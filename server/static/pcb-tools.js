@@ -1168,6 +1168,37 @@
     for (const l of a) if (b.has(l)) return true;
     return false;
   };
+  function boxGrid(items, boxOf2, cell = 2) {
+    const cells = /* @__PURE__ */ new Map();
+    const big = [];
+    const boxes = items.map(boxOf2);
+    const key = (cx, cy) => cx * 1048576 + cy;
+    boxes.forEach((b, i) => {
+      const x0 = Math.floor(b[0] / cell), x1 = Math.floor(b[2] / cell), y0 = Math.floor(b[1] / cell), y1 = Math.floor(b[3] / cell);
+      if (!isFinite(x0 + x1 + y0 + y1) || (x1 - x0 + 1) * (y1 - y0 + 1) > 256) {
+        big.push(i);
+        return;
+      }
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+        const k = key(x, y);
+        const l = cells.get(k);
+        if (l) l.push(i);
+        else cells.set(k, [i]);
+      }
+    });
+    return {
+      query(b, slop) {
+        const hit = new Set(big);
+        const x0 = Math.floor((b[0] - slop) / cell), x1 = Math.floor((b[2] + slop) / cell), y0 = Math.floor((b[1] - slop) / cell), y1 = Math.floor((b[3] + slop) / cell);
+        if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) return items.slice();
+        for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+          const l = cells.get(key(x, y));
+          if (l) for (const i of l) hit.add(i);
+        }
+        return [...hit].sort((p, q) => p - q).filter((i) => boxesTouch(boxes[i], b, slop)).map((i) => items[i]);
+      }
+    };
+  }
 
   // web/tools/pcb-tools/nets.ts
   function netOf(node) {
@@ -1572,6 +1603,5400 @@
       ACT_SwitchCornerModeArc90: rs.corner_mode === CM_R90
     };
   }
+
+  // web/canvas/colors.ts
+  var SCH_DEFAULT = Object.freeze({
+    bg: "#F5F4EF",
+    grid: "#B5B5B5",
+    gridAxes: "#000084",
+    wire: "#009600",
+    bus: "#000084",
+    junction: "#009600",
+    outline: "#840000",
+    body: "#FFFFC2",
+    pin: "#840000",
+    pinName: "#006464",
+    pinNum: "#A90000",
+    ref: "#006464",
+    value: "#006464",
+    field: "#840084",
+    label: "#0F0F0F",
+    glabel: "#840000",
+    hlabel: "#725600",
+    sheet: "#840000",
+    sheetName: "#006464",
+    sheetFile: "#725600",
+    sheetFields: "#840084",
+    sheetLabel: "#006464",
+    noconnect: "#000084",
+    notes: "#0000C2",
+    busEntry: "#009600",
+    dnp: "rgba(220,9,13,0.85)",
+    netclass: "#484848",
+    ruleArea: "#FF0000",
+    excluded: "rgba(194,194,194,0.95)",
+    hidden: "#C2C2C2",
+    privateNotes: "#4848FF",
+    frame: "#840000",
+    // LAYER_SCHEMATIC_DRAWINGSHEET ("schematic.worksheet") is `frame`; the page outline is a separate,
+    // lighter layer — DS_PAINTER::DrawBorder paints it in LAYER_SCHEMATIC_PAGE_LIMITS, not the sheet ink
+    // (common/settings/builtin_color_themes.h:78-79, eeschema/sch_view.cpp:137-138).
+    pageLimits: "#B5B5B5",
+    brightened: "#FF00FF"
+    // LAYER_BRIGHTENED: net highlighting / selection disambiguation
+  });
+  var SCH = Object.assign({}, SCH_DEFAULT);
+  var PCB_ORDER = ["B.Fab", "B.CrtYd", "B.Adhes", "B.Paste", "B.SilkS", "B.Mask", "B.Cu"];
+  for (let i = 30; i >= 1; i--) PCB_ORDER.push("In" + i + ".Cu");
+  PCB_ORDER.push("F.Fab", "F.CrtYd", "F.Adhes", "F.Paste", "F.SilkS", "F.Mask", "F.Cu", "holes");
+  for (let i = 45; i >= 1; i--) PCB_ORDER.push("User." + i);
+  PCB_ORDER.push("Margin", "Edge.Cuts", "Eco2.User", "Eco1.User", "Cmts.User", "Dwgs.User");
+  var PCB_ZMAP = new Map(PCB_ORDER.map((l, i) => [l, i * 10]));
+
+  // web/canvas/sexpr.ts
+  var isList2 = Array.isArray;
+  function kid(node, key) {
+    for (let j = 1; j < node.length; j++) {
+      const c = node[j];
+      if (isList2(c) && c[0] === key) return c;
+    }
+    return null;
+  }
+  function kids(node, key) {
+    const out = [];
+    for (let j = 1; j < node.length; j++) {
+      const c = node[j];
+      if (isList2(c) && c[0] === key) out.push(c);
+    }
+    return out;
+  }
+  function num(v, d = 0) {
+    if (typeof v === "number") return v;
+    if (v === void 0 || v === null || v === "") return d;
+    const x = Number(v);
+    return isNaN(x) ? d : x;
+  }
+  function str(v) {
+    return v === void 0 || v === null ? "" : String(v);
+  }
+  function has(node, tok) {
+    for (let j = 1; j < node.length; j++) if (node[j] === tok) return true;
+    return false;
+  }
+  function atOf(node) {
+    const t = kid(node, "transform");
+    if (t) {
+      const tr = kid(t, "translate"), ro = kid(t, "rotate");
+      return [tr ? num(tr[1]) : 0, tr ? num(tr[2]) : 0, ro ? num(ro[1]) : 0];
+    }
+    const a = kid(node, "at");
+    return a ? [num(a[1]), num(a[2]), num(a[3])] : [0, 0, 0];
+  }
+  function polyPtsOf(node) {
+    const p = kid(node, "pts");
+    if (!p) return [];
+    const out = [];
+    for (let i = 1; i < p.length; i++) {
+      const c = p[i];
+      if (!isList2(c)) continue;
+      if (c[0] === "xy") out.push([num(c[1]), num(c[2])]);
+      else if (c[0] === "arc") {
+        const s = kid(c, "start"), m = kid(c, "mid"), e = kid(c, "end");
+        if (!s || !m || !e) continue;
+        const a = arcFrom3([num(s[1]), num(s[2])], [num(m[1]), num(m[2])], [num(e[1]), num(e[2])]);
+        if (!a) {
+          out.push([num(s[1]), num(s[2])], [num(e[1]), num(e[2])]);
+          continue;
+        }
+        const TAU = 2 * Math.PI;
+        let sweep = a.anticlockwise ? a.a0 - a.a1 : a.a1 - a.a0;
+        sweep = (sweep % TAU + TAU) % TAU;
+        const step = a.r > 5e-3 ? 2 * Math.acos(1 - 5e-3 / a.r) : Math.PI / 2, n = Math.max(2, Math.ceil(sweep / step));
+        out.push([num(s[1]), num(s[2])]);
+        for (let k = 1; k < n; k++) {
+          const t = a.a0 + (a.anticlockwise ? -1 : 1) * sweep * k / n;
+          out.push([a.x + a.r * Math.cos(t), a.y + a.r * Math.sin(t)]);
+        }
+        out.push([num(e[1]), num(e[2])]);
+      }
+    }
+    return out;
+  }
+  function arcFrom3(p0, pm, p1) {
+    const ax = p0[0], ay = p0[1], bx = pm[0], by = pm[1], cx = p1[0], cy = p1[1];
+    const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(d) < 1e-9) return null;
+    const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
+    const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
+    const r = Math.hypot(ax - ux, ay - uy);
+    const a0 = Math.atan2(ay - uy, ax - ux), am = Math.atan2(by - uy, bx - ux), a1 = Math.atan2(cy - uy, cx - ux);
+    const norm2 = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    const ccwSweep = norm2(a1 - a0), ccwMid = norm2(am - a0);
+    const ccw = ccwMid <= ccwSweep;
+    return { x: ux, y: uy, r, a0, a1, anticlockwise: !ccw };
+  }
+
+  // web/fab/prims.ts
+  var rad = (deg2) => deg2 * Math.PI / 180;
+  function rot(x, y, deg2) {
+    if (!deg2) return [x, y];
+    const r = rad(deg2), c = Math.cos(r), s = Math.sin(r);
+    return [x * c + y * s, -x * s + y * c];
+  }
+  function arcPoints2(cx, cy, r, a0, a1, acw, maxErr = 5e-3) {
+    const TAU = 2 * Math.PI;
+    let sweep = acw ? a0 - a1 : a1 - a0;
+    sweep = (sweep % TAU + TAU) % TAU;
+    if (sweep < 1e-12 && Math.abs(a1 - a0) > 1e-9) sweep = TAU;
+    const step = r > maxErr ? 2 * Math.acos(1 - maxErr / r) : Math.PI / 2;
+    const n = Math.max(2, Math.ceil(sweep / step));
+    const out = [];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + (acw ? -1 : 1) * sweep * i / n;
+      out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    return out;
+  }
+  function circlePoints(cx, cy, r, maxErr = 5e-3) {
+    const step = r > maxErr ? 2 * Math.acos(1 - maxErr / r) : Math.PI / 2;
+    const n = Math.max(8, Math.ceil(2 * Math.PI / step));
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = 2 * Math.PI * i / n;
+      out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    return out;
+  }
+  function area(pts) {
+    let a = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+    return a / 2;
+  }
+
+  // web/fab/model.ts
+  var K2 = (n, key) => n ? kid(n, key) : null;
+  function boardSettings(setup, doc) {
+    const n = (key) => {
+      const k = K2(setup, key);
+      return k ? num(k[1], 0) : 0;
+    };
+    const tent = K2(setup, "tenting");
+    let tentFront = true, tentBack = true;
+    if (tent) {
+      const legacy = tent.slice(1).some((x) => !isList2(x));
+      if (legacy) {
+        tentFront = tent.includes("front");
+        tentBack = tent.includes("back");
+      } else {
+        const f = K2(tent, "front"), b = K2(tent, "back");
+        tentFront = f ? str(f[1]) !== "no" : false;
+        tentBack = b ? str(b[1]) !== "no" : false;
+      }
+    } else {
+      const pp = K2(setup, "pcbplotparams");
+      const v = K2(pp, "viasonmask");
+      if (v) {
+        const open = str(v[1]) === "true" || str(v[1]) === "yes";
+        tentFront = tentBack = !open;
+      }
+    }
+    const ax = K2(setup, "aux_axis_origin");
+    const yn = (k) => !!k && /^(yes|true)$/.test(str(k[1]));
+    const cov = K2(setup, "covering"), plug = K2(setup, "plugging");
+    return {
+      coverFront: yn(K2(cov, "front")),
+      coverBack: yn(K2(cov, "back")),
+      plugFront: yn(K2(plug, "front")),
+      plugBack: yn(K2(plug, "back")),
+      capVias: yn(K2(setup, "capping")),
+      fillVias: yn(K2(setup, "filling")),
+      maskExpansion: n("pad_to_mask_clearance"),
+      maskMinWidth: n("solder_mask_min_width"),
+      pasteClearance: n("pad_to_paste_clearance"),
+      pasteRatio: n("pad_to_paste_clearance_ratio"),
+      tentFront,
+      tentBack,
+      auxOrigin: ax ? [num(ax[1]), num(ax[2])] : doc.auxOrigin ? [doc.auxOrigin[0], doc.auxOrigin[1]] : [0, 0]
+    };
+  }
+  function copperStack(doc) {
+    const cu = doc.copper && doc.copper.length ? doc.copper.slice() : ["F.Cu", "B.Cu"];
+    const rank = (l) => l === "F.Cu" ? 0 : l === "B.Cu" ? 1e6 : num((/^In(\d+)\.Cu$/.exec(l) || [])[1], 5e5);
+    return cu.sort((a, b) => rank(a) - rank(b));
+  }
+  var isCopper = (l) => /\.Cu$/.test(l);
+  var isBack2 = (l) => /^B\./.test(l);
+  function expandLayers(names, copper) {
+    const out = [];
+    for (const n of names) {
+      if (n === "*.Cu") out.push(...copper);
+      else if (n === "F&B.Cu") out.push("F.Cu", "B.Cu");
+      else if (n.startsWith("*.")) out.push("F" + n.slice(1), "B" + n.slice(1));
+      else out.push(n);
+    }
+    return out;
+  }
+  var optNum = (n, key) => {
+    const k = K2(n, key);
+    return k ? num(k[1], 0) : null;
+  };
+  function readShape(n, shape, inherit) {
+    const sz = K2(n, "size");
+    const dr = K2(n, "drill");
+    const off = K2(n, "offset") || (dr ? K2(dr, "offset") : null);
+    const rr = K2(n, "roundrect_rratio");
+    const cr = K2(n, "chamfer_ratio");
+    const ch = K2(n, "chamfer");
+    const rd = K2(n, "rect_delta");
+    const opts = K2(n, "options");
+    const an = opts ? K2(opts, "anchor") : null;
+    const chamfers = ch ? ch.slice(1).map(str) : inherit ? inherit.chamfers : [];
+    let s = shape || (inherit ? inherit.shape : "circle");
+    if ((s === "roundrect" || s === "rect") && chamfers.length && (cr ? num(cr[1]) : inherit ? inherit.chamferRatio : 0) > 0) s = "chamfer";
+    if (s === "rect" && rd && (num(rd[1]) || num(rd[2]))) s = "trapezoid";
+    const w = sz ? num(sz[1], 0) : inherit ? inherit.w : 0;
+    return {
+      shape: s,
+      w,
+      h: sz ? num(sz[2], w) : inherit ? inherit.h : w,
+      rratio: rr ? num(rr[1]) : inherit ? inherit.rratio : s === "roundrect" ? 0.25 : 0,
+      chamferRatio: cr ? num(cr[1]) : inherit ? inherit.chamferRatio : 0,
+      chamfers,
+      delta: rd ? [num(rd[1]), num(rd[2])] : inherit ? inherit.delta : [0, 0],
+      offset: off ? [num(off[1]), num(off[2])] : inherit ? inherit.offset : [0, 0],
+      anchor: an ? str(an[1]) : inherit ? inherit.anchor : "rect",
+      primitives: K2(n, "primitives") || (inherit ? inherit.primitives : null)
+    };
+  }
+  function padShapeOn(pad, layer, copper) {
+    if (!pad.stack.size) return pad.base;
+    const cu = isCopper(layer) ? layer : isBack2(layer) ? "B.Cu" : "F.Cu";
+    if (cu === "F.Cu") return pad.base;
+    if (pad.stackMode === "front_inner_back") {
+      if (cu === "B.Cu") return pad.stack.get("B.Cu") || pad.base;
+      return pad.stack.get("Inner") || pad.stack.get(copper[1] || "In1.Cu") || pad.base;
+    }
+    return pad.stack.get(cu) || pad.base;
+  }
+  function frontBack(n) {
+    if (!n) return [null, null];
+    if (n.slice(1).some((x) => !isList2(x))) return [n.includes("front") ? true : null, n.includes("back") ? true : null];
+    const f = K2(n, "front"), b = K2(n, "back");
+    const v = (k) => k ? str(k[1]) === "none" ? null : str(k[1]) !== "no" : null;
+    return [v(f), v(b)];
+  }
+  function readPad(node, fp, copper, nets) {
+    const [px, py, prot] = atOf(node);
+    const [x, y] = fp.tf(px, py);
+    const ls = K2(node, "layers");
+    const layers = new Set(expandLayers(ls ? ls.slice(1).map(str) : [fp.side], copper));
+    const dr = K2(node, "drill");
+    let drill2 = null;
+    if (dr) {
+      const oval = str(dr[1]) === "oval";
+      const nums = dr.slice(1).filter((v) => typeof v === "number");
+      const w = nums.length ? nums[0] : 0, h = nums.length > 1 ? nums[1] : w;
+      if (w > 0 || h > 0) drill2 = { w, h: oval ? h : w, oval: oval && Math.abs(w - h) > 1e-9 };
+    }
+    const netN = K2(node, "net");
+    const net = netN ? typeof netN[1] === "number" ? netN.length > 2 ? str(netN[2]) : str(nets.get(netN[1]) || "") : str(netN[1]) : "";
+    const base = readShape(node, str(node[3]), null);
+    const stack = /* @__PURE__ */ new Map();
+    let stackMode = "";
+    const ps = K2(node, "padstack");
+    if (ps) {
+      const m = K2(ps, "mode");
+      stackMode = m ? str(m[1]) : "";
+      for (const l of kids(ps, "layer")) {
+        const shapeN = K2(l, "shape");
+        stack.set(str(l[1]), readShape(l, shapeN ? str(shapeN[1]) : "", base));
+      }
+    }
+    const ru = K2(node, "remove_unused_layers"), ke = K2(node, "keep_end_layers"), zl = K2(node, "zone_layer_connections");
+    const [tf, tb] = frontBack(K2(node, "tenting"));
+    const prop3 = K2(node, "property");
+    return {
+      node,
+      fp,
+      number: str(node[1]),
+      type: str(node[2]),
+      x,
+      y,
+      rot: prot || 0,
+      layers,
+      drill: drill2,
+      net,
+      property: prop3 ? str(prop3[1]) : "",
+      maskMargin: optNum(node, "solder_mask_margin"),
+      pasteMargin: optNum(node, "solder_paste_margin"),
+      pasteRatio: optNum(node, "solder_paste_margin_ratio") ?? optNum(node, "solder_paste_ratio"),
+      removeUnused: ru ? ru.length < 2 || str(ru[1]) !== "no" : has(node, "remove_unused_layers"),
+      keepEnds: ke ? ke.length < 2 || str(ke[1]) !== "no" : has(node, "keep_end_layers"),
+      zoneLayers: new Set(zl ? zl.slice(1).map(str) : []),
+      base,
+      stackMode,
+      stack,
+      tentFront: tf,
+      tentBack: tb
+    };
+  }
+  var DEFAULT_VARIANT = "< Default >";
+  var isDefaultVariant = (v) => !v || v.toLowerCase() === DEFAULT_VARIANT.toLowerCase();
+  function applyFootprintVariant(fp, variant) {
+    if (isDefaultVariant(variant)) return;
+    const v = kids(fp.node, "variant").find((x) => {
+      const nm2 = K2(x, "name");
+      return !!nm2 && str(nm2[1]) === variant;
+    });
+    if (!v) return;
+    const flag = (key, own) => {
+      const k = K2(v, key);
+      return k ? k.length < 2 || /^(yes|true)$/.test(str(k[1])) : own;
+    };
+    fp.dnp = flag("dnp", fp.dnp);
+    fp.excludeFromBom = flag("exclude_from_bom", fp.excludeFromBom);
+    fp.excludeFromPos = flag("exclude_from_pos_files", fp.excludeFromPos);
+    const props = new Map(fp.props);
+    for (const f of kids(v, "field")) {
+      const nm2 = K2(f, "name"), val = K2(f, "value");
+      if (nm2 && str(nm2[1])) props.set(str(nm2[1]), val ? str(val[1]) : "");
+    }
+    fp.props = props;
+    fp.value = props.get("Value") || "";
+  }
+  function readFootprint(item, copper, nets) {
+    const n = item.node;
+    const [fx, fy, frot] = atOf(n);
+    const layerN = K2(n, "layer");
+    const side = layerN ? str(layerN[1]) : "F.Cu";
+    const trN = K2(n, "transform");
+    const scN = trN ? K2(trN, "scale") : null;
+    const sx = scN ? num(scN[1], 1) || 1 : 1, sy = scN ? num(scN[2], 1) || 1 : 1;
+    const tf = (lx, ly) => {
+      const [x, y] = rot(lx * sx, ly * sy, frot || 0);
+      return [fx + x, fy + y];
+    };
+    const props = /* @__PURE__ */ new Map();
+    for (const p of kids(n, "property")) if (typeof p[2] !== "object") props.set(str(p[1]), str(p[2]));
+    for (const t of kids(n, "fp_text")) {
+      const kind = str(t[1]);
+      if (kind === "reference" && !props.has("Reference")) props.set("Reference", str(t[2]));
+      else if (kind === "value" && !props.has("Value")) props.set("Value", str(t[2]));
+    }
+    const attr = K2(n, "attr");
+    const flags = attr ? attr.slice(1).map(str) : [];
+    const priv = K2(n, "private_layers");
+    const lib = str(n[1]);
+    const fp = {
+      id: item.id,
+      node: n,
+      item,
+      lib,
+      name: lib.indexOf(":") >= 0 ? lib.slice(lib.indexOf(":") + 1) : lib,
+      x: fx,
+      y: fy,
+      rot: frot || 0,
+      side,
+      ref: props.get("Reference") || "",
+      value: props.get("Value") || "",
+      props,
+      smd: flags.includes("smd"),
+      throughHole: flags.includes("through_hole"),
+      boardOnly: flags.includes("board_only"),
+      excludeFromPos: flags.includes("exclude_from_pos_files"),
+      excludeFromBom: flags.includes("exclude_from_bom"),
+      dnp: flags.includes("dnp"),
+      maskMargin: optNum(n, "solder_mask_margin"),
+      pasteMargin: optNum(n, "solder_paste_margin"),
+      pasteRatio: optNum(n, "solder_paste_margin_ratio") ?? optNum(n, "solder_paste_ratio"),
+      privateLayers: new Set(priv ? priv.slice(1).map(str) : []),
+      pads: [],
+      tf
+    };
+    for (const p of kids(n, "pad")) fp.pads.push(readPad(p, fp, copper, nets));
+    return fp;
+  }
+  function netName(node, nets) {
+    const nn = K2(node, "net");
+    if (!nn) return "";
+    return typeof nn[1] === "number" ? nn.length > 2 ? str(nn[2]) : str(nets.get(nn[1]) || "") : str(nn[1]);
+  }
+  function readTrack(n, kind, nets) {
+    const s = K2(n, "start"), e = K2(n, "end");
+    if (!s || !e) return null;
+    const ls = K2(n, "layers");
+    const l1 = K2(n, "layer");
+    const names = ls ? ls.slice(1).map(str) : [l1 ? str(l1[1]) : "F.Cu"];
+    const layer = names.find(isCopper) || names[0];
+    const maskLayer = names.find((x) => /\.Mask$/.test(x)) || null;
+    const wN = K2(n, "width");
+    const t = { layer, w: wN ? num(wN[1], 0.25) : 0.25, x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), arc: null, maskLayer, maskMargin: optNum(n, "solder_mask_margin"), net: nets ? netName(n, nets) : void 0 };
+    if (kind === "arc") {
+      const m = K2(n, "mid");
+      const a = m ? arcFrom3([t.x1, t.y1], [num(m[1]), num(m[2])], [t.x2, t.y2]) : null;
+      if (a) t.arc = { cx: a.x, cy: a.y, r: a.r, a0: a.a0, a1: a.a1, acw: a.anticlockwise };
+    }
+    return t;
+  }
+  function readVia(n, copper, nets) {
+    const [x, y] = atOf(n);
+    const sz = K2(n, "size"), dr = K2(n, "drill");
+    const type = has(n, "blind") ? "blind" : has(n, "buried") ? "blind" : has(n, "micro") ? "micro" : "through";
+    const ls = K2(n, "layers");
+    const pair = ls ? [str(ls[1]), str(ls[2])] : ["F.Cu", "B.Cu"];
+    let layers = copper;
+    if (type !== "through") {
+      const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]);
+      layers = i0 >= 0 && i1 >= 0 ? copper.slice(Math.min(i0, i1), Math.max(i0, i1) + 1) : pair;
+    }
+    const size = sz ? num(sz[1], 0.8) : 0.8;
+    let sizes = null;
+    const ps = K2(n, "padstack");
+    if (ps) {
+      const mode = str((K2(ps, "mode") || [])[1]);
+      const entry = /* @__PURE__ */ new Map();
+      for (const l of kids(ps, "layer")) {
+        const s = K2(l, "size");
+        if (s) entry.set(str(l[1]), num(s[1], size));
+      }
+      sizes = /* @__PURE__ */ new Map();
+      for (const l of layers) {
+        if (l === "F.Cu") sizes.set(l, size);
+        else if (mode === "front_inner_back") sizes.set(l, l === "B.Cu" ? entry.get("B.Cu") ?? size : entry.get("Inner") ?? entry.get(copper[1]) ?? size);
+        else sizes.set(l, entry.get(l) ?? size);
+      }
+    }
+    const ru = K2(n, "remove_unused_layers"), ke = K2(n, "keep_end_layers"), zl = K2(n, "zone_layer_connections");
+    const [tf, tb] = frontBack(K2(n, "tenting"));
+    const [cf, cb] = frontBack(K2(n, "covering")), [pf, pb] = frontBack(K2(n, "plugging"));
+    const opt = (k) => k && k.length > 1 && str(k[1]) !== "none" ? str(k[1]) !== "no" : null;
+    return {
+      coverFront: cf,
+      coverBack: cb,
+      plugFront: pf,
+      plugBack: pb,
+      capped: opt(K2(n, "capping")),
+      filled: opt(K2(n, "filling")),
+      x,
+      y,
+      size,
+      drill: dr ? num(dr[1], 0.4) : 0.4,
+      type,
+      layers,
+      sizes,
+      net: netName(n, nets),
+      removeUnused: ru ? ru.length < 2 || str(ru[1]) !== "no" : has(n, "remove_unused_layers"),
+      keepEnds: ke ? ke.length < 2 || str(ke[1]) !== "no" : has(n, "keep_end_layers"),
+      zoneLayers: new Set(zl ? zl.slice(1).map(str) : []),
+      tentFront: tf,
+      tentBack: tb
+    };
+  }
+  function readZone(n, copper, tf, out, nets) {
+    if (K2(n, "keepout")) return;
+    const single = K2(n, "layer"), multi = K2(n, "layers");
+    const layers = expandLayers(single ? [str(single[1])] : multi ? multi.slice(1).map(str) : ["F.Cu"], copper);
+    const fills = kids(n, "filled_polygon");
+    if (!fills.length) {
+      if (layers.some(isCopper)) out.unfilledZones++;
+      return;
+    }
+    for (const f of fills) {
+      const l = K2(f, "layer");
+      const pts = polyPtsOf(f);
+      if (pts.length < 3) continue;
+      out.fills.push({ layer: l ? str(l[1]) : layers[0], pts: tf ? pts.map((p) => tf(p[0], p[1])) : pts, net: nets ? netName(n, nets) : void 0 });
+    }
+  }
+  function boardModel(doc, setup, variant) {
+    const copper = copperStack(doc);
+    const m = { doc, settings: boardSettings(setup, doc), copper, footprints: [], tracks: [], vias: [], fills: [], unfilledZones: 0 };
+    for (const item of doc.items.values()) {
+      const n = item.node;
+      if (item.kind === "footprint") {
+        const fp = readFootprint(item, copper, doc.nets);
+        applyFootprintVariant(fp, variant);
+        m.footprints.push(fp);
+        for (const z of kids(n, "zone")) readZone(z, copper, fp.tf, m, doc.nets);
+      } else if (item.kind === "segment" || item.kind === "arc") {
+        const t = readTrack(n, item.kind, doc.nets);
+        if (t) m.tracks.push(t);
+      } else if (item.kind === "via") m.vias.push(readVia(n, copper, doc.nets));
+      else if (item.kind === "zone") readZone(n, copper, null, m, doc.nets);
+    }
+    return m;
+  }
+
+  // node_modules/clipper2-ts/dist/Core.js
+  var ClipType;
+  (function(ClipType2) {
+    ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
+    ClipType2[ClipType2["Intersection"] = 1] = "Intersection";
+    ClipType2[ClipType2["Union"] = 2] = "Union";
+    ClipType2[ClipType2["Difference"] = 3] = "Difference";
+    ClipType2[ClipType2["Xor"] = 4] = "Xor";
+  })(ClipType || (ClipType = {}));
+  var PathType;
+  (function(PathType2) {
+    PathType2[PathType2["Subject"] = 0] = "Subject";
+    PathType2[PathType2["Clip"] = 1] = "Clip";
+  })(PathType || (PathType = {}));
+  var FillRule;
+  (function(FillRule2) {
+    FillRule2[FillRule2["EvenOdd"] = 0] = "EvenOdd";
+    FillRule2[FillRule2["NonZero"] = 1] = "NonZero";
+    FillRule2[FillRule2["Positive"] = 2] = "Positive";
+    FillRule2[FillRule2["Negative"] = 3] = "Negative";
+  })(FillRule || (FillRule = {}));
+  var PointInPolygonResult;
+  (function(PointInPolygonResult2) {
+    PointInPolygonResult2[PointInPolygonResult2["IsOn"] = 0] = "IsOn";
+    PointInPolygonResult2[PointInPolygonResult2["IsInside"] = 1] = "IsInside";
+    PointInPolygonResult2[PointInPolygonResult2["IsOutside"] = 2] = "IsOutside";
+  })(PointInPolygonResult || (PointInPolygonResult = {}));
+  var maxSafeInteger = Number.MAX_SAFE_INTEGER;
+  var maxDeltaForSafeProduct = Math.floor(Math.sqrt(maxSafeInteger));
+  function isSafeProduct(a, b) {
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b))
+      return false;
+    if (a === 0 || b === 0)
+      return true;
+    return Math.abs(a) <= maxSafeInteger / Math.abs(b);
+  }
+  function isSafeSum(a, b) {
+    return Math.abs(a) + Math.abs(b) <= maxSafeInteger;
+  }
+  function safeMultiplyDifference(a, b, c, d) {
+    if (isSafeProduct(a, b) && isSafeProduct(c, d)) {
+      const prod1 = a * b;
+      const prod2 = c * d;
+      if (isSafeSum(prod1, prod2)) {
+        return prod1 - prod2;
+      }
+    }
+    if (Number.isSafeInteger(a) && Number.isSafeInteger(b) && Number.isSafeInteger(c) && Number.isSafeInteger(d)) {
+      return Number(BigInt(a) * BigInt(b) - BigInt(c) * BigInt(d));
+    }
+    return a * b - c * d;
+  }
+  function safeMultiplySum(a, b, c, d) {
+    if (isSafeProduct(a, b) && isSafeProduct(c, d)) {
+      const prod1 = a * b;
+      const prod2 = c * d;
+      if (isSafeSum(prod1, prod2)) {
+        return prod1 + prod2;
+      }
+    }
+    if (Number.isSafeInteger(a) && Number.isSafeInteger(b) && Number.isSafeInteger(c) && Number.isSafeInteger(d)) {
+      return Number(BigInt(a) * BigInt(b) + BigInt(c) * BigInt(d));
+    }
+    return a * b + c * d;
+  }
+  var B0 = BigInt(0);
+  var B2 = BigInt(2);
+  var B4 = BigInt(4);
+  var B64 = BigInt(64);
+  var UINT64_MASK = BigInt("0xFFFFFFFFFFFFFFFF");
+  var IC_MaxInt64 = BigInt("9223372036854775807");
+  var IC_MaxCoord = Number(IC_MaxInt64 / B4);
+  var IC_Invalid64 = Number(IC_MaxInt64);
+  var IC_floatingPointTolerance = 1e-12;
+  var IC_defaultMinimumEdgeLength = 0.1;
+  var IC_maxCoordForSafeAreaProduct = Math.floor(maxDeltaForSafeProduct / 2);
+  var IC_maxCoordForSafeCrossSq = Math.floor(Math.sqrt(Math.sqrt(maxSafeInteger / 4)));
+  function maxSafeCoordinateForScale(scale) {
+    if (!Number.isFinite(scale)) {
+      throw new RangeError("Scale must be a finite number");
+    }
+    const absScale = Math.abs(scale);
+    if (absScale === 0)
+      return Number.POSITIVE_INFINITY;
+    return maxSafeInteger / absScale;
+  }
+  function checkSafeScaleValue(value, maxAbs, context) {
+    if (!Number.isFinite(value) || Math.abs(value) > maxAbs) {
+      throw new RangeError(`Scaled coordinate exceeds Number.MAX_SAFE_INTEGER in ${context}`);
+    }
+  }
+  function ensureSafeInteger(value, context) {
+    if (!Number.isFinite(value) || Math.abs(value) > maxSafeInteger) {
+      throw new RangeError(`Coordinate exceeds Number.MAX_SAFE_INTEGER in ${context}`);
+    }
+  }
+  function crossProduct(pt1, pt2, pt3) {
+    const a = pt2.x - pt1.x;
+    const b = pt3.y - pt2.y;
+    const c = pt2.y - pt1.y;
+    const d = pt3.x - pt2.x;
+    if (Math.abs(a) < maxDeltaForSafeProduct && Math.abs(b) < maxDeltaForSafeProduct && Math.abs(c) < maxDeltaForSafeProduct && Math.abs(d) < maxDeltaForSafeProduct) {
+      return a * b - c * d;
+    }
+    return safeMultiplyDifference(a, b, c, d);
+  }
+  function crossProductSign(pt1, pt2, pt3) {
+    const a = pt2.x - pt1.x;
+    const b = pt3.y - pt2.y;
+    const c = pt2.y - pt1.y;
+    const d = pt3.x - pt2.x;
+    if (Math.abs(a) < maxDeltaForSafeProduct && Math.abs(b) < maxDeltaForSafeProduct && Math.abs(c) < maxDeltaForSafeProduct && Math.abs(d) < maxDeltaForSafeProduct) {
+      const prod1 = a * b;
+      const prod2 = c * d;
+      return prod1 > prod2 ? 1 : prod1 < prod2 ? -1 : 0;
+    }
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || !Number.isSafeInteger(c) || !Number.isSafeInteger(d)) {
+      const prod1 = a * b;
+      const prod2 = c * d;
+      return prod1 > prod2 ? 1 : prod1 < prod2 ? -1 : 0;
+    }
+    const bigProd1 = BigInt(a) * BigInt(b);
+    const bigProd2 = BigInt(c) * BigInt(d);
+    if (bigProd1 === bigProd2)
+      return 0;
+    return bigProd1 > bigProd2 ? 1 : -1;
+  }
+  function checkPrecision(precision) {
+    if (precision < -8 || precision > 8) {
+      throw new Error("Error: Precision is out of range.");
+    }
+  }
+  function isAlmostZero(value) {
+    return Math.abs(value) <= IC_floatingPointTolerance;
+  }
+  function triSign(x) {
+    return x < 0 ? -1 : x > 0 ? 1 : 0;
+  }
+  function multiplyUInt64(a, b) {
+    const aBig = BigInt(a);
+    const bBig = BigInt(b);
+    const res = aBig * bBig;
+    return {
+      lo64: res & UINT64_MASK,
+      hi64: res >> B64
+    };
+  }
+  function productsAreEqual(a, b, c, d) {
+    const absA = Math.abs(a);
+    const absB = Math.abs(b);
+    const absC = Math.abs(c);
+    const absD = Math.abs(d);
+    if (absA < maxDeltaForSafeProduct && absB < maxDeltaForSafeProduct && absC < maxDeltaForSafeProduct && absD < maxDeltaForSafeProduct) {
+      return a * b === c * d;
+    }
+    const signAb = (a < 0 ? -1 : a > 0 ? 1 : 0) * (b < 0 ? -1 : b > 0 ? 1 : 0);
+    const signCd = (c < 0 ? -1 : c > 0 ? 1 : 0) * (d < 0 ? -1 : d > 0 ? 1 : 0);
+    if (signAb !== signCd)
+      return false;
+    if (signAb === 0)
+      return true;
+    if (!Number.isSafeInteger(absA) || !Number.isSafeInteger(absB) || !Number.isSafeInteger(absC) || !Number.isSafeInteger(absD)) {
+      return a * b === c * d;
+    }
+    const bigA = BigInt(absA);
+    const bigB = BigInt(absB);
+    const bigC = BigInt(absC);
+    const bigD = BigInt(absD);
+    return bigA * bigB === bigC * bigD;
+  }
+  function isCollinear(pt1, sharedPt, pt2) {
+    const a = sharedPt.x - pt1.x;
+    const b = pt2.y - sharedPt.y;
+    const c = sharedPt.y - pt1.y;
+    const d = pt2.x - sharedPt.x;
+    return productsAreEqual(a, b, c, d);
+  }
+  function dotProduct(pt1, pt2, pt3) {
+    const a = pt2.x - pt1.x;
+    const b = pt3.x - pt2.x;
+    const c = pt2.y - pt1.y;
+    const d = pt3.y - pt2.y;
+    if (Math.abs(a) < maxDeltaForSafeProduct && Math.abs(b) < maxDeltaForSafeProduct && Math.abs(c) < maxDeltaForSafeProduct && Math.abs(d) < maxDeltaForSafeProduct) {
+      return a * b + c * d;
+    }
+    return safeMultiplySum(a, b, c, d);
+  }
+  function dotProductSign(pt1, pt2, pt3) {
+    const a = pt2.x - pt1.x;
+    const b = pt3.x - pt2.x;
+    const c = pt2.y - pt1.y;
+    const d = pt3.y - pt2.y;
+    if (Math.abs(a) < maxDeltaForSafeProduct && Math.abs(b) < maxDeltaForSafeProduct && Math.abs(c) < maxDeltaForSafeProduct && Math.abs(d) < maxDeltaForSafeProduct) {
+      const sum = a * b + c * d;
+      return sum > 0 ? 1 : sum < 0 ? -1 : 0;
+    }
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || !Number.isSafeInteger(c) || !Number.isSafeInteger(d)) {
+      const sum = a * b + c * d;
+      return sum > 0 ? 1 : sum < 0 ? -1 : 0;
+    }
+    const bigSum = BigInt(a) * BigInt(b) + BigInt(c) * BigInt(d);
+    if (bigSum === B0)
+      return 0;
+    return bigSum > B0 ? 1 : -1;
+  }
+  function icArea(path) {
+    const cnt = path.length;
+    if (cnt < 3)
+      return 0;
+    let allSmall = true;
+    for (let i = 0; i < cnt && allSmall; i++) {
+      const pt2 = path[i];
+      if (Math.abs(pt2.x) >= IC_maxCoordForSafeAreaProduct || Math.abs(pt2.y) >= IC_maxCoordForSafeAreaProduct) {
+        allSmall = false;
+      }
+    }
+    let prevPt = path[cnt - 1];
+    if (allSmall) {
+      let total = 0;
+      for (const pt2 of path) {
+        total += (prevPt.y + pt2.y) * (prevPt.x - pt2.x);
+        prevPt = pt2;
+      }
+      return total * 0.5;
+    }
+    let totalBig = B0;
+    for (const pt2 of path) {
+      const sum = prevPt.y + pt2.y;
+      const diff = prevPt.x - pt2.x;
+      if (Number.isSafeInteger(sum) && Number.isSafeInteger(diff)) {
+        totalBig += BigInt(sum) * BigInt(diff);
+      } else if (Number.isSafeInteger(prevPt.y) && Number.isSafeInteger(pt2.y) && Number.isSafeInteger(prevPt.x) && Number.isSafeInteger(pt2.x)) {
+        const sumBig = BigInt(prevPt.y) + BigInt(pt2.y);
+        const diffBig = BigInt(prevPt.x) - BigInt(pt2.x);
+        totalBig += sumBig * diffBig;
+      } else {
+        totalBig += BigInt(Math.round(sum * diff));
+      }
+      prevPt = pt2;
+    }
+    return Number(totalBig) * 0.5;
+  }
+  function crossProductD(vec1, vec2) {
+    return vec1.y * vec2.x - vec2.y * vec1.x;
+  }
+  function dotProductD(vec1, vec2) {
+    return vec1.x * vec2.x + vec1.y * vec2.y;
+  }
+  function roundToEven(value) {
+    const r = Math.round(value);
+    if (value === r - 0.5 && (r & 1) !== 0)
+      return r - 1;
+    return r;
+  }
+  function checkCastInt64(val) {
+    if (val >= IC_MaxCoord || val <= -IC_MaxCoord)
+      return IC_Invalid64;
+    return Math.round(val);
+  }
+  function getLineIntersectPt(ln1a, ln1b, ln2a, ln2b) {
+    const dy1 = ln1b.y - ln1a.y;
+    const dx1 = ln1b.x - ln1a.x;
+    const dy2 = ln2b.y - ln2a.y;
+    const dx2 = ln2b.x - ln2a.x;
+    const det = safeMultiplyDifference(dy1, dx2, dy2, dx1);
+    if (det === 0) {
+      return null;
+    }
+    const t = safeMultiplyDifference(ln1a.x - ln2a.x, dy2, ln1a.y - ln2a.y, dx2) / det;
+    if (t <= 0) {
+      return { x: ln1a.x, y: ln1a.y, z: ln1a.z || 0 };
+    } else if (t >= 1) {
+      return { x: ln1b.x, y: ln1b.y, z: ln1b.z || 0 };
+    } else {
+      return {
+        x: Math.trunc(ln1a.x + t * dx1),
+        y: Math.trunc(ln1a.y + t * dy1),
+        z: 0
+      };
+    }
+  }
+  function getLineIntersectPtD(ln1a, ln1b, ln2a, ln2b) {
+    const dy1 = ln1b.y - ln1a.y;
+    const dx1 = ln1b.x - ln1a.x;
+    const dy2 = ln2b.y - ln2a.y;
+    const dx2 = ln2b.x - ln2a.x;
+    const det = dy1 * dx2 - dy2 * dx1;
+    if (det === 0) {
+      return { success: false, ip: { x: 0, y: 0, z: 0 } };
+    }
+    const t = ((ln1a.x - ln2a.x) * dy2 - (ln1a.y - ln2a.y) * dx2) / det;
+    let ip;
+    if (t <= 0) {
+      ip = { ...ln1a, z: 0 };
+    } else if (t >= 1) {
+      ip = { ...ln1b, z: 0 };
+    } else {
+      ip = {
+        x: ln1a.x + t * dx1,
+        y: ln1a.y + t * dy1,
+        z: 0
+      };
+    }
+    return { success: true, ip };
+  }
+  function segsIntersect2(seg1a, seg1b, seg2a, seg2b, inclusive = false) {
+    if (!inclusive) {
+      const s1 = crossProductSign(seg1a, seg2a, seg2b);
+      const s2 = crossProductSign(seg1b, seg2a, seg2b);
+      const s3 = crossProductSign(seg2a, seg1a, seg1b);
+      const s4 = crossProductSign(seg2b, seg1a, seg1b);
+      return s1 !== 0 && s2 !== 0 && s1 !== s2 && (s3 !== 0 && s4 !== 0 && s3 !== s4);
+    }
+    const res1 = crossProductSign(seg1a, seg2a, seg2b);
+    const res2 = crossProductSign(seg1b, seg2a, seg2b);
+    if (res1 !== 0 && res1 === res2)
+      return false;
+    const res3 = crossProductSign(seg2a, seg1a, seg1b);
+    const res4 = crossProductSign(seg2b, seg1a, seg1b);
+    if (res3 !== 0 && res3 === res4)
+      return false;
+    return res1 !== 0 || res2 !== 0 || res3 !== 0 || res4 !== 0;
+  }
+  function icGetBounds(path) {
+    if (path.length === 0)
+      return { left: 0, top: 0, right: 0, bottom: 0 };
+    const result = {
+      left: Number.MAX_SAFE_INTEGER,
+      top: Number.MAX_SAFE_INTEGER,
+      right: Number.MIN_SAFE_INTEGER,
+      bottom: Number.MIN_SAFE_INTEGER
+    };
+    for (const pt2 of path) {
+      if (pt2.x < result.left)
+        result.left = pt2.x;
+      if (pt2.x > result.right)
+        result.right = pt2.x;
+      if (pt2.y < result.top)
+        result.top = pt2.y;
+      if (pt2.y > result.bottom)
+        result.bottom = pt2.y;
+    }
+    return result.left === Number.MAX_SAFE_INTEGER ? { left: 0, top: 0, right: 0, bottom: 0 } : result;
+  }
+  function getClosestPtOnSegment(offPt, seg1, seg2) {
+    if (seg1.x === seg2.x && seg1.y === seg2.y)
+      return { x: seg1.x, y: seg1.y, z: 0 };
+    const dx = seg2.x - seg1.x;
+    const dy = seg2.y - seg1.y;
+    const q = safeMultiplySum(offPt.x - seg1.x, dx, offPt.y - seg1.y, dy) / safeMultiplySum(dx, dx, dy, dy);
+    const qClamped = q < 0 ? 0 : q > 1 ? 1 : q;
+    return {
+      // use Math.round to match the C# MidpointRounding.ToEven behavior
+      x: Math.round(seg1.x + qClamped * dx),
+      y: Math.round(seg1.y + qClamped * dy),
+      z: 0
+    };
+  }
+  function icPointInPolygon(pt2, polygon) {
+    const len = polygon.length;
+    let start = 0;
+    if (len < 3)
+      return PointInPolygonResult.IsOutside;
+    while (start < len && polygon[start].y === pt2.y)
+      start++;
+    if (start === len)
+      return PointInPolygonResult.IsOutside;
+    let isAbove = polygon[start].y < pt2.y;
+    const startingAbove = isAbove;
+    let val = 0;
+    let i = start + 1;
+    let end = len;
+    while (true) {
+      if (i === end) {
+        if (end === 0 || start === 0)
+          break;
+        end = start;
+        i = 0;
+      }
+      if (isAbove) {
+        while (i < end && polygon[i].y < pt2.y)
+          i++;
+      } else {
+        while (i < end && polygon[i].y > pt2.y)
+          i++;
+      }
+      if (i === end)
+        continue;
+      const curr = polygon[i];
+      const prev = i > 0 ? polygon[i - 1] : polygon[len - 1];
+      if (curr.y === pt2.y) {
+        if (curr.x === pt2.x || curr.y === prev.y && pt2.x < prev.x !== pt2.x < curr.x) {
+          return PointInPolygonResult.IsOn;
+        }
+        i++;
+        if (i === start)
+          break;
+        continue;
+      }
+      if (pt2.x < curr.x && pt2.x < prev.x) {
+      } else if (pt2.x > prev.x && pt2.x > curr.x) {
+        val = 1 - val;
+      } else {
+        const cps2 = crossProductSign(prev, curr, pt2);
+        if (cps2 === 0)
+          return PointInPolygonResult.IsOn;
+        if (cps2 < 0 === isAbove)
+          val = 1 - val;
+      }
+      isAbove = !isAbove;
+      i++;
+    }
+    if (isAbove === startingAbove) {
+      return val === 0 ? PointInPolygonResult.IsOutside : PointInPolygonResult.IsInside;
+    }
+    if (i === len)
+      i = 0;
+    const cps = i === 0 ? crossProductSign(polygon[len - 1], polygon[0], pt2) : crossProductSign(polygon[i - 1], polygon[i], pt2);
+    if (cps === 0)
+      return PointInPolygonResult.IsOn;
+    if (cps < 0 === isAbove)
+      val = 1 - val;
+    return val === 0 ? PointInPolygonResult.IsOutside : PointInPolygonResult.IsInside;
+  }
+  function path2ContainsPath1(path1, path2) {
+    let pip2 = PointInPolygonResult.IsOn;
+    for (const pt2 of path1) {
+      switch (icPointInPolygon(pt2, path2)) {
+        case PointInPolygonResult.IsOutside:
+          if (pip2 === PointInPolygonResult.IsOutside)
+            return false;
+          pip2 = PointInPolygonResult.IsOutside;
+          break;
+        case PointInPolygonResult.IsInside:
+          if (pip2 === PointInPolygonResult.IsInside)
+            return true;
+          pip2 = PointInPolygonResult.IsInside;
+          break;
+        default:
+          break;
+      }
+    }
+    const mp = icGetBounds(path1);
+    let midX, midY;
+    if (Number.isSafeInteger(mp.left) && Number.isSafeInteger(mp.right) && Math.abs(mp.left) + Math.abs(mp.right) > Number.MAX_SAFE_INTEGER) {
+      midX = Number((BigInt(mp.left) + BigInt(mp.right)) / B2);
+      midY = Number((BigInt(mp.top) + BigInt(mp.bottom)) / B2);
+    } else {
+      midX = Math.round((mp.left + mp.right) / 2);
+      midY = Math.round((mp.top + mp.bottom) / 2);
+    }
+    const midPt = { x: midX, y: midY };
+    return icPointInPolygon(midPt, path2) !== PointInPolygonResult.IsOutside;
+  }
+  var InternalClipper = {
+    MaxInt64: IC_MaxInt64,
+    MaxCoord: IC_MaxCoord,
+    max_coord: IC_MaxCoord,
+    min_coord: -IC_MaxCoord,
+    Invalid64: IC_Invalid64,
+    floatingPointTolerance: IC_floatingPointTolerance,
+    defaultMinimumEdgeLength: IC_defaultMinimumEdgeLength,
+    maxCoordForSafeAreaProduct: IC_maxCoordForSafeAreaProduct,
+    maxCoordForSafeCrossSq: IC_maxCoordForSafeCrossSq,
+    maxSafeCoordinateForScale,
+    checkSafeScaleValue,
+    ensureSafeInteger,
+    crossProduct,
+    crossProductSign,
+    checkPrecision,
+    isAlmostZero,
+    triSign,
+    multiplyUInt64,
+    productsAreEqual,
+    isCollinear,
+    dotProduct,
+    dotProductSign,
+    area: icArea,
+    crossProductD,
+    dotProductD,
+    roundToEven,
+    checkCastInt64,
+    getLineIntersectPt,
+    getLineIntersectPtD,
+    segsIntersect: segsIntersect2,
+    getBounds: icGetBounds,
+    getClosestPtOnSegment,
+    pointInPolygon: icPointInPolygon,
+    path2ContainsPath1
+  };
+  var Point64Utils = {
+    create(x = 0, y = 0, z = 0) {
+      return { x: Math.round(x), y: Math.round(y), z };
+    },
+    fromPointD(pt2) {
+      InternalClipper.ensureSafeInteger(pt2.x, "Point64Utils.fromPointD");
+      InternalClipper.ensureSafeInteger(pt2.y, "Point64Utils.fromPointD");
+      return { x: Math.round(pt2.x), y: Math.round(pt2.y), z: pt2.z || 0 };
+    },
+    scale(pt2, scale) {
+      return {
+        x: Math.round(pt2.x * scale),
+        y: Math.round(pt2.y * scale),
+        z: pt2.z || 0
+      };
+    },
+    equals(a, b) {
+      return a.x === b.x && a.y === b.y;
+    },
+    add(a, b) {
+      if (Number.isSafeInteger(a.x) && Number.isSafeInteger(b.x) && Number.isSafeInteger(a.y) && Number.isSafeInteger(b.y)) {
+        const sumX = a.x + b.x;
+        const sumY = a.y + b.y;
+        if (Number.isSafeInteger(sumX) && Number.isSafeInteger(sumY)) {
+          return { x: sumX, y: sumY, z: 0 };
+        }
+        return {
+          x: Number(BigInt(a.x) + BigInt(b.x)),
+          y: Number(BigInt(a.y) + BigInt(b.y)),
+          z: 0
+        };
+      }
+      return { x: a.x + b.x, y: a.y + b.y, z: 0 };
+    },
+    subtract(a, b) {
+      return { x: a.x - b.x, y: a.y - b.y, z: 0 };
+    },
+    toString(pt2) {
+      if (pt2.z !== void 0 && pt2.z !== 0) {
+        return `${pt2.x},${pt2.y},${pt2.z} `;
+      }
+      return `${pt2.x},${pt2.y} `;
+    }
+  };
+  var PointDUtils = {
+    create(x = 0, y = 0, z = 0) {
+      return { x, y, z };
+    },
+    fromPoint64(pt2) {
+      return { x: pt2.x, y: pt2.y, z: pt2.z || 0 };
+    },
+    scale(pt2, scale) {
+      return { x: pt2.x * scale, y: pt2.y * scale, z: pt2.z || 0 };
+    },
+    equals(a, b) {
+      return InternalClipper.isAlmostZero(a.x - b.x) && InternalClipper.isAlmostZero(a.y - b.y);
+    },
+    negate(pt2) {
+      pt2.x = -pt2.x;
+      pt2.y = -pt2.y;
+    },
+    toString(pt2, precision = 2) {
+      if (pt2.z !== void 0 && pt2.z !== 0) {
+        return `${pt2.x.toFixed(precision)},${pt2.y.toFixed(precision)},${pt2.z}`;
+      }
+      return `${pt2.x.toFixed(precision)},${pt2.y.toFixed(precision)}`;
+    }
+  };
+  var Rect64Utils = {
+    create(l = 0, t = 0, r = 0, b = 0) {
+      return { left: l, top: t, right: r, bottom: b };
+    },
+    createInvalid() {
+      return {
+        left: Number.MAX_SAFE_INTEGER,
+        top: Number.MAX_SAFE_INTEGER,
+        right: Number.MIN_SAFE_INTEGER,
+        bottom: Number.MIN_SAFE_INTEGER
+      };
+    },
+    width(rect) {
+      return rect.right - rect.left;
+    },
+    height(rect) {
+      return rect.bottom - rect.top;
+    },
+    isEmpty(rect) {
+      return rect.bottom <= rect.top || rect.right <= rect.left;
+    },
+    isValid(rect) {
+      return rect.left < Number.MAX_SAFE_INTEGER;
+    },
+    midPoint(rect) {
+      if (Number.isSafeInteger(rect.left) && Number.isSafeInteger(rect.right) && Math.abs(rect.left) + Math.abs(rect.right) > Number.MAX_SAFE_INTEGER) {
+        const midX = Number((BigInt(rect.left) + BigInt(rect.right)) / B2);
+        const midY = Number((BigInt(rect.top) + BigInt(rect.bottom)) / B2);
+        return { x: midX, y: midY };
+      }
+      return {
+        x: Math.round((rect.left + rect.right) / 2),
+        y: Math.round((rect.top + rect.bottom) / 2)
+      };
+    },
+    contains(rect, pt2) {
+      return pt2.x > rect.left && pt2.x < rect.right && pt2.y > rect.top && pt2.y < rect.bottom;
+    },
+    containsRect(rect, rec) {
+      return rec.left >= rect.left && rec.right <= rect.right && rec.top >= rect.top && rec.bottom <= rect.bottom;
+    },
+    intersects(rect, rec) {
+      return Math.max(rect.left, rec.left) <= Math.min(rect.right, rec.right) && Math.max(rect.top, rec.top) <= Math.min(rect.bottom, rec.bottom);
+    },
+    asPath(rect) {
+      return [
+        { x: rect.left, y: rect.top, z: 0 },
+        { x: rect.right, y: rect.top, z: 0 },
+        { x: rect.right, y: rect.bottom, z: 0 },
+        { x: rect.left, y: rect.bottom, z: 0 }
+      ];
+    }
+  };
+  var RectDUtils = {
+    create(l = 0, t = 0, r = 0, b = 0) {
+      return { left: l, top: t, right: r, bottom: b };
+    },
+    createInvalid() {
+      return {
+        left: Number.MAX_VALUE,
+        top: Number.MAX_VALUE,
+        right: -Number.MAX_VALUE,
+        bottom: -Number.MAX_VALUE
+      };
+    },
+    width(rect) {
+      return rect.right - rect.left;
+    },
+    height(rect) {
+      return rect.bottom - rect.top;
+    },
+    isEmpty(rect) {
+      return rect.bottom <= rect.top || rect.right <= rect.left;
+    },
+    midPoint(rect) {
+      return {
+        x: (rect.left + rect.right) / 2,
+        y: (rect.top + rect.bottom) / 2
+      };
+    },
+    contains(rect, pt2) {
+      return pt2.x > rect.left && pt2.x < rect.right && pt2.y > rect.top && pt2.y < rect.bottom;
+    },
+    containsRect(rect, rec) {
+      return rec.left >= rect.left && rec.right <= rect.right && rec.top >= rect.top && rec.bottom <= rect.bottom;
+    },
+    intersects(rect, rec) {
+      return Math.max(rect.left, rec.left) < Math.min(rect.right, rec.right) && Math.max(rect.top, rec.top) < Math.min(rect.bottom, rec.bottom);
+    },
+    asPath(rect) {
+      return [
+        { x: rect.left, y: rect.top, z: 0 },
+        { x: rect.right, y: rect.top, z: 0 },
+        { x: rect.right, y: rect.bottom, z: 0 },
+        { x: rect.left, y: rect.bottom, z: 0 }
+      ];
+    }
+  };
+  var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
+  var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
+
+  // node_modules/clipper2-ts/dist/Engine.js
+  var B02 = BigInt(0);
+  var B22 = BigInt(2);
+  var B42 = BigInt(4);
+  var VertexFlags;
+  (function(VertexFlags2) {
+    VertexFlags2[VertexFlags2["None"] = 0] = "None";
+    VertexFlags2[VertexFlags2["OpenStart"] = 1] = "OpenStart";
+    VertexFlags2[VertexFlags2["OpenEnd"] = 2] = "OpenEnd";
+    VertexFlags2[VertexFlags2["LocalMax"] = 4] = "LocalMax";
+    VertexFlags2[VertexFlags2["LocalMin"] = 8] = "LocalMin";
+  })(VertexFlags || (VertexFlags = {}));
+  var ScanlineHeap = class {
+    data = [];
+    push(value) {
+      this.data.push(value);
+      this.siftUp(this.data.length - 1);
+    }
+    peek() {
+      return this.data.length === 0 ? null : this.data[0];
+    }
+    pop() {
+      if (this.data.length === 0)
+        return null;
+      const max = this.data[0];
+      const last = this.data.pop();
+      if (this.data.length > 0) {
+        this.data[0] = last;
+        this.siftDown(0);
+      }
+      return max;
+    }
+    clear() {
+      this.data.length = 0;
+    }
+    // Hole-sift: lift the value once, shift parents/children, then place.
+    // Avoids temporary array allocation from destructuring swap on every step.
+    siftUp(index) {
+      const val = this.data[index];
+      while (index > 0) {
+        const parent = index - 1 >> 1;
+        if (this.data[parent] >= val)
+          break;
+        this.data[index] = this.data[parent];
+        index = parent;
+      }
+      this.data[index] = val;
+    }
+    siftDown(index) {
+      const length = this.data.length;
+      const val = this.data[index];
+      while (true) {
+        const left = (index << 1) + 1;
+        if (left >= length)
+          break;
+        const right = left + 1;
+        let child = left;
+        if (right < length && this.data[right] > this.data[left])
+          child = right;
+        if (this.data[child] <= val)
+          break;
+        this.data[index] = this.data[child];
+        index = child;
+      }
+      this.data[index] = val;
+    }
+  };
+  var Vertex = class {
+    pt;
+    next = null;
+    prev = null;
+    flags;
+    constructor(pt2, flags, prev) {
+      this.pt = pt2;
+      this.flags = flags;
+      this.prev = prev;
+    }
+  };
+  var LocalMinima = class {
+    vertex;
+    polytype;
+    isOpen;
+    constructor(vertex, polytype, isOpen = false) {
+      this.vertex = vertex;
+      this.polytype = polytype;
+      this.isOpen = isOpen;
+    }
+    equals(other) {
+      return other !== null && this.vertex === other.vertex;
+    }
+  };
+  function createIntersectNode(pt2, edge1, edge2) {
+    return { pt: pt2, edge1, edge2 };
+  }
+  var OutPt = class {
+    pt;
+    next;
+    prev;
+    outrec;
+    horz;
+    constructor(pt2, outrec) {
+      this.pt = pt2;
+      this.outrec = outrec;
+      this.next = this;
+      this.prev = this;
+      this.horz = null;
+    }
+  };
+  var JoinWith;
+  (function(JoinWith2) {
+    JoinWith2[JoinWith2["None"] = 0] = "None";
+    JoinWith2[JoinWith2["Left"] = 1] = "Left";
+    JoinWith2[JoinWith2["Right"] = 2] = "Right";
+  })(JoinWith || (JoinWith = {}));
+  var HorzPosition;
+  (function(HorzPosition2) {
+    HorzPosition2[HorzPosition2["Bottom"] = 0] = "Bottom";
+    HorzPosition2[HorzPosition2["Middle"] = 1] = "Middle";
+    HorzPosition2[HorzPosition2["Top"] = 2] = "Top";
+  })(HorzPosition || (HorzPosition = {}));
+  var OutRec = class {
+    idx = 0;
+    owner = null;
+    frontEdge = null;
+    backEdge = null;
+    pts = null;
+    polypath = null;
+    bounds = { left: 0, top: 0, right: 0, bottom: 0 };
+    path = [];
+    isOpen = false;
+    splits = null;
+    recursiveSplit = null;
+  };
+  var HorzSegment = class {
+    leftOp;
+    rightOp;
+    leftToRight;
+    constructor(op) {
+      this.leftOp = op;
+      this.rightOp = null;
+      this.leftToRight = true;
+    }
+  };
+  var HorzJoin = class {
+    op1;
+    op2;
+    constructor(ltor, rtol) {
+      this.op1 = ltor;
+      this.op2 = rtol;
+    }
+  };
+  function compareHorzSegments(hs1, hs2) {
+    if (hs1.rightOp === null) {
+      return hs2.rightOp === null ? 0 : 1;
+    }
+    if (hs2.rightOp === null)
+      return -1;
+    return hs1.leftOp.pt.x - hs2.leftOp.pt.x;
+  }
+  function compareIntersectNodes(a, b) {
+    if (a.pt.y !== b.pt.y)
+      return a.pt.y > b.pt.y ? -1 : 1;
+    if (a.pt.x !== b.pt.x)
+      return a.pt.x < b.pt.x ? -1 : 1;
+    if (a.edge1.curX !== b.edge1.curX)
+      return a.edge1.curX < b.edge1.curX ? -1 : 1;
+    return a.edge2.curX < b.edge2.curX ? -1 : a.edge2.curX > b.edge2.curX ? 1 : 0;
+  }
+  var Active = class {
+    bot = { x: 0, y: 0 };
+    top = { x: 0, y: 0 };
+    curX = 0;
+    // current (updated at every new scanline) - keep as number but ensure integer precision
+    dx = 0;
+    windDx = 0;
+    // 1 or -1 depending on winding direction
+    windCount = 0;
+    windCount2 = 0;
+    // winding count of the opposite polytype
+    outrec = null;
+    // AEL: 'active edge list' (Vatti's AET - active edge table)
+    //     a linked list of all edges (from left to right) that are present
+    //     (or 'active') within the current scanbeam (a horizontal 'beam' that
+    //     sweeps from bottom to top over the paths in the clipping operation).
+    prevInAEL = null;
+    nextInAEL = null;
+    // SEL: 'sorted edge list' (Vatti's ST - sorted table)
+    //     linked list used when sorting edges into their new positions at the
+    //     top of scanbeams, but also (re)used to process horizontals.
+    prevInSEL = null;
+    nextInSEL = null;
+    jump = null;
+    vertexTop = null;
+    localMin = null;
+    // the bottom of an edge 'bound' (also Vatti)
+    isLeftBound = false;
+    joinWith = JoinWith.None;
+  };
+  var ClipperEngine = {
+    addLocMin(vert, polytype, isOpen, minimaList) {
+      if ((vert.flags & VertexFlags.LocalMin) !== VertexFlags.None)
+        return;
+      vert.flags |= VertexFlags.LocalMin;
+      const lm = new LocalMinima(vert, polytype, isOpen);
+      minimaList.push(lm);
+    },
+    addPathsToVertexList(paths, polytype, isOpen, minimaList, vertexList) {
+      for (let i = 0, len = paths.length; i < len; i++) {
+        const path = paths[i];
+        let v0 = null;
+        let prevV = null;
+        let prevPt = null;
+        for (let j = 0, len2 = path.length; j < len2; j++) {
+          const pt2 = path[j];
+          if (v0 === null) {
+            v0 = new Vertex(pt2, VertexFlags.None, null);
+            vertexList.push(v0);
+            prevV = v0;
+            prevPt = pt2;
+          } else if (!(prevPt.x === pt2.x && prevPt.y === pt2.y)) {
+            const currV2 = new Vertex(pt2, VertexFlags.None, prevV);
+            prevV.next = currV2;
+            prevV = currV2;
+            prevPt = pt2;
+          }
+        }
+        if (prevV?.prev == null)
+          continue;
+        if (!isOpen && prevV.pt.x === v0.pt.x && prevV.pt.y === v0.pt.y)
+          prevV = prevV.prev;
+        prevV.next = v0;
+        v0.prev = prevV;
+        if (!isOpen && prevV.next === prevV)
+          continue;
+        let goingUp;
+        if (isOpen) {
+          let currV2 = v0.next;
+          while (currV2 !== v0 && currV2.pt.y === v0.pt.y)
+            currV2 = currV2.next;
+          goingUp = currV2.pt.y <= v0.pt.y;
+          if (goingUp) {
+            v0.flags = VertexFlags.OpenStart;
+            ClipperEngine.addLocMin(v0, polytype, true, minimaList);
+          } else {
+            v0.flags = VertexFlags.OpenStart | VertexFlags.LocalMax;
+          }
+        } else {
+          prevV = v0.prev;
+          while (prevV !== v0 && prevV.pt.y === v0.pt.y)
+            prevV = prevV.prev;
+          if (prevV === v0)
+            continue;
+          goingUp = prevV.pt.y > v0.pt.y;
+        }
+        const goingUp0 = goingUp;
+        prevV = v0;
+        let currV = v0.next;
+        while (currV !== v0) {
+          if (currV.pt.y > prevV.pt.y && goingUp) {
+            prevV.flags |= VertexFlags.LocalMax;
+            goingUp = false;
+          } else if (currV.pt.y < prevV.pt.y && !goingUp) {
+            goingUp = true;
+            ClipperEngine.addLocMin(prevV, polytype, isOpen, minimaList);
+          }
+          prevV = currV;
+          currV = currV.next;
+        }
+        if (isOpen) {
+          prevV.flags |= VertexFlags.OpenEnd;
+          if (goingUp)
+            prevV.flags |= VertexFlags.LocalMax;
+          else
+            ClipperEngine.addLocMin(prevV, polytype, isOpen, minimaList);
+        } else if (goingUp !== goingUp0) {
+          if (goingUp0)
+            ClipperEngine.addLocMin(prevV, polytype, false, minimaList);
+          else
+            prevV.flags |= VertexFlags.LocalMax;
+        }
+      }
+    }
+  };
+  var ClipperBase = class _ClipperBase {
+    // When there are no open paths, a lot of open-path branching becomes dead code.
+    // We set this per execute to allow fast short-circuiting in hot helpers.
+    static openPathsEnabled = true;
+    cliptype = ClipType.NoClip;
+    fillrule = FillRule.EvenOdd;
+    actives = null;
+    sel = null;
+    // X bounds of the horizontal being processed, written by resetHorzDirection
+    // (C# passes these as 'out' parameters)
+    horzLeft = 0;
+    horzRight = 0;
+    minimaList = [];
+    intersectList = [];
+    vertexList = [];
+    outrecList = [];
+    scanlineHeap = new ScanlineHeap();
+    // For very small inputs, a heap + set can cost more than it saves.
+    // Use an array-based scanline mode initially, and upgrade to heap+set
+    // automatically if the scanline list grows beyond a threshold.
+    scanlineArr = [];
+    useScanlineArray = false;
+    horzSegList = [];
+    horzJoinList = [];
+    currentLocMin = 0;
+    // y of minimaList[currentLocMin], cached so popScanline doesn't chase
+    // minimaList -> vertex -> pt on every call. hasLocMin is false once all
+    // minima are consumed (an integer sentinel keeps the field a Smi for V8).
+    nextLocMinY = 0;
+    hasLocMin = false;
+    currentBotY = 0;
+    // True when every active edge's curX already equals topX(edge, topY) for the
+    // scanbeam top being processed (set by buildIntersectList when the SEL scan
+    // finds no inversions, i.e. no intersections; consumed by doTopOfScanbeam).
+    curXValidAtTop = false;
+    isSortedMinimaList = false;
+    hasOpenPaths = false;
+    usingPolytree = false;
+    succeeded = false;
+    // Cache Z callback for the duration of an execute to avoid repeated virtual calls
+    // to getZCallback() in hot paths.
+    zCallbackInternal = void 0;
+    preserveCollinear = true;
+    reverseSolution = false;
+    constructor() {
+    }
+    // Z-coordinate callback support
+    // Override in subclasses (Clipper64/ClipperD) to provide callback
+    getZCallback() {
+      return void 0;
+    }
+    xyEqual(pt1, pt2) {
+      return pt1.x === pt2.x && pt1.y === pt2.y;
+    }
+    setZ(ae1, ae2, intersectPt) {
+      const zCallback = this.zCallbackInternal;
+      if (!zCallback)
+        return;
+      if (_ClipperBase.getPolyType(ae1) === PathType.Subject) {
+        if (this.xyEqual(intersectPt, ae1.bot)) {
+          intersectPt.z = ae1.bot.z ?? 0;
+        } else if (this.xyEqual(intersectPt, ae1.top)) {
+          intersectPt.z = ae1.top.z ?? 0;
+        } else if (this.xyEqual(intersectPt, ae2.bot)) {
+          intersectPt.z = ae2.bot.z ?? 0;
+        } else if (this.xyEqual(intersectPt, ae2.top)) {
+          intersectPt.z = ae2.top.z ?? 0;
+        } else {
+          intersectPt.z = 0;
+        }
+        zCallback(ae1.bot, ae1.top, ae2.bot, ae2.top, intersectPt);
+      } else {
+        if (this.xyEqual(intersectPt, ae2.bot)) {
+          intersectPt.z = ae2.bot.z ?? 0;
+        } else if (this.xyEqual(intersectPt, ae2.top)) {
+          intersectPt.z = ae2.top.z ?? 0;
+        } else if (this.xyEqual(intersectPt, ae1.bot)) {
+          intersectPt.z = ae1.bot.z ?? 0;
+        } else if (this.xyEqual(intersectPt, ae1.top)) {
+          intersectPt.z = ae1.top.z ?? 0;
+        } else {
+          intersectPt.z = 0;
+        }
+        zCallback(ae2.bot, ae2.top, ae1.bot, ae1.top, intersectPt);
+      }
+    }
+    // Helper functions
+    static isOdd(val) {
+      return (val & 1) !== 0;
+    }
+    static isHotEdge(ae) {
+      return ae.outrec != null;
+    }
+    static isOpen(ae) {
+      return _ClipperBase.openPathsEnabled && ae.localMin.isOpen;
+    }
+    static isOpenEnd(ae) {
+      return _ClipperBase.openPathsEnabled && ae.localMin.isOpen && _ClipperBase.isOpenEndVertex(ae.vertexTop);
+    }
+    static isOpenEndVertex(v) {
+      return (v.flags & (VertexFlags.OpenStart | VertexFlags.OpenEnd)) !== VertexFlags.None;
+    }
+    static getPrevHotEdge(ae) {
+      let prev = ae.prevInAEL;
+      if (!_ClipperBase.openPathsEnabled) {
+        while (prev !== null && !_ClipperBase.isHotEdge(prev)) {
+          prev = prev.prevInAEL;
+        }
+        return prev;
+      }
+      while (prev !== null && (prev.localMin.isOpen || !_ClipperBase.isHotEdge(prev))) {
+        prev = prev.prevInAEL;
+      }
+      return prev;
+    }
+    static isFront(ae) {
+      return ae === ae.outrec.frontEdge;
+    }
+    /*******************************************************************************
+    *  Dx:                             0(90deg)                                    *
+    *                                  |                                           *
+    *               +inf (180deg) <--- o ---> -inf (0deg)                          *
+    *******************************************************************************/
+    static getDx(pt1, pt2) {
+      const dy = pt2.y - pt1.y;
+      if (dy !== 0) {
+        return (pt2.x - pt1.x) / dy;
+      }
+      return pt2.x > pt1.x ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+    }
+    static topX(ae, currentY) {
+      if (currentY === ae.top.y || ae.top.x === ae.bot.x)
+        return ae.top.x;
+      if (currentY === ae.bot.y)
+        return ae.bot.x;
+      return InternalClipper.roundToEven(ae.bot.x + ae.dx * (currentY - ae.bot.y));
+    }
+    static isHorizontal(ae) {
+      return ae.dx === Number.NEGATIVE_INFINITY || ae.dx === Number.POSITIVE_INFINITY;
+    }
+    static isHeadingRightHorz(ae) {
+      return ae.dx === Number.NEGATIVE_INFINITY;
+    }
+    static isHeadingLeftHorz(ae) {
+      return ae.dx === Number.POSITIVE_INFINITY;
+    }
+    static getPolyType(ae) {
+      return ae.localMin.polytype;
+    }
+    static isSamePolyType(ae1, ae2) {
+      return ae1.localMin.polytype === ae2.localMin.polytype;
+    }
+    static setDx(ae) {
+      ae.dx = _ClipperBase.getDx(ae.bot, ae.top);
+    }
+    static nextVertex(ae) {
+      return ae.windDx > 0 ? ae.vertexTop.next : ae.vertexTop.prev;
+    }
+    static prevPrevVertex(ae) {
+      return ae.windDx > 0 ? ae.vertexTop.prev.prev : ae.vertexTop.next.next;
+    }
+    static isMaximaVertex(v) {
+      return (v.flags & VertexFlags.LocalMax) !== VertexFlags.None;
+    }
+    static isMaximaEdge(ae) {
+      return (ae.vertexTop.flags & VertexFlags.LocalMax) !== VertexFlags.None;
+    }
+    static getMaximaPair(ae) {
+      let ae2 = ae.nextInAEL;
+      while (ae2 !== null) {
+        if (ae2.vertexTop === ae.vertexTop)
+          return ae2;
+        ae2 = ae2.nextInAEL;
+      }
+      return null;
+    }
+    // optimization (not in C# reference): fast bounding box overlap check for segment intersection
+    boundingBoxesOverlap(p1, p2, p3, p4) {
+      const min1x = p1.x < p2.x ? p1.x : p2.x;
+      const max2x = p3.x > p4.x ? p3.x : p4.x;
+      if (max2x < min1x)
+        return false;
+      const max1x = p1.x > p2.x ? p1.x : p2.x;
+      const min2x = p3.x < p4.x ? p3.x : p4.x;
+      if (max1x < min2x)
+        return false;
+      const min1y = p1.y < p2.y ? p1.y : p2.y;
+      const max2y = p3.y > p4.y ? p3.y : p4.y;
+      if (max2y < min1y)
+        return false;
+      const max1y = p1.y > p2.y ? p1.y : p2.y;
+      const min2y = p3.y < p4.y ? p3.y : p4.y;
+      return max1y >= min2y;
+    }
+    clearSolutionOnly() {
+      while (this.actives !== null)
+        this.deleteFromAEL(this.actives);
+      this.scanlineHeap.clear();
+      this.scanlineArr.length = 0;
+      this.disposeIntersectNodes();
+      this.outrecList.length = 0;
+      this.horzSegList.length = 0;
+      this.horzJoinList.length = 0;
+    }
+    clear() {
+      this.clearSolutionOnly();
+      this.minimaList.length = 0;
+      this.vertexList.length = 0;
+      this.currentLocMin = 0;
+      this.isSortedMinimaList = false;
+      this.hasOpenPaths = false;
+    }
+    reset() {
+      if (!this.isSortedMinimaList) {
+        this.minimaList.sort((a, b) => b.vertex.pt.y - a.vertex.pt.y);
+        this.isSortedMinimaList = true;
+      }
+      this.scanlineHeap.clear();
+      this.scanlineArr.length = 0;
+      this.useScanlineArray = this.minimaList.length <= 16;
+      this.currentBotY = 0;
+      this.currentLocMin = 0;
+      this.hasLocMin = this.minimaList.length > 0;
+      this.nextLocMinY = this.hasLocMin ? this.minimaList[0].vertex.pt.y : 0;
+      this.actives = null;
+      this.sel = null;
+      this.curXValidAtTop = false;
+      this.succeeded = true;
+    }
+    upgradeScanlineStructureFromArray() {
+      const arr = this.scanlineArr;
+      for (let i = 0, len = arr.length; i < len; i++) {
+        const y = arr[i];
+        this.scanlineHeap.push(y);
+      }
+      arr.length = 0;
+      this.useScanlineArray = false;
+    }
+    insertScanline(y) {
+      if (this.useScanlineArray) {
+        const arr = this.scanlineArr;
+        for (let i = 0, len = arr.length; i < len; i++) {
+          if (arr[i] === y)
+            return;
+        }
+        arr.push(y);
+        if (arr.length > 64)
+          this.upgradeScanlineStructureFromArray();
+        return;
+      }
+      this.scanlineHeap.push(y);
+    }
+    // Returns the next scanline Y value, or null if empty.
+    // Avoids allocating a wrapper object on every call in the main sweep loop.
+    // The next scanline is the larger of the next local minima's y (local minima
+    // are sorted by descending y) and the top of the scanline list. A y taken
+    // from a local minima isn't consumed here; it stays pending until
+    // popLocalMinima, so insertLocalMinimaIntoAEL must run before the next pop.
+    popScanline() {
+      const hasLocMin = this.hasLocMin;
+      const locMinY = this.nextLocMinY;
+      if (this.useScanlineArray) {
+        const arr = this.scanlineArr;
+        const len = arr.length;
+        if (len === 0)
+          return hasLocMin ? locMinY : null;
+        let bestIdx = 0;
+        let bestY = arr[0];
+        for (let i = 1; i < len; i++) {
+          const v = arr[i];
+          if (v > bestY) {
+            bestY = v;
+            bestIdx = i;
+          }
+        }
+        if (hasLocMin && locMinY > bestY)
+          return locMinY;
+        arr[bestIdx] = arr[len - 1];
+        arr.pop();
+        return bestY;
+      }
+      const top = this.scanlineHeap.peek();
+      if (top === null)
+        return hasLocMin ? locMinY : null;
+      if (hasLocMin && locMinY > top)
+        return locMinY;
+      this.scanlineHeap.pop();
+      while (this.scanlineHeap.peek() === top)
+        this.scanlineHeap.pop();
+      return top;
+    }
+    hasLocMinAtY(y) {
+      return this.hasLocMin && this.nextLocMinY === y;
+    }
+    popLocalMinima() {
+      const lm = this.minimaList[this.currentLocMin++];
+      this.hasLocMin = this.currentLocMin < this.minimaList.length;
+      this.nextLocMinY = this.hasLocMin ? this.minimaList[this.currentLocMin].vertex.pt.y : 0;
+      return lm;
+    }
+    addPath(path, polytype, isOpen = false) {
+      const tmp = [path];
+      this.addPaths(tmp, polytype, isOpen);
+    }
+    addPaths(paths, polytype, isOpen = false) {
+      if (isOpen)
+        this.hasOpenPaths = true;
+      this.isSortedMinimaList = false;
+      ClipperEngine.addPathsToVertexList(paths, polytype, isOpen, this.minimaList, this.vertexList);
+    }
+    addReuseableData(reuseableData) {
+      if (reuseableData["minimaList"].length === 0)
+        return;
+      this.isSortedMinimaList = false;
+      for (const lm of reuseableData["minimaList"]) {
+        this.minimaList.push(new LocalMinima(lm.vertex, lm.polytype, lm.isOpen));
+        if (lm.isOpen)
+          this.hasOpenPaths = true;
+      }
+    }
+    deleteFromAEL(ae) {
+      const prev = ae.prevInAEL;
+      const next = ae.nextInAEL;
+      if (prev === null && next === null && ae !== this.actives)
+        return;
+      if (prev !== null) {
+        prev.nextInAEL = next;
+      } else {
+        this.actives = next;
+      }
+      if (next !== null)
+        next.prevInAEL = prev;
+    }
+    getBounds() {
+      const bounds = {
+        left: Number.MAX_SAFE_INTEGER,
+        top: Number.MAX_SAFE_INTEGER,
+        right: Number.MIN_SAFE_INTEGER,
+        bottom: Number.MIN_SAFE_INTEGER
+      };
+      for (const t of this.vertexList) {
+        let v = t;
+        do {
+          if (v.pt.x < bounds.left)
+            bounds.left = v.pt.x;
+          if (v.pt.x > bounds.right)
+            bounds.right = v.pt.x;
+          if (v.pt.y < bounds.top)
+            bounds.top = v.pt.y;
+          if (v.pt.y > bounds.bottom)
+            bounds.bottom = v.pt.y;
+          v = v.next;
+        } while (v !== t);
+      }
+      return Rect64Utils.isEmpty(bounds) ? { left: 0, top: 0, right: 0, bottom: 0 } : bounds;
+    }
+    executeInternal(ct, fillRule) {
+      if (ct === ClipType.NoClip)
+        return;
+      _ClipperBase.openPathsEnabled = this.hasOpenPaths;
+      this.zCallbackInternal = this.getZCallback();
+      this.fillrule = fillRule;
+      this.cliptype = ct;
+      this.reset();
+      let y = this.popScanline();
+      if (y === null)
+        return;
+      while (this.succeeded) {
+        this.insertLocalMinimaIntoAEL(y);
+        let ae;
+        while ((ae = this.popHorz()) !== null)
+          this.doHorizontal(ae);
+        if (this.horzSegList.length > 0) {
+          this.convertHorzSegsToJoins();
+          this.horzSegList.length = 0;
+        }
+        this.currentBotY = y;
+        const nextY = this.popScanline();
+        if (nextY === null)
+          break;
+        y = nextY;
+        this.doIntersections(y);
+        this.doTopOfScanbeam(y);
+        while ((ae = this.popHorz()) !== null)
+          this.doHorizontal(ae);
+      }
+      if (this.succeeded)
+        this.processHorzJoins();
+    }
+    insertLocalMinimaIntoAEL(botY) {
+      while (this.hasLocMinAtY(botY)) {
+        const localMinima = this.popLocalMinima();
+        let leftBound;
+        if ((localMinima.vertex.flags & VertexFlags.OpenStart) !== VertexFlags.None) {
+          leftBound = null;
+        } else {
+          leftBound = new Active();
+          leftBound.bot = localMinima.vertex.pt;
+          leftBound.curX = localMinima.vertex.pt.x;
+          leftBound.windDx = -1;
+          leftBound.vertexTop = localMinima.vertex.prev;
+          leftBound.top = localMinima.vertex.prev.pt;
+          leftBound.outrec = null;
+          leftBound.localMin = localMinima;
+          _ClipperBase.setDx(leftBound);
+        }
+        let rightBound;
+        if ((localMinima.vertex.flags & VertexFlags.OpenEnd) !== VertexFlags.None) {
+          rightBound = null;
+        } else {
+          rightBound = new Active();
+          rightBound.bot = localMinima.vertex.pt;
+          rightBound.curX = localMinima.vertex.pt.x;
+          rightBound.windDx = 1;
+          rightBound.vertexTop = localMinima.vertex.next;
+          rightBound.top = localMinima.vertex.next.pt;
+          rightBound.outrec = null;
+          rightBound.localMin = localMinima;
+          _ClipperBase.setDx(rightBound);
+        }
+        if (leftBound !== null && rightBound !== null) {
+          if (_ClipperBase.isHorizontal(leftBound)) {
+            if (_ClipperBase.isHeadingRightHorz(leftBound)) {
+              const tmp = leftBound;
+              leftBound = rightBound;
+              rightBound = tmp;
+            }
+          } else if (_ClipperBase.isHorizontal(rightBound)) {
+            if (_ClipperBase.isHeadingLeftHorz(rightBound)) {
+              const tmp = leftBound;
+              leftBound = rightBound;
+              rightBound = tmp;
+            }
+          } else if (leftBound.dx < rightBound.dx) {
+            const tmp = leftBound;
+            leftBound = rightBound;
+            rightBound = tmp;
+          }
+        } else if (leftBound === null) {
+          leftBound = rightBound;
+          rightBound = null;
+        }
+        let contributing;
+        leftBound.isLeftBound = true;
+        this.insertLeftEdge(leftBound);
+        if (!_ClipperBase.openPathsEnabled) {
+          this.setWindCountForClosedPathEdge(leftBound);
+          contributing = this.isContributingClosed(leftBound);
+        } else if (_ClipperBase.isOpen(leftBound)) {
+          this.setWindCountForOpenPathEdge(leftBound);
+          contributing = this.isContributingOpen(leftBound);
+        } else {
+          this.setWindCountForClosedPathEdge(leftBound);
+          contributing = this.isContributingClosed(leftBound);
+        }
+        if (rightBound !== null) {
+          rightBound.windCount = leftBound.windCount;
+          rightBound.windCount2 = leftBound.windCount2;
+          this.insertRightEdge(leftBound, rightBound);
+          if (contributing) {
+            this.addLocalMinPoly(leftBound, rightBound, leftBound.bot, true);
+            if (!_ClipperBase.isHorizontal(leftBound)) {
+              this.checkJoinLeft(leftBound, leftBound.bot);
+            }
+          }
+          while (rightBound.nextInAEL !== null && this.isValidAelOrder(rightBound.nextInAEL, rightBound)) {
+            this.intersectEdges(rightBound, rightBound.nextInAEL, rightBound.bot);
+            this.swapPositionsInAEL(rightBound, rightBound.nextInAEL);
+          }
+          if (_ClipperBase.isHorizontal(rightBound)) {
+            this.pushHorz(rightBound);
+          } else {
+            this.checkJoinRight(rightBound, rightBound.bot);
+            this.insertScanline(rightBound.top.y);
+          }
+        } else if (contributing && _ClipperBase.openPathsEnabled) {
+          this.startOpenPath(leftBound, leftBound.bot);
+        }
+        if (_ClipperBase.isHorizontal(leftBound)) {
+          this.pushHorz(leftBound);
+        } else {
+          this.insertScanline(leftBound.top.y);
+        }
+      }
+    }
+    pushHorz(ae) {
+      ae.nextInSEL = this.sel;
+      this.sel = ae;
+    }
+    popHorz() {
+      const ae = this.sel;
+      if (ae === null)
+        return null;
+      this.sel = this.sel.nextInSEL;
+      return ae;
+    }
+    doHorizontal(horz) {
+      if (!_ClipperBase.openPathsEnabled) {
+        this.doHorizontalClosed(horz);
+        return;
+      }
+      const horzIsOpen = _ClipperBase.isOpen(horz);
+      const y = horz.bot.y;
+      const vertexMax = horzIsOpen ? this.getCurrYMaximaVertexOpen(horz) : this.getCurrYMaximaVertex(horz);
+      let isLeftToRight = this.resetHorzDirection(horz, vertexMax);
+      let leftX2 = this.horzLeft;
+      let rightX2 = this.horzRight;
+      if (_ClipperBase.isHotEdge(horz)) {
+        const op = this.addOutPt(horz, { x: horz.curX, y });
+        this.addToHorzSegList(op);
+      }
+      while (true) {
+        let ae = isLeftToRight ? horz.nextInAEL : horz.prevInAEL;
+        while (ae !== null) {
+          if (ae.vertexTop === vertexMax) {
+            if (_ClipperBase.isHotEdge(horz) && this.isJoined(ae))
+              this.split(ae, ae.top);
+            if (_ClipperBase.isHotEdge(horz)) {
+              while (horz.vertexTop !== vertexMax) {
+                this.addOutPt(horz, horz.top);
+                this.updateEdgeIntoAEL(horz);
+              }
+              if (isLeftToRight) {
+                this.addLocalMaxPoly(horz, ae, horz.top);
+              } else {
+                this.addLocalMaxPoly(ae, horz, horz.top);
+              }
+            }
+            this.deleteFromAEL(ae);
+            this.deleteFromAEL(horz);
+            return;
+          }
+          if (vertexMax !== horz.vertexTop || _ClipperBase.isOpenEnd(horz)) {
+            if (isLeftToRight && ae.curX > rightX2 || !isLeftToRight && ae.curX < leftX2)
+              break;
+            if (ae.curX === horz.top.x && !_ClipperBase.isHorizontal(ae)) {
+              const pt3 = _ClipperBase.nextVertex(horz).pt;
+              if (_ClipperBase.isOpen(ae) && !_ClipperBase.isSamePolyType(ae, horz) && !_ClipperBase.isHotEdge(ae)) {
+                if (isLeftToRight && _ClipperBase.topX(ae, pt3.y) > pt3.x || !isLeftToRight && _ClipperBase.topX(ae, pt3.y) < pt3.x)
+                  break;
+              } else if (isLeftToRight && _ClipperBase.topX(ae, pt3.y) >= pt3.x || !isLeftToRight && _ClipperBase.topX(ae, pt3.y) <= pt3.x)
+                break;
+            }
+          }
+          const pt2 = { x: ae.curX, y };
+          if (isLeftToRight) {
+            this.intersectEdges(horz, ae, pt2);
+            this.swapPositionsInAEL(horz, ae);
+            this.checkJoinLeft(ae, pt2);
+            horz.curX = ae.curX;
+            ae = horz.nextInAEL;
+          } else {
+            this.intersectEdges(ae, horz, pt2);
+            this.swapPositionsInAEL(ae, horz);
+            this.checkJoinRight(ae, pt2);
+            horz.curX = ae.curX;
+            ae = horz.prevInAEL;
+          }
+          if (_ClipperBase.isHotEdge(horz)) {
+            this.addToHorzSegList(this.getLastOp(horz));
+          }
+        }
+        if (horzIsOpen && _ClipperBase.isOpenEnd(horz)) {
+          if (_ClipperBase.isHotEdge(horz)) {
+            this.addOutPt(horz, horz.top);
+            if (_ClipperBase.isFront(horz)) {
+              horz.outrec.frontEdge = null;
+            } else {
+              horz.outrec.backEdge = null;
+            }
+            horz.outrec = null;
+          }
+          this.deleteFromAEL(horz);
+          return;
+        }
+        if (_ClipperBase.nextVertex(horz).pt.y !== horz.top.y) {
+          break;
+        }
+        if (_ClipperBase.isHotEdge(horz)) {
+          this.addOutPt(horz, horz.top);
+        }
+        this.updateEdgeIntoAEL(horz);
+        isLeftToRight = this.resetHorzDirection(horz, vertexMax);
+        leftX2 = this.horzLeft;
+        rightX2 = this.horzRight;
+      }
+      if (_ClipperBase.isHotEdge(horz)) {
+        const op = this.addOutPt(horz, horz.top);
+        this.addToHorzSegList(op);
+      }
+      this.updateEdgeIntoAEL(horz);
+    }
+    // Closed-path-only horizontal processing (no open-path branching).
+    doHorizontalClosed(horz) {
+      const y = horz.bot.y;
+      const vertexMax = this.getCurrYMaximaVertex(horz);
+      let isLeftToRight = this.resetHorzDirection(horz, vertexMax);
+      let leftX2 = this.horzLeft;
+      let rightX2 = this.horzRight;
+      if (_ClipperBase.isHotEdge(horz)) {
+        const op = this.addOutPt(horz, { x: horz.curX, y });
+        this.addToHorzSegList(op);
+      }
+      while (true) {
+        let ae = isLeftToRight ? horz.nextInAEL : horz.prevInAEL;
+        while (ae !== null) {
+          if (ae.vertexTop === vertexMax) {
+            if (_ClipperBase.isHotEdge(horz) && this.isJoined(ae))
+              this.split(ae, ae.top);
+            if (_ClipperBase.isHotEdge(horz)) {
+              while (horz.vertexTop !== vertexMax) {
+                this.addOutPt(horz, horz.top);
+                this.updateEdgeIntoAEL(horz);
+              }
+              if (isLeftToRight) {
+                this.addLocalMaxPoly(horz, ae, horz.top);
+              } else {
+                this.addLocalMaxPoly(ae, horz, horz.top);
+              }
+            }
+            this.deleteFromAEL(ae);
+            this.deleteFromAEL(horz);
+            return;
+          }
+          if (vertexMax !== horz.vertexTop) {
+            if (isLeftToRight && ae.curX > rightX2 || !isLeftToRight && ae.curX < leftX2)
+              break;
+            if (ae.curX === horz.top.x && !_ClipperBase.isHorizontal(ae)) {
+              const nextPt = _ClipperBase.nextVertex(horz).pt;
+              const tx = _ClipperBase.topX(ae, nextPt.y);
+              if (isLeftToRight && tx >= nextPt.x || !isLeftToRight && tx <= nextPt.x)
+                break;
+            }
+          }
+          const pt2 = { x: ae.curX, y };
+          if (isLeftToRight) {
+            this.intersectEdges(horz, ae, pt2);
+            this.swapPositionsInAEL(horz, ae);
+            this.checkJoinLeft(ae, pt2);
+            horz.curX = ae.curX;
+            ae = horz.nextInAEL;
+          } else {
+            this.intersectEdges(ae, horz, pt2);
+            this.swapPositionsInAEL(ae, horz);
+            this.checkJoinRight(ae, pt2);
+            horz.curX = ae.curX;
+            ae = horz.prevInAEL;
+          }
+          if (_ClipperBase.isHotEdge(horz)) {
+            this.addToHorzSegList(this.getLastOp(horz));
+          }
+        }
+        if (_ClipperBase.nextVertex(horz).pt.y !== horz.top.y) {
+          break;
+        }
+        if (_ClipperBase.isHotEdge(horz)) {
+          this.addOutPt(horz, horz.top);
+        }
+        this.updateEdgeIntoAEL(horz);
+        isLeftToRight = this.resetHorzDirection(horz, vertexMax);
+        leftX2 = this.horzLeft;
+        rightX2 = this.horzRight;
+      }
+      if (_ClipperBase.isHotEdge(horz)) {
+        const op = this.addOutPt(horz, horz.top);
+        this.addToHorzSegList(op);
+      }
+      this.updateEdgeIntoAEL(horz);
+    }
+    convertHorzSegsToJoins() {
+      const list = this.horzSegList;
+      let k = 0;
+      for (let i = 0, len = list.length; i < len; i++) {
+        const hs = list[i];
+        if (this.updateHorzSegment(hs))
+          list[k++] = hs;
+      }
+      if (k < 2)
+        return;
+      list.length = k;
+      this.horzSegList.sort(compareHorzSegments);
+      for (let i = 0; i < k - 1; i++) {
+        const hs1 = this.horzSegList[i];
+        for (let j = i + 1; j < k; j++) {
+          const hs2 = this.horzSegList[j];
+          if (hs2.leftOp.pt.x >= hs1.rightOp.pt.x || hs2.leftToRight === hs1.leftToRight || hs2.rightOp.pt.x <= hs1.leftOp.pt.x)
+            continue;
+          const currY = hs1.leftOp.pt.y;
+          if (hs1.leftToRight) {
+            while (hs1.leftOp.next.pt.y === currY && hs1.leftOp.next.pt.x <= hs2.leftOp.pt.x)
+              hs1.leftOp = hs1.leftOp.next;
+            while (hs2.leftOp.prev.pt.y === currY && hs2.leftOp.prev.pt.x <= hs1.leftOp.pt.x)
+              hs2.leftOp = hs2.leftOp.prev;
+            const join = new HorzJoin(this.duplicateOp(hs1.leftOp, true), this.duplicateOp(hs2.leftOp, false));
+            this.horzJoinList.push(join);
+          } else {
+            while (hs1.leftOp.prev.pt.y === currY && hs1.leftOp.prev.pt.x <= hs2.leftOp.pt.x)
+              hs1.leftOp = hs1.leftOp.prev;
+            while (hs2.leftOp.next.pt.y === currY && hs2.leftOp.next.pt.x <= hs1.leftOp.pt.x)
+              hs2.leftOp = hs2.leftOp.next;
+            const join = new HorzJoin(this.duplicateOp(hs2.leftOp, true), this.duplicateOp(hs1.leftOp, false));
+            this.horzJoinList.push(join);
+          }
+        }
+      }
+    }
+    updateHorzSegment(hs) {
+      const op = hs.leftOp;
+      const outrec = this.getRealOutRec(op.outrec);
+      const outrecHasEdges = outrec.frontEdge !== null;
+      const currY = op.pt.y;
+      let opP = op;
+      let opN = op;
+      if (outrecHasEdges) {
+        const opA = outrec.pts;
+        const opZ = opA.next;
+        while (opP !== opZ && opP.prev.pt.y === currY)
+          opP = opP.prev;
+        while (opN !== opA && opN.next.pt.y === currY)
+          opN = opN.next;
+      } else {
+        while (opP.prev !== opN && opP.prev.pt.y === currY)
+          opP = opP.prev;
+        while (opN.next !== opP && opN.next.pt.y === currY)
+          opN = opN.next;
+      }
+      const result = this.setHorzSegHeadingForward(hs, opP, opN) && hs.leftOp.horz === null;
+      if (result) {
+        hs.leftOp.horz = hs;
+      } else {
+        hs.rightOp = null;
+      }
+      return result;
+    }
+    setHorzSegHeadingForward(hs, opP, opN) {
+      if (opP.pt.x === opN.pt.x)
+        return false;
+      if (opP.pt.x < opN.pt.x) {
+        hs.leftOp = opP;
+        hs.rightOp = opN;
+        hs.leftToRight = true;
+      } else {
+        hs.leftOp = opN;
+        hs.rightOp = opP;
+        hs.leftToRight = false;
+      }
+      return true;
+    }
+    duplicateOp(op, insertAfter) {
+      const result = new OutPt(op.pt, op.outrec);
+      if (insertAfter) {
+        result.next = op.next;
+        result.next.prev = result;
+        result.prev = op;
+        op.next = result;
+      } else {
+        result.prev = op.prev;
+        result.prev.next = result;
+        result.next = op;
+        op.prev = result;
+      }
+      return result;
+    }
+    getRealOutRec(outRec) {
+      while (outRec !== null && outRec.pts === null) {
+        outRec = outRec.owner;
+      }
+      return outRec;
+    }
+    doIntersections(y) {
+      if (this.buildIntersectList(y)) {
+        this.processIntersectList();
+        this.disposeIntersectNodes();
+      }
+    }
+    doTopOfScanbeam(y) {
+      const curXValid = this.curXValidAtTop;
+      this.curXValidAtTop = false;
+      this.sel = null;
+      let ae = this.actives;
+      while (ae !== null) {
+        if (ae.top.y === y) {
+          ae.curX = ae.top.x;
+          if (_ClipperBase.isMaximaEdge(ae)) {
+            ae = this.doMaxima(ae);
+            continue;
+          } else {
+            if (_ClipperBase.isHotEdge(ae))
+              this.addOutPt(ae, ae.top);
+            this.updateEdgeIntoAEL(ae);
+            if (_ClipperBase.isHorizontal(ae)) {
+              this.pushHorz(ae);
+            }
+          }
+        } else if (!curXValid) {
+          ae.curX = _ClipperBase.topX(ae, y);
+        }
+        ae = ae.nextInAEL;
+      }
+    }
+    processHorzJoins() {
+      for (const j of this.horzJoinList) {
+        const or1 = this.getRealOutRec(j.op1.outrec);
+        const or2 = this.getRealOutRec(j.op2.outrec);
+        const op1b = j.op1.next;
+        const op2b = j.op2.prev;
+        j.op1.next = j.op2;
+        j.op2.prev = j.op1;
+        op1b.prev = op2b;
+        op2b.next = op1b;
+        if (or1 === or2) {
+          const or2New = this.newOutRec();
+          or2New.pts = op1b;
+          this.fixOutRecPts(or2New);
+          if (or1.pts.outrec === or2New) {
+            or1.pts = j.op1;
+            or1.pts.outrec = or1;
+          }
+          if (this.usingPolytree) {
+            if (this.path1InsidePath2(or1.pts, or2New.pts)) {
+              [or2New.pts, or1.pts] = [or1.pts, or2New.pts];
+              this.fixOutRecPts(or1);
+              this.fixOutRecPts(or2New);
+              or2New.owner = or1;
+            } else if (this.path1InsidePath2(or2New.pts, or1.pts)) {
+              or2New.owner = or1;
+            } else {
+              or2New.owner = or1.owner;
+            }
+            if (or1.splits === null)
+              or1.splits = [];
+            or1.splits.push(or2New.idx);
+          } else {
+            or2New.owner = or1;
+          }
+        } else {
+          or2.pts = null;
+          if (this.usingPolytree) {
+            this.setOwner(or2, or1);
+            this.moveSplits(or2, or1);
+          } else {
+            or2.owner = or1;
+          }
+        }
+      }
+    }
+    fixOutRecPts(outrec) {
+      let op = outrec.pts;
+      do {
+        op.outrec = outrec;
+        op = op.next;
+      } while (op !== outrec.pts);
+    }
+    path1InsidePath2(op1, op2) {
+      let pip2 = PointInPolygonResult.IsOn;
+      let op = op1;
+      do {
+        switch (this.pointInOpPolygon(op.pt, op2)) {
+          case PointInPolygonResult.IsOutside:
+            if (pip2 === PointInPolygonResult.IsOutside)
+              return false;
+            pip2 = PointInPolygonResult.IsOutside;
+            break;
+          case PointInPolygonResult.IsInside:
+            if (pip2 === PointInPolygonResult.IsInside)
+              return true;
+            pip2 = PointInPolygonResult.IsInside;
+            break;
+          default:
+            break;
+        }
+        op = op.next;
+      } while (op !== op1);
+      return InternalClipper.path2ContainsPath1(this.getCleanPath(op1), this.getCleanPath(op2));
+    }
+    pointInOpPolygon(pt2, op) {
+      if (op === op.next || op.prev === op.next) {
+        return PointInPolygonResult.IsOutside;
+      }
+      let op2 = op;
+      do {
+        if (op.pt.y !== pt2.y)
+          break;
+        op = op.next;
+      } while (op !== op2);
+      if (op.pt.y === pt2.y)
+        return PointInPolygonResult.IsOutside;
+      let isAbove = op.pt.y < pt2.y;
+      const startingAbove = isAbove;
+      let val = 0;
+      op2 = op.next;
+      while (op2 !== op) {
+        if (isAbove) {
+          while (op2 !== op && op2.pt.y < pt2.y)
+            op2 = op2.next;
+        } else {
+          while (op2 !== op && op2.pt.y > pt2.y)
+            op2 = op2.next;
+        }
+        if (op2 === op)
+          break;
+        if (op2.pt.y === pt2.y) {
+          if (op2.pt.x === pt2.x || op2.pt.y === op2.prev.pt.y && pt2.x < op2.prev.pt.x !== pt2.x < op2.pt.x)
+            return PointInPolygonResult.IsOn;
+          op2 = op2.next;
+          if (op2 === op)
+            break;
+          continue;
+        }
+        if (op2.pt.x <= pt2.x || op2.prev.pt.x <= pt2.x) {
+          if (op2.prev.pt.x < pt2.x && op2.pt.x < pt2.x) {
+            val = 1 - val;
+          } else {
+            const d = InternalClipper.crossProductSign(op2.prev.pt, op2.pt, pt2);
+            if (d === 0)
+              return PointInPolygonResult.IsOn;
+            if (d < 0 === isAbove)
+              val = 1 - val;
+          }
+        }
+        isAbove = !isAbove;
+        op2 = op2.next;
+      }
+      if (isAbove === startingAbove)
+        return val === 0 ? PointInPolygonResult.IsOutside : PointInPolygonResult.IsInside;
+      {
+        const d = InternalClipper.crossProductSign(op2.prev.pt, op2.pt, pt2);
+        if (d === 0)
+          return PointInPolygonResult.IsOn;
+        if (d < 0 === isAbove)
+          val = 1 - val;
+      }
+      return val === 0 ? PointInPolygonResult.IsOutside : PointInPolygonResult.IsInside;
+    }
+    getCleanPath(op) {
+      const result = [];
+      let op2 = op;
+      while (op2.next !== op && (op2.pt.x === op2.next.pt.x && op2.pt.x === op2.prev.pt.x || op2.pt.y === op2.next.pt.y && op2.pt.y === op2.prev.pt.y))
+        op2 = op2.next;
+      result.push(op2.pt);
+      let prevOp = op2;
+      op2 = op2.next;
+      while (op2 !== op) {
+        if ((op2.pt.x !== op2.next.pt.x || op2.pt.x !== prevOp.pt.x) && (op2.pt.y !== op2.next.pt.y || op2.pt.y !== prevOp.pt.y)) {
+          result.push(op2.pt);
+          prevOp = op2;
+        }
+        op2 = op2.next;
+      }
+      return result;
+    }
+    moveSplits(fromOr, toOr) {
+      if (fromOr.splits === null)
+        return;
+      if (toOr.splits === null)
+        toOr.splits = [];
+      for (const i of fromOr.splits) {
+        if (i !== toOr.idx) {
+          toOr.splits.push(i);
+        }
+      }
+      fromOr.splits = null;
+    }
+    buildIntersectList(topY) {
+      if (this.actives?.nextInAEL === null)
+        return false;
+      if (!this.adjustCurrXAndCopyToSEL(topY)) {
+        this.curXValidAtTop = true;
+        return false;
+      }
+      let left = this.sel;
+      while (left !== null && left.jump !== null) {
+        let prevBase = null;
+        while (left !== null && left.jump !== null) {
+          let currBase = left;
+          let right = left.jump;
+          let lEnd = right;
+          const rEnd = right?.jump || null;
+          left.jump = rEnd;
+          while (left !== lEnd && right !== rEnd) {
+            if (right.curX < left.curX) {
+              let tmp = right.prevInSEL;
+              while (true) {
+                this.addNewIntersectNode(tmp, right, topY);
+                if (tmp === left)
+                  break;
+                tmp = tmp.prevInSEL;
+              }
+              tmp = right;
+              right = this.extractFromSEL(tmp);
+              lEnd = right;
+              if (left !== null)
+                this.insert1Before2InSEL(tmp, left);
+              if (left !== currBase)
+                continue;
+              currBase = tmp;
+              currBase.jump = rEnd;
+              if (prevBase === null) {
+                this.sel = currBase;
+              } else {
+                prevBase.jump = currBase;
+              }
+            } else {
+              left = left.nextInSEL;
+            }
+          }
+          prevBase = currBase;
+          left = rEnd;
+        }
+        left = this.sel;
+      }
+      return this.intersectList.length > 0;
+    }
+    processIntersectList() {
+      this.intersectList.sort(compareIntersectNodes);
+      for (let i = 0; i < this.intersectList.length; ++i) {
+        if (!this.edgesAdjacentInAEL(this.intersectList[i])) {
+          let j = i + 1;
+          while (!this.edgesAdjacentInAEL(this.intersectList[j]))
+            j++;
+          [this.intersectList[j], this.intersectList[i]] = [this.intersectList[i], this.intersectList[j]];
+        }
+        const node = this.intersectList[i];
+        this.intersectEdges(node.edge1, node.edge2, node.pt);
+        this.swapPositionsInAEL(node.edge1, node.edge2);
+        node.edge1.curX = node.pt.x;
+        node.edge2.curX = node.pt.x;
+        this.checkJoinLeft(node.edge2, node.pt, true);
+        this.checkJoinRight(node.edge1, node.pt, true);
+      }
+    }
+    edgesAdjacentInAEL(inode) {
+      return inode.edge1.nextInAEL === inode.edge2 || inode.edge1.prevInAEL === inode.edge2;
+    }
+    // Returns true if any adjacent pair is inverted at topY (i.e. at least one
+    // intersection exists within this scanbeam).
+    adjustCurrXAndCopyToSEL(topY) {
+      let ae = this.actives;
+      this.sel = ae;
+      let prevX = Number.NEGATIVE_INFINITY;
+      let inverted = false;
+      while (ae !== null) {
+        ae.prevInSEL = ae.prevInAEL;
+        ae.nextInSEL = ae.nextInAEL;
+        ae.jump = ae.nextInSEL;
+        const x = _ClipperBase.topX(ae, topY);
+        ae.curX = x;
+        if (x < prevX)
+          inverted = true;
+        prevX = x;
+        ae = ae.nextInAEL;
+      }
+      return inverted;
+    }
+    doMaxima(ae) {
+      const prevE = ae.prevInAEL;
+      let nextE = ae.nextInAEL;
+      if (_ClipperBase.isOpenEnd(ae)) {
+        if (_ClipperBase.isHotEdge(ae))
+          this.addOutPt(ae, ae.top);
+        if (_ClipperBase.isHorizontal(ae))
+          return nextE;
+        if (_ClipperBase.isHotEdge(ae)) {
+          if (_ClipperBase.isFront(ae)) {
+            ae.outrec.frontEdge = null;
+          } else {
+            ae.outrec.backEdge = null;
+          }
+          ae.outrec = null;
+        }
+        this.deleteFromAEL(ae);
+        return nextE;
+      }
+      const maxPair = _ClipperBase.getMaximaPair(ae);
+      if (maxPair === null)
+        return nextE;
+      if (this.isJoined(ae))
+        this.split(ae, ae.top);
+      if (this.isJoined(maxPair))
+        this.split(maxPair, maxPair.top);
+      while (nextE !== maxPair) {
+        this.intersectEdges(ae, nextE, ae.top);
+        this.swapPositionsInAEL(ae, nextE);
+        nextE = ae.nextInAEL;
+      }
+      if (_ClipperBase.isOpen(ae)) {
+        if (_ClipperBase.isHotEdge(ae)) {
+          this.addLocalMaxPoly(ae, maxPair, ae.top);
+        }
+        this.deleteFromAEL(maxPair);
+        this.deleteFromAEL(ae);
+        return prevE !== null ? prevE.nextInAEL : this.actives;
+      }
+      if (_ClipperBase.isHotEdge(ae)) {
+        this.addLocalMaxPoly(ae, maxPair, ae.top);
+      }
+      this.deleteFromAEL(ae);
+      this.deleteFromAEL(maxPair);
+      return prevE !== null ? prevE.nextInAEL : this.actives;
+    }
+    updateEdgeIntoAEL(ae) {
+      ae.bot = ae.top;
+      ae.vertexTop = _ClipperBase.nextVertex(ae);
+      ae.top = ae.vertexTop.pt;
+      ae.curX = ae.bot.x;
+      _ClipperBase.setDx(ae);
+      if (this.isJoined(ae))
+        this.split(ae, ae.bot);
+      if (_ClipperBase.isHorizontal(ae)) {
+        if (!_ClipperBase.openPathsEnabled) {
+          this.trimHorz(ae, this.preserveCollinear);
+        } else if (!_ClipperBase.isOpen(ae)) {
+          this.trimHorz(ae, this.preserveCollinear);
+        }
+        return;
+      }
+      this.insertScanline(ae.top.y);
+      this.checkJoinLeft(ae, ae.bot);
+      this.checkJoinRight(ae, ae.bot, true);
+    }
+    trimHorz(horzEdge, preserveCollinear) {
+      let wasTrimmed = false;
+      let pt2 = _ClipperBase.nextVertex(horzEdge).pt;
+      while (pt2.y === horzEdge.top.y) {
+        if (preserveCollinear && pt2.x < horzEdge.top.x !== horzEdge.bot.x < horzEdge.top.x) {
+          break;
+        }
+        horzEdge.vertexTop = _ClipperBase.nextVertex(horzEdge);
+        horzEdge.top = pt2;
+        wasTrimmed = true;
+        if (_ClipperBase.isMaximaVertex(horzEdge.vertexTop))
+          break;
+        pt2 = _ClipperBase.nextVertex(horzEdge).pt;
+      }
+      if (wasTrimmed)
+        _ClipperBase.setDx(horzEdge);
+    }
+    addToHorzSegList(op) {
+      if (op.outrec.isOpen)
+        return;
+      this.horzSegList.push(new HorzSegment(op));
+    }
+    addNewIntersectNode(ae1, ae2, topY) {
+      let ip = InternalClipper.getLineIntersectPt(ae1.bot, ae1.top, ae2.bot, ae2.top);
+      if (ip === null) {
+        ip = { x: ae1.curX, y: topY };
+      }
+      if (ip.y > this.currentBotY || ip.y < topY) {
+        const absDx1 = Math.abs(ae1.dx);
+        const absDx2 = Math.abs(ae2.dx);
+        if (absDx1 > 100 && absDx2 > 100) {
+          if (absDx1 > absDx2) {
+            ip = InternalClipper.getClosestPtOnSegment(ip, ae1.bot, ae1.top);
+          } else {
+            ip = InternalClipper.getClosestPtOnSegment(ip, ae2.bot, ae2.top);
+          }
+        } else if (absDx1 > 100) {
+          ip = InternalClipper.getClosestPtOnSegment(ip, ae1.bot, ae1.top);
+        } else if (absDx2 > 100) {
+          ip = InternalClipper.getClosestPtOnSegment(ip, ae2.bot, ae2.top);
+        } else {
+          if (ip.y < topY)
+            ip.y = topY;
+          else
+            ip.y = this.currentBotY;
+          if (absDx1 < absDx2)
+            ip.x = _ClipperBase.topX(ae1, ip.y);
+          else
+            ip.x = _ClipperBase.topX(ae2, ip.y);
+        }
+      }
+      const node = createIntersectNode(ip, ae1, ae2);
+      this.intersectList.push(node);
+    }
+    extractFromSEL(ae) {
+      const res = ae.nextInSEL;
+      if (res !== null) {
+        res.prevInSEL = ae.prevInSEL;
+      }
+      ae.prevInSEL.nextInSEL = res;
+      return res;
+    }
+    insert1Before2InSEL(ae1, ae2) {
+      ae1.prevInSEL = ae2.prevInSEL;
+      if (ae1.prevInSEL !== null) {
+        ae1.prevInSEL.nextInSEL = ae1;
+      }
+      ae1.nextInSEL = ae2;
+      ae2.prevInSEL = ae1;
+    }
+    getCurrYMaximaVertexOpen(ae) {
+      let result = ae.vertexTop;
+      if (ae.windDx > 0) {
+        while (result.next.pt.y === result.pt.y && (result.flags & (VertexFlags.OpenEnd | VertexFlags.LocalMax)) === VertexFlags.None)
+          result = result.next;
+      } else {
+        while (result.prev.pt.y === result.pt.y && (result.flags & (VertexFlags.OpenEnd | VertexFlags.LocalMax)) === VertexFlags.None)
+          result = result.prev;
+      }
+      if (!_ClipperBase.isMaximaVertex(result))
+        result = null;
+      return result;
+    }
+    getCurrYMaximaVertex(ae) {
+      let result = ae.vertexTop;
+      if (ae.windDx > 0) {
+        while (result.next.pt.y === result.pt.y)
+          result = result.next;
+      } else {
+        while (result.prev.pt.y === result.pt.y)
+          result = result.prev;
+      }
+      if (!_ClipperBase.isMaximaVertex(result))
+        result = null;
+      return result;
+    }
+    // Returns the sweep direction and writes the horizontal's X bounds to
+    // horzLeft/horzRight (the C# 'out' parameters), avoiding a result object
+    // allocation per call.
+    resetHorzDirection(horz, vertexMax) {
+      if (horz.bot.x === horz.top.x) {
+        this.horzLeft = horz.curX;
+        this.horzRight = horz.curX;
+        let ae = horz.nextInAEL;
+        while (ae !== null && ae.vertexTop !== vertexMax)
+          ae = ae.nextInAEL;
+        return ae !== null;
+      }
+      if (horz.curX < horz.top.x) {
+        this.horzLeft = horz.curX;
+        this.horzRight = horz.top.x;
+        return true;
+      } else {
+        this.horzLeft = horz.top.x;
+        this.horzRight = horz.curX;
+        return false;
+      }
+    }
+    getLastOp(hotEdge) {
+      const outrec = hotEdge.outrec;
+      return hotEdge === outrec.frontEdge ? outrec.pts : outrec.pts.next;
+    }
+    insertLeftEdge(ae) {
+      if (this.actives === null) {
+        ae.prevInAEL = null;
+        ae.nextInAEL = null;
+        this.actives = ae;
+      } else if (!this.isValidAelOrder(this.actives, ae)) {
+        ae.prevInAEL = null;
+        ae.nextInAEL = this.actives;
+        this.actives.prevInAEL = ae;
+        this.actives = ae;
+      } else {
+        let ae2 = this.actives;
+        while (ae2.nextInAEL !== null && this.isValidAelOrder(ae2.nextInAEL, ae)) {
+          ae2 = ae2.nextInAEL;
+        }
+        if (ae2.joinWith === JoinWith.Right)
+          ae2 = ae2.nextInAEL;
+        ae.nextInAEL = ae2.nextInAEL;
+        if (ae2.nextInAEL !== null)
+          ae2.nextInAEL.prevInAEL = ae;
+        ae.prevInAEL = ae2;
+        ae2.nextInAEL = ae;
+      }
+    }
+    insertRightEdge(ae1, ae2) {
+      ae2.nextInAEL = ae1.nextInAEL;
+      if (ae1.nextInAEL !== null)
+        ae1.nextInAEL.prevInAEL = ae2;
+      ae2.prevInAEL = ae1;
+      ae1.nextInAEL = ae2;
+    }
+    setWindCountForOpenPathEdge(ae) {
+      let ae2 = this.actives;
+      if (this.fillrule === FillRule.EvenOdd) {
+        let cnt1 = 0, cnt2 = 0;
+        while (ae2 !== ae) {
+          if (_ClipperBase.getPolyType(ae2) === PathType.Clip) {
+            cnt2++;
+          } else if (!_ClipperBase.isOpen(ae2)) {
+            cnt1++;
+          }
+          ae2 = ae2.nextInAEL;
+        }
+        ae.windCount = _ClipperBase.isOdd(cnt1) ? 1 : 0;
+        ae.windCount2 = _ClipperBase.isOdd(cnt2) ? 1 : 0;
+      } else {
+        while (ae2 !== ae) {
+          if (_ClipperBase.getPolyType(ae2) === PathType.Clip) {
+            ae.windCount2 += ae2.windDx;
+          } else if (!_ClipperBase.isOpen(ae2)) {
+            ae.windCount += ae2.windDx;
+          }
+          ae2 = ae2.nextInAEL;
+        }
+      }
+    }
+    setWindCountForClosedPathEdge(ae) {
+      let ae2 = ae.prevInAEL;
+      const pt2 = _ClipperBase.getPolyType(ae);
+      if (!_ClipperBase.openPathsEnabled) {
+        while (ae2 !== null && _ClipperBase.getPolyType(ae2) !== pt2)
+          ae2 = ae2.prevInAEL;
+        if (ae2 === null) {
+          ae.windCount = ae.windDx;
+          ae2 = this.actives;
+        } else if (this.fillrule === FillRule.EvenOdd) {
+          ae.windCount = ae.windDx;
+          ae.windCount2 = ae2.windCount2;
+          ae2 = ae2.nextInAEL;
+        } else {
+          if (ae2.windCount * ae2.windDx < 0) {
+            if (Math.abs(ae2.windCount) > 1) {
+              if (ae2.windDx * ae.windDx < 0) {
+                ae.windCount = ae2.windCount;
+              } else {
+                ae.windCount = ae2.windCount + ae.windDx;
+              }
+            } else {
+              ae.windCount = ae.windDx;
+            }
+          } else {
+            if (ae2.windDx * ae.windDx < 0) {
+              ae.windCount = ae2.windCount;
+            } else {
+              ae.windCount = ae2.windCount + ae.windDx;
+            }
+          }
+          ae.windCount2 = ae2.windCount2;
+          ae2 = ae2.nextInAEL;
+        }
+        if (this.fillrule === FillRule.EvenOdd) {
+          while (ae2 !== ae) {
+            if (_ClipperBase.getPolyType(ae2) !== pt2) {
+              ae.windCount2 = ae.windCount2 === 0 ? 1 : 0;
+            }
+            ae2 = ae2.nextInAEL;
+          }
+        } else {
+          while (ae2 !== ae) {
+            if (_ClipperBase.getPolyType(ae2) !== pt2) {
+              ae.windCount2 += ae2.windDx;
+            }
+            ae2 = ae2.nextInAEL;
+          }
+        }
+        return;
+      }
+      while (ae2 !== null && (_ClipperBase.getPolyType(ae2) !== pt2 || _ClipperBase.isOpen(ae2)))
+        ae2 = ae2.prevInAEL;
+      if (ae2 === null) {
+        ae.windCount = ae.windDx;
+        ae2 = this.actives;
+      } else if (this.fillrule === FillRule.EvenOdd) {
+        ae.windCount = ae.windDx;
+        ae.windCount2 = ae2.windCount2;
+        ae2 = ae2.nextInAEL;
+      } else {
+        if (ae2.windCount * ae2.windDx < 0) {
+          if (Math.abs(ae2.windCount) > 1) {
+            if (ae2.windDx * ae.windDx < 0) {
+              ae.windCount = ae2.windCount;
+            } else {
+              ae.windCount = ae2.windCount + ae.windDx;
+            }
+          } else {
+            ae.windCount = _ClipperBase.isOpen(ae) ? 1 : ae.windDx;
+          }
+        } else {
+          if (ae2.windDx * ae.windDx < 0) {
+            ae.windCount = ae2.windCount;
+          } else {
+            ae.windCount = ae2.windCount + ae.windDx;
+          }
+        }
+        ae.windCount2 = ae2.windCount2;
+        ae2 = ae2.nextInAEL;
+      }
+      if (this.fillrule === FillRule.EvenOdd) {
+        while (ae2 !== ae) {
+          if (_ClipperBase.getPolyType(ae2) !== pt2 && !_ClipperBase.isOpen(ae2)) {
+            ae.windCount2 = ae.windCount2 === 0 ? 1 : 0;
+          }
+          ae2 = ae2.nextInAEL;
+        }
+      } else {
+        while (ae2 !== ae) {
+          if (_ClipperBase.getPolyType(ae2) !== pt2 && !_ClipperBase.isOpen(ae2)) {
+            ae.windCount2 += ae2.windDx;
+          }
+          ae2 = ae2.nextInAEL;
+        }
+      }
+    }
+    isContributingOpen(ae) {
+      let isInClip, isInSubj;
+      switch (this.fillrule) {
+        case FillRule.Positive:
+          isInSubj = ae.windCount > 0;
+          isInClip = ae.windCount2 > 0;
+          break;
+        case FillRule.Negative:
+          isInSubj = ae.windCount < 0;
+          isInClip = ae.windCount2 < 0;
+          break;
+        default:
+          isInSubj = ae.windCount !== 0;
+          isInClip = ae.windCount2 !== 0;
+          break;
+      }
+      switch (this.cliptype) {
+        case ClipType.Intersection:
+          return isInClip;
+        case ClipType.Union:
+          return !isInSubj && !isInClip;
+        default:
+          return !isInClip;
+      }
+    }
+    isContributingClosed(ae) {
+      switch (this.fillrule) {
+        case FillRule.Positive:
+          if (ae.windCount !== 1)
+            return false;
+          break;
+        case FillRule.Negative:
+          if (ae.windCount !== -1)
+            return false;
+          break;
+        case FillRule.NonZero:
+          if (Math.abs(ae.windCount) !== 1)
+            return false;
+          break;
+      }
+      switch (this.cliptype) {
+        case ClipType.Intersection:
+          return this.fillrule === FillRule.Positive ? ae.windCount2 > 0 : this.fillrule === FillRule.Negative ? ae.windCount2 < 0 : ae.windCount2 !== 0;
+        case ClipType.Union:
+          return this.fillrule === FillRule.Positive ? ae.windCount2 <= 0 : this.fillrule === FillRule.Negative ? ae.windCount2 >= 0 : ae.windCount2 === 0;
+        case ClipType.Difference: {
+          const result = this.fillrule === FillRule.Positive ? ae.windCount2 <= 0 : this.fillrule === FillRule.Negative ? ae.windCount2 >= 0 : ae.windCount2 === 0;
+          return _ClipperBase.getPolyType(ae) === PathType.Subject ? result : !result;
+        }
+        case ClipType.Xor:
+          return true;
+        // XOr is always contributing unless open
+        default:
+          return false;
+      }
+    }
+    addLocalMinPoly(ae1, ae2, pt2, isNew = false) {
+      const outrec = this.newOutRec();
+      ae1.outrec = outrec;
+      ae2.outrec = outrec;
+      if (_ClipperBase.isOpen(ae1)) {
+        outrec.owner = null;
+        outrec.isOpen = true;
+        if (ae1.windDx > 0) {
+          this.setSides(outrec, ae1, ae2);
+        } else {
+          this.setSides(outrec, ae2, ae1);
+        }
+      } else {
+        outrec.isOpen = false;
+        const prevHotEdge = _ClipperBase.getPrevHotEdge(ae1);
+        if (prevHotEdge !== null) {
+          if (this.usingPolytree) {
+            this.setOwner(outrec, prevHotEdge.outrec);
+          }
+          outrec.owner = prevHotEdge.outrec;
+          if (this.outrecIsAscending(prevHotEdge) === isNew) {
+            this.setSides(outrec, ae2, ae1);
+          } else {
+            this.setSides(outrec, ae1, ae2);
+          }
+        } else {
+          outrec.owner = null;
+          if (isNew) {
+            this.setSides(outrec, ae1, ae2);
+          } else {
+            this.setSides(outrec, ae2, ae1);
+          }
+        }
+      }
+      const op = new OutPt(pt2, outrec);
+      outrec.pts = op;
+      return op;
+    }
+    outrecIsAscending(hotEdge) {
+      return hotEdge === hotEdge.outrec.frontEdge;
+    }
+    newOutRec() {
+      const result = new OutRec();
+      result.idx = this.outrecList.length;
+      this.outrecList.push(result);
+      return result;
+    }
+    startOpenPath(ae, pt2) {
+      const outrec = this.newOutRec();
+      outrec.isOpen = true;
+      if (ae.windDx > 0) {
+        outrec.frontEdge = ae;
+        outrec.backEdge = null;
+      } else {
+        outrec.frontEdge = null;
+        outrec.backEdge = ae;
+      }
+      ae.outrec = outrec;
+      const op = new OutPt(pt2, outrec);
+      outrec.pts = op;
+      return op;
+    }
+    checkJoinLeft(ae, pt2, checkCurrX = false) {
+      const prev = ae.prevInAEL;
+      if (prev === null)
+        return;
+      if (!checkCurrX && ae.curX !== prev.curX)
+        return;
+      if (!_ClipperBase.isHotEdge(ae) || !_ClipperBase.isHotEdge(prev) || _ClipperBase.isHorizontal(ae) || _ClipperBase.isHorizontal(prev) || _ClipperBase.isOpen(ae) || _ClipperBase.isOpen(prev))
+        return;
+      if ((pt2.y < ae.top.y + 2 || pt2.y < prev.top.y + 2) && // avoid trivial joins
+      (ae.bot.y > pt2.y || prev.bot.y > pt2.y))
+        return;
+      if (checkCurrX) {
+        if (this.perpendicDistFromLineSqrdGreaterThanQuarter(pt2, prev.bot, prev.top))
+          return;
+      }
+      if (!InternalClipper.isCollinear(ae.top, pt2, prev.top))
+        return;
+      if (ae.outrec.idx === prev.outrec.idx) {
+        this.addLocalMaxPoly(prev, ae, pt2);
+      } else if (ae.outrec.idx < prev.outrec.idx) {
+        this.joinOutrecPaths(ae, prev);
+      } else {
+        this.joinOutrecPaths(prev, ae);
+      }
+      prev.joinWith = JoinWith.Right;
+      ae.joinWith = JoinWith.Left;
+    }
+    checkJoinRight(ae, pt2, checkCurrX = false) {
+      const next = ae.nextInAEL;
+      if (next === null)
+        return;
+      if (!checkCurrX && ae.curX !== next.curX)
+        return;
+      if (!_ClipperBase.isHotEdge(ae) || !_ClipperBase.isHotEdge(next) || _ClipperBase.isHorizontal(ae) || _ClipperBase.isHorizontal(next) || _ClipperBase.isOpen(ae) || _ClipperBase.isOpen(next))
+        return;
+      if ((pt2.y < ae.top.y + 2 || pt2.y < next.top.y + 2) && // avoid trivial joins
+      (ae.bot.y > pt2.y || next.bot.y > pt2.y))
+        return;
+      if (checkCurrX) {
+        if (this.perpendicDistFromLineSqrdGreaterThanQuarter(pt2, next.bot, next.top))
+          return;
+      }
+      if (!InternalClipper.isCollinear(ae.top, pt2, next.top))
+        return;
+      if (ae.outrec.idx === next.outrec.idx) {
+        this.addLocalMaxPoly(ae, next, pt2);
+      } else if (ae.outrec.idx < next.outrec.idx) {
+        this.joinOutrecPaths(ae, next);
+      } else {
+        this.joinOutrecPaths(next, ae);
+      }
+      ae.joinWith = JoinWith.Right;
+      next.joinWith = JoinWith.Left;
+    }
+    perpendicDistFromLineSqrdGreaterThanQuarter(pt2, line1, line2) {
+      const a = pt2.x - line1.x;
+      const b = pt2.y - line1.y;
+      const c = line2.x - line1.x;
+      const d = line2.y - line1.y;
+      if (c === 0 && d === 0)
+        return false;
+      const maxCoord = InternalClipper.maxCoordForSafeCrossSq;
+      if (Math.abs(a) < maxCoord && Math.abs(b) < maxCoord && Math.abs(c) < maxCoord && Math.abs(d) < maxCoord) {
+        const cross3 = a * d - c * b;
+        return cross3 * cross3 / (c * c + d * d) > 0.25;
+      }
+      if (Number.isSafeInteger(a) && Number.isSafeInteger(b) && Number.isSafeInteger(c) && Number.isSafeInteger(d)) {
+        const cross3 = BigInt(a) * BigInt(d) - BigInt(c) * BigInt(b);
+        const crossSq = cross3 * cross3;
+        const denom = BigInt(c) * BigInt(c) + BigInt(d) * BigInt(d);
+        return B42 * crossSq > denom;
+      }
+      const cross2 = a * d - c * b;
+      return cross2 * cross2 / (c * c + d * d) > 0.25;
+    }
+    intersectEdges(ae1, ae2, pt2) {
+      let resultOp;
+      if (this.hasOpenPaths && (_ClipperBase.isOpen(ae1) || _ClipperBase.isOpen(ae2))) {
+        if (_ClipperBase.isOpen(ae1) && _ClipperBase.isOpen(ae2))
+          return;
+        if (_ClipperBase.isOpen(ae2)) {
+          const tmp = ae1;
+          ae1 = ae2;
+          ae2 = tmp;
+        }
+        if (this.isJoined(ae2))
+          this.split(ae2, pt2);
+        if (this.cliptype === ClipType.Union) {
+          if (!_ClipperBase.isHotEdge(ae2))
+            return;
+        } else if (ae2.localMin.polytype === PathType.Subject)
+          return;
+        switch (this.fillrule) {
+          case FillRule.Positive:
+            if (ae2.windCount !== 1)
+              return;
+            break;
+          case FillRule.Negative:
+            if (ae2.windCount !== -1)
+              return;
+            break;
+          default:
+            if (Math.abs(ae2.windCount) !== 1)
+              return;
+            break;
+        }
+        if (_ClipperBase.isHotEdge(ae1)) {
+          resultOp = this.addOutPt(ae1, pt2);
+          this.setZ(ae1, ae2, resultOp.pt);
+          if (_ClipperBase.isFront(ae1)) {
+            ae1.outrec.frontEdge = null;
+          } else {
+            ae1.outrec.backEdge = null;
+          }
+          ae1.outrec = null;
+        } else if (pt2.x === ae1.localMin.vertex.pt.x && pt2.y === ae1.localMin.vertex.pt.y && !_ClipperBase.isOpenEndVertex(ae1.localMin.vertex)) {
+          const ae3 = this.findEdgeWithMatchingLocMin(ae1);
+          if (ae3 !== null && _ClipperBase.isHotEdge(ae3)) {
+            ae1.outrec = ae3.outrec;
+            if (ae1.windDx > 0) {
+              this.setSides(ae3.outrec, ae1, ae3);
+            } else {
+              this.setSides(ae3.outrec, ae3, ae1);
+            }
+            return;
+          }
+          resultOp = this.startOpenPath(ae1, pt2);
+        } else {
+          resultOp = this.startOpenPath(ae1, pt2);
+        }
+        this.setZ(ae1, ae2, resultOp.pt);
+        return;
+      }
+      if (this.isJoined(ae1))
+        this.split(ae1, pt2);
+      if (this.isJoined(ae2))
+        this.split(ae2, pt2);
+      let oldE1WindCount, oldE2WindCount;
+      if (ae1.localMin.polytype === ae2.localMin.polytype) {
+        if (this.fillrule === FillRule.EvenOdd) {
+          oldE1WindCount = ae1.windCount;
+          ae1.windCount = ae2.windCount;
+          ae2.windCount = oldE1WindCount;
+        } else {
+          if (ae1.windCount + ae2.windDx === 0) {
+            ae1.windCount = -ae1.windCount;
+          } else {
+            ae1.windCount += ae2.windDx;
+          }
+          if (ae2.windCount - ae1.windDx === 0) {
+            ae2.windCount = -ae2.windCount;
+          } else {
+            ae2.windCount -= ae1.windDx;
+          }
+        }
+      } else {
+        if (this.fillrule !== FillRule.EvenOdd) {
+          ae1.windCount2 += ae2.windDx;
+        } else {
+          ae1.windCount2 = ae1.windCount2 === 0 ? 1 : 0;
+        }
+        if (this.fillrule !== FillRule.EvenOdd) {
+          ae2.windCount2 -= ae1.windDx;
+        } else {
+          ae2.windCount2 = ae2.windCount2 === 0 ? 1 : 0;
+        }
+      }
+      switch (this.fillrule) {
+        case FillRule.Positive:
+          oldE1WindCount = ae1.windCount;
+          oldE2WindCount = ae2.windCount;
+          break;
+        case FillRule.Negative:
+          oldE1WindCount = -ae1.windCount;
+          oldE2WindCount = -ae2.windCount;
+          break;
+        default:
+          oldE1WindCount = Math.abs(ae1.windCount);
+          oldE2WindCount = Math.abs(ae2.windCount);
+          break;
+      }
+      const e1WindCountIs0or1 = oldE1WindCount === 0 || oldE1WindCount === 1;
+      const e2WindCountIs0or1 = oldE2WindCount === 0 || oldE2WindCount === 1;
+      if (!_ClipperBase.isHotEdge(ae1) && !e1WindCountIs0or1 || !_ClipperBase.isHotEdge(ae2) && !e2WindCountIs0or1)
+        return;
+      if (_ClipperBase.isHotEdge(ae1) && _ClipperBase.isHotEdge(ae2)) {
+        if (oldE1WindCount !== 0 && oldE1WindCount !== 1 || oldE2WindCount !== 0 && oldE2WindCount !== 1 || ae1.localMin.polytype !== ae2.localMin.polytype && this.cliptype !== ClipType.Xor) {
+          resultOp = this.addLocalMaxPoly(ae1, ae2, pt2);
+          if (resultOp)
+            this.setZ(ae1, ae2, resultOp.pt);
+        } else if (_ClipperBase.isFront(ae1) || ae1.outrec === ae2.outrec) {
+          resultOp = this.addLocalMaxPoly(ae1, ae2, pt2);
+          if (resultOp)
+            this.setZ(ae1, ae2, resultOp.pt);
+          const op2 = this.addLocalMinPoly(ae1, ae2, pt2);
+          this.setZ(ae1, ae2, op2.pt);
+        } else {
+          resultOp = this.addOutPt(ae1, pt2);
+          this.setZ(ae1, ae2, resultOp.pt);
+          const op2 = this.addOutPt(ae2, pt2);
+          this.setZ(ae1, ae2, op2.pt);
+          this.swapOutrecs(ae1, ae2);
+        }
+      } else if (_ClipperBase.isHotEdge(ae1)) {
+        resultOp = this.addOutPt(ae1, pt2);
+        this.setZ(ae1, ae2, resultOp.pt);
+        this.swapOutrecs(ae1, ae2);
+      } else if (_ClipperBase.isHotEdge(ae2)) {
+        resultOp = this.addOutPt(ae2, pt2);
+        this.setZ(ae1, ae2, resultOp.pt);
+        this.swapOutrecs(ae1, ae2);
+      } else {
+        let e1Wc2, e2Wc2;
+        switch (this.fillrule) {
+          case FillRule.Positive:
+            e1Wc2 = ae1.windCount2;
+            e2Wc2 = ae2.windCount2;
+            break;
+          case FillRule.Negative:
+            e1Wc2 = -ae1.windCount2;
+            e2Wc2 = -ae2.windCount2;
+            break;
+          default:
+            e1Wc2 = Math.abs(ae1.windCount2);
+            e2Wc2 = Math.abs(ae2.windCount2);
+            break;
+        }
+        if (!_ClipperBase.isSamePolyType(ae1, ae2)) {
+          resultOp = this.addLocalMinPoly(ae1, ae2, pt2);
+          this.setZ(ae1, ae2, resultOp.pt);
+        } else if (oldE1WindCount === 1 && oldE2WindCount === 1) {
+          resultOp = null;
+          switch (this.cliptype) {
+            case ClipType.Union:
+              if (e1Wc2 > 0 && e2Wc2 > 0)
+                return;
+              resultOp = this.addLocalMinPoly(ae1, ae2, pt2);
+              break;
+            case ClipType.Difference:
+              if (_ClipperBase.getPolyType(ae1) === PathType.Clip && e1Wc2 > 0 && e2Wc2 > 0 || _ClipperBase.getPolyType(ae1) === PathType.Subject && e1Wc2 <= 0 && e2Wc2 <= 0) {
+                resultOp = this.addLocalMinPoly(ae1, ae2, pt2);
+              }
+              break;
+            case ClipType.Xor:
+              resultOp = this.addLocalMinPoly(ae1, ae2, pt2);
+              break;
+            default:
+              if (e1Wc2 <= 0 || e2Wc2 <= 0)
+                return;
+              resultOp = this.addLocalMinPoly(ae1, ae2, pt2);
+              break;
+          }
+          if (resultOp)
+            this.setZ(ae1, ae2, resultOp.pt);
+        }
+      }
+    }
+    swapPositionsInAEL(ae1, ae2) {
+      const next = ae2.nextInAEL;
+      if (next !== null)
+        next.prevInAEL = ae1;
+      const prev = ae1.prevInAEL;
+      if (prev !== null)
+        prev.nextInAEL = ae2;
+      ae2.prevInAEL = prev;
+      ae2.nextInAEL = ae1;
+      ae1.prevInAEL = ae2;
+      ae1.nextInAEL = next;
+      if (ae2.prevInAEL === null)
+        this.actives = ae2;
+    }
+    isValidAelOrder(resident, newcomer) {
+      if (newcomer.curX !== resident.curX) {
+        return newcomer.curX > resident.curX;
+      }
+      const d = InternalClipper.crossProductSign(resident.top, newcomer.bot, newcomer.top);
+      if (d !== 0)
+        return d < 0;
+      if (!_ClipperBase.isMaximaEdge(resident) && resident.top.y > newcomer.top.y) {
+        return InternalClipper.crossProductSign(newcomer.bot, resident.top, _ClipperBase.nextVertex(resident).pt) <= 0;
+      }
+      if (!_ClipperBase.isMaximaEdge(newcomer) && newcomer.top.y > resident.top.y) {
+        return InternalClipper.crossProductSign(newcomer.bot, newcomer.top, _ClipperBase.nextVertex(newcomer).pt) >= 0;
+      }
+      const y = newcomer.bot.y;
+      const newcomerIsLeft = newcomer.isLeftBound;
+      if (resident.bot.y !== y || resident.localMin.vertex.pt.y !== y) {
+        return newcomer.isLeftBound;
+      }
+      if (resident.isLeftBound !== newcomerIsLeft) {
+        return newcomerIsLeft;
+      }
+      if (InternalClipper.isCollinear(_ClipperBase.prevPrevVertex(resident).pt, resident.bot, resident.top))
+        return true;
+      return InternalClipper.crossProductSign(_ClipperBase.prevPrevVertex(resident).pt, newcomer.bot, _ClipperBase.prevPrevVertex(newcomer).pt) > 0 === newcomerIsLeft;
+    }
+    isJoined(e) {
+      return e.joinWith !== JoinWith.None;
+    }
+    split(e, currPt) {
+      if (e.joinWith === JoinWith.Right) {
+        e.joinWith = JoinWith.None;
+        e.nextInAEL.joinWith = JoinWith.None;
+        this.addLocalMinPoly(e, e.nextInAEL, currPt, true);
+      } else {
+        e.joinWith = JoinWith.None;
+        e.prevInAEL.joinWith = JoinWith.None;
+        this.addLocalMinPoly(e.prevInAEL, e, currPt, true);
+      }
+    }
+    setSides(outrec, startEdge, endEdge) {
+      outrec.frontEdge = startEdge;
+      outrec.backEdge = endEdge;
+    }
+    findEdgeWithMatchingLocMin(e) {
+      let result = e.nextInAEL;
+      while (result !== null) {
+        if (result.localMin?.equals(e.localMin))
+          return result;
+        if (!_ClipperBase.isHorizontal(result) && !(e.bot.x === result.bot.x && e.bot.y === result.bot.y))
+          result = null;
+        else
+          result = result.nextInAEL;
+      }
+      result = e.prevInAEL;
+      while (result !== null) {
+        if (result.localMin?.equals(e.localMin))
+          return result;
+        if (!_ClipperBase.isHorizontal(result) && !(e.bot.x === result.bot.x && e.bot.y === result.bot.y))
+          return null;
+        result = result.prevInAEL;
+      }
+      return result;
+    }
+    addOutPt(ae, pt2) {
+      const outrec = ae.outrec;
+      const toFront = _ClipperBase.isFront(ae);
+      const opFront = outrec.pts;
+      const opBack = opFront.next;
+      if (toFront && pt2.x === opFront.pt.x && pt2.y === opFront.pt.y) {
+        return opFront;
+      } else if (!toFront && pt2.x === opBack.pt.x && pt2.y === opBack.pt.y) {
+        return opBack;
+      }
+      const newOp = new OutPt(pt2, outrec);
+      opBack.prev = newOp;
+      newOp.prev = opFront;
+      newOp.next = opBack;
+      opFront.next = newOp;
+      if (toFront)
+        outrec.pts = newOp;
+      return newOp;
+    }
+    addLocalMaxPoly(ae1, ae2, pt2) {
+      if (this.isJoined(ae1))
+        this.split(ae1, pt2);
+      if (this.isJoined(ae2))
+        this.split(ae2, pt2);
+      if (_ClipperBase.isFront(ae1) === _ClipperBase.isFront(ae2)) {
+        if (_ClipperBase.isOpenEnd(ae1)) {
+          this.swapFrontBackSides(ae1.outrec);
+        } else if (_ClipperBase.isOpenEnd(ae2)) {
+          this.swapFrontBackSides(ae2.outrec);
+        } else {
+          this.succeeded = false;
+          return null;
+        }
+      }
+      const result = this.addOutPt(ae1, pt2);
+      if (ae1.outrec === ae2.outrec) {
+        const outrec = ae1.outrec;
+        outrec.pts = result;
+        if (this.usingPolytree) {
+          const e = _ClipperBase.getPrevHotEdge(ae1);
+          if (e === null) {
+            outrec.owner = null;
+          } else {
+            this.setOwner(outrec, e.outrec);
+          }
+        }
+        this.uncoupleOutRec(ae1);
+      } else if (_ClipperBase.isOpen(ae1)) {
+        if (ae1.windDx < 0) {
+          this.joinOutrecPaths(ae1, ae2);
+        } else {
+          this.joinOutrecPaths(ae2, ae1);
+        }
+      } else if (ae1.outrec.idx < ae2.outrec.idx) {
+        this.joinOutrecPaths(ae1, ae2);
+      } else {
+        this.joinOutrecPaths(ae2, ae1);
+      }
+      return result;
+    }
+    swapFrontBackSides(outrec) {
+      const ae2 = outrec.frontEdge;
+      outrec.frontEdge = outrec.backEdge;
+      outrec.backEdge = ae2;
+      outrec.pts = outrec.pts.next;
+    }
+    setOwner(outrec, newOwner) {
+      while (newOwner.owner !== null && newOwner.owner.pts === null) {
+        newOwner.owner = newOwner.owner.owner;
+      }
+      let tmp = newOwner;
+      while (tmp !== null && tmp !== outrec) {
+        tmp = tmp.owner;
+      }
+      if (tmp !== null) {
+        newOwner.owner = outrec.owner;
+      }
+      outrec.owner = newOwner;
+    }
+    uncoupleOutRec(ae) {
+      const outrec = ae.outrec;
+      if (outrec === null)
+        return;
+      outrec.frontEdge.outrec = null;
+      outrec.backEdge.outrec = null;
+      outrec.frontEdge = null;
+      outrec.backEdge = null;
+    }
+    joinOutrecPaths(ae1, ae2) {
+      const p1Start = ae1.outrec.pts;
+      const p2Start = ae2.outrec.pts;
+      const p1End = p1Start.next;
+      const p2End = p2Start.next;
+      if (_ClipperBase.isFront(ae1)) {
+        p2End.prev = p1Start;
+        p1Start.next = p2End;
+        p2Start.next = p1End;
+        p1End.prev = p2Start;
+        ae1.outrec.pts = p2Start;
+        ae1.outrec.frontEdge = ae2.outrec.frontEdge;
+        if (ae1.outrec.frontEdge !== null) {
+          ae1.outrec.frontEdge.outrec = ae1.outrec;
+        }
+      } else {
+        p1End.prev = p2Start;
+        p2Start.next = p1End;
+        p1Start.next = p2End;
+        p2End.prev = p1Start;
+        ae1.outrec.backEdge = ae2.outrec.backEdge;
+        if (ae1.outrec.backEdge !== null) {
+          ae1.outrec.backEdge.outrec = ae1.outrec;
+        }
+      }
+      ae2.outrec.frontEdge = null;
+      ae2.outrec.backEdge = null;
+      ae2.outrec.pts = null;
+      this.setOwner(ae2.outrec, ae1.outrec);
+      if (_ClipperBase.isOpenEnd(ae1)) {
+        ae2.outrec.pts = ae1.outrec.pts;
+        ae1.outrec.pts = null;
+      }
+      ae1.outrec = null;
+      ae2.outrec = null;
+    }
+    swapOutrecs(ae1, ae2) {
+      const or1 = ae1.outrec;
+      const or2 = ae2.outrec;
+      if (or1 === or2) {
+        const ae = or1.frontEdge;
+        or1.frontEdge = or1.backEdge;
+        or1.backEdge = ae;
+        return;
+      }
+      if (or1 !== null) {
+        if (ae1 === or1.frontEdge) {
+          or1.frontEdge = ae2;
+        } else {
+          or1.backEdge = ae2;
+        }
+      }
+      if (or2 !== null) {
+        if (ae2 === or2.frontEdge) {
+          or2.frontEdge = ae1;
+        } else {
+          or2.backEdge = ae1;
+        }
+      }
+      ae1.outrec = or2;
+      ae2.outrec = or1;
+    }
+    disposeIntersectNodes() {
+      this.intersectList.length = 0;
+    }
+    static ptsReallyClose(pt1, pt2) {
+      return Math.abs(pt1.x - pt2.x) < 2 && Math.abs(pt1.y - pt2.y) < 2;
+    }
+    static isVerySmallTriangle(op) {
+      return op.next.next === op.prev && (_ClipperBase.ptsReallyClose(op.prev.pt, op.next.pt) || _ClipperBase.ptsReallyClose(op.pt, op.next.pt) || _ClipperBase.ptsReallyClose(op.pt, op.prev.pt));
+    }
+    static buildPath(op, reverse, isOpen, path) {
+      if (op === null || op.next === op || !isOpen && op.next === op.prev)
+        return false;
+      path.length = 0;
+      let lastPt;
+      let op2;
+      if (reverse) {
+        lastPt = op.pt;
+        op2 = op.prev;
+      } else {
+        op = op.next;
+        lastPt = op.pt;
+        op2 = op.next;
+      }
+      path.push(lastPt);
+      while (op2 !== op) {
+        if (!(op2.pt.x === lastPt.x && op2.pt.y === lastPt.y)) {
+          lastPt = op2.pt;
+          path.push(lastPt);
+        }
+        if (reverse) {
+          op2 = op2.prev;
+        } else {
+          op2 = op2.next;
+        }
+      }
+      return path.length !== 3 || isOpen || !_ClipperBase.isVerySmallTriangle(op2);
+    }
+    buildPaths(solutionClosed, solutionOpen) {
+      solutionClosed.length = 0;
+      solutionOpen.length = 0;
+      let i = 0;
+      while (i < this.outrecList.length) {
+        const outrec = this.outrecList[i++];
+        if (outrec.pts === null)
+          continue;
+        const path = [];
+        if (outrec.isOpen) {
+          if (_ClipperBase.buildPath(outrec.pts, this.reverseSolution, true, path)) {
+            solutionOpen.push(path);
+          }
+        } else {
+          this.cleanCollinear(outrec);
+          if (_ClipperBase.buildPath(outrec.pts, this.reverseSolution, false, path)) {
+            solutionClosed.push(path);
+          }
+        }
+      }
+      return true;
+    }
+    buildTree(polytree, solutionOpen) {
+      polytree.clear();
+      solutionOpen.length = 0;
+      let i = 0;
+      while (i < this.outrecList.length) {
+        const outrec = this.outrecList[i++];
+        if (outrec.pts === null)
+          continue;
+        if (outrec.isOpen) {
+          const openPath = [];
+          if (_ClipperBase.buildPath(outrec.pts, this.reverseSolution, true, openPath)) {
+            solutionOpen.push(openPath);
+          }
+          continue;
+        }
+        if (this.checkBounds(outrec)) {
+          this.recursiveCheckOwners(outrec, polytree);
+        }
+      }
+    }
+    checkBounds(outrec) {
+      if (outrec.pts === null)
+        return false;
+      if (!Rect64Utils.isEmpty(outrec.bounds))
+        return true;
+      this.cleanCollinear(outrec);
+      if (outrec.pts === null || !_ClipperBase.buildPath(outrec.pts, this.reverseSolution, false, outrec.path)) {
+        return false;
+      }
+      outrec.bounds = InternalClipper.getBounds(outrec.path);
+      return true;
+    }
+    recursiveCheckOwners(outrec, polypath) {
+      if (outrec.polypath !== null || Rect64Utils.isEmpty(outrec.bounds))
+        return;
+      while (outrec.owner !== null) {
+        if (outrec.owner.splits !== null && this.checkSplitOwner(outrec, outrec.owner.splits))
+          break;
+        if (outrec.owner.pts !== null && this.checkBounds(outrec.owner) && // Fast reject: a container must contain the child's bounds.
+        this.containsRect(outrec.owner.bounds, outrec.bounds) && this.path1InsidePath2(outrec.pts, outrec.owner.pts))
+          break;
+        outrec.owner = outrec.owner.owner;
+      }
+      if (outrec.owner !== null) {
+        if (outrec.owner.polypath === null) {
+          this.recursiveCheckOwners(outrec.owner, polypath);
+        }
+        outrec.polypath = outrec.owner.polypath.addChild(outrec.path);
+      } else {
+        outrec.polypath = polypath.addChild(outrec.path);
+      }
+    }
+    cleanCollinear(outrec) {
+      outrec = this.getRealOutRec(outrec);
+      if (outrec === null || outrec.isOpen)
+        return;
+      if (!this.isValidClosedPath(outrec.pts)) {
+        outrec.pts = null;
+        return;
+      }
+      let startOp = outrec.pts;
+      let op2 = startOp;
+      while (true) {
+        if (op2 !== null && InternalClipper.isCollinear(op2.prev.pt, op2.pt, op2.next.pt) && (op2.pt.x === op2.prev.pt.x && op2.pt.y === op2.prev.pt.y || op2.pt.x === op2.next.pt.x && op2.pt.y === op2.next.pt.y || !this.preserveCollinear || InternalClipper.dotProductSign(op2.prev.pt, op2.pt, op2.next.pt) < 0)) {
+          if (op2 === outrec.pts) {
+            outrec.pts = op2.prev;
+          }
+          op2 = this.disposeOutPt(op2);
+          if (!this.isValidClosedPath(op2)) {
+            outrec.pts = null;
+            return;
+          }
+          startOp = op2;
+          continue;
+        }
+        if (op2 === null)
+          break;
+        op2 = op2.next;
+        if (op2 === startOp)
+          break;
+      }
+      this.fixSelfIntersects(outrec);
+    }
+    isValidClosedPath(op) {
+      return op !== null && op.next !== op && (op.next !== op.prev || !_ClipperBase.isVerySmallTriangle(op));
+    }
+    disposeOutPt(op) {
+      const result = op.next === op ? null : op.next;
+      op.prev.next = op.next;
+      op.next.prev = op.prev;
+      return result;
+    }
+    fixSelfIntersects(outrec) {
+      let op2 = outrec.pts;
+      if (op2.prev === op2.next.next) {
+        return;
+      }
+      while (true) {
+        if (op2.next && op2.next.next && this.boundingBoxesOverlap(op2.prev.pt, op2.pt, op2.next.pt, op2.next.next.pt) && InternalClipper.segsIntersect(op2.prev.pt, op2.pt, op2.next.pt, op2.next.next.pt)) {
+          if (op2 === outrec.pts || op2.next === outrec.pts) {
+            outrec.pts = outrec.pts.prev;
+          }
+          this.doSplitOp(outrec, op2);
+          if (outrec.pts === null)
+            return;
+          op2 = outrec.pts;
+          if (op2.prev === op2.next.next)
+            break;
+          continue;
+        }
+        op2 = op2.next;
+        if (op2 === outrec.pts)
+          break;
+      }
+    }
+    doSplitOp(outrec, splitOp) {
+      const prevOp = splitOp.prev;
+      const nextNextOp = splitOp.next.next;
+      outrec.pts = prevOp;
+      const ip = InternalClipper.getLineIntersectPt(prevOp.pt, splitOp.pt, splitOp.next.pt, nextNextOp.pt);
+      if (this.zCallbackInternal) {
+        this.zCallbackInternal(prevOp.pt, splitOp.pt, splitOp.next.pt, nextNextOp.pt, ip);
+      }
+      const doubleArea1 = _ClipperBase.areaOutPt(prevOp);
+      const absDoubleArea1 = doubleArea1 < B02 ? -doubleArea1 : doubleArea1;
+      if (absDoubleArea1 < B42) {
+        outrec.pts = null;
+        return;
+      }
+      const doubleArea2 = this.areaTriangle(ip, splitOp.pt, splitOp.next.pt);
+      const absDoubleArea2 = doubleArea2 < B02 ? -doubleArea2 : doubleArea2;
+      if (ip.x === prevOp.pt.x && ip.y === prevOp.pt.y || ip.x === nextNextOp.pt.x && ip.y === nextNextOp.pt.y) {
+        nextNextOp.prev = prevOp;
+        prevOp.next = nextNextOp;
+      } else {
+        const newOp2 = new OutPt(ip, outrec);
+        newOp2.prev = prevOp;
+        newOp2.next = nextNextOp;
+        nextNextOp.prev = newOp2;
+        prevOp.next = newOp2;
+      }
+      if (!(absDoubleArea2 > B22))
+        return;
+      const isHoleOfRemainder = !(absDoubleArea2 > absDoubleArea1) && doubleArea2 > B02 !== doubleArea1 > B02;
+      if (isHoleOfRemainder && !_ClipperBase.triangleInsidePath(prevOp, ip, splitOp.pt, splitOp.next.pt))
+        return;
+      const newOutRec = this.newOutRec();
+      newOutRec.owner = isHoleOfRemainder ? outrec : outrec.owner;
+      splitOp.outrec = newOutRec;
+      splitOp.next.outrec = newOutRec;
+      const newOp = new OutPt(ip, newOutRec);
+      newOp.prev = splitOp.next;
+      newOp.next = splitOp;
+      newOutRec.pts = newOp;
+      splitOp.prev = newOp;
+      splitOp.next.next = newOp;
+      if (!this.usingPolytree)
+        return;
+      if (this.path1InsidePath2(prevOp, newOp)) {
+        if (newOutRec.splits === null)
+          newOutRec.splits = [];
+        newOutRec.splits.push(outrec.idx);
+      } else {
+        if (outrec.splits === null)
+          outrec.splits = [];
+        outrec.splits.push(newOutRec.idx);
+      }
+    }
+    // returns true when the triangle's centroid has a non-zero winding number
+    // relative to the closed path at op (the centroid is kept in doubles so that
+    // it isn't rounded outside a very thin triangle)
+    static triangleInsidePath(op, a, b, c) {
+      const x = (a.x + b.x + c.x) / 3;
+      const y = (a.y + b.y + c.y) / 3;
+      let winding = 0;
+      let op2 = op;
+      do {
+        const p = op2.pt;
+        const q = op2.next.pt;
+        const cross2 = (q.x - p.x) * (y - p.y) - (x - p.x) * (q.y - p.y);
+        if (p.y <= y) {
+          if (q.y > y && cross2 > 0)
+            winding++;
+        } else if (q.y <= y && cross2 < 0) {
+          winding--;
+        }
+        op2 = op2.next;
+      } while (op2 !== op);
+      return winding !== 0;
+    }
+    static areaOutPt(op) {
+      const maxCoord = InternalClipper.maxCoordForSafeAreaProduct;
+      let area3 = 0;
+      let allSmall = true;
+      let op2 = op;
+      do {
+        const prev = op2.prev;
+        const pt2 = op2.pt;
+        if (Math.abs(prev.pt.x) >= maxCoord || Math.abs(prev.pt.y) >= maxCoord || Math.abs(pt2.x) >= maxCoord || Math.abs(pt2.y) >= maxCoord) {
+          allSmall = false;
+          break;
+        }
+        area3 += (prev.pt.y + pt2.y) * (prev.pt.x - pt2.x);
+        op2 = op2.next;
+      } while (op2 !== op);
+      if (allSmall) {
+        return BigInt(Math.round(area3));
+      }
+      let areaBig = B02;
+      op2 = op;
+      do {
+        const prev = op2.prev;
+        if (Number.isSafeInteger(prev.pt.y) && Number.isSafeInteger(op2.pt.y) && Number.isSafeInteger(prev.pt.x) && Number.isSafeInteger(op2.pt.x)) {
+          const sumBig = BigInt(prev.pt.y) + BigInt(op2.pt.y);
+          const diffBig = BigInt(prev.pt.x) - BigInt(op2.pt.x);
+          areaBig += sumBig * diffBig;
+        } else {
+          const sum = prev.pt.y + op2.pt.y;
+          const diff = prev.pt.x - op2.pt.x;
+          areaBig += BigInt(Math.round(sum * diff));
+        }
+        op2 = op2.next;
+      } while (op2 !== op);
+      return areaBig;
+    }
+    areaTriangle(pt1, pt2, pt3) {
+      const maxCoord = InternalClipper.maxCoordForSafeAreaProduct;
+      if (Math.abs(pt1.x) < maxCoord && Math.abs(pt1.y) < maxCoord && Math.abs(pt2.x) < maxCoord && Math.abs(pt2.y) < maxCoord && Math.abs(pt3.x) < maxCoord && Math.abs(pt3.y) < maxCoord) {
+        const area4 = (pt3.y + pt1.y) * (pt3.x - pt1.x) + (pt1.y + pt2.y) * (pt1.x - pt2.x) + (pt2.y + pt3.y) * (pt2.x - pt3.x);
+        return BigInt(Math.round(area4));
+      }
+      if (Number.isSafeInteger(pt1.x) && Number.isSafeInteger(pt1.y) && Number.isSafeInteger(pt2.x) && Number.isSafeInteger(pt2.y) && Number.isSafeInteger(pt3.x) && Number.isSafeInteger(pt3.y)) {
+        const term1 = (BigInt(pt3.y) + BigInt(pt1.y)) * (BigInt(pt3.x) - BigInt(pt1.x));
+        const term2 = (BigInt(pt1.y) + BigInt(pt2.y)) * (BigInt(pt1.x) - BigInt(pt2.x));
+        const term3 = (BigInt(pt2.y) + BigInt(pt3.y)) * (BigInt(pt2.x) - BigInt(pt3.x));
+        return term1 + term2 + term3;
+      }
+      const area3 = (pt3.y + pt1.y) * (pt3.x - pt1.x) + (pt1.y + pt2.y) * (pt1.x - pt2.x) + (pt2.y + pt3.y) * (pt2.x - pt3.x);
+      return BigInt(Math.round(area3));
+    }
+    isValidOwner(outRec, testOwner) {
+      while (testOwner !== null && testOwner !== outRec) {
+        testOwner = testOwner.owner;
+      }
+      return testOwner === null;
+    }
+    containsRect(rect, rec) {
+      return rec.left >= rect.left && rec.right <= rect.right && rec.top >= rect.top && rec.bottom <= rect.bottom;
+    }
+    checkSplitOwner(outrec, splits) {
+      for (let i = 0; i < splits.length; i++) {
+        let split = this.outrecList[splits[i]];
+        if (split.pts === null && split.splits !== null) {
+          if (split.recursiveSplit === outrec)
+            continue;
+          split.recursiveSplit = outrec;
+          if (this.checkSplitOwner(outrec, split.splits))
+            return true;
+        }
+        split = this.getRealOutRec(split);
+        if (split === null || split === outrec || split.recursiveSplit === outrec)
+          continue;
+        split.recursiveSplit = outrec;
+        if (split.splits !== null && this.checkSplitOwner(outrec, split.splits))
+          return true;
+        if (!this.checkBounds(split) || !this.containsRect(split.bounds, outrec.bounds) || !this.path1InsidePath2(outrec.pts, split.pts))
+          continue;
+        if (!this.isValidOwner(outrec, split)) {
+          split.owner = outrec.owner;
+        }
+        outrec.owner = split;
+        return true;
+      }
+      return false;
+    }
+  };
+  var Clipper64 = class extends ClipperBase {
+    zCallback;
+    getZCallback() {
+      return this.zCallback;
+    }
+    addPath(path, polytype, isOpen = false) {
+      super.addPath(path, polytype, isOpen);
+    }
+    addReuseableData(reuseableData) {
+      super.addReuseableData(reuseableData);
+    }
+    addPaths(paths, polytype, isOpen = false) {
+      super.addPaths(paths, polytype, isOpen);
+    }
+    addSubject(paths) {
+      this.addPaths(paths, PathType.Subject);
+    }
+    addOpenSubject(paths) {
+      this.addPaths(paths, PathType.Subject, true);
+    }
+    addClip(paths) {
+      this.addPaths(paths, PathType.Clip);
+    }
+    execute(clipType, fillRule, solutionOrTree, openPathsOrSolutionOpen) {
+      if (Array.isArray(solutionOrTree)) {
+        const solutionClosed = solutionOrTree;
+        const solutionOpen = openPathsOrSolutionOpen;
+        solutionClosed.length = 0;
+        if (solutionOpen)
+          solutionOpen.length = 0;
+        try {
+          this.executeInternal(clipType, fillRule);
+          this.buildPaths(solutionClosed, solutionOpen || []);
+        } catch {
+          this.succeeded = false;
+        }
+        this.clearSolutionOnly();
+        return this.succeeded;
+      } else {
+        const polytree = solutionOrTree;
+        const openPaths = openPathsOrSolutionOpen;
+        polytree.clear();
+        if (openPaths)
+          openPaths.length = 0;
+        this.usingPolytree = true;
+        try {
+          this.executeInternal(clipType, fillRule);
+          this.buildTree(polytree, openPaths || []);
+        } catch {
+          this.succeeded = false;
+        }
+        this.clearSolutionOnly();
+        return this.succeeded;
+      }
+    }
+  };
+  var ClipperD = class extends ClipperBase {
+    zCallback;
+    scale;
+    invScale;
+    constructor(roundingDecimalPrecision = 2) {
+      super();
+      InternalClipper.checkPrecision(roundingDecimalPrecision);
+      this.scale = Math.pow(10, roundingDecimalPrecision);
+      this.invScale = 1 / this.scale;
+    }
+    getZCallback() {
+      return this.zCallback;
+    }
+    scalePathDFromInt(path, scale) {
+      const result = [];
+      for (const pt2 of path) {
+        result.push({
+          x: pt2.x * scale,
+          y: pt2.y * scale,
+          z: pt2.z || 0
+        });
+      }
+      return result;
+    }
+    buildPathsD(solutionClosed, solutionOpen) {
+      solutionClosed.length = 0;
+      solutionOpen.length = 0;
+      let i = 0;
+      while (i < this.outrecList.length) {
+        const outrec = this.outrecList[i++];
+        if (outrec.pts === null)
+          continue;
+        const path = [];
+        if (outrec.isOpen) {
+          if (ClipperBase.buildPath(outrec.pts, this.reverseSolution, true, path)) {
+            solutionOpen.push(this.scalePathDFromInt(path, this.invScale));
+          }
+        } else {
+          this.cleanCollinear(outrec);
+          if (ClipperBase.buildPath(outrec.pts, this.reverseSolution, false, path)) {
+            solutionClosed.push(this.scalePathDFromInt(path, this.invScale));
+          }
+        }
+      }
+      return true;
+    }
+    buildTreeD(polytree, solutionOpen) {
+      polytree.clear();
+      solutionOpen.length = 0;
+      let i = 0;
+      while (i < this.outrecList.length) {
+        const outrec = this.outrecList[i++];
+        if (outrec.pts === null)
+          continue;
+        if (outrec.isOpen) {
+          const openPath = [];
+          if (ClipperBase.buildPath(outrec.pts, this.reverseSolution, true, openPath)) {
+            solutionOpen.push(this.scalePathDFromInt(openPath, this.invScale));
+          }
+          continue;
+        }
+        if (this.checkBounds(outrec)) {
+          this.recursiveCheckOwners(outrec, polytree);
+        }
+      }
+    }
+    addPath(path, polytype, isOpen = false) {
+      const tmp = [path];
+      this.addPaths(tmp, polytype, isOpen);
+    }
+    addPaths(paths, polytype, isOpen = false) {
+      super.addPaths(Clipper.scalePaths64(paths, this.scale), polytype, isOpen);
+    }
+    addSubject(path) {
+      this.addPath(path, PathType.Subject);
+    }
+    addOpenSubject(path) {
+      this.addPath(path, PathType.Subject, true);
+    }
+    addClip(path) {
+      this.addPath(path, PathType.Clip);
+    }
+    addSubjectPaths(paths) {
+      this.addPaths(paths, PathType.Subject);
+    }
+    addOpenSubjectPaths(paths) {
+      this.addPaths(paths, PathType.Subject, true);
+    }
+    addClipPaths(paths) {
+      this.addPaths(paths, PathType.Clip);
+    }
+    execute(clipType, fillRule, solutionOrTree, openPathsOrSolutionOpen) {
+      if (Array.isArray(solutionOrTree)) {
+        const solutionClosed = solutionOrTree;
+        const solutionOpen = openPathsOrSolutionOpen;
+        const solClosed64 = [];
+        const solOpen64 = [];
+        solutionClosed.length = 0;
+        if (solutionOpen)
+          solutionOpen.length = 0;
+        let success = true;
+        try {
+          this.executeInternal(clipType, fillRule);
+          this.buildPaths(solClosed64, solOpen64);
+        } catch {
+          success = false;
+        }
+        this.clearSolutionOnly();
+        if (!success)
+          return false;
+        for (const path of solClosed64) {
+          solutionClosed.push(this.scalePathDFromInt(path, this.invScale));
+        }
+        if (solutionOpen) {
+          for (const path of solOpen64) {
+            solutionOpen.push(this.scalePathDFromInt(path, this.invScale));
+          }
+        }
+        return true;
+      } else {
+        const polytree = solutionOrTree;
+        const openPaths = openPathsOrSolutionOpen;
+        polytree.clear();
+        if (openPaths)
+          openPaths.length = 0;
+        this.usingPolytree = true;
+        polytree.scale = this.scale;
+        let success = true;
+        try {
+          this.executeInternal(clipType, fillRule);
+          this.buildTreeD(polytree, openPaths || []);
+        } catch {
+          success = false;
+        }
+        this.clearSolutionOnly();
+        return success;
+      }
+    }
+  };
+  var Clipper = {
+    area(path) {
+      return InternalClipper.area(path);
+    },
+    areaD(path) {
+      let a = 0;
+      const cnt = path.length;
+      if (cnt < 3)
+        return 0;
+      let prevPt = path[cnt - 1];
+      for (const pt2 of path) {
+        a += (prevPt.y + pt2.y) * (prevPt.x - pt2.x);
+        prevPt = pt2;
+      }
+      return a * 0.5;
+    },
+    scalePath64(path, scale) {
+      const maxAbs = InternalClipper.maxSafeCoordinateForScale(scale);
+      const result = [];
+      for (const pt2 of path) {
+        InternalClipper.checkSafeScaleValue(pt2.x, maxAbs, "scalePath64");
+        InternalClipper.checkSafeScaleValue(pt2.y, maxAbs, "scalePath64");
+        result.push({
+          x: Math.round(pt2.x * scale),
+          y: Math.round(pt2.y * scale)
+        });
+      }
+      return result;
+    },
+    scalePaths64(paths, scale) {
+      const result = [];
+      for (const path of paths) {
+        result.push(Clipper.scalePath64(path, scale));
+      }
+      return result;
+    },
+    scalePathD(path, scale) {
+      const result = [];
+      for (const pt2 of path) {
+        result.push({
+          x: pt2.x * scale,
+          y: pt2.y * scale
+        });
+      }
+      return result;
+    },
+    scalePathsD(paths, scale) {
+      const result = [];
+      for (const path of paths) {
+        result.push(Clipper.scalePathD(path, scale));
+      }
+      return result;
+    }
+  };
+
+  // node_modules/clipper2-ts/dist/Offset.js
+  var JoinType;
+  (function(JoinType2) {
+    JoinType2[JoinType2["Miter"] = 0] = "Miter";
+    JoinType2[JoinType2["Square"] = 1] = "Square";
+    JoinType2[JoinType2["Bevel"] = 2] = "Bevel";
+    JoinType2[JoinType2["Round"] = 3] = "Round";
+  })(JoinType || (JoinType = {}));
+  var EndType;
+  (function(EndType2) {
+    EndType2[EndType2["Polygon"] = 0] = "Polygon";
+    EndType2[EndType2["Joined"] = 1] = "Joined";
+    EndType2[EndType2["Butt"] = 2] = "Butt";
+    EndType2[EndType2["Square"] = 3] = "Square";
+    EndType2[EndType2["Round"] = 4] = "Round";
+  })(EndType || (EndType = {}));
+  var Group = class {
+    inPaths;
+    joinType;
+    endType;
+    pathsReversed;
+    lowestPathIdx;
+    constructor(paths, joinType, endType = EndType.Polygon) {
+      this.joinType = joinType;
+      this.endType = endType;
+      const isJoined = endType === EndType.Polygon || endType === EndType.Joined;
+      this.inPaths = [];
+      for (const path of paths) {
+        this.inPaths.push(ClipperOffset.stripDuplicates(path, isJoined));
+      }
+      if (endType === EndType.Polygon) {
+        const lowestInfo = ClipperOffset.getLowestPathInfo(this.inPaths);
+        this.lowestPathIdx = lowestInfo.idx;
+        this.pathsReversed = this.lowestPathIdx >= 0 && lowestInfo.isNegArea;
+      } else {
+        this.lowestPathIdx = -1;
+        this.pathsReversed = false;
+      }
+    }
+  };
+  var ClipperOffset = class _ClipperOffset {
+    static Tolerance = 1e-12;
+    // Clipper2 approximates arcs by using series of relatively short straight
+    //line segments. And logically, shorter line segments will produce better arc
+    // approximations. But very short segments can degrade performance, usually
+    // with little or no discernable improvement in curve quality. Very short
+    // segments can even detract from curve quality, due to the effects of integer
+    // rounding. Since there isn't an optimal number of line segments for any given
+    // arc radius (that perfectly balances curve approximation with performance),
+    // arc tolerance is user defined. Nevertheless, when the user doesn't define
+    // an arc tolerance (ie leaves alone the 0 default value), the calculated
+    // default arc tolerance (offset_radius / 500) generally produces good (smooth)
+    // arc approximations without producing excessively small segment lengths.
+    // See also: https://www.angusj.com/clipper2/Docs/Trigonometry.htm
+    static arc_const = 2e-3;
+    // <-- 1/500
+    groupList = [];
+    pathOut = [];
+    normals = [];
+    solution = [];
+    solutionTree = null;
+    groupDelta = 0;
+    //*0.5 for open paths; *-1.0 for negative areas
+    delta = 0;
+    mitLimSqr = 0;
+    stepsPerRad = 0;
+    stepSin = 0;
+    stepCos = 0;
+    joinType = JoinType.Bevel;
+    endType = EndType.Polygon;
+    arcTolerance = 0;
+    mergeGroups = true;
+    miterLimit = 2;
+    preserveCollinear = false;
+    reverseSolution = false;
+    zCallback;
+    deltaCallback = null;
+    constructor(miterLimit = 2, arcTolerance = 0, preserveCollinear = false, reverseSolution = false) {
+      this.miterLimit = miterLimit;
+      this.arcTolerance = arcTolerance;
+      this.mergeGroups = true;
+      this.preserveCollinear = preserveCollinear;
+      this.reverseSolution = reverseSolution;
+    }
+    clear() {
+      this.groupList.length = 0;
+    }
+    // Internal Z callback that implements default Z handling before calling user callback
+    ZCB = (bot1, top1, bot2, top2, intersectPt) => {
+      if ((bot1.z || 0) !== 0 && (bot1.z === bot2.z || bot1.z === top2.z)) {
+        intersectPt.z = bot1.z;
+      } else if ((bot2.z || 0) !== 0 && bot2.z === top1.z) {
+        intersectPt.z = bot2.z;
+      } else if ((top1.z || 0) !== 0 && top1.z === top2.z) {
+        intersectPt.z = top1.z;
+      } else if (this.zCallback) {
+        this.zCallback(bot1, top1, bot2, top2, intersectPt);
+      }
+    };
+    addPath(path, joinType, endType) {
+      if (path.length === 0)
+        return;
+      const pp = [path];
+      this.addPaths(pp, joinType, endType);
+    }
+    addPaths(paths, joinType, endType) {
+      if (paths.length === 0)
+        return;
+      this.groupList.push(new Group(paths, joinType, endType));
+    }
+    calcSolutionCapacity() {
+      let result = 0;
+      for (const g of this.groupList) {
+        result += g.endType === EndType.Joined ? g.inPaths.length * 2 : g.inPaths.length;
+      }
+      return result;
+    }
+    checkPathsReversed() {
+      let result = false;
+      for (const g of this.groupList) {
+        if (g.endType === EndType.Polygon) {
+          result = g.pathsReversed;
+          break;
+        }
+      }
+      return result;
+    }
+    executeInternal(delta) {
+      if (this.groupList.length === 0)
+        return;
+      if (Math.abs(delta) < 0.5) {
+        for (const group of this.groupList) {
+          for (const path of group.inPaths) {
+            this.solution.push(path);
+          }
+        }
+        return;
+      }
+      this.delta = delta;
+      this.mitLimSqr = this.miterLimit <= 1 ? 2 : 2 / _ClipperOffset.sqr(this.miterLimit);
+      for (const group of this.groupList) {
+        this.doGroupOffset(group);
+      }
+      if (this.groupList.length === 0)
+        return;
+      const pathsReversed = this.checkPathsReversed();
+      const fillRule = pathsReversed ? FillRule.Negative : FillRule.Positive;
+      const c = new Clipper64();
+      c.preserveCollinear = this.preserveCollinear;
+      c.reverseSolution = this.reverseSolution !== pathsReversed;
+      c.zCallback = this.ZCB;
+      c.addSubject(this.solution);
+      if (this.solutionTree !== null) {
+        c.execute(ClipType.Union, fillRule, this.solutionTree);
+      } else {
+        c.execute(ClipType.Union, fillRule, this.solution);
+      }
+    }
+    execute(delta, solutionOrTree) {
+      if (Array.isArray(solutionOrTree)) {
+        const solution = solutionOrTree;
+        solution.length = 0;
+        this.solution = solution;
+        this.executeInternal(delta);
+      } else {
+        const solutionTree = solutionOrTree;
+        solutionTree.clear();
+        this.solutionTree = solutionTree;
+        this.solution = [];
+        this.executeInternal(delta);
+      }
+    }
+    executeWithCallback(deltaCallback, solution) {
+      this.deltaCallback = deltaCallback;
+      this.execute(1, solution);
+    }
+    static getUnitNormal(pt1, pt2) {
+      const dx = pt2.x - pt1.x;
+      const dy = pt2.y - pt1.y;
+      if (dx === 0 && dy === 0)
+        return { x: 0, y: 0 };
+      const f = 1 / Math.sqrt(dx * dx + dy * dy);
+      return {
+        x: dy * f,
+        y: -dx * f
+      };
+    }
+    static getLowestPathInfo(paths) {
+      let idx = -1;
+      let isNegArea = false;
+      const botPt = { x: Number.MAX_SAFE_INTEGER, y: Number.MIN_SAFE_INTEGER };
+      for (let i = 0; i < paths.length; ++i) {
+        let a = Number.MAX_VALUE;
+        for (const pt2 of paths[i]) {
+          if (pt2.y < botPt.y || pt2.y === botPt.y && pt2.x >= botPt.x)
+            continue;
+          if (a === Number.MAX_VALUE) {
+            a = _ClipperOffset.area(paths[i]);
+            if (a === 0)
+              break;
+            isNegArea = a < 0;
+          }
+          idx = i;
+          botPt.x = pt2.x;
+          botPt.y = pt2.y;
+        }
+      }
+      return { idx, isNegArea };
+    }
+    static translatePoint(pt2, dx, dy) {
+      return { x: pt2.x + dx, y: pt2.y + dy, z: pt2.z };
+    }
+    static reflectPoint(pt2, pivot) {
+      return { x: pivot.x + (pivot.x - pt2.x), y: pivot.y + (pivot.y - pt2.y), z: pt2.z };
+    }
+    static almostZero(value, epsilon = 1e-3) {
+      return Math.abs(value) < epsilon;
+    }
+    static hypotenuse(x, y) {
+      return Math.sqrt(x * x + y * y);
+    }
+    static normalizeVector(vec) {
+      const h = _ClipperOffset.hypotenuse(vec.x, vec.y);
+      if (_ClipperOffset.almostZero(h))
+        return { x: 0, y: 0 };
+      const inverseHypot = 1 / h;
+      return { x: vec.x * inverseHypot, y: vec.y * inverseHypot };
+    }
+    static getAvgUnitVector(vec1, vec2) {
+      return _ClipperOffset.normalizeVector({ x: vec1.x + vec2.x, y: vec1.y + vec2.y });
+    }
+    static intersectPoint(pt1a, pt1b, pt2a, pt2b) {
+      if (InternalClipper.isAlmostZero(pt1a.x - pt1b.x)) {
+        if (InternalClipper.isAlmostZero(pt2a.x - pt2b.x))
+          return { x: 0, y: 0 };
+        const m2 = (pt2b.y - pt2a.y) / (pt2b.x - pt2a.x);
+        const b2 = pt2a.y - m2 * pt2a.x;
+        return { x: pt1a.x, y: m2 * pt1a.x + b2 };
+      }
+      if (InternalClipper.isAlmostZero(pt2a.x - pt2b.x)) {
+        const m1 = (pt1b.y - pt1a.y) / (pt1b.x - pt1a.x);
+        const b1 = pt1a.y - m1 * pt1a.x;
+        return { x: pt2a.x, y: m1 * pt2a.x + b1 };
+      } else {
+        const m1 = (pt1b.y - pt1a.y) / (pt1b.x - pt1a.x);
+        const b1 = pt1a.y - m1 * pt1a.x;
+        const m2 = (pt2b.y - pt2a.y) / (pt2b.x - pt2a.x);
+        const b2 = pt2a.y - m2 * pt2a.x;
+        if (InternalClipper.isAlmostZero(m1 - m2))
+          return { x: 0, y: 0 };
+        const x = (b2 - b1) / (m1 - m2);
+        return { x, y: m1 * x + b1 };
+      }
+    }
+    getPerpendic(pt2, norm2) {
+      return {
+        x: Math.round(pt2.x + norm2.x * this.groupDelta),
+        y: Math.round(pt2.y + norm2.y * this.groupDelta),
+        z: pt2.z || 0
+      };
+    }
+    getPerpendicD(pt2, norm2) {
+      return {
+        x: pt2.x + norm2.x * this.groupDelta,
+        y: pt2.y + norm2.y * this.groupDelta,
+        z: pt2.z || 0
+      };
+    }
+    doBevel(path, j, k) {
+      let pt1, pt2;
+      const pjz = path[j].z || 0;
+      if (j === k) {
+        const absDelta = Math.abs(this.groupDelta);
+        pt1 = {
+          x: Math.round(path[j].x - absDelta * this.normals[j].x),
+          y: Math.round(path[j].y - absDelta * this.normals[j].y),
+          z: pjz
+        };
+        pt2 = {
+          x: Math.round(path[j].x + absDelta * this.normals[j].x),
+          y: Math.round(path[j].y + absDelta * this.normals[j].y),
+          z: pjz
+        };
+      } else {
+        pt1 = {
+          x: Math.round(path[j].x + this.groupDelta * this.normals[k].x),
+          y: Math.round(path[j].y + this.groupDelta * this.normals[k].y),
+          z: pjz
+        };
+        pt2 = {
+          x: Math.round(path[j].x + this.groupDelta * this.normals[j].x),
+          y: Math.round(path[j].y + this.groupDelta * this.normals[j].y),
+          z: pjz
+        };
+      }
+      this.pathOut.push(pt1);
+      this.pathOut.push(pt2);
+    }
+    doSquare(path, j, k) {
+      let vec;
+      if (j === k) {
+        vec = { x: this.normals[j].y, y: -this.normals[j].x };
+      } else {
+        vec = _ClipperOffset.getAvgUnitVector({ x: -this.normals[k].y, y: this.normals[k].x }, { x: this.normals[j].y, y: -this.normals[j].x });
+      }
+      const absDelta = Math.abs(this.groupDelta);
+      let ptQ = { x: path[j].x, y: path[j].y, z: path[j].z || 0 };
+      ptQ = _ClipperOffset.translatePoint(ptQ, absDelta * vec.x, absDelta * vec.y);
+      const pt1 = _ClipperOffset.translatePoint(ptQ, this.groupDelta * vec.y, this.groupDelta * -vec.x);
+      const pt2 = _ClipperOffset.translatePoint(ptQ, this.groupDelta * -vec.y, this.groupDelta * vec.x);
+      const pt3 = this.getPerpendicD(path[k], this.normals[k]);
+      if (j === k) {
+        const pt4 = {
+          x: pt3.x + vec.x * this.groupDelta,
+          y: pt3.y + vec.y * this.groupDelta
+        };
+        const pt5 = _ClipperOffset.intersectPoint(pt1, pt2, pt3, pt4);
+        pt5.z = ptQ.z;
+        this.pathOut.push(Point64Utils.fromPointD(_ClipperOffset.reflectPoint(pt5, ptQ)));
+        this.pathOut.push(Point64Utils.fromPointD(pt5));
+      } else {
+        const pt4 = this.getPerpendicD(path[j], this.normals[k]);
+        const pt5 = _ClipperOffset.intersectPoint(pt1, pt2, pt3, pt4);
+        pt5.z = ptQ.z;
+        this.pathOut.push(Point64Utils.fromPointD(pt5));
+        this.pathOut.push(Point64Utils.fromPointD(_ClipperOffset.reflectPoint(pt5, ptQ)));
+      }
+    }
+    doMiter(path, j, k, cosA) {
+      const q = this.groupDelta / (cosA + 1);
+      this.pathOut.push({
+        x: Math.round(path[j].x + (this.normals[k].x + this.normals[j].x) * q),
+        y: Math.round(path[j].y + (this.normals[k].y + this.normals[j].y) * q),
+        z: path[j].z || 0
+      });
+    }
+    doRound(path, j, k, angle) {
+      if (this.deltaCallback !== null) {
+        const absDelta = Math.abs(this.groupDelta);
+        const arcTol = this.arcTolerance > 0.01 ? this.arcTolerance : absDelta * _ClipperOffset.arc_const;
+        const stepsPer360 = Math.PI / Math.acos(1 - arcTol / absDelta);
+        this.stepSin = Math.sin(2 * Math.PI / stepsPer360);
+        this.stepCos = Math.cos(2 * Math.PI / stepsPer360);
+        if (this.groupDelta < 0)
+          this.stepSin = -this.stepSin;
+        this.stepsPerRad = stepsPer360 / (2 * Math.PI);
+      }
+      const pt2 = path[j];
+      const ptz = pt2.z || 0;
+      let offsetVec = { x: this.normals[k].x * this.groupDelta, y: this.normals[k].y * this.groupDelta };
+      if (j === k)
+        PointDUtils.negate(offsetVec);
+      this.pathOut.push({
+        x: Math.round(pt2.x + offsetVec.x),
+        y: Math.round(pt2.y + offsetVec.y),
+        z: ptz
+      });
+      const steps = Math.ceil(this.stepsPerRad * Math.abs(angle));
+      for (let i = 1; i < steps; i++) {
+        offsetVec = {
+          x: offsetVec.x * this.stepCos - this.stepSin * offsetVec.y,
+          y: offsetVec.x * this.stepSin + offsetVec.y * this.stepCos
+        };
+        this.pathOut.push({
+          x: Math.round(pt2.x + offsetVec.x),
+          y: Math.round(pt2.y + offsetVec.y),
+          z: ptz
+        });
+      }
+      this.pathOut.push(this.getPerpendic(path[j], this.normals[j]));
+    }
+    buildNormals(path) {
+      const cnt = path.length;
+      this.normals.length = 0;
+      if (cnt === 0)
+        return;
+      for (let i = 0; i < cnt - 1; i++) {
+        this.normals.push(_ClipperOffset.getUnitNormal(path[i], path[i + 1]));
+      }
+      this.normals.push(_ClipperOffset.getUnitNormal(path[cnt - 1], path[0]));
+    }
+    offsetPoint(group, path, j, k) {
+      if (Point64Utils.equals(path[j], path[k]))
+        return;
+      let sinA = InternalClipper.crossProductD(this.normals[j], this.normals[k]);
+      const cosA = InternalClipper.dotProductD(this.normals[j], this.normals[k]);
+      if (sinA > 1)
+        sinA = 1;
+      else if (sinA < -1)
+        sinA = -1;
+      if (this.deltaCallback !== null) {
+        this.groupDelta = this.deltaCallback(path, this.normals, j, k);
+        if (group.pathsReversed)
+          this.groupDelta = -this.groupDelta;
+      }
+      if (Math.abs(this.groupDelta) < _ClipperOffset.Tolerance) {
+        this.pathOut.push(path[j]);
+        return;
+      }
+      if (cosA > -0.999 && sinA * this.groupDelta < 0) {
+        this.pathOut.push(this.getPerpendic(path[j], this.normals[k]));
+        this.pathOut.push(path[j]);
+        this.pathOut.push(this.getPerpendic(path[j], this.normals[j]));
+      } else if (cosA > 0.999 && this.joinType !== JoinType.Round) {
+        this.doMiter(path, j, k, cosA);
+      } else {
+        switch (this.joinType) {
+          // miter unless the angle is sufficiently acute to exceed ML
+          case JoinType.Miter:
+            if (cosA > this.mitLimSqr - 1) {
+              this.doMiter(path, j, k, cosA);
+            } else {
+              this.doSquare(path, j, k);
+            }
+            break;
+          case JoinType.Round:
+            this.doRound(path, j, k, Math.atan2(sinA, cosA));
+            break;
+          case JoinType.Bevel:
+            this.doBevel(path, j, k);
+            break;
+          default:
+            this.doSquare(path, j, k);
+            break;
+        }
+      }
+    }
+    offsetPolygon(group, path) {
+      this.pathOut = [];
+      const cnt = path.length;
+      let prev = cnt - 1;
+      for (let i = 0; i < cnt; i++) {
+        this.offsetPoint(group, path, i, prev);
+        prev = i;
+      }
+      this.solution.push(this.pathOut);
+    }
+    offsetOpenJoined(group, path) {
+      this.offsetPolygon(group, path);
+      const reversePath2 = [...path].reverse();
+      this.buildNormals(reversePath2);
+      this.offsetPolygon(group, reversePath2);
+    }
+    offsetOpenPath(group, path) {
+      this.pathOut = [];
+      const highI = path.length - 1;
+      if (this.deltaCallback !== null) {
+        this.groupDelta = this.deltaCallback(path, this.normals, 0, 0);
+      }
+      if (Math.abs(this.groupDelta) < _ClipperOffset.Tolerance) {
+        this.pathOut.push(path[0]);
+      } else {
+        switch (this.endType) {
+          case EndType.Butt:
+            this.doBevel(path, 0, 0);
+            break;
+          case EndType.Round:
+            this.doRound(path, 0, 0, Math.PI);
+            break;
+          default:
+            this.doSquare(path, 0, 0);
+            break;
+        }
+      }
+      for (let i = 1, k = 0; i < highI; i++) {
+        this.offsetPoint(group, path, i, k);
+        k = i;
+      }
+      for (let i = highI; i > 0; i--) {
+        this.normals[i] = { x: -this.normals[i - 1].x, y: -this.normals[i - 1].y };
+      }
+      this.normals[0] = this.normals[highI];
+      if (this.deltaCallback !== null) {
+        this.groupDelta = this.deltaCallback(path, this.normals, highI, highI);
+      }
+      if (Math.abs(this.groupDelta) < _ClipperOffset.Tolerance) {
+        this.pathOut.push(path[highI]);
+      } else {
+        switch (this.endType) {
+          case EndType.Butt:
+            this.doBevel(path, highI, highI);
+            break;
+          case EndType.Round:
+            this.doRound(path, highI, highI, Math.PI);
+            break;
+          default:
+            this.doSquare(path, highI, highI);
+            break;
+        }
+      }
+      for (let i = highI - 1, k = highI; i > 0; i--) {
+        this.offsetPoint(group, path, i, k);
+        k = i;
+      }
+      this.solution.push(this.pathOut);
+    }
+    doGroupOffset(group) {
+      if (group.endType === EndType.Polygon) {
+        if (group.lowestPathIdx < 0)
+          this.delta = Math.abs(this.delta);
+        this.groupDelta = group.pathsReversed ? -this.delta : this.delta;
+      } else {
+        this.groupDelta = Math.abs(this.delta);
+      }
+      const absDelta = Math.abs(this.groupDelta);
+      this.joinType = group.joinType;
+      this.endType = group.endType;
+      if (group.joinType === JoinType.Round || group.endType === EndType.Round) {
+        const arcTol = this.arcTolerance > 0.01 ? this.arcTolerance : absDelta * _ClipperOffset.arc_const;
+        const stepsPer360 = Math.PI / Math.acos(1 - arcTol / absDelta);
+        this.stepSin = Math.sin(2 * Math.PI / stepsPer360);
+        this.stepCos = Math.cos(2 * Math.PI / stepsPer360);
+        if (this.groupDelta < 0)
+          this.stepSin = -this.stepSin;
+        this.stepsPerRad = stepsPer360 / (2 * Math.PI);
+      }
+      for (const pathIn of group.inPaths) {
+        this.pathOut = [];
+        const cnt = pathIn.length;
+        if (cnt === 0)
+          continue;
+        this.endType = group.endType;
+        if (cnt === 1) {
+          const pt2 = pathIn[0];
+          if (this.deltaCallback !== null) {
+            this.groupDelta = this.deltaCallback(pathIn, this.normals, 0, 0);
+            if (group.pathsReversed)
+              this.groupDelta = -this.groupDelta;
+          }
+          const ptz = pt2.z || 0;
+          if (group.endType === EndType.Round) {
+            const steps = Math.ceil(this.stepsPerRad * 2 * Math.PI);
+            this.pathOut = _ClipperOffset.ellipse(pt2, Math.abs(this.groupDelta), Math.abs(this.groupDelta), steps);
+            if (ptz !== 0)
+              for (let i = 0; i < this.pathOut.length; i++)
+                this.pathOut[i].z = ptz;
+          } else {
+            const d = Math.ceil(Math.abs(this.groupDelta));
+            const r = { left: pt2.x - d, top: pt2.y - d, right: pt2.x + d, bottom: pt2.y + d };
+            this.pathOut = [
+              { x: r.left, y: r.top, z: ptz },
+              { x: r.right, y: r.top, z: ptz },
+              { x: r.right, y: r.bottom, z: ptz },
+              { x: r.left, y: r.bottom, z: ptz }
+            ];
+          }
+          this.solution.push(this.pathOut);
+          continue;
+        }
+        if (cnt === 2 && group.endType === EndType.Joined) {
+          this.endType = group.joinType === JoinType.Round ? EndType.Round : EndType.Square;
+        }
+        this.buildNormals(pathIn);
+        switch (this.endType) {
+          case EndType.Polygon:
+            this.offsetPolygon(group, pathIn);
+            break;
+          case EndType.Joined:
+            this.offsetOpenJoined(group, pathIn);
+            break;
+          default:
+            this.offsetOpenPath(group, pathIn);
+            break;
+        }
+      }
+    }
+    static stripDuplicates(path, isClosedPath) {
+      const cnt = path.length;
+      const result = [];
+      if (cnt === 0)
+        return result;
+      let lastPt = path[0];
+      result.push(lastPt);
+      for (let i = 1; i < cnt; i++) {
+        if (!Point64Utils.equals(lastPt, path[i])) {
+          lastPt = path[i];
+          result.push(lastPt);
+        }
+      }
+      if (isClosedPath && Point64Utils.equals(lastPt, result[0])) {
+        result.pop();
+      }
+      return result;
+    }
+    static area(path) {
+      return InternalClipper.area(path);
+    }
+    static sqr(val) {
+      return val * val;
+    }
+    static ellipse(center, radiusX, radiusY = 0, steps = 0) {
+      if (radiusX <= 0)
+        return [];
+      if (radiusY <= 0)
+        radiusY = radiusX;
+      if (steps <= 2) {
+        steps = Math.ceil(Math.PI * Math.sqrt((radiusX + radiusY) / 2));
+      }
+      const si = Math.sin(2 * Math.PI / steps);
+      const co = Math.cos(2 * Math.PI / steps);
+      let dx = co;
+      let dy = si;
+      const result = [{ x: Math.round(center.x + radiusX), y: center.y }];
+      for (let i = 1; i < steps; ++i) {
+        result.push({
+          x: Math.round(center.x + radiusX * dx),
+          y: Math.round(center.y + radiusY * dy)
+        });
+        const x = dx * co - dy * si;
+        dy = dy * co + dx * si;
+        dx = x;
+      }
+      return result;
+    }
+  };
+
+  // node_modules/clipper2-ts/dist/Clipper.js
+  var B23 = BigInt(2);
+  function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
+    if (typeof clipOrFillRule === "number") {
+      return booleanOpD(ClipType.Union, subject, null, clipOrFillRule);
+    } else {
+      return booleanOpD(ClipType.Union, subject, clipOrFillRule, fillRuleOrPrecision, precision || 2);
+    }
+  }
+  function differenceD(subject, clip, fillRule, precision = 2) {
+    return booleanOpD(ClipType.Difference, subject, clip, fillRule, precision);
+  }
+  function booleanOpD(clipType, subject, clip, fillRule, precision = 2) {
+    const solution = [];
+    const c = new ClipperD(precision);
+    c.addSubjectPaths(subject);
+    if (clip !== null) {
+      c.addClipPaths(clip);
+    }
+    c.execute(clipType, fillRule, solution);
+    return solution;
+  }
+  function inflatePathsD(paths, delta, joinType, endType, miterLimit = 2, precision = 2, arcTolerance = 0) {
+    InternalClipper.checkPrecision(precision);
+    const scale = Math.pow(10, precision);
+    const tmp = scalePaths64(paths, scale);
+    const co = new ClipperOffset(miterLimit, scale * arcTolerance);
+    co.addPaths(tmp, joinType, endType);
+    const solution = [];
+    co.execute(delta * scale, solution);
+    return scalePathsD(solution, 1 / scale);
+  }
+  function scalePathD(path, scale) {
+    if (InternalClipper.isAlmostZero(scale - 1))
+      return path;
+    const result = [];
+    for (const pt2 of path) {
+      result.push(PointDUtils.scale(pt2, scale));
+    }
+    return result;
+  }
+  function scalePathsD(paths, scale) {
+    if (InternalClipper.isAlmostZero(scale - 1))
+      return paths;
+    const result = [];
+    for (const path of paths) {
+      result.push(scalePathD(path, scale));
+    }
+    return result;
+  }
+  function scalePath64(path, scale) {
+    const maxAbs = InternalClipper.maxSafeCoordinateForScale(scale);
+    const result = [];
+    for (const pt2 of path) {
+      InternalClipper.checkSafeScaleValue(pt2.x, maxAbs, "scalePath64");
+      InternalClipper.checkSafeScaleValue(pt2.y, maxAbs, "scalePath64");
+      result.push({
+        x: Math.round(pt2.x * scale),
+        y: Math.round(pt2.y * scale)
+      });
+    }
+    return result;
+  }
+  function scalePaths64(paths, scale) {
+    const result = [];
+    for (const path of paths) {
+      result.push(scalePath64(path, scale));
+    }
+    return result;
+  }
+
+  // web/fab/poly.ts
+  var PRECISION = 6;
+  var MAX_ERROR = 5e-3;
+  var toPath = (pts) => pts.map((p) => ({ x: p[0], y: p[1] }));
+  var fromPath = (p) => p.map((q) => [q.x, q.y]);
+  var toPaths = (polys) => polys.map(toPath);
+  var fromPaths = (ps) => ps.map(fromPath).filter((p) => p.length >= 3);
+  function union2(polys) {
+    if (!polys.length) return [];
+    return fromPaths(unionD(toPaths(polys), [], FillRule.NonZero, PRECISION));
+  }
+  function inflate(polys, d) {
+    if (!d) return polys;
+    if (!polys.length) return [];
+    return fromPaths(inflatePathsD(toPaths(polys), d, JoinType.Round, EndType.Polygon, 2, PRECISION, MAX_ERROR));
+  }
+  function subtract(a, b) {
+    if (!a.length || !b.length) return a;
+    return fromPaths(differenceD(toPaths(a), toPaths(b), FillRule.NonZero, PRECISION));
+  }
+  function pointInPoly2(pts, x, y) {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+      if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function fracture(paths) {
+    if (paths.length < 2) return paths;
+    const areas = paths.map(area);
+    let pos = 0, neg = 0;
+    for (const a of areas) {
+      if (a > 0) pos += a;
+      else neg -= a;
+    }
+    const outerSign = pos >= neg ? 1 : -1;
+    const outers = [];
+    const holes = [];
+    paths.forEach((p, i) => {
+      if (Math.sign(areas[i]) === outerSign) outers.push({ pts: p, holes: [], a: Math.abs(areas[i]), box: bbox(p) });
+      else holes.push(p);
+    });
+    if (!holes.length) return paths;
+    outers.sort((a, b) => a.a - b.a);
+    const inside = (c, x, y) => x >= c.box[0] && x <= c.box[2] && y >= c.box[1] && y <= c.box[3] && pointInPoly2(c.pts, x, y);
+    for (const h of holes) {
+      const o = outers.find((c) => inside(c, h[0][0], h[0][1]) || inside(c, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
+      if (o) o.holes.push(h);
+    }
+    const out = [];
+    for (const o of outers) out.push(o.holes.length ? joinHoles(o.pts, o.holes) : o.pts.slice());
+    return out;
+  }
+  function bbox(p) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of p) {
+      if (q[0] < x0) x0 = q[0];
+      if (q[0] > x1) x1 = q[0];
+      if (q[1] < y0) y0 = q[1];
+      if (q[1] > y1) y1 = q[1];
+    }
+    return [x0, y0, x1, y1];
+  }
+  function joinHoles(outer, holeList) {
+    const GAP = 1 << 20;
+    const head = { p: outer[0], next: null, l: 0 };
+    let tail = head;
+    for (let i = 1; i < outer.length; i++) {
+      const n = { p: outer[i], next: null, l: i * GAP };
+      tail.next = n;
+      tail = n;
+    }
+    const nextOf = (n) => n.next || head;
+    let y0 = Infinity, y1 = -Infinity;
+    for (const p of outer) {
+      if (p[1] < y0) y0 = p[1];
+      if (p[1] > y1) y1 = p[1];
+    }
+    let total = outer.length;
+    for (const h of holeList) total += h.length;
+    const nb = Math.max(1, Math.min(4096, Math.ceil(Math.sqrt(total)))), bh = (y1 - y0) / nb || 1;
+    const bands = Array.from({ length: nb }, () => []);
+    const band = (y) => Math.min(nb - 1, Math.max(0, Math.floor((y - y0) / bh)));
+    const addEdge = (a) => {
+      const b = nextOf(a);
+      if (a.p[1] === b.p[1]) return;
+      const e = { a };
+      const lo = band(Math.min(a.p[1], b.p[1])), hi = band(Math.max(a.p[1], b.p[1]));
+      for (let k = lo; k <= hi; k++) bands[k].push(e);
+    };
+    for (let n = head; n; n = n.next) addEdge(n);
+    const hs = holeList.map((h) => {
+      let mi = 0;
+      for (let i = 1; i < h.length; i++) if (h[i][0] > h[mi][0]) mi = i;
+      return { h, mi };
+    });
+    hs.sort((a, b) => b.h[b.mi][0] - a.h[a.mi][0]);
+    for (const { h, mi } of hs) {
+      const hx = h[mi][0], hy = h[mi][1];
+      if (hy < y0 || hy > y1) continue;
+      let best = null, bestX = Infinity;
+      for (const e of bands[band(hy)]) {
+        if (e.dead) continue;
+        const a2 = e.a.p, b = nextOf(e.a).p;
+        if (a2[1] === b[1]) continue;
+        if (Math.min(a2[1], b[1]) > hy || Math.max(a2[1], b[1]) < hy) continue;
+        const x = a2[0] + (b[0] - a2[0]) * (hy - a2[1]) / (b[1] - a2[1]);
+        if (x >= hx && (x < bestX || x === bestX && best && e.a.l < best.a.l)) {
+          bestX = x;
+          best = e;
+        }
+      }
+      if (!best) continue;
+      const a = best.a, after2 = a.next;
+      const cut = [bestX, hy];
+      best.dead = true;
+      const c1 = { p: cut, next: null, l: 0 };
+      a.next = c1;
+      let last = c1;
+      const added = [a], fresh = [c1];
+      for (let k = 0; k <= h.length; k++) {
+        const n = { p: h[(mi + k) % h.length], next: null, l: 0 };
+        last.next = n;
+        added.push(last);
+        fresh.push(n);
+        last = n;
+      }
+      const c2 = { p: cut, next: after2, l: 0 };
+      last.next = c2;
+      added.push(last, c2);
+      fresh.push(c2);
+      const hiL = after2 ? after2.l : a.l + (fresh.length + 1) * GAP, step = (hiL - a.l) / (fresh.length + 1);
+      let ok = true, prev = a.l;
+      for (let k = 0; k < fresh.length; k++) {
+        const l = a.l + (k + 1) * step;
+        if (!(l > prev)) ok = false;
+        fresh[k].l = prev = l;
+      }
+      if (after2 && !(after2.l > prev)) ok = false;
+      if (!ok) {
+        let i = 0;
+        for (let n = head; n; n = n.next) n.l = i++ * GAP;
+      }
+      for (const n of added) addEdge(n);
+    }
+    const res = [];
+    for (let n = head; n; n = n.next) res.push(n.p);
+    return res;
+  }
+  function clockwise(pts) {
+    return area(pts) < 0 ? pts.slice().reverse() : pts;
+  }
+  function stadium(x1, y1, x2, y2, w) {
+    const r = w / 2;
+    if (Math.hypot(x2 - x1, y2 - y1) < 1e-9) return circlePoints(x1, y1, r, MAX_ERROR);
+    const a = Math.atan2(y2 - y1, x2 - x1);
+    return arcPoints2(x1, y1, r, a + Math.PI / 2, a + 3 * Math.PI / 2, false, MAX_ERROR).concat(arcPoints2(x2, y2, r, a - Math.PI / 2, a + Math.PI / 2, false, MAX_ERROR));
+  }
+  function roundRectPoints(x, y, w, h, r, deg2) {
+    const hx = w / 2 - r, hy = h / 2 - r;
+    const pts = [];
+    if (r <= 1e-9) pts.push([-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]);
+    else {
+      const corner = (cx, cy, a0) => {
+        for (const p of arcPoints2(cx, cy, r, a0, a0 + Math.PI / 2, false, MAX_ERROR)) pts.push(p);
+      };
+      corner(hx, hy, 0);
+      corner(-hx, hy, Math.PI / 2);
+      corner(-hx, -hy, Math.PI);
+      corner(hx, -hy, 3 * Math.PI / 2);
+    }
+    return pts.map((p) => {
+      const q = rot(p[0], p[1], deg2);
+      return [x + q[0], y + q[1]];
+    });
+  }
+  function primPolys(p) {
+    switch (p.k) {
+      case "seg":
+        return p.w > 0 ? [stadium(p.x1, p.y1, p.x2, p.y2, p.w)] : [];
+      case "arc": {
+        if (!(p.w > 0)) return [];
+        const pts = arcPoints2(p.cx, p.cy, p.r, p.a0, p.a1, p.acw, MAX_ERROR);
+        const out = [];
+        for (let i = 0; i + 1 < pts.length; i++) out.push(stadium(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], p.w));
+        return out;
+      }
+      case "circle":
+        return p.d > 0 ? [circlePoints(p.x, p.y, p.d / 2, MAX_ERROR)] : [];
+      case "rect":
+        return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, 0, p.rot)] : [];
+      case "oval":
+        return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, Math.min(p.w, p.h) / 2, p.rot)] : [];
+      case "roundrect":
+        return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, p.r, p.rot)] : [];
+      case "poly":
+        return p.pts.length >= 3 ? [clockwise(p.pts.map((q) => [p.x + q[0], p.y + q[1]]))] : [];
+      case "region":
+        return p.pts.length >= 3 ? [clockwise(p.pts)] : [];
+      case "rpoly": {
+        if (!(p.d > 0) || p.n < 3) return [];
+        const pts = [];
+        for (let i = 0; i < p.n; i++) {
+          const a = (p.rot + i * 360 / p.n) * Math.PI / 180;
+          pts.push([p.x + p.d / 2 * Math.cos(a), p.y - p.d / 2 * Math.sin(a)]);
+        }
+        return [clockwise(pts)];
+      }
+      case "td":
+        return [];
+    }
+  }
+
+  // web/fab/plot.ts
+  var canvas = () => globalThis.KiCadCanvas;
+  var K3 = (n, key) => n ? kid(n, key) : null;
+  var N = (v, d = 0) => typeof v === "number" ? v : d;
+  var S2 = (v) => typeof v === "string" ? v : "";
+  var PlotLog = class {
+    constructor() {
+      this.messages = /* @__PURE__ */ new Set();
+    }
+    warn(m) {
+      this.messages.add(m);
+    }
+  };
+  function dashed(pts, pattern, w, out) {
+    let pi = 0, left = pattern[0], on = true;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      let [x, y] = pts[i];
+      const [ex, ey] = pts[i + 1];
+      let len = Math.hypot(ex - x, ey - y);
+      if (len < 1e-9) continue;
+      const ux = (ex - x) / len, uy = (ey - y) / len;
+      while (len > 1e-9) {
+        const step = Math.min(left, len);
+        const nx = x + ux * step, ny = y + uy * step;
+        if (on) out.push({ k: "seg", x1: x, y1: y, x2: nx, y2: ny, w });
+        x = nx;
+        y = ny;
+        len -= step;
+        left -= step;
+        if (left <= 1e-9) {
+          pi = (pi + 1) % pattern.length;
+          left = pattern[pi];
+          on = !on;
+        }
+      }
+    }
+  }
+  function polyline(pts, close, w, g, out) {
+    if (!(w > 0) || pts.length < 2) return;
+    const path = close ? pts.concat([pts[0]]) : pts;
+    if (g.dash) {
+      dashed(path, canvas().dashPattern(S2(g.dashType), w), w, out);
+      return;
+    }
+    for (let i = 0; i + 1 < path.length; i++) out.push({ k: "seg", x1: path[i][0], y1: path[i][1], x2: path[i + 1][0], y2: path[i + 1][1], w });
+  }
+  var clampPen = (pen, size, sizeX) => Math.min(pen, Math.min(Math.abs(size), Math.abs(sizeX)) * 0.25);
+  function cachedOutlines(oc, size, sizeX) {
+    if (oc.polys !== void 0) return oc.polys;
+    oc.polys = null;
+    const rc = oc.node;
+    if (S2(rc[1]) !== oc.shown) return null;
+    const turn = ((num(rc[2], 0) - oc.rot) % 360 + 360) % 360;
+    if (Math.min(turn, 360 - turn) > 0.01) return null;
+    const polys = [];
+    for (const p of rc.slice(3)) {
+      if (!isList2(p) || str(p[0]) !== "polygon") continue;
+      const outlines = p.filter((c) => isList2(c) && str(c[0]) === "pts").map((c) => polyPtsOf(["x", c])).filter((o) => o.length >= 3);
+      if (!outlines.length) continue;
+      if (outlines.length === 1) polys.push(outlines[0]);
+      else for (const o of fracture([clockwise(outlines[0])].concat(outlines.slice(1).map((h) => clockwise(h).slice().reverse())))) polys.push(o);
+    }
+    if (!polys.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const poly of polys) for (const q of poly) {
+      const [lx, ly] = rot(q[0] - oc.x, q[1] - oc.y, -oc.rot);
+      if (lx < x0) x0 = lx;
+      if (ly < y0) y0 = ly;
+      if (lx > x1) x1 = lx;
+      if (ly > y1) y1 = ly;
+    }
+    const tx = 0.35 * Math.abs(sizeX) + 0.1, ty = 0.6 * Math.abs(size) + 0.1;
+    const onX = Math.abs(x0) <= tx || Math.abs(x1) <= tx || Math.abs((x0 + x1) / 2) <= tx;
+    const onY = Math.abs(y0) <= ty || Math.abs(y1) <= ty || Math.abs((y0 + y1) / 2) <= ty;
+    if (!onX || !onY) return null;
+    oc.polys = polys;
+    return polys;
+  }
+  function knockoutBox(pts, x, y, deg2, margin) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of pts) {
+      const [lx, ly] = rot(q[0] - x, q[1] - y, -deg2);
+      if (lx < x0) x0 = lx;
+      if (ly < y0) y0 = ly;
+      if (lx > x1) x1 = lx;
+      if (ly > y1) y1 = ly;
+    }
+    return [[x0 - margin, y0 - margin], [x1 + margin, y0 - margin], [x1 + margin, y1 + margin], [x0 - margin, y1 + margin]].map(([lx, ly]) => {
+      const [rx, ry] = rot(lx, ly, deg2);
+      return [x + rx, y + ry];
+    });
+  }
+  function textPrims(g, out, knock, log) {
+    const at = out.length;
+    textPrimsOf(g, out, knock, log);
+    const dt = g.dxfText;
+    if (!dt || g.knockout || out.length === at) return;
+    const size = N(g.size, 1);
+    const info = {
+      text: S2(g.raw) || S2(g.text),
+      x: N(g.x),
+      y: N(g.y),
+      size,
+      sizeX: N(g.sizeX) > 0 ? N(g.sizeX) : size,
+      rot: N(g.rot),
+      h: S2(g.h) || "center",
+      v: S2(g.v) || "middle",
+      italic: !!g.italic,
+      bold: !!dt.bold,
+      mirror: !!g.mirror
+    };
+    for (let i = at; i < out.length; i++) out[i].text = info;
+  }
+  function textPrimsOf(g, out, knock, log) {
+    const text = S2(g.raw) || S2(g.text);
+    if (!text) return;
+    const size = N(g.size, 1), sizeX = N(g.sizeX) > 0 ? N(g.sizeX) : size;
+    const pen = clampPen(N(g.w) > 0 ? N(g.w) : size / 8, size, sizeX);
+    const margin = Math.max(pen / 2, size / 9);
+    const dst = g.knockout ? knock : out, clear = g.knockout ? true : void 0;
+    if (g.face) {
+      const oc = g.outline, polys = oc ? cachedOutlines(oc, size, sizeX) : null;
+      if (oc && polys) {
+        if (!g.outlineFirst) return;
+        if (g.knockout) knock.push({ k: "region", pts: knockoutBox(polys.flat(), oc.x, oc.y, oc.rot, margin) });
+        for (const pts of polys) dst.push({ k: "region", pts, clear });
+        return;
+      }
+      log.warn(oc ? `Text set in the font "${S2(g.face)}" was changed after KiCad last drew it, so its stored outlines no longer fit. It is plotted with the KiCad stroke font; open and save the board in KiCad to refresh them.` : `Text set in the font "${S2(g.face)}" has no outlines stored in the board (KiCad stores them when it saves). It is plotted with the KiCad stroke font.`);
+    }
+    const C = canvas();
+    const line2 = C.strokeLine(text, !!g.italic);
+    const lay = g.knockout && g.layoutW !== void 0 ? N(g.layoutW) : pen;
+    const [ox, oy] = C.strokeOrigin(line2.advance, S2(g.h) || "center", S2(g.v) || "middle", lay / sizeX, lay / size);
+    const a = -N(g.rot) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
+    const x0 = N(g.x), y0 = N(g.y);
+    const P = (u, v) => {
+      const lx = (u + ox) * sizeX * mx, ly = (v + oy) * size;
+      return [x0 + lx * c - ly * sn, y0 + lx * sn + ly * c];
+    };
+    const segs = [];
+    const ends = [];
+    for (const st of line2.strokes) {
+      if (st.length === 2) {
+        const p = P(st[0], st[1]);
+        ends.push(p);
+        segs.push({ k: "seg", x1: p[0], y1: p[1], x2: p[0], y2: p[1], w: pen, clear });
+        continue;
+      }
+      for (let i = 0; i + 3 < st.length; i += 2) {
+        const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]);
+        ends.push(p, q);
+        segs.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen, clear });
+      }
+    }
+    if (g.knockout && ends.length) knock.push({ k: "region", pts: knockoutBox(ends, x0, y0, N(g.rot), margin + pen / 2) });
+    for (const p of segs) dst.push(p);
+  }
+  function geomPrims(g, out, knock, log, grow = 0) {
+    const w = N(g.w) + 2 * grow;
+    if (g.t === "line") {
+      const pts = [[N(g.x1), N(g.y1)], [N(g.x2), N(g.y2)]];
+      polyline(pts, false, w, g, out);
+    } else if (g.t === "arc") {
+      if (g.pie || !(w > 0)) return;
+      const cx = N(g.x), cy = N(g.y), r = N(g.r), a0 = N(g.a0), a1 = N(g.a1), acw = !!g.anticlockwise;
+      if (g.dash) dashed(arcPoints2(cx, cy, r, a0, a1, acw, MAX_ERROR), canvas().dashPattern(S2(g.dashType), w), w, out);
+      else out.push({ k: "arc", cx, cy, r, a0, a1, acw, w });
+    } else if (g.t === "circle") {
+      const x = N(g.x), y = N(g.y), r = N(g.r);
+      if (g.fill) {
+        const d = 2 * r + (g.noStroke ? 0 : N(g.w)) + 2 * grow;
+        if (d > 0) out.push({ k: "circle", x, y, d });
+      } else if (w > 0) {
+        if (g.dash) dashed(circlePoints(x, y, r, MAX_ERROR).concat([[x + r, y]]), canvas().dashPattern(S2(g.dashType), w), w, out);
+        else out.push({ k: "arc", cx: x, cy: y, r, a0: 0, a1: 2 * Math.PI, acw: false, w });
+      }
+    } else if (g.t === "poly") {
+      const pts = g.pts || [];
+      if (pts.length < 2) return;
+      if (g.fill && pts.length >= 3) out.push({ k: "region", pts });
+      if (!g.noStroke || grow > 0) polyline(pts, !!g.close, g.noStroke ? 2 * grow : w, g, out);
+    } else if (g.t === "text") textPrims(g, out, knock, log);
+  }
+  function maskMargin(pad, m, shape) {
+    if (![...pad.layers].some(isCopper)) return 0;
+    let v = pad.maskMargin ?? pad.fp.maskMargin ?? m.settings.maskExpansion;
+    if (v < 0) v = Math.max(v, -Math.min(shape.w, shape.h) / 2);
+    return v;
+  }
+  function pasteMargin(pad, m, shape) {
+    if (![...pad.layers].some(isCopper)) return [0, 0];
+    const abs = pad.pasteMargin ?? pad.fp.pasteMargin ?? m.settings.pasteClearance;
+    const ratio = pad.pasteRatio ?? pad.fp.pasteRatio ?? m.settings.pasteRatio;
+    let mx = abs + shape.w * ratio, my = abs + shape.h * ratio;
+    if (shape.shape !== "custom") {
+      mx = Math.max(mx, -shape.w / 2);
+      my = Math.max(my, -shape.h / 2);
+    }
+    return [mx, my];
+  }
+  function chamferedRect(w, h, radius, ratio, corners2) {
+    const hx = w / 2, hy = h / 2, c = Math.max(0, ratio * Math.min(w, h));
+    const pts = [];
+    const corner = (name, x, y, sx, sy, a0) => {
+      if (corners2.includes(name)) {
+        if (c <= 0) {
+          pts.push([x, y]);
+          return;
+        }
+        const horizFirst = name === "top_right" || name === "bottom_left";
+        if (horizFirst) pts.push([x + sx * c, y], [x, y + sy * c]);
+        else pts.push([x, y + sy * c], [x + sx * c, y]);
+      } else if (radius > 1e-9) {
+        for (const p of arcPoints2(x + sx * radius, y + sy * radius, radius, a0, a0 + Math.PI / 2, false, MAX_ERROR)) pts.push(p);
+      } else pts.push([x, y]);
+    };
+    corner("top_left", -hx, -hy, 1, 1, Math.PI);
+    corner("top_right", hx, -hy, -1, 1, 3 * Math.PI / 2);
+    corner("bottom_right", hx, hy, -1, -1, 0);
+    corner("bottom_left", -hx, hy, 1, -1, Math.PI / 2);
+    return pts;
+  }
+  function customPolys(shape) {
+    const polys = [];
+    if (shape.anchor === "circle") polys.push(circlePoints(0, 0, shape.w / 2, MAX_ERROR));
+    else polys.push([[-shape.w / 2, -shape.h / 2], [shape.w / 2, -shape.h / 2], [shape.w / 2, shape.h / 2], [-shape.w / 2, shape.h / 2]]);
+    if (!shape.primitives) return polys;
+    const widthOf2 = (p) => {
+      const st = K3(p, "stroke");
+      const wn = st ? K3(st, "width") : K3(p, "width");
+      return wn ? num(wn[1], 0) : 0;
+    };
+    const filled = (p) => {
+      const f = K3(p, "fill");
+      if (!f) return false;
+      const t = K3(f, "type");
+      const v = t ? str(t[1]) : str(f[1]);
+      return v === "yes" || v === "solid";
+    };
+    const stroke = (pts, w, close) => {
+      if (!(w > 0)) return;
+      const path = close ? pts.concat([pts[0]]) : pts;
+      for (let i = 0; i + 1 < path.length; i++) polys.push(stadium(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1], w));
+    };
+    for (const p of shape.primitives.slice(1)) {
+      if (!isList2(p)) continue;
+      const kind = str(p[0]);
+      const w = widthOf2(p);
+      if (kind === "gr_poly") {
+        const pts = polyPtsOf(p);
+        if (pts.length < 3) continue;
+        polys.push(pts);
+        stroke(pts, w, true);
+      } else if (kind === "gr_line") {
+        const s = K3(p, "start"), e = K3(p, "end");
+        if (s && e) stroke([[num(s[1]), num(s[2])], [num(e[1]), num(e[2])]], w, false);
+      } else if (kind === "gr_rect") {
+        const s = K3(p, "start"), e = K3(p, "end");
+        if (!s || !e) continue;
+        const pts = [[num(s[1]), num(s[2])], [num(e[1]), num(s[2])], [num(e[1]), num(e[2])], [num(s[1]), num(e[2])]];
+        if (filled(p)) polys.push(pts);
+        stroke(pts, w, true);
+      } else if (kind === "gr_circle") {
+        const c = K3(p, "center"), e = K3(p, "end");
+        if (!c || !e) continue;
+        const r = Math.hypot(num(e[1]) - num(c[1]), num(e[2]) - num(c[2]));
+        if (filled(p)) polys.push(circlePoints(num(c[1]), num(c[2]), r + w / 2, MAX_ERROR));
+        else stroke(circlePoints(num(c[1]), num(c[2]), r, MAX_ERROR), w, true);
+      } else if (kind === "gr_arc") {
+        const s = K3(p, "start"), mid = K3(p, "mid"), e = K3(p, "end"), ang = K3(p, "angle");
+        if (!s || !e) continue;
+        let pts = [];
+        if (mid) {
+          const [ax, ay, bx, by, cx, cy] = [num(s[1]), num(s[2]), num(mid[1]), num(mid[2]), num(e[1]), num(e[2])];
+          const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+          if (Math.abs(d) < 1e-12) pts = [[ax, ay], [cx, cy]];
+          else {
+            const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
+            const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
+            const a0 = Math.atan2(ay - uy, ax - ux), am = Math.atan2(by - uy, bx - ux), a1 = Math.atan2(cy - uy, cx - ux);
+            const nm2 = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+            pts = arcPoints2(ux, uy, Math.hypot(ax - ux, ay - uy), a0, a1, !(nm2(am - a0) <= nm2(a1 - a0)), MAX_ERROR);
+          }
+        } else if (ang) {
+          const cx = num(s[1]), cy = num(s[2]), sx = num(e[1]), sy = num(e[2]);
+          const r = Math.hypot(sx - cx, sy - cy), a0 = Math.atan2(sy - cy, sx - cx), sweep = num(ang[1]) * Math.PI / 180;
+          pts = arcPoints2(cx, cy, r, a0, a0 + sweep, sweep < 0, MAX_ERROR);
+        }
+        stroke(pts, w, false);
+      } else if (kind === "gr_curve") {
+        const cp = polyPtsOf(p);
+        if (cp.length !== 4) continue;
+        const pts = [];
+        const n = 32;
+        for (let i = 0; i <= n; i++) {
+          const t = i / n, u = 1 - t;
+          pts.push([u * u * u * cp[0][0] + 3 * u * u * t * cp[1][0] + 3 * u * t * t * cp[2][0] + t * t * t * cp[3][0], u * u * u * cp[0][1] + 3 * u * u * t * cp[1][1] + 3 * u * t * t * cp[2][1] + t * t * t * cp[3][1]]);
+        }
+        stroke(pts, w, false);
+      }
+    }
+    return polys.map(clockwise);
+  }
+  function padPrims(pad, layer, m, out, adj = 0) {
+    const shape = padShapeOn(pad, layer, m.copper);
+    const onMask = /\.Mask$/.test(layer), onPaste = /\.Paste$/.test(layer);
+    let mx = 0, my = 0;
+    if (onMask) mx = my = maskMargin(pad, m, shape);
+    if (onPaste) [mx, my] = pasteMargin(pad, m, shape);
+    const same = Math.abs(mx - my) < 1e-9;
+    const w = shape.w + 2 * mx + adj, h = shape.h + 2 * my + adj;
+    if (shape.shape !== "custom" && (w <= 0 || h <= 0)) return;
+    const [ox, oy] = rot(shape.offset[0], shape.offset[1], pad.rot);
+    const x = pad.x + ox, y = pad.y + oy, r = pad.rot;
+    const flashPolys = (polys) => {
+      for (const poly of fracture(polys)) out.push({ k: "poly", x, y, pts: poly.map((p) => rot(p[0], p[1], r)) });
+    };
+    switch (shape.shape) {
+      case "circle":
+        out.push({ k: "circle", x, y, d: w });
+        break;
+      case "oval":
+        if (Math.abs(w - h) < 1e-9) out.push({ k: "circle", x, y, d: w });
+        else out.push({ k: "oval", x, y, w, h, rot: r });
+        break;
+      case "rect":
+        if (mx > 0 && same) out.push({ k: "roundrect", x, y, w, h, r: mx, rot: r });
+        else out.push({ k: "rect", x, y, w, h, rot: r });
+        break;
+      case "roundrect": {
+        const r0 = shape.rratio * Math.min(shape.w, shape.h);
+        const rr = Math.min(same ? Math.max(0, r0 + mx + adj / 2) : shape.rratio * Math.min(w, h), Math.min(w, h) / 2);
+        if (rr <= 1e-9) out.push({ k: "rect", x, y, w, h, rot: r });
+        else if (Math.abs(w - h) < 1e-9 && Math.abs(rr - w / 2) < 1e-9) out.push({ k: "circle", x, y, d: w });
+        else out.push({ k: "roundrect", x, y, w, h, r: rr, rot: r });
+        break;
+      }
+      case "trapezoid": {
+        const hx = shape.w / 2, hy = shape.h / 2, dx = shape.delta[0] / 2, dy = shape.delta[1] / 2;
+        const pts = [[-hx - dy, hy + dx], [hx + dy, hy - dx], [hx - dy, -hy + dx], [-hx + dy, -hy - dx]];
+        flashPolys(mx ? inflate([pts], mx) : [pts]);
+        break;
+      }
+      case "chamfer": {
+        if (mx <= 0 || !same) flashPolys([chamferedRect(w, h, shape.rratio * Math.min(w, h), shape.chamferRatio, shape.chamfers)]);
+        else flashPolys(inflate([chamferedRect(shape.w, shape.h, shape.rratio * Math.min(shape.w, shape.h), shape.chamferRatio, shape.chamfers)], mx));
+        break;
+      }
+      case "custom": {
+        let polys = union2(customPolys(shape));
+        if (mx) polys = inflate(polys, mx);
+        flashPolys(polys);
+        break;
+      }
+      default:
+        out.push({ k: "rect", x, y, w, h, rot: r });
+    }
+  }
+
+  // web/canvas/drc-items.ts
+  var DRC_ITEMS = [
+    ["Electrical", "", ""],
+    ["Items shorting two nets", "shorting_items", "error"],
+    ["Tracks crossing", "tracks_crossing", "error"],
+    ["Clearance violation", "clearance", "error"],
+    ["Creepage violation", "creepage", "error"],
+    ["Via is not connected or connected on only one layer", "via_dangling", "warning"],
+    ["Track has unconnected end", "track_dangling", "warning"],
+    ["Thermal relief connection to zone incomplete", "starved_thermal", "error"],
+    ["Design for Manufacturing", "", ""],
+    ["Board edge clearance violation", "copper_edge_clearance", "error"],
+    ["Hole clearance violation", "hole_clearance", "error"],
+    ["Drilled hole too close to other hole", "hole_to_hole", "warning"],
+    ["Drilled holes co-located", "holes_co_located", "warning"],
+    ["Track width", "track_width", "error"],
+    ["Track angle", "track_angle", "error"],
+    ["Track segment length", "track_segment_length", "error"],
+    ["Annular width", "annular_width", "error"],
+    ["Hole size out of range", "drill_out_of_range", "error"],
+    ["Micro via hole size out of range", "microvia_drill_out_of_range", "error"],
+    ["Microvia stack has malformed span", "malformed_microvia_stack_span", "error"],
+    ["Microvia under microvia not filled", "microvia_stack_not_filled", "warning"],
+    ["Microvia stack too deep", "microvia_stack_depth", "error"],
+    ["Microvia too deep for its diameter", "microvia_aspect_ratio", "error"],
+    ["Microvia crosses core material", "microvia_crosses_core", "warning"],
+    ["Via diameter", "via_diameter", "error"],
+    ["Courtyards overlap", "courtyards_overlap", "error"],
+    ["Footprint has no courtyard defined", "missing_courtyard", "ignore"],
+    ["Footprint has malformed courtyard", "malformed_courtyard", "error"],
+    ["Board has malformed outline", "invalid_outline", "error"],
+    ["Copper sliver", "copper_sliver", "warning"],
+    ["Solder mask aperture bridges items with different nets", "solder_mask_bridge", "error"],
+    ["Copper connection too narrow", "connection_width", "warning"],
+    ["Track connected to post-machined or backdrilled layer", "track_on_post_machined_layer", "error"],
+    ["Track endpoint not centered on via", "track_not_centered_on_via", "ignore"],
+    ["Via-stitching zones overlap for same net", "via_stitch_overlap", "error"],
+    ["Tuning profile track geometries", "tuning_profile_track_geometries", "ignore"],
+    ["Schematic Parity", "", ""],
+    ["Duplicate footprints", "duplicate_footprints", "warning"],
+    ["Missing footprint", "missing_footprint", "warning"],
+    ["Extra footprint", "extra_footprint", "warning"],
+    ["Footprint attributes don't match symbol", "footprint_symbol_mismatch", "warning"],
+    ["Footprint field does not match symbol field", "footprint_symbol_field_mismatch", "warning"],
+    ["Footprint doesn't match symbol's footprint filters", "footprint_filters_mismatch", "ignore"],
+    ["Pad net doesn't match schematic", "net_conflict", "warning"],
+    ["Missing connection between items", "unconnected_items", "error"],
+    ["Signal Integrity", "", ""],
+    ["Track length out of range", "length_out_of_range", "error"],
+    ["Net chain stub length out of range", "net_chain_stub_length", "error"],
+    ["Net chain routed without continuous copper on the required reference layer", "net_chain_return_path", "error"],
+    ["Net chain nets do not have consistent tuning profile assignment", "net_chain_tuning_profiles", "error"],
+    ["Skew between tracks out of range", "skew_out_of_range", "error"],
+    ["Too many or too few vias on a connection", "too_many_vias", "error"],
+    ["Differential pair gap out of range", "diff_pair_gap_out_of_range", "error"],
+    ["Differential uncoupled length too long", "diff_pair_uncoupled_length_too_long", "error"],
+    ["Readability", "", ""],
+    ["Silkscreen clearance", "silk_overlap", "warning"],
+    ["Silkscreen clipped by solder mask", "silk_over_copper", "warning"],
+    ["Silkscreen clipped by board edge", "silk_edge_clearance", "warning"],
+    ["Text height out of range", "text_height", "warning"],
+    ["Text thickness out of range", "text_thickness", "warning"],
+    ["Mirrored text on front layer", "mirrored_text_on_front_layer", "warning"],
+    ["Non-Mirrored text on back layer", "nonmirrored_text_on_back_layer", "warning"],
+    ["Miscellaneous", "", ""],
+    ["Items not allowed", "items_not_allowed", "error"],
+    ["Text or graphic on Edge.Cuts layer", "text_on_edge_cuts", "error"],
+    ["Isolated copper fill", "isolated_copper", "warning"],
+    ["Footprint is not valid", "footprint", "error"],
+    ["Padstack is questionable", "padstack", "warning"],
+    ["PTH inside courtyard", "pth_inside_courtyard", "error"],
+    ["NPTH inside courtyard", "npth_inside_courtyard", "error"],
+    ["Item on a disabled copper layer", "item_on_disabled_layer", "error"],
+    ["Unresolved text variable", "unresolved_variable", "error"],
+    ["Assertion failure", "assertion_failure", "error"],
+    ["Footprint component type doesn't match footprint pads", "footprint_type_mismatch", "ignore"],
+    ["Footprint not found in libraries", "lib_footprint_issues", "warning"],
+    ["Footprint doesn't match copy in library", "lib_footprint_mismatch", "warning"],
+    ["Through hole pad has no hole", "through_hole_pad_without_hole", "error"],
+    ["Footprint with pads is scaled (physical part size unchanged)", "footprint_scaled_with_pads", "warning"],
+    ["Missing tuning profile", "missing_tuning_profile", "warning"],
+    ["Padstack is not valid", "padstack_invalid", "error"],
+    ["Error", "generic_error", "error"],
+    ["Warning", "generic_warning", "error"]
+  ];
 
   // web/tools/pcb-tools/meander.ts
   var TUNE_IU = 1e6;
@@ -2257,7 +7682,7 @@
   }
 
   // web/tools/pcb-tools/dru-eval.ts
-  var netName = (doc, n) => {
+  var netName2 = (doc, n) => {
     const r = netOf(n);
     return r.name || (r.code > 0 && doc && doc.nets ? String(doc.nets.get(r.code) || "") : "");
   };
@@ -2446,7 +7871,7 @@
   };
   var FUNC_BY_LOWER = new Map(Object.keys(FUNCS).map((f) => [f.toLowerCase(), f]));
   var isKnownProp = (name) => KNOWN_PROPS.has(norm(name));
-  var str = (v) => ({ t: "s", v, wild: false });
+  var str2 = (v) => ({ t: "s", v, wild: false });
   var numv = (v) => ({ t: "n", v });
   var U = { t: "u" };
   var NUL = { t: "null" };
@@ -2499,25 +7924,25 @@
   function propOf(doc, s, it, name, typeName2) {
     if (!it) return U;
     const key = norm(name), n = it.node;
-    const net = () => netName(doc, n);
+    const net = () => netName2(doc, n);
     const isPad = it.kind === "pad", isVia = it.kind === "via", isFp = it.kind === "footprint", isZone = it.kind === "zone";
     switch (key) {
       case "type":
-        return str(typeName2(it));
+        return str2(typeName2(it));
       case "net":
       case "netname":
-        return str(net());
+        return str2(net());
       case "netcode":
         return numv(netOf(n).code || 0);
       case "netclass":
-        return str(netclassName(s, net()));
+        return str2(netclassName(s, net()));
       case "layer":
-        return str(it.layer || layerOf(n) || "");
+        return str2(it.layer || layerOf(n) || "");
       case "locked":
         return bool(yes(n, "locked") || n.slice(1).some((c) => !isList(c) && K.str(c) === "locked"));
       case "parent": {
         const fp = fpOf(it);
-        return fp && !isFp ? str(fieldOf(fp.node, "Reference") || "") : U;
+        return fp && !isFp ? str2(fieldOf(fp.node, "Reference") || "") : U;
       }
       case "positionx":
       case "positiony": {
@@ -2565,30 +7990,30 @@
       case "holeshape": {
         if (!isPad) return U;
         const d = K.kid(n, "drill");
-        return str(!d ? "Undefined" : K.str(d[1]) === "oval" ? "Oblong" : "Round");
+        return str2(!d ? "Undefined" : K.str(d[1]) === "oval" ? "Oblong" : "Round");
       }
       case "layertop":
       case "layerbottom": {
         if (!isVia) return U;
         const ls = K.kid(n, "layers");
-        return ls ? str(K.str(ls[key === "layertop" ? 1 : 2])) : U;
+        return ls ? str2(K.str(ls[key === "layertop" ? 1 : 2])) : U;
       }
       case "viatype":
-        return isVia ? str(VIA_TYPE[viaTypeOf(n)] || "Through") : U;
+        return isVia ? str2(VIA_TYPE[viaTypeOf(n)] || "Through") : U;
       case "padtype":
-        return isPad ? str(PAD_TYPE[K.str(n[2])] || K.str(n[2])) : U;
+        return isPad ? str2(PAD_TYPE[K.str(n[2])] || K.str(n[2])) : U;
       case "padshape":
-        return isPad ? str(PAD_SHAPE[K.str(n[3])] || K.str(n[3])) : U;
+        return isPad ? str2(PAD_SHAPE[K.str(n[3])] || K.str(n[3])) : U;
       case "padnumber":
-        return isPad ? str(K.str(n[1])) : U;
+        return isPad ? str2(K.str(n[1])) : U;
       case "pinname":
-        return isPad ? str(kidStr(n, "pinfunction")) : U;
+        return isPad ? str2(kidStr(n, "pinfunction")) : U;
       case "pintype":
-        return isPad ? str(kidStr(n, "pintype")) : U;
+        return isPad ? str2(kidStr(n, "pintype")) : U;
       case "fabricationproperty": {
         if (!isPad) return U;
         const p = kidStr(n, "property");
-        return str(PAD_PROP[p] || "None");
+        return str2(PAD_PROP[p] || "None");
       }
       case "sizex":
       case "sizey":
@@ -2611,20 +8036,20 @@
         return isPad ? kidNum(n, "die_length") : U;
       case "reference": {
         const fp = isFp ? it : null;
-        return fp ? str(fieldOf(n, "Reference") || "") : U;
+        return fp ? str2(fieldOf(n, "Reference") || "") : U;
       }
       case "value": {
-        if (isFp) return str(fieldOf(n, "Value") || "");
+        if (isFp) return str2(fieldOf(n, "Value") || "");
         return U;
       }
       case "librarylink":
-        return isFp ? str(K.str(n[1])) : U;
+        return isFp ? str2(K.str(n[1])) : U;
       case "librarydescription":
-        return isFp ? str(kidStr(n, "descr")) : U;
+        return isFp ? str2(kidStr(n, "descr")) : U;
       case "keywords":
-        return isFp ? str(kidStr(n, "tags")) : U;
+        return isFp ? str2(kidStr(n, "tags")) : U;
       case "footprinttype":
-        return isFp ? str(FP_TYPE(n)) : U;
+        return isFp ? str2(FP_TYPE(n)) : U;
       case "donotpopulate":
         return isFp ? bool(attrHas(n, "dnp")) : U;
       case "excludefrombillofmaterials":
@@ -2638,10 +8063,10 @@
       case "componentclass": {
         if (!isFp) return U;
         const cc = K.kid(n, "component_classes");
-        return str(cc ? K.kids(cc, "class").map((c) => K.str(c[1])).join(",") : "");
+        return str2(cc ? K.kids(cc, "class").map((c) => K.str(c[1])).join(",") : "");
       }
       case "name":
-        return isZone ? str(kidStr(n, "name")) : it.kind === "group" ? str(K.str(n[1])) : U;
+        return isZone ? str2(kidStr(n, "name")) : it.kind === "group" ? str2(K.str(n[1])) : U;
       case "priority":
         return isZone ? numv(K.num(kidv(n, "priority") ?? 0)) : U;
       case "clearance": {
@@ -2654,7 +8079,7 @@
         return isZone ? kidNum(n, "min_thickness") : U;
       case "text": {
         const t = n[1];
-        return it.kind === "property" ? str(K.str(n[2])) : t !== void 0 && !isList(t) ? str(K.str(t)) : U;
+        return it.kind === "property" ? str2(K.str(n[2])) : t !== void 0 && !isList(t) ? str2(K.str(t)) : U;
       }
       case "height":
       case "thickness": {
@@ -2842,13 +8267,13 @@
         return bool(rp2.every((r, i) => wxm(r, sp[i])));
       }
       case "getField": {
-        if (!it || it.kind !== "footprint" || !as) return str("");
-        return str(fieldOf(it.node, as) || "");
+        if (!it || it.kind !== "footprint" || !as) return str2("");
+        return str2(fieldOf(it.node, as) || "");
       }
       case "hasNetclass":
-        return bool(!!it && !!as && wild(as, netclassName(s, netName(doc, it.node))));
+        return bool(!!it && !!as && wild(as, netclassName(s, netName2(doc, it.node))));
       case "hasExactNetclass":
-        return bool(!!it && !!as && netclassName(s, netName(doc, it.node)) === as);
+        return bool(!!it && !!as && netclassName(s, netName2(doc, it.node)) === as);
       case "hasComponentClass": {
         const fp = it ? fpOf(it) : null;
         if (!fp || !as) return bool(false);
@@ -2856,7 +8281,7 @@
         return bool(!!cc && K.kids(cc, "class").some((x) => wild(as, K.str(x[1]))));
       }
       case "customProperty":
-        return str("");
+        return str2("");
       // EDA_ITEM custom properties are not written to the board file
       case "hasCustomProperty":
         return bool(false);
@@ -2867,7 +8292,7 @@
       // the board defines no net chains
       case "inDiffPair": {
         if (!it || !as) return bool(false);
-        const name = netName(doc, it.node);
+        const name = netName2(doc, it.node);
         const m = matchDpSuffix(name);
         if (!m.rv || !netExists(doc, m.complement)) return bool(false);
         const base = m.base;
@@ -2875,12 +8300,12 @@
       }
       case "isCoupledDiffPair": {
         const a = c.A, b = c.B;
-        const name = a ? netName(doc, a.node) : "";
+        const name = a ? netName2(doc, a.node) : "";
         if (!name) return bool(false);
         const m = matchDpSuffix(name);
         if (!m.rv) return bool(false);
         if (c.constraint && ["diff_pair_gap", "length", "skew", "net_chain_length"].includes(c.constraint) && netExists(doc, m.complement)) return bool(true);
-        return bool(!!b && netName(doc, b.node) === m.complement);
+        return bool(!!b && netName2(doc, b.node) === m.complement);
       }
       case "insideCourtyard":
       case "intersectsCourtyard":
@@ -2956,12 +8381,12 @@
     for (const it of doc.items.values()) {
       if (it.kind === "footprint") {
         const ref = fieldOf(it.node, "Reference") || "";
-        for (const p of padsOf(it)) nodes.push({ node: p.node, shape: padShape(p), layers: expand2(p.layers), name: ref + "-" + p.number, net: p.net.name || netName(doc, p.node) });
+        for (const p of padsOf(it)) nodes.push({ node: p.node, shape: padShape(p), layers: expand2(p.layers), name: ref + "-" + p.number, net: p.net.name || netName2(doc, p.node) });
       } else if (it.kind === "segment" || it.kind === "arc" || it.kind === "via") {
         const sh = itemShape({ kind: it.kind, node: it.node });
         if (!sh) continue;
         const ls = it.kind === "via" ? copper : [layerOf(it.node)];
-        nodes.push({ node: it.node, shape: sh, layers: ls, name: "", net: netName(doc, it.node) });
+        nodes.push({ node: it.node, shape: sh, layers: ls, name: "", net: netName2(doc, it.node) });
       }
     }
     const starts = nodes.filter((n) => n.name && wxm(from, n.name)), ends = new Set(nodes.filter((n) => n.name && wxm(to, n.name)));
@@ -3162,7 +8587,7 @@
     return TYPE_NAME[it.kind] || it.kind;
   }
   var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
-  var num = (b) => ({ t: "n", v: b ? 1 : 0 });
+  var num2 = (b) => ({ t: "n", v: b ? 1 : 0 });
   function evalExpr(e, doc, s, A, B) {
     switch (e.k) {
       case "lit":
@@ -3175,21 +8600,21 @@
         return propOf(doc, s, navigate(e.who === "A" ? A : B, e.nav), e.name, typeName);
       }
       case "not":
-        return num(!truth(evalExpr(e.e, doc, s, A, B)));
+        return num2(!truth(evalExpr(e.e, doc, s, A, B)));
       case "bin": {
-        if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
-        if (e.op === "||") return num(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
+        if (e.op === "&&") return num2(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
+        if (e.op === "||") return num2(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
         const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
         if (e.op === "==" || e.op === "!=") {
           let eq = false;
-          if (a.t === "u" || b.t === "u") return num(false);
+          if (a.t === "u" || b.t === "u") return num2(false);
           if (a.t === "null" && b.t === "null") eq = true;
           else if (a.t === "n" && b.t === "n") eq = a.v === b.v;
           else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
-          return num(e.op === "==" ? eq : !eq);
+          return num2(e.op === "==" ? eq : !eq);
         }
-        if (a.t !== "n" || b.t !== "n") return num(false);
-        return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
+        if (a.t !== "n" || b.t !== "n") return num2(false);
+        return num2(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
       }
       case "call": {
         const it = navigate(e.who === "B" ? B : A, e.nav);
@@ -3304,7 +8729,7 @@
     const nets = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) {
       if (it.kind !== "segment" && it.kind !== "arc") continue;
-      const name = netName(doc, it.node);
+      const name = netName2(doc, it.node);
       if (!name) continue;
       const a = K.kid(it.node, "start"), b = K.kid(it.node, "end");
       if (!a || !b) continue;
@@ -3384,7 +8809,7 @@
     for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K.groupMemberIds(it.node)) inPattern.add(id);
     const byNet = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) if (it.kind === "segment" || it.kind === "arc") {
-      const n = netName(doc, it.node);
+      const n = netName2(doc, it.node);
       if (n) {
         let l = byNet.get(n);
         if (!l) byNet.set(n, l = []);
@@ -3466,1294 +8891,9 @@
     return out.filter((mk2) => s.severities[mk2.code] !== "ignore");
   }
 
-  // web/tools/pcb-tools/drc-rules.ts
-  function resolve(rules, type, doc, s, A, B, implicitMin, implicitName = "board setup constraints") {
-    const h = rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
-    if (h) return h.severity === "ignore" ? null : { min: h.min, max: h.max, name: h.name, severity: h.severity || null };
-    return implicitMin != null && implicitMin > 0 ? { min: implicitMin, max: null, name: implicitName, severity: null } : null;
-  }
-  function fails(c, actual, eps = 1e-6) {
-    if (!c) return null;
-    if (c.min != null && c.min > 0 && actual < c.min - eps) return { kind: "min", v: c.min };
-    if (c.max != null && actual > c.max + eps) return { kind: "max", v: c.max };
-    return null;
-  }
-  var sev = (c) => c.severity === "warning" || c.severity === "error" ? c.severity : "error";
-  var deg = (v) => v.toFixed(1) + "\xB0";
-  function sizeMarkers(doc, s, rules, conds) {
-    const out = [];
-    for (const c of conds) {
-      if (c.kind === "segment" || c.kind === "arc") {
-        const [a, b] = c.anchors;
-        const layer = layerOf(c.item.node);
-        const A = { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape };
-        const r = resolve(rules, "track_width", doc, s, A, null, s.minTrackWidth || 0);
-        const f = fails(r, c.width);
-        if (r && f) out.push(marker("track_width", sev(r), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (${r.name} ${f.kind} width ${mm4(f.v)}; actual ${mm4(c.width)})`, [c.id]));
-        if (c.kind === "segment" && rules.length) {
-          const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-          const rl = resolve(rules, "track_segment_length", doc, s, A, null, null);
-          const fl = fails(rl, L);
-          if (rl && fl) out.push(marker("track_segment_length", sev(rl), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track segment length (${rl.name} ${fl.kind} length ${mm4(fl.v)}; actual ${mm4(L)})`, [c.id]));
-        }
-      } else if (c.kind === "via") {
-        const [a] = c.anchors;
-        const A = { kind: "via", node: c.item.node, item: c.item, layer: null, shape: c.shape };
-        if (c.drill >= c.size - 1e-6) {
-          out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
-          continue;
-        }
-        const rd = resolve(rules, "via_diameter", doc, s, A, null, s.minViaDiameter || 0);
-        const fd = fails(rd, c.size);
-        if (rd && fd) out.push(marker("via_diameter", sev(rd), a[0], a[1], `Via diameter (${rd.name} ${fd.kind} diameter ${mm4(fd.v)}; actual ${mm4(c.size)})`, [c.id]));
-        const micro = viaTypeOf(c.item.node) === "micro";
-        const rh = resolve(rules, "hole_size", doc, s, A, null, micro ? s.minMicroViaDrill || 0 : s.minViaDrill || 0, micro ? "board setup constraints micro-via" : "board setup constraints");
-        const fh = fails(rh, c.drill);
-        if (rh && fh) out.push(marker(micro ? "microvia_drill_out_of_range" : "drill_out_of_range", sev(rh), a[0], a[1], `${micro ? "Micro via hole size out of range" : "Hole size out of range"} (${rh.name} ${fh.kind} hole ${mm4(fh.v)}; actual ${mm4(c.drill)})`, [c.id]));
-        const ann = (c.size - c.drill) / 2;
-        const ra = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
-        const fa = fails(ra, ann);
-        if (ra && fa) out.push(marker("annular_width", sev(ra), a[0], a[1], `Annular width (${ra.name} ${fa.kind} annular width ${mm4(fa.v)}; actual ${mm4(ann)})`, [c.id]));
-      }
-    }
-    out.push(...padAnnularMarkers(doc, s, rules));
-    for (const it of doc.items.values()) {
-      if (it.kind !== "footprint") continue;
-      for (const p of padsOf(it)) {
-        const d = K.kid(p.node, "drill");
-        if (!d) continue;
-        const oval = K.str(d[1]) === "oval";
-        const w = oval ? K.num(d[2]) : K.num(d[1]);
-        const h = oval ? K.num(d[3], w) : w;
-        const minor = Math.min(w, h), major = Math.max(w, h);
-        if (!(minor > 0)) continue;
-        const A = { kind: "pad", node: p.node, parent: it, layer: null };
-        const r = resolve(rules, "hole_size", doc, s, A, null, s.minViaDrill || 0);
-        if (!r) continue;
-        const f = r.min != null && r.min > 0 && minor < r.min - 1e-6 ? { kind: "min", v: r.min, actual: minor } : r.max != null && major > r.max + 1e-6 ? { kind: "max", v: r.max, actual: major } : null;
-        if (f) out.push(marker("drill_out_of_range", sev(r), p.x, p.y, `Hole size out of range (${r.name} ${f.kind} hole ${mm4(f.v)}; actual ${mm4(f.actual)})`, [it.id]));
-      }
-    }
-    return out;
-  }
-  function insetDepth(sh, q) {
-    if (sh.t === "circle") return sh.r - Math.hypot(q[0] - sh.x, q[1] - sh.y);
-    if (sh.t === "seg") return sh.r - dPS(q, sh.a, sh.b);
-    if (sh.t === "rect") {
-      const [lx, ly] = rotator(-(sh.rot || 0))(q[0] - sh.x, q[1] - sh.y);
-      const rr = sh.rr || 0;
-      const hw = Math.max(sh.w / 2 - rr, 0), hh = Math.max(sh.h / 2 - rr, 0);
-      const out = rectPointDist(sh, q);
-      return out > 0 ? rr - out : rr + Math.min(hw - Math.abs(lx), hh - Math.abs(ly));
-    }
-    return 0;
-  }
-  function padAnnulus(p, others = []) {
-    const d = K.kid(p.node, "drill");
-    if (!d) return null;
-    const oval = K.str(d[1]) === "oval";
-    const dx = oval ? K.num(d[2]) : K.num(d[1]), dy = oval ? K.num(d[3], dx) : dx;
-    const cr = K.kid(p.node, "chamfer_ratio"), chamfered = !!K.kid(p.node, "chamfer") && !!cr;
-    const offset = Math.abs(p.off[0]) > 1e-9 || Math.abs(p.off[1]) > 1e-9;
-    const handled = !offset && (["circle", "oval", "rect", "roundrect"].includes(p.shape) && (!chamfered || K.num(cr[1]) <= 0.3));
-    const fast = Math.abs(Math.min((p.w - dx) / 2, (p.h - dy) / 2));
-    if (others.length) return handled && p.shape === "circle" ? fast : null;
-    if (handled) return fast;
-    if (p.shape !== "circle" && p.shape !== "oval" && p.shape !== "rect" && p.shape !== "roundrect") return null;
-    const R = rotator(p.rot), [ox, oy] = R(p.off[0], p.off[1]);
-    const sh = padShape({ shape: p.shape, x: p.x + ox, y: p.y + oy, w: p.w, h: p.h, rot: p.rot, node: p.node });
-    if (insetDepth(sh, [p.x, p.y]) < 0) return 0;
-    const half = Math.abs(dx - dy) / 2, [hx, hy] = dx >= dy ? R(half, 0) : R(0, half), hr = Math.min(dx, dy) / 2;
-    return Math.max(0, Math.min(insetDepth(sh, [p.x - hx, p.y - hy]), insetDepth(sh, [p.x + hx, p.y + hy])) - hr);
-  }
-  function padAnnularMarkers(doc, s, rules) {
-    const out = [];
-    if (!((s.minViaAnnular || 0) > 0) && !rules.some((r) => r.constraints.some((c) => c.type === "annular_width"))) return out;
-    for (const it of doc.items.values()) {
-      if (it.kind !== "footprint") continue;
-      const pads = padsOf(it);
-      for (const p of pads) {
-        if (p.type !== "thru_hole" || !K.kid(p.node, "drill")) continue;
-        const box = (q) => {
-          const r2 = Math.hypot(q.w, q.h) / 2 + Math.hypot(q.off[0], q.off[1]);
-          return [q.x - r2, q.y - r2, q.x + r2, q.y + r2];
-        };
-        const b = box(p);
-        const others = p.number ? pads.filter((q) => q !== p && q.number === p.number && (() => {
-          const c = box(q);
-          return c[0] <= b[2] && c[2] >= b[0] && c[1] <= b[3] && c[3] >= b[1];
-        })()) : [];
-        const A = { kind: "pad", node: p.node, parent: it, layer: "F.Cu" };
-        const r = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
-        if (!r) continue;
-        const w = padAnnulus(p, others);
-        if (w == null) continue;
-        const f = fails(r, w);
-        if (!f) continue;
-        out.push(marker("annular_width", sev(r), p.x, p.y, `Annular width (${r.name} ${f.kind} annular width ${mm4(f.v)}; actual ${mm4(w)})`, [it.id]));
-      }
-    }
-    return out;
-  }
-  function segIntersect(a0, a1, b0, b1) {
-    const e = 1e-9;
-    if (Math.max(a0[0], a1[0]) < Math.min(b0[0], b1[0]) - e || Math.max(b0[0], b1[0]) < Math.min(a0[0], a1[0]) - e || Math.max(a0[1], a1[1]) < Math.min(b0[1], b1[1]) - e || Math.max(b0[1], b1[1]) < Math.min(a0[1], a1[1]) - e) return null;
-    const d1 = [a1[0] - a0[0], a1[1] - a0[1]], d2 = [b1[0] - b0[0], b1[1] - b0[1]], off = [b0[0] - a0[0], b0[1] - a0[1]];
-    const det = d2[0] * d1[1] - d2[1] * d1[0];
-    if (Math.abs(det) < 1e-12) {
-      if (Math.abs(d1[0] * off[1] - d1[1] * off[0]) > 1e-9) return null;
-      const ax = Math.abs(d1[0]) >= Math.abs(d1[1]) ? 0 : 1, o = 1 - ax;
-      const s1 = [Math.min(a0[ax], a1[ax]), Math.max(a0[ax], a1[ax])], s2 = [Math.min(b0[ax], b1[ax]), Math.max(b0[ax], b1[ax])];
-      if (s1[1] < s2[0] - e || s2[1] < s1[0] - e) return null;
-      const proj = (Math.max(s1[0], s2[0]) + Math.min(s1[1], s2[1])) / 2;
-      const other = a1[ax] !== a0[ax] ? a0[o] + (proj - a0[ax]) * (a1[o] - a0[o]) / (a1[ax] - a0[ax]) : a0[o];
-      const r = [0, 0];
-      r[ax] = proj;
-      r[o] = other;
-      return r;
-    }
-    const t = (d2[0] * off[1] - d2[1] * off[0]) / det, u = (d1[0] * off[1] - d1[1] * off[0]) / det;
-    if (t < -e || t > 1 + e || u < -e || u > 1 + e) return null;
-    return [a0[0] + t * d1[0], a0[1] + t * d1[1]];
-  }
-  function trackAngleMarkers(doc, s, rules, conds) {
-    const out = [];
-    if (!rules.some((r) => r.constraints.some((c) => c.type === "track_angle"))) return out;
-    const segs = conds.filter((c) => c.kind === "segment");
-    const pads = conds.filter((c) => c.kind === "pad");
-    const same = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
-    const touches = (a, b) => a.anchors.some((p) => dPS(p, b.anchors[0], b.anchors[1]) <= b.width / 2 + 1e-9);
-    for (const a of segs) {
-      const la = layerOf(a.item.node);
-      for (const b of segs) {
-        if (a === b || a.id === b.id || a.net && b.net && a.net !== b.net || la !== layerOf(b.item.node)) continue;
-        if (!touches(a, b) && !touches(b, a)) continue;
-        const [a0, a1] = a.anchors, [b0, b1] = b.anchors;
-        const p0 = segIntersect(a0, a1, b0, b1);
-        if (!p0) continue;
-        if (pads.some((c) => c.layers.has(la) && shapeGap(c.shape, { t: "circle", x: p0[0], y: p0[1], r: 0 }) <= 0)) continue;
-        const r = resolve(rules, "track_angle", doc, s, { kind: "segment", node: a.item.node, item: a.item, layer: la }, { kind: "segment", node: b.item.node, item: b.item, layer: la }, null);
-        if (!r) continue;
-        const unit2 = (u, v2) => {
-          const d = [v2[0] - u[0], v2[1] - u[1]];
-          const l = Math.hypot(d[0], d[1]) || 1;
-          return [d[0] / l, d[1] / l];
-        };
-        let da = unit2(a0, a1), db = unit2(b0, b1), below90 = false;
-        if (same(a1, p0)) da = [-da[0], -da[1]];
-        else if (!same(a0, p0)) below90 = true;
-        if (same(b1, p0)) db = [-db[0], -db[1]];
-        else if (!same(b0, p0)) below90 = true;
-        let actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
-        if (below90 && actual > 90) actual -= 90;
-        const fmin = r.min != null && actual < r.min, fmax = r.max != null && actual > r.max;
-        if (!fmin && !fmax) continue;
-        const v = fmax ? r.max : r.min;
-        out.push(marker("track_angle", sev(r), p0[0], p0[1], `Track angle (${r.name} ${fmin ? "min" : "max"} angle ${deg(v)}; actual ${deg(actual)})`, [a.id, b.id]));
-      }
-    }
-    return out;
-  }
-  function disallowKinds(kind, node) {
-    if (kind === "segment" || kind === "arc") return ["track"];
-    if (kind === "via") {
-      const t = viaTypeOf(node);
-      return ["via", t === "micro" ? "micro_via" : t === "blind" ? "blind_via" : t === "buried" ? "buried_via" : "through_via"];
-    }
-    if (kind === "pad") return ["pad"];
-    if (kind === "zone") return ["zone"];
-    if (kind === "footprint") return ["footprint"];
-    if (/^(gr|fp)_text/.test(kind) || kind === "text" || kind === "property") return ["text"];
-    if (/^(gr|fp)_(line|rect|circle|arc|poly|curve)$/.test(kind)) return ["graphic"];
-    return [];
-  }
-  function ruleItems(doc) {
-    const out = [];
-    for (const it of doc.items.values()) {
-      if (it.kind === "group" || it.kind === "generated") continue;
-      out.push({ kind: it.kind, node: it.node, item: it, layer: null });
-      if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) out.push({ kind: "pad", node: p, parent: it, layer: null });
-    }
-    return out;
-  }
-  var anchorOf2 = (it) => {
-    if (it.kind === "pad" && it.parent) {
-      const p2 = padsOf(it.parent).find((q) => q.node === it.node);
-      if (p2) return [p2.x, p2.y];
-    }
-    const p = pt(it.node, "at") || pt(it.node, "start") || pt(it.node, "center");
-    if (p) return p;
-    const poly = K.kid(it.node, "polygon");
-    const pts = poly ? K.ptsOf(poly) : [];
-    if (pts.length) return pts[0];
-    const b = it.item && it.item.bbox;
-    return b ? [b[0], b[1]] : [0, 0];
-  };
-  var idOf = (it) => it.parent ? it.parent.id : it.item ? it.item.id : "";
-  function disallowMarkers(doc, s, rules, items) {
-    const out = [];
-    const dr = rules.filter((r) => !r.error && r.constraints.some((c) => c.type === "disallow"));
-    if (!dr.length) return out;
-    for (const it of items || ruleItems(doc)) {
-      const kinds = disallowKinds(it.kind, it.node);
-      if (!kinds.length) continue;
-      for (let i = rules.length - 1; i >= 0; i--) {
-        const r = rules[i], c = r.constraints.find((k) => k.type === "disallow");
-        if (!c || !ruleMatches(r, doc, s, it, null)) continue;
-        if (r.severity === "ignore") break;
-        const flags = c.options || [];
-        if (!flags.some((f) => kinds.includes(f) || f === "hole" && (it.kind === "via" || it.kind === "pad" && !!K.kid(it.node, "drill")))) break;
-        const p = anchorOf2(it);
-        out.push(marker("items_not_allowed", r.severity === "warning" ? "warning" : "error", p[0], p[1], `Items not allowed (rule '${r.name}')`, [idOf(it)]));
-        break;
-      }
-    }
-    return out;
-  }
-  function assertionMarkers(doc, s, rules, items) {
-    const out = [];
-    const ar = rules.filter((r) => !r.error && r.constraints.some((c) => c.type === "assertion"));
-    if (!ar.length) return out;
-    for (const it of items || ruleItems(doc)) {
-      for (const r of ar) {
-        if (r.severity === "ignore" || !ruleMatches(r, doc, s, it, null)) continue;
-        for (const c of r.constraints) {
-          if (c.type !== "assertion") continue;
-          const ok = evalAssertion(r, c, doc, s, it);
-          if (ok !== false) continue;
-          const p = anchorOf2(it);
-          out.push(marker("assertion_failure", r.severity === "warning" ? "warning" : "error", p[0], p[1], `Assertion failure (rule '${r.name}')`, [idOf(it)]));
-        }
-      }
-    }
-    return out;
-  }
-
-  // web/canvas/drc-items.ts
-  var DRC_ITEMS = [
-    ["Electrical", "", ""],
-    ["Items shorting two nets", "shorting_items", "error"],
-    ["Tracks crossing", "tracks_crossing", "error"],
-    ["Clearance violation", "clearance", "error"],
-    ["Creepage violation", "creepage", "error"],
-    ["Via is not connected or connected on only one layer", "via_dangling", "warning"],
-    ["Track has unconnected end", "track_dangling", "warning"],
-    ["Thermal relief connection to zone incomplete", "starved_thermal", "error"],
-    ["Design for Manufacturing", "", ""],
-    ["Board edge clearance violation", "copper_edge_clearance", "error"],
-    ["Hole clearance violation", "hole_clearance", "error"],
-    ["Drilled hole too close to other hole", "hole_to_hole", "warning"],
-    ["Drilled holes co-located", "holes_co_located", "warning"],
-    ["Track width", "track_width", "error"],
-    ["Track angle", "track_angle", "error"],
-    ["Track segment length", "track_segment_length", "error"],
-    ["Annular width", "annular_width", "error"],
-    ["Hole size out of range", "drill_out_of_range", "error"],
-    ["Micro via hole size out of range", "microvia_drill_out_of_range", "error"],
-    ["Microvia stack has malformed span", "malformed_microvia_stack_span", "error"],
-    ["Microvia under microvia not filled", "microvia_stack_not_filled", "warning"],
-    ["Microvia stack too deep", "microvia_stack_depth", "error"],
-    ["Microvia too deep for its diameter", "microvia_aspect_ratio", "error"],
-    ["Microvia crosses core material", "microvia_crosses_core", "warning"],
-    ["Via diameter", "via_diameter", "error"],
-    ["Courtyards overlap", "courtyards_overlap", "error"],
-    ["Footprint has no courtyard defined", "missing_courtyard", "ignore"],
-    ["Footprint has malformed courtyard", "malformed_courtyard", "error"],
-    ["Board has malformed outline", "invalid_outline", "error"],
-    ["Copper sliver", "copper_sliver", "warning"],
-    ["Solder mask aperture bridges items with different nets", "solder_mask_bridge", "error"],
-    ["Copper connection too narrow", "connection_width", "warning"],
-    ["Track connected to post-machined or backdrilled layer", "track_on_post_machined_layer", "error"],
-    ["Track endpoint not centered on via", "track_not_centered_on_via", "ignore"],
-    ["Via-stitching zones overlap for same net", "via_stitch_overlap", "error"],
-    ["Tuning profile track geometries", "tuning_profile_track_geometries", "ignore"],
-    ["Schematic Parity", "", ""],
-    ["Duplicate footprints", "duplicate_footprints", "warning"],
-    ["Missing footprint", "missing_footprint", "warning"],
-    ["Extra footprint", "extra_footprint", "warning"],
-    ["Footprint attributes don't match symbol", "footprint_symbol_mismatch", "warning"],
-    ["Footprint field does not match symbol field", "footprint_symbol_field_mismatch", "warning"],
-    ["Footprint doesn't match symbol's footprint filters", "footprint_filters_mismatch", "ignore"],
-    ["Pad net doesn't match schematic", "net_conflict", "warning"],
-    ["Missing connection between items", "unconnected_items", "error"],
-    ["Signal Integrity", "", ""],
-    ["Track length out of range", "length_out_of_range", "error"],
-    ["Net chain stub length out of range", "net_chain_stub_length", "error"],
-    ["Net chain routed without continuous copper on the required reference layer", "net_chain_return_path", "error"],
-    ["Net chain nets do not have consistent tuning profile assignment", "net_chain_tuning_profiles", "error"],
-    ["Skew between tracks out of range", "skew_out_of_range", "error"],
-    ["Too many or too few vias on a connection", "too_many_vias", "error"],
-    ["Differential pair gap out of range", "diff_pair_gap_out_of_range", "error"],
-    ["Differential uncoupled length too long", "diff_pair_uncoupled_length_too_long", "error"],
-    ["Readability", "", ""],
-    ["Silkscreen clearance", "silk_overlap", "warning"],
-    ["Silkscreen clipped by solder mask", "silk_over_copper", "warning"],
-    ["Silkscreen clipped by board edge", "silk_edge_clearance", "warning"],
-    ["Text height out of range", "text_height", "warning"],
-    ["Text thickness out of range", "text_thickness", "warning"],
-    ["Mirrored text on front layer", "mirrored_text_on_front_layer", "warning"],
-    ["Non-Mirrored text on back layer", "nonmirrored_text_on_back_layer", "warning"],
-    ["Miscellaneous", "", ""],
-    ["Items not allowed", "items_not_allowed", "error"],
-    ["Text or graphic on Edge.Cuts layer", "text_on_edge_cuts", "error"],
-    ["Isolated copper fill", "isolated_copper", "warning"],
-    ["Footprint is not valid", "footprint", "error"],
-    ["Padstack is questionable", "padstack", "warning"],
-    ["PTH inside courtyard", "pth_inside_courtyard", "error"],
-    ["NPTH inside courtyard", "npth_inside_courtyard", "error"],
-    ["Item on a disabled copper layer", "item_on_disabled_layer", "error"],
-    ["Unresolved text variable", "unresolved_variable", "error"],
-    ["Assertion failure", "assertion_failure", "error"],
-    ["Footprint component type doesn't match footprint pads", "footprint_type_mismatch", "ignore"],
-    ["Footprint not found in libraries", "lib_footprint_issues", "warning"],
-    ["Footprint doesn't match copy in library", "lib_footprint_mismatch", "warning"],
-    ["Through hole pad has no hole", "through_hole_pad_without_hole", "error"],
-    ["Footprint with pads is scaled (physical part size unchanged)", "footprint_scaled_with_pads", "warning"],
-    ["Missing tuning profile", "missing_tuning_profile", "warning"],
-    ["Padstack is not valid", "padstack_invalid", "error"],
-    ["Error", "generic_error", "error"],
-    ["Warning", "generic_warning", "error"]
-  ];
-
-  // web/tools/pcb-tools/drc-more.ts
-  var MORE_DEFAULTS = { minHoleToHole: 0.25, minHoleClearance: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
-  var defaultSeverity = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
-  var ident = (x, y) => [x, y];
-  function fpTf(fp) {
-    const [fx, fy, frot] = K.atOf(fp.node);
-    const R = rotator(frot);
-    return (x, y) => {
-      const [dx, dy] = R(x, y);
-      return [fx + dx, fy + dy];
-    };
-  }
-  var kindOf = (n) => String(n[0]);
-  function padHole(fp, p) {
-    if (p.type !== "thru_hole" && p.type !== "np_thru_hole") return null;
-    const d = K.kid(p.node, "drill");
-    if (!d) return null;
-    let w, h;
-    if (K.str(d[1]) === "oval") {
-      w = K.num(d[2], 0);
-      h = K.num(d[3], w);
-    } else {
-      w = h = K.num(d[1], 0);
-    }
-    if (!(w > 0) || !(h > 0)) return null;
-    const half = Math.abs(w - h) / 2;
-    const [dx, dy] = rotator(p.rot)(w >= h ? half : 0, w >= h ? 0 : half);
-    return { id: fp.id, kind: "pad", a: [p.x - dx, p.y - dy], b: [p.x + dx, p.y + dy], w: Math.min(w, h), layers: null, micro: false, pad: p, fp, uuid: K.uuidOf(p.node) || fp.id + ":" + p.index };
-  }
-  function viaHole(it) {
-    const a = pt(it.node, "at");
-    if (!a) return null;
-    const d = K.kid(it.node, "drill");
-    const w = d ? K.num(d[1], 0) : 0;
-    if (!(w > 0)) return null;
-    const ls = K.kid(it.node, "layers");
-    const pair = ls ? [K.str(ls[1]), K.str(ls[2])] : ["F.Cu", "B.Cu"];
-    const typed = it.node.includes("blind") || it.node.includes("micro") || it.node.includes("buried");
-    return { id: it.id, kind: "via", a, b: a, w, layers: typed ? new Set(pair) : null, micro: it.node.includes("micro"), uuid: it.id };
-  }
-  var holeShape = (h) => ({ t: "seg", a: h.a, b: h.b, r: h.w / 2 });
-  var holeCentre = (h) => [(h.a[0] + h.b[0]) / 2, (h.a[1] + h.b[1]) / 2];
-  function viaSpan(doc, h) {
-    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
-    if (!h.layers) return new Set(copper);
-    const [x, y] = [...h.layers].map((l) => copper.indexOf(l));
-    const lo = Math.min(x, y), hi = Math.max(x, y);
-    return new Set(copper.filter((_, i) => i >= lo && i <= hi));
-  }
-  function boardHoles(doc) {
-    const out = [];
-    for (const it of doc.items.values()) {
-      if (it.kind === "via") {
-        const h = viaHole(it);
-        if (h) out.push(h);
-      } else if (it.kind === "footprint") for (const p of padsOf(it)) {
-        const h = padHole(it, p);
-        if (h) out.push(h);
-      }
-    }
-    return out;
-  }
-  function holeToHoleMarkers(doc, s, ruleOf, worstRule = 0) {
-    const out = [];
-    const holes = boardHoles(doc);
-    const min0 = typeof s.minHoleToHole === "number" ? s.minHoleToHole : MORE_DEFAULTS.minHoleToHole;
-    const seen = /* @__PURE__ */ new Set();
-    const box = (h) => shapeBBox(holeShape(h));
-    const ri = (h) => ({ kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: "" });
-    const test = (a, b) => {
-      if (a.kind === "via" && b.kind === "via") {
-        const sa = viaSpan(doc, a), sb = viaSpan(doc, b);
-        if (![...sa].some((l) => sb.has(l))) return;
-      }
-      const ca = holeCentre(a), cb = holeCentre(b);
-      const [p, q] = a.uuid > b.uuid ? [b, a] : [a, b];
-      if (Math.hypot(ca[0] - cb[0], ca[1] - cb[1]) < DRC_EPS) {
-        out.push(marker("holes_co_located", defaultSeverity("holes_co_located"), ca[0], ca[1], "Drilled holes co-located", [p.id, q.id]));
-        return;
-      }
-      const actual = Math.max(0, coreDist(holeShape(a), holeShape(b)) - a.w / 2 - b.w / 2);
-      const hit = ruleOf("hole_to_hole", ri(a), ri(b));
-      if (hit && hit.severity === "ignore") return;
-      const min = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints";
-      if (min >= 0 && actual < Math.max(0, min - DRC_EPS)) out.push(marker("hole_to_hole", defaultSeverity("hole_to_hole"), ca[0], ca[1], `Drilled hole too close to other hole (${name} min ${mm4(min)}; actual ${mm4(actual)})`, [p.id, q.id]));
-    };
-    const reach = Math.max(min0, worstRule, 0.01);
-    const boxes = holes.map(box);
-    const order = holes.map((_, i) => i).sort((a, b) => boxes[a][0] - boxes[b][0]);
-    const rank = new Int32Array(holes.length);
-    order.forEach((h, k) => {
-      rank[h] = k;
-    });
-    const query = (i) => {
-      const near = [];
-      for (let k = rank[i] - 1; k >= 0; k--) {
-        const j = order[k];
-        if (boxes[j][0] < boxes[i][0] - 30) break;
-        near.push(j);
-      }
-      for (let k = rank[i] + 1; k < order.length; k++) {
-        const j = order[k];
-        if (boxes[j][0] > boxes[i][2] + reach) break;
-        near.push(j);
-      }
-      for (const j of near) {
-        if (!boxesTouch(boxes[i], boxes[j], reach)) continue;
-        const key = i < j ? i + ":" + j : j + ":" + i;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        test(holes[i], holes[j]);
-      }
-    };
-    holes.forEach((h, i) => {
-      if (h.kind === "via" && !h.micro) query(i);
-    });
-    holes.forEach((h, i) => {
-      if (h.kind === "pad") query(i);
-    });
-    return out;
-  }
-  function holeClearanceMarkers(doc, s, ruleOf, worstRule = 0) {
-    const out = [];
-    const min0 = typeof s.holeClearance === "number" ? s.holeClearance : MORE_DEFAULTS.minHoleClearance;
-    const conds = conductors(doc).filter((c) => c.kind !== "zone");
-    if (!conds.length) return out;
-    const holes = boardHoles(doc);
-    const reach = Math.max(min0, worstRule, 0.01);
-    const G = 2, grid = /* @__PURE__ */ new Map();
-    const cell = (v) => Math.floor(v / G);
-    conds.forEach((c, i) => {
-      for (let gx = cell(c.bbox[0]); gx <= cell(c.bbox[2]); gx++) for (let gy = cell(c.bbox[1]); gy <= cell(c.bbox[3]); gy++) {
-        const k = gx + "," + gy;
-        const l = grid.get(k);
-        if (l) l.push(i);
-        else grid.set(k, [i]);
-      }
-    });
-    const near = (b) => {
-      const got = /* @__PURE__ */ new Set();
-      for (let gx = cell(b[0] - reach); gx <= cell(b[2] + reach); gx++) for (let gy = cell(b[1] - reach); gy <= cell(b[3] + reach); gy++) for (const i of grid.get(gx + "," + gy) || []) got.add(i);
-      return [...got].sort((a, b2) => a - b2).map((i) => conds[i]);
-    };
-    const seen = /* @__PURE__ */ new Set();
-    const ownOf = /* @__PURE__ */ new Map();
-    for (const c of conds) {
-      if (c.kind === "via") ownOf.set("v:" + c.id, c);
-      else if (c.kind === "pad") ownOf.set("p:" + c.id + ":" + c.index, c);
-    }
-    for (const h of holes) {
-      const shape = holeShape(h);
-      const hb = shapeBBox(shape);
-      const span = h.kind === "via" ? viaSpan(doc, h) : null;
-      const own = ownOf.get(h.kind === "via" ? "v:" + h.id : "p:" + h.id + ":" + h.pad.index);
-      const hNet = own ? own.net : "";
-      for (const c of near(hb)) {
-        if (!boxesTouch(c.bbox, hb, reach)) continue;
-        if (span && ![...c.layers].some((l) => span.has(l))) continue;
-        if (h.kind === "via" && c.kind === "via" && c.id === h.id) continue;
-        if (h.kind === "pad" && c.kind === "pad" && c.id === h.id && (c.index === h.pad.index || c.pad.number === h.pad.number)) continue;
-        if (c.kind !== "pad" || h.kind === "via") {
-          if (c.net === hNet && (c.kind !== "pad" || hNet)) continue;
-        } else if (hNet && c.net === hNet) continue;
-        const hit = ruleOf("hole_clearance", { kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: [...c.layers][0] }, { kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer: [...c.layers][0] });
-        if (hit && hit.severity === "ignore") continue;
-        const clr = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints hole";
-        if (c.kind === "pad" && !(clr > 0)) continue;
-        const gap = shapeGap(c.shape, shape);
-        if (gap >= clr - DRC_EPS && !(clr === 0 && gap === 0 && coreDist(c.shape, shape) < shapeOffset(c.shape) + shapeOffset(shape) - DRC_EPS)) continue;
-        {
-          if (own && own.net !== c.net && shapeGap(own.shape, c.shape) < Math.max(netClearance(s, own.net), netClearance(s, c.net), s.minClearance || 0) - DRC_EPS) continue;
-        }
-        const ids = [c.id, h.id];
-        const key = ids.join("|") + "|" + h.uuid;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const [cx, cy] = holeCentre(h);
-        out.push(marker("hole_clearance", defaultSeverity("hole_clearance"), cx, cy, clr ? `Hole clearance violation (${name} clearance ${mm4(clr)}; actual ${mm4(gap)})` : `Hole clearance violation (${name} clearance ${mm4(clr)}; actual < 0)`, ids));
-      }
-    }
-    return out;
-  }
-  function boardTexts(doc) {
-    const out = [];
-    const take = (n, id, tf, fp, layer) => {
-      const k = kindOf(n);
-      const at = pt(n, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K.ptsOf(n)[0] : null) || [0, 0];
-      out.push({ id, node: n, kind: k, layer: layer || layerOf(n, "F.SilkS"), pos: tf(at[0], at[1]), fp });
-    };
-    for (const it of doc.items.values()) {
-      const n = it.node;
-      if (it.kind === "gr_text" || it.kind === "gr_text_box") take(n, it.id, ident);
-      else if (it.kind === "dimension") {
-        const t = K.kid(n, "gr_text");
-        if (t) take(t, it.id, ident, void 0, layerOf(n, "Dwgs.User"));
-      } else if (it.kind === "footprint") {
-        const tf = fpTf(it);
-        for (const g of n) if (isList(g) && (g[0] === "property" || g[0] === "fp_text" || g[0] === "fp_text_box") && K.kid(g, "layer")) take(g, it.id, tf, it);
-      }
-    }
-    return out;
-  }
-  function effectivePenWidth(n, boardVersion) {
-    const ef = K.effectsOf(n);
-    const minSize = Math.min(Math.abs(ef.size), Math.abs(ef.sizeX));
-    let w;
-    if (ef.thick <= 1e-6) w = ef.bold ? ef.sizeX / 5 : ef.sizeX / 8;
-    else if (ef.bold && !ef.face) w = boardVersion > 0 && boardVersion < 20260826 ? ef.thick : ef.thick * 1.6;
-    else w = ef.thick;
-    return Math.min(w, minSize * 0.25);
-  }
-  function textDimsMarkers(doc, s, ruleOf) {
-    const out = [];
-    const minH = typeof s.minTextHeight === "number" ? s.minTextHeight : MORE_DEFAULTS.minTextHeight, minT = typeof s.minTextThickness === "number" ? s.minTextThickness : MORE_DEFAULTS.minTextThickness;
-    for (const t of boardTexts(doc)) {
-      const ef = K.effectsOf(t.node);
-      if (ef.hide) continue;
-      const silk = t.layer === "F.SilkS" || t.layer === "B.SilkS";
-      const A = { kind: t.kind, node: t.node, layer: t.layer };
-      const check = (type, implicit, implicitName, actual, what) => {
-        const hit = ruleOf(type, A, null);
-        if (hit && hit.severity === "ignore") return;
-        const min = hit ? hit.min : silk ? implicit : null, max = hit ? hit.max : null, name = hit ? hit.name : implicitName;
-        if (min != null && min > 0 && actual < min - 1e-9) out.push(marker(type, defaultSeverity(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} min ${what} ${mm4(min)}; actual ${mm4(actual)})`, [t.id]));
-        if (max != null && actual > max + 1e-9) out.push(marker(type, defaultSeverity(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} max ${what} ${mm4(max)}; actual ${mm4(actual)})`, [t.id]));
-      };
-      if (!ef.face) check("text_thickness", minT, "board setup constraints silk text thickness", effectivePenWidth(t.node, doc.version || 0), "thickness");
-      check("text_height", minH, "board setup constraints silk text height", Math.abs(ef.size), "height");
-    }
-    return out;
-  }
-  function textMirroringMarkers(doc) {
-    const out = [];
-    const top = /* @__PURE__ */ new Set(["F.Cu", "F.SilkS", "F.Mask", "F.Fab"]), bottom = /* @__PURE__ */ new Set(["B.Cu", "B.SilkS", "B.Mask", "B.Fab"]);
-    for (const t of boardTexts(doc)) {
-      if (!top.has(t.layer) && !bottom.has(t.layer)) continue;
-      if (doc.layers.size && !doc.layers.has(t.layer)) continue;
-      const ef = K.effectsOf(t.node);
-      if (ef.hide) continue;
-      if (ef.mirror && top.has(t.layer)) out.push(marker("mirrored_text_on_front_layer", defaultSeverity("mirrored_text_on_front_layer"), t.pos[0], t.pos[1], "Mirrored text on front layer", [t.id]));
-      if (!ef.mirror && bottom.has(t.layer)) out.push(marker("nonmirrored_text_on_back_layer", defaultSeverity("nonmirrored_text_on_back_layer"), t.pos[0], t.pos[1], "Non-Mirrored text on back layer", [t.id]));
-    }
-    return out;
-  }
-  function courtyardOutlines(fp) {
-    const tf = fpTf(fp);
-    const chains = { "F.CrtYd": [], "B.CrtYd": [] };
-    for (const g of fp.node) {
-      if (!isList(g) || !/^fp_(line|rect|circle|arc|poly)$/.test(g[0])) continue;
-      const layer = layerOf(g, "");
-      if (!chains[layer]) continue;
-      const kind = g[0].slice(3);
-      const P = (key) => {
-        const p = pt(g, key);
-        return p ? tf(p[0], p[1]) : null;
-      };
-      if (kind === "line") {
-        const a = P("start"), b = P("end");
-        if (a && b) chains[layer].push([a, b]);
-      } else if (kind === "rect") {
-        const s0 = pt(g, "start"), e = pt(g, "end");
-        if (s0 && e) {
-          const pts = [tf(s0[0], s0[1]), tf(e[0], s0[1]), tf(e[0], e[1]), tf(s0[0], e[1])];
-          chains[layer].push(pts.concat([pts[0]]));
-        }
-      } else if (kind === "circle") {
-        const c = P("center"), e = P("end");
-        if (c && e) {
-          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
-          const pts = [];
-          for (let i = 0; i < 32; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
-          chains[layer].push(pts.concat([pts[0]]));
-        }
-      } else if (kind === "arc") {
-        const a = P("start"), m = P("mid"), b = P("end");
-        if (a && m && b) {
-          const arc = K.arcFrom3(a, m, b);
-          chains[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
-        }
-      } else if (kind === "poly") {
-        const pts = K.ptsOf(g).map(([x, y]) => tf(x, y));
-        if (pts.length > 2) chains[layer].push(pts.concat([pts[0]]));
-      }
-    }
-    const res = {};
-    for (const layer of Object.keys(chains)) {
-      if (!chains[layer].length) {
-        res[layer] = { loops: [], open: null };
-        continue;
-      }
-      const { loops, dangling } = chainLoops(chains[layer], 0.02);
-      let open = null;
-      if (dangling) {
-        const ends = [];
-        for (const c of chains[layer]) {
-          const a = c[0], b = c[c.length - 1];
-          if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.02) ends.push(a, b);
-        }
-        const free = ends.filter((e) => ends.filter((o) => Math.hypot(o[0] - e[0], o[1] - e[1]) <= 0.02).length < 2);
-        open = free[0] || ends[0] || chains[layer][0][0];
-      }
-      res[layer] = { loops, open };
-    }
-    return res;
-  }
-  var allowsMissingCourtyard = (fp) => {
-    const a = K.kid(fp.node, "attr");
-    return !!a && a.slice(1).some((x) => K.str(x) === "allow_missing_courtyard");
-  };
-  function courtyardMarkers(doc) {
-    const out = [];
-    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint").sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-    const cy = fps.map((fp) => courtyardOutlines(fp));
-    fps.forEach((fp, i) => {
-      const c = cy[i];
-      const bad = ["F.CrtYd", "B.CrtYd"].map((l) => c[l].open).find((p) => p);
-      const [fx, fy] = K.atOf(fp.node);
-      if (bad) out.push(marker("malformed_courtyard", defaultSeverity("malformed_courtyard"), bad[0], bad[1], "Footprint has malformed courtyard (not a closed shape)", [fp.id]));
-      else if (!c["F.CrtYd"].loops.length && !c["B.CrtYd"].loops.length && !allowsMissingCourtyard(fp)) out.push(marker("missing_courtyard", defaultSeverity("missing_courtyard"), fx, fy, "Footprint has no courtyard defined", [fp.id]));
-    });
-    const holes = fps.map((fp) => padsOf(fp).map((p) => ({ p, h: padHole(fp, p) })).filter((x) => x.h && !/heatsink/.test(String((K.kid(x.p.node, "property") || [])[1] || ""))));
-    const hitIn = (h, loops) => loops.some((L) => shapeGap({ t: "poly", pts: L }, holeShape(h)) <= 0);
-    const testPads = (bi, ai) => {
-      for (const { p, h } of holes[bi]) {
-        const code = p.type === "np_thru_hole" ? "npth_inside_courtyard" : "pth_inside_courtyard";
-        if (hitIn(h, cy[ai]["F.CrtYd"].loops) || hitIn(h, cy[ai]["B.CrtYd"].loops)) out.push(marker(code, defaultSeverity(code), p.x, p.y, code === "pth_inside_courtyard" ? "PTH inside courtyard" : "NPTH inside courtyard", [fps[bi].id, fps[ai].id]));
-      }
-    };
-    for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
-      if (fps[i].bbox && fps[j].bbox && !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
-      testPads(j, i);
-      testPads(i, j);
-    }
-    return out;
-  }
-  var EDGE_TEXT = /* @__PURE__ */ new Set(["gr_text", "gr_text_box", "table", "barcode", "dimension"]);
-  function textOnEdgeCutsMarkers(doc) {
-    const out = [];
-    const sev3 = defaultSeverity("text_on_edge_cuts");
-    for (const it of doc.items.values()) {
-      if (EDGE_TEXT.has(it.kind) && layerOf(it.node, "") === "Edge.Cuts") {
-        const p = pt(it.node, "at") || pt(it.node, "start") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
-        out.push(marker("text_on_edge_cuts", sev3, p[0], p[1], "Text or graphic on Edge.Cuts layer", [it.id]));
-      }
-    }
-    for (const t of boardTexts(doc)) if (t.fp && t.layer === "Edge.Cuts") out.push(marker("text_on_edge_cuts", sev3, t.pos[0], t.pos[1], "Text or graphic on Edge.Cuts layer", [t.id]));
-    return out;
-  }
-  function keepouts(doc) {
-    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
-    const out = [];
-    const take = (z, id, tf, fp) => {
-      const ko = K.kid(z, "keepout");
-      if (!ko) return;
-      const no = (k) => {
-        const c = K.kid(ko, k);
-        return !!c && K.str(c[1]) === "not_allowed";
-      };
-      const poly = K.kid(z, "polygon");
-      const pts = poly ? K.ptsOf(poly).map(([x, y]) => tf(x, y)) : [];
-      if (pts.length < 3) return;
-      const layers = /* @__PURE__ */ new Set();
-      for (const l of zoneLayers(z)) {
-        if (l === "*.Cu" || l === "F&B.Cu") copper.forEach((c) => layers.add(c));
-        else layers.add(l);
-      }
-      const nm2 = K.kid(z, "name");
-      out.push({ id, name: nm2 ? K.str(nm2[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
-    };
-    for (const it of doc.items.values()) {
-      if (it.kind === "zone") take(it.node, it.id, ident, null);
-      else if (it.kind === "footprint") {
-        const tf = fpTf(it);
-        for (const g of it.node) if (isList(g) && g[0] === "zone") take(g, it.id, tf, it);
-      }
-    }
-    return out;
-  }
-  function keepoutRuleName(k) {
-    const ref = k.fp ? k.fp.ref || "" : "";
-    if (k.name) return ref ? `keepout area '${k.name}' of ${ref}` : `keepout area '${k.name}'`;
-    return ref ? `keepout area of ${ref}` : "keepout area";
-  }
-  function pointInPolyShape(shape, P) {
-    const probe = shape.t === "circle" ? [[shape.x, shape.y]] : shape.t === "rect" ? [[shape.x, shape.y]] : shape.t === "seg" ? [shape.a, shape.b, [(shape.a[0] + shape.b[0]) / 2, (shape.a[1] + shape.b[1]) / 2]] : shape.t === "path" ? shape.pts.concat(shape.pts.slice(1).map((p, i) => [(p[0] + shape.pts[i][0]) / 2, (p[1] + shape.pts[i][1]) / 2])) : shape.pts;
-    return probe.some((p) => pointInPoly(P, p[0], p[1]) && polyEdgeDist(P, p) > DRC_EPS);
-  }
-  var polyEdgeDist = (P, p) => {
-    let d = Infinity;
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
-      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-      const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
-      d = Math.min(d, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
-    }
-    return d;
-  };
-  function keepoutMarkers(doc) {
-    const out = [];
-    const kos = keepouts(doc);
-    if (!kos.length) return out;
-    const sev3 = defaultSeverity("items_not_allowed");
-    const boxes = kos.map((k) => shapeBBox({ t: "poly", pts: k.pts }));
-    const hits = (shape, i) => {
-      if (!boxesTouch(shapeBBox(shape), boxes[i], 0)) return false;
-      const core = coreDist({ t: "poly", pts: kos[i].pts }, shape);
-      return core === 0 && pointInPolyShape(shape, kos[i].pts) || core < shapeOffset(shape) - DRC_EPS;
-    };
-    const firstInside = (shape, pts, P) => pts.find((p) => pointInPoly(P, p[0], p[1])) || (shape.t === "seg" ? shape.a : pts[0]);
-    for (const it of doc.items.values()) {
-      const n = it.node;
-      if (it.kind === "segment" || it.kind === "arc") {
-        const a = pt(n, "start"), b = pt(n, "end");
-        if (!a || !b) continue;
-        const layer = layerOf(n);
-        const w = K.num((K.kid(n, "width") || [0, 0.25])[1], 0.25);
-        let pts = [a, b];
-        if (it.kind === "arc") {
-          const m = pt(n, "mid");
-          const arc = m && K.arcFrom3(a, m, b);
-          if (arc) pts = arcPoints(arc, a, b);
-        }
-        const shape = { t: "path", pts, r: w / 2 };
-        kos.forEach((k, i) => {
-          if (k.tracks && k.layers.has(layer) && hits(shape, i)) {
-            const p = firstInside(shape, pts, k.pts);
-            out.push(marker("items_not_allowed", sev3, p[0], p[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
-          }
-        });
-      } else if (it.kind === "via") {
-        const a = pt(n, "at");
-        if (!a) continue;
-        const size = K.num((K.kid(n, "size") || [0, 0.6])[1], 0.6);
-        const span = viaSpan(doc, viaHole(it) || { layers: null });
-        const shape = { t: "circle", x: a[0], y: a[1], r: size / 2 };
-        kos.forEach((k, i) => {
-          if (k.vias && [...span].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev3, a[0], a[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
-        });
-      } else if (it.kind === "footprint") {
-        for (const p of padsOf(it)) {
-          const shape = padShape(p);
-          const layers = /* @__PURE__ */ new Set();
-          for (const l of p.layers) {
-            if (l === "*.Cu" || l === "F&B.Cu") (doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]).forEach((c) => layers.add(c));
-            else layers.add(l);
-          }
-          kos.forEach((k, i) => {
-            if (k.pads && k.fp !== it && [...layers].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev3, p.x, p.y, `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
-          });
-        }
-      }
-    }
-    return out;
-  }
-  function disabledLayerMarkers(doc) {
-    const out = [];
-    if (!doc.layers.size) return out;
-    const sev3 = defaultSeverity("item_on_disabled_layer");
-    const off = (l) => /\.Cu$/.test(l) && !doc.layers.has(l);
-    const report = (id, p, l) => out.push(marker("item_on_disabled_layer", sev3, p[0], p[1], `Item on a disabled copper layer (layer ${l})`, [id]));
-    for (const it of doc.items.values()) {
-      const n = it.node;
-      if (it.kind === "via") {
-        const ls = K.kid(n, "layers");
-        const pair = ls ? [K.str(ls[1]), K.str(ls[2])] : [];
-        const bad = pair.find(off);
-        const a = pt(n, "at");
-        if (bad && a) report(it.id, a, bad);
-      } else if (it.kind === "footprint") {
-        for (const p of padsOf(it)) {
-          if (p.type !== "smd" && p.type !== "connect") continue;
-          const l = p.layers.find((x) => /\.Cu$/.test(x) && x !== "*.Cu");
-          if (l && off(l)) report(it.id, [p.x, p.y], l);
-        }
-      } else if (it.kind !== "zone") {
-        const l = layerOf(n, "");
-        if (!l || !off(l)) continue;
-        const p = pt(n, "start") || pt(n, "at") || pt(n, "center") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
-        report(it.id, p, l);
-      }
-    }
-    return out;
-  }
-  function moreDrcMarkers(doc, s, rules) {
-    const ruleOf = (type, A, B) => rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
-    const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...holeClearanceMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_clearance").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
-    return all.filter((m) => (s.severities[m.code] || m.severity) !== "ignore");
-  }
-
-  // web/canvas/colors.ts
-  var SCH_DEFAULT = Object.freeze({
-    bg: "#F5F4EF",
-    grid: "#B5B5B5",
-    gridAxes: "#000084",
-    wire: "#009600",
-    bus: "#000084",
-    junction: "#009600",
-    outline: "#840000",
-    body: "#FFFFC2",
-    pin: "#840000",
-    pinName: "#006464",
-    pinNum: "#A90000",
-    ref: "#006464",
-    value: "#006464",
-    field: "#840084",
-    label: "#0F0F0F",
-    glabel: "#840000",
-    hlabel: "#725600",
-    sheet: "#840000",
-    sheetName: "#006464",
-    sheetFile: "#725600",
-    sheetFields: "#840084",
-    sheetLabel: "#006464",
-    noconnect: "#000084",
-    notes: "#0000C2",
-    busEntry: "#009600",
-    dnp: "rgba(220,9,13,0.85)",
-    netclass: "#484848",
-    ruleArea: "#FF0000",
-    excluded: "rgba(194,194,194,0.95)",
-    hidden: "#C2C2C2",
-    privateNotes: "#4848FF",
-    frame: "#840000",
-    // LAYER_SCHEMATIC_DRAWINGSHEET ("schematic.worksheet") is `frame`; the page outline is a separate,
-    // lighter layer — DS_PAINTER::DrawBorder paints it in LAYER_SCHEMATIC_PAGE_LIMITS, not the sheet ink
-    // (common/settings/builtin_color_themes.h:78-79, eeschema/sch_view.cpp:137-138).
-    pageLimits: "#B5B5B5",
-    brightened: "#FF00FF"
-    // LAYER_BRIGHTENED: net highlighting / selection disambiguation
-  });
-  var SCH = Object.assign({}, SCH_DEFAULT);
-  var PCB_ORDER = ["B.Fab", "B.CrtYd", "B.Adhes", "B.Paste", "B.SilkS", "B.Mask", "B.Cu"];
-  for (let i = 30; i >= 1; i--) PCB_ORDER.push("In" + i + ".Cu");
-  PCB_ORDER.push("F.Fab", "F.CrtYd", "F.Adhes", "F.Paste", "F.SilkS", "F.Mask", "F.Cu", "holes");
-  for (let i = 45; i >= 1; i--) PCB_ORDER.push("User." + i);
-  PCB_ORDER.push("Margin", "Edge.Cuts", "Eco2.User", "Eco1.User", "Cmts.User", "Dwgs.User");
-  var PCB_ZMAP = new Map(PCB_ORDER.map((l, i) => [l, i * 10]));
-
-  // web/canvas/sexpr.ts
-  var isList2 = Array.isArray;
-  function kid(node, key) {
-    for (let j = 1; j < node.length; j++) {
-      const c = node[j];
-      if (isList2(c) && c[0] === key) return c;
-    }
-    return null;
-  }
-  function num2(v, d = 0) {
-    if (typeof v === "number") return v;
-    if (v === void 0 || v === null || v === "") return d;
-    const x = Number(v);
-    return isNaN(x) ? d : x;
-  }
-  function str2(v) {
-    return v === void 0 || v === null ? "" : String(v);
-  }
-  function polyPtsOf(node) {
-    const p = kid(node, "pts");
-    if (!p) return [];
-    const out = [];
-    for (let i = 1; i < p.length; i++) {
-      const c = p[i];
-      if (!isList2(c)) continue;
-      if (c[0] === "xy") out.push([num2(c[1]), num2(c[2])]);
-      else if (c[0] === "arc") {
-        const s = kid(c, "start"), m = kid(c, "mid"), e = kid(c, "end");
-        if (!s || !m || !e) continue;
-        const a = arcFrom3([num2(s[1]), num2(s[2])], [num2(m[1]), num2(m[2])], [num2(e[1]), num2(e[2])]);
-        if (!a) {
-          out.push([num2(s[1]), num2(s[2])], [num2(e[1]), num2(e[2])]);
-          continue;
-        }
-        const TAU = 2 * Math.PI;
-        let sweep = a.anticlockwise ? a.a0 - a.a1 : a.a1 - a.a0;
-        sweep = (sweep % TAU + TAU) % TAU;
-        const step = a.r > 5e-3 ? 2 * Math.acos(1 - 5e-3 / a.r) : Math.PI / 2, n = Math.max(2, Math.ceil(sweep / step));
-        out.push([num2(s[1]), num2(s[2])]);
-        for (let k = 1; k < n; k++) {
-          const t = a.a0 + (a.anticlockwise ? -1 : 1) * sweep * k / n;
-          out.push([a.x + a.r * Math.cos(t), a.y + a.r * Math.sin(t)]);
-        }
-        out.push([num2(e[1]), num2(e[2])]);
-      }
-    }
-    return out;
-  }
-  function arcFrom3(p0, pm, p1) {
-    const ax = p0[0], ay = p0[1], bx = pm[0], by = pm[1], cx = p1[0], cy = p1[1];
-    const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-    if (Math.abs(d) < 1e-9) return null;
-    const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
-    const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
-    const r = Math.hypot(ax - ux, ay - uy);
-    const a0 = Math.atan2(ay - uy, ax - ux), am = Math.atan2(by - uy, bx - ux), a1 = Math.atan2(cy - uy, cx - ux);
-    const norm2 = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-    const ccwSweep = norm2(a1 - a0), ccwMid = norm2(am - a0);
-    const ccw = ccwMid <= ccwSweep;
-    return { x: ux, y: uy, r, a0, a1, anticlockwise: !ccw };
-  }
-
-  // web/fab/prims.ts
-  var rad = (deg2) => deg2 * Math.PI / 180;
-  function rot(x, y, deg2) {
-    if (!deg2) return [x, y];
-    const r = rad(deg2), c = Math.cos(r), s = Math.sin(r);
-    return [x * c + y * s, -x * s + y * c];
-  }
-  function arcPoints2(cx, cy, r, a0, a1, acw, maxErr = 5e-3) {
-    const TAU = 2 * Math.PI;
-    let sweep = acw ? a0 - a1 : a1 - a0;
-    sweep = (sweep % TAU + TAU) % TAU;
-    if (sweep < 1e-12 && Math.abs(a1 - a0) > 1e-9) sweep = TAU;
-    const step = r > maxErr ? 2 * Math.acos(1 - maxErr / r) : Math.PI / 2;
-    const n = Math.max(2, Math.ceil(sweep / step));
-    const out = [];
-    for (let i = 0; i <= n; i++) {
-      const a = a0 + (acw ? -1 : 1) * sweep * i / n;
-      out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
-    }
-    return out;
-  }
-  function circlePoints(cx, cy, r, maxErr = 5e-3) {
-    const step = r > maxErr ? 2 * Math.acos(1 - maxErr / r) : Math.PI / 2;
-    const n = Math.max(8, Math.ceil(2 * Math.PI / step));
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      const a = 2 * Math.PI * i / n;
-      out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
-    }
-    return out;
-  }
-  function area(pts) {
-    let a = 0;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
-    return a / 2;
-  }
-
-  // web/fab/model.ts
-  var K2 = (n, key) => n ? kid(n, key) : null;
-  function boardSettings(setup, doc) {
-    const n = (key) => {
-      const k = K2(setup, key);
-      return k ? num2(k[1], 0) : 0;
-    };
-    const tent = K2(setup, "tenting");
-    let tentFront = true, tentBack = true;
-    if (tent) {
-      const legacy = tent.slice(1).some((x) => !isList2(x));
-      if (legacy) {
-        tentFront = tent.includes("front");
-        tentBack = tent.includes("back");
-      } else {
-        const f = K2(tent, "front"), b = K2(tent, "back");
-        tentFront = f ? str2(f[1]) !== "no" : false;
-        tentBack = b ? str2(b[1]) !== "no" : false;
-      }
-    } else {
-      const pp = K2(setup, "pcbplotparams");
-      const v = K2(pp, "viasonmask");
-      if (v) {
-        const open = str2(v[1]) === "true" || str2(v[1]) === "yes";
-        tentFront = tentBack = !open;
-      }
-    }
-    const ax = K2(setup, "aux_axis_origin");
-    const yn = (k) => !!k && /^(yes|true)$/.test(str2(k[1]));
-    const cov = K2(setup, "covering"), plug = K2(setup, "plugging");
-    return {
-      coverFront: yn(K2(cov, "front")),
-      coverBack: yn(K2(cov, "back")),
-      plugFront: yn(K2(plug, "front")),
-      plugBack: yn(K2(plug, "back")),
-      capVias: yn(K2(setup, "capping")),
-      fillVias: yn(K2(setup, "filling")),
-      maskExpansion: n("pad_to_mask_clearance"),
-      maskMinWidth: n("solder_mask_min_width"),
-      pasteClearance: n("pad_to_paste_clearance"),
-      pasteRatio: n("pad_to_paste_clearance_ratio"),
-      tentFront,
-      tentBack,
-      auxOrigin: ax ? [num2(ax[1]), num2(ax[2])] : doc.auxOrigin ? [doc.auxOrigin[0], doc.auxOrigin[1]] : [0, 0]
-    };
-  }
-
-  // web/fab/poly.ts
-  var MAX_ERROR = 5e-3;
-  function pointInPoly2(pts, x, y) {
-    let inside = false;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
-      if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
-    }
-    return inside;
-  }
-  function fracture(paths) {
-    if (paths.length < 2) return paths;
-    const sign = (p) => Math.sign(area(p));
-    let pos = 0, neg = 0;
-    for (const p of paths) {
-      const a = area(p);
-      if (a > 0) pos += a;
-      else neg -= a;
-    }
-    const outerSign = pos >= neg ? 1 : -1;
-    const outers = [];
-    const holes = [];
-    for (const p of paths) {
-      if (sign(p) === outerSign) outers.push({ pts: p, holes: [], a: Math.abs(area(p)) });
-      else holes.push(p);
-    }
-    if (!holes.length) return paths;
-    outers.sort((a, b) => a.a - b.a);
-    for (const h of holes) {
-      const o = outers.find((c) => pointInPoly2(c.pts, h[0][0], h[0][1]) || pointInPoly2(c.pts, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
-      if (o) o.holes.push(h);
-    }
-    const out = [];
-    for (const o of outers) {
-      let poly = o.pts.slice();
-      const hs = o.holes.map((h) => {
-        let mi = 0;
-        for (let i = 1; i < h.length; i++) if (h[i][0] > h[mi][0]) mi = i;
-        return { h, mi };
-      });
-      hs.sort((a, b) => b.h[b.mi][0] - a.h[a.mi][0]);
-      for (const { h, mi } of hs) {
-        const hx = h[mi][0], hy = h[mi][1];
-        let best = -1, bestX = Infinity;
-        for (let i = 0; i < poly.length; i++) {
-          const a = poly[i], b = poly[(i + 1) % poly.length];
-          if (a[1] === b[1]) continue;
-          if (Math.min(a[1], b[1]) > hy || Math.max(a[1], b[1]) < hy) continue;
-          const x = a[0] + (b[0] - a[0]) * (hy - a[1]) / (b[1] - a[1]);
-          if (x >= hx && x < bestX) {
-            bestX = x;
-            best = i;
-          }
-        }
-        if (best < 0) continue;
-        const cut = [bestX, hy];
-        const ring2 = [];
-        for (let k = 0; k <= h.length; k++) ring2.push(h[(mi + k) % h.length]);
-        poly = poly.slice(0, best + 1).concat([cut], ring2, [cut], poly.slice(best + 1));
-      }
-      out.push(poly);
-    }
-    return out;
-  }
-  function clockwise(pts) {
-    return area(pts) < 0 ? pts.slice().reverse() : pts;
-  }
-
-  // web/fab/plot.ts
-  var canvas = () => globalThis.KiCadCanvas;
-  var N = (v, d = 0) => typeof v === "number" ? v : d;
-  var S2 = (v) => typeof v === "string" ? v : "";
-  var PlotLog = class {
-    constructor() {
-      this.messages = /* @__PURE__ */ new Set();
-    }
-    warn(m) {
-      this.messages.add(m);
-    }
-  };
-  function dashed(pts, pattern, w, out) {
-    let pi = 0, left = pattern[0], on = true;
-    for (let i = 0; i + 1 < pts.length; i++) {
-      let [x, y] = pts[i];
-      const [ex, ey] = pts[i + 1];
-      let len = Math.hypot(ex - x, ey - y);
-      if (len < 1e-9) continue;
-      const ux = (ex - x) / len, uy = (ey - y) / len;
-      while (len > 1e-9) {
-        const step = Math.min(left, len);
-        const nx = x + ux * step, ny = y + uy * step;
-        if (on) out.push({ k: "seg", x1: x, y1: y, x2: nx, y2: ny, w });
-        x = nx;
-        y = ny;
-        len -= step;
-        left -= step;
-        if (left <= 1e-9) {
-          pi = (pi + 1) % pattern.length;
-          left = pattern[pi];
-          on = !on;
-        }
-      }
-    }
-  }
-  function polyline(pts, close, w, g, out) {
-    if (!(w > 0) || pts.length < 2) return;
-    const path = close ? pts.concat([pts[0]]) : pts;
-    if (g.dash) {
-      dashed(path, canvas().dashPattern(S2(g.dashType), w), w, out);
-      return;
-    }
-    for (let i = 0; i + 1 < path.length; i++) out.push({ k: "seg", x1: path[i][0], y1: path[i][1], x2: path[i + 1][0], y2: path[i + 1][1], w });
-  }
-  var clampPen = (pen, size, sizeX) => Math.min(pen, Math.min(Math.abs(size), Math.abs(sizeX)) * 0.25);
-  function cachedOutlines(oc, size, sizeX) {
-    if (oc.polys !== void 0) return oc.polys;
-    oc.polys = null;
-    const rc = oc.node;
-    if (S2(rc[1]) !== oc.shown) return null;
-    const turn = ((num2(rc[2], 0) - oc.rot) % 360 + 360) % 360;
-    if (Math.min(turn, 360 - turn) > 0.01) return null;
-    const polys = [];
-    for (const p of rc.slice(3)) {
-      if (!isList2(p) || str2(p[0]) !== "polygon") continue;
-      const outlines = p.filter((c) => isList2(c) && str2(c[0]) === "pts").map((c) => polyPtsOf(["x", c])).filter((o) => o.length >= 3);
-      if (!outlines.length) continue;
-      if (outlines.length === 1) polys.push(outlines[0]);
-      else for (const o of fracture([clockwise(outlines[0])].concat(outlines.slice(1).map((h) => clockwise(h).slice().reverse())))) polys.push(o);
-    }
-    if (!polys.length) return null;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const poly of polys) for (const q of poly) {
-      const [lx, ly] = rot(q[0] - oc.x, q[1] - oc.y, -oc.rot);
-      if (lx < x0) x0 = lx;
-      if (ly < y0) y0 = ly;
-      if (lx > x1) x1 = lx;
-      if (ly > y1) y1 = ly;
-    }
-    const tx = 0.35 * Math.abs(sizeX) + 0.1, ty = 0.6 * Math.abs(size) + 0.1;
-    const onX = Math.abs(x0) <= tx || Math.abs(x1) <= tx || Math.abs((x0 + x1) / 2) <= tx;
-    const onY = Math.abs(y0) <= ty || Math.abs(y1) <= ty || Math.abs((y0 + y1) / 2) <= ty;
-    if (!onX || !onY) return null;
-    oc.polys = polys;
-    return polys;
-  }
-  function knockoutBox(pts, x, y, deg2, margin) {
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const q of pts) {
-      const [lx, ly] = rot(q[0] - x, q[1] - y, -deg2);
-      if (lx < x0) x0 = lx;
-      if (ly < y0) y0 = ly;
-      if (lx > x1) x1 = lx;
-      if (ly > y1) y1 = ly;
-    }
-    return [[x0 - margin, y0 - margin], [x1 + margin, y0 - margin], [x1 + margin, y1 + margin], [x0 - margin, y1 + margin]].map(([lx, ly]) => {
-      const [rx, ry] = rot(lx, ly, deg2);
-      return [x + rx, y + ry];
-    });
-  }
-  function textPrims(g, out, knock, log) {
-    const at = out.length;
-    textPrimsOf(g, out, knock, log);
-    const dt = g.dxfText;
-    if (!dt || g.knockout || out.length === at) return;
-    const size = N(g.size, 1);
-    const info = {
-      text: S2(g.raw) || S2(g.text),
-      x: N(g.x),
-      y: N(g.y),
-      size,
-      sizeX: N(g.sizeX) > 0 ? N(g.sizeX) : size,
-      rot: N(g.rot),
-      h: S2(g.h) || "center",
-      v: S2(g.v) || "middle",
-      italic: !!g.italic,
-      bold: !!dt.bold,
-      mirror: !!g.mirror
-    };
-    for (let i = at; i < out.length; i++) out[i].text = info;
-  }
-  function textPrimsOf(g, out, knock, log) {
-    const text = S2(g.raw) || S2(g.text);
-    if (!text) return;
-    const size = N(g.size, 1), sizeX = N(g.sizeX) > 0 ? N(g.sizeX) : size;
-    const pen = clampPen(N(g.w) > 0 ? N(g.w) : size / 8, size, sizeX);
-    const margin = Math.max(pen / 2, size / 9);
-    const dst = g.knockout ? knock : out, clear = g.knockout ? true : void 0;
-    if (g.face) {
-      const oc = g.outline, polys = oc ? cachedOutlines(oc, size, sizeX) : null;
-      if (oc && polys) {
-        if (!g.outlineFirst) return;
-        if (g.knockout) knock.push({ k: "region", pts: knockoutBox(polys.flat(), oc.x, oc.y, oc.rot, margin) });
-        for (const pts of polys) dst.push({ k: "region", pts, clear });
-        return;
-      }
-      log.warn(oc ? `Text set in the font "${S2(g.face)}" was changed after KiCad last drew it, so its stored outlines no longer fit. It is plotted with the KiCad stroke font; open and save the board in KiCad to refresh them.` : `Text set in the font "${S2(g.face)}" has no outlines stored in the board (KiCad stores them when it saves). It is plotted with the KiCad stroke font.`);
-    }
-    const C = canvas();
-    const line2 = C.strokeLine(text, !!g.italic);
-    const lay = g.knockout && g.layoutW !== void 0 ? N(g.layoutW) : pen;
-    const [ox, oy] = C.strokeOrigin(line2.advance, S2(g.h) || "center", S2(g.v) || "middle", lay / sizeX, lay / size);
-    const a = -N(g.rot) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
-    const x0 = N(g.x), y0 = N(g.y);
-    const P = (u, v) => {
-      const lx = (u + ox) * sizeX * mx, ly = (v + oy) * size;
-      return [x0 + lx * c - ly * sn, y0 + lx * sn + ly * c];
-    };
-    const segs = [];
-    const ends = [];
-    for (const st of line2.strokes) {
-      if (st.length === 2) {
-        const p = P(st[0], st[1]);
-        ends.push(p);
-        segs.push({ k: "seg", x1: p[0], y1: p[1], x2: p[0], y2: p[1], w: pen, clear });
-        continue;
-      }
-      for (let i = 0; i + 3 < st.length; i += 2) {
-        const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]);
-        ends.push(p, q);
-        segs.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen, clear });
-      }
-    }
-    if (g.knockout && ends.length) knock.push({ k: "region", pts: knockoutBox(ends, x0, y0, N(g.rot), margin + pen / 2) });
-    for (const p of segs) dst.push(p);
-  }
-  function geomPrims(g, out, knock, log, grow = 0) {
-    const w = N(g.w) + 2 * grow;
-    if (g.t === "line") {
-      const pts = [[N(g.x1), N(g.y1)], [N(g.x2), N(g.y2)]];
-      polyline(pts, false, w, g, out);
-    } else if (g.t === "arc") {
-      if (g.pie || !(w > 0)) return;
-      const cx = N(g.x), cy = N(g.y), r = N(g.r), a0 = N(g.a0), a1 = N(g.a1), acw = !!g.anticlockwise;
-      if (g.dash) dashed(arcPoints2(cx, cy, r, a0, a1, acw, MAX_ERROR), canvas().dashPattern(S2(g.dashType), w), w, out);
-      else out.push({ k: "arc", cx, cy, r, a0, a1, acw, w });
-    } else if (g.t === "circle") {
-      const x = N(g.x), y = N(g.y), r = N(g.r);
-      if (g.fill) {
-        const d = 2 * r + (g.noStroke ? 0 : N(g.w)) + 2 * grow;
-        if (d > 0) out.push({ k: "circle", x, y, d });
-      } else if (w > 0) {
-        if (g.dash) dashed(circlePoints(x, y, r, MAX_ERROR).concat([[x + r, y]]), canvas().dashPattern(S2(g.dashType), w), w, out);
-        else out.push({ k: "arc", cx: x, cy: y, r, a0: 0, a1: 2 * Math.PI, acw: false, w });
-      }
-    } else if (g.t === "poly") {
-      const pts = g.pts || [];
-      if (pts.length < 2) return;
-      if (g.fill && pts.length >= 3) out.push({ k: "region", pts });
-      if (!g.noStroke || grow > 0) polyline(pts, !!g.close, g.noStroke ? 2 * grow : w, g, out);
-    } else if (g.t === "text") textPrims(g, out, knock, log);
-  }
-
   // web/tools/pcb-tools/drc-silk.ts
   var EPS2 = 1e-6;
-  var defaultSeverity2 = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
+  var defaultSeverity = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
   var SILK = ["F.SilkS", "B.SilkS"];
   function primShapes(p) {
     if (p.clear) return [];
@@ -4956,7 +9096,7 @@
             if (isRuleArea(g)) continue;
             if (!expand(zoneLayers(g), copper).some((l) => layers.has(l))) continue;
           } else if (g[0] !== "dimension" && g[0] !== "table" && !layers.has(layerOf(g, "F.SilkS"))) continue;
-          const net = g[0] === "zone" ? netName(doc, g) : null;
+          const net = g[0] === "zone" ? netName2(doc, g) : null;
           fromGeoms(childGeoms(doc, it, g), it.id, K.uuidOf(g) || it.id + ":" + i, String(g[0]), g, it, net);
         }
         for (const p of padsOf(it)) {
@@ -4992,14 +9132,14 @@
         const mk2 = /* @__PURE__ */ new Set();
         if (span.has("F.Cu") && !tentF) mk2.add("F.Mask");
         if (span.has("B.Cu") && !tentB) mk2.add("B.Mask");
-        const net = netName(doc, n);
+        const net = netName2(doc, n);
         const shapes = [{ t: "circle", x, y, r: size / 2 }];
         for (const l of [...span, ...mk2]) if (layers.has(l)) push({ id: it.id, uuid: it.id, kind: "via", node: n, fp: null, layer: l, shapes, grow: /\.Mask$/.test(l) ? ms.maskExpansion : 0, net, copper: span, mask: mk2 });
         continue;
       }
       if (it.kind === "group" || it.kind === "image" || it.kind === "generated" || it.kind === "point" || it.kind === "gr_bbox") continue;
       const connected = it.kind === "segment" || it.kind === "arc" || it.kind === "zone" || /^gr_/.test(it.kind) && /\.Cu$/.test(layerOf(n, ""));
-      fromGeoms(it.geom || [], it.id, it.id, it.kind, n, null, connected ? netName(doc, n) : null);
+      fromGeoms(it.geom || [], it.id, it.id, it.kind, n, null, connected ? netName2(doc, n) : null);
     }
     return out;
   }
@@ -5081,7 +9221,7 @@
           reported.add(key);
           const [x, y] = centre(a.bbox, b.bbox);
           const title = code === "silk_overlap" ? "Silkscreen clearance" : "Silkscreen clipped by solder mask";
-          out.push(marker(code, defaultSeverity2(code), x, y, title + detail(name, min, gap), Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
+          out.push(marker(code, defaultSeverity(code), x, y, title + detail(name, min, gap), Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
         }
       }
     }
@@ -5089,7 +9229,7 @@
   }
   function silkEdgeMarkers(doc, s, rules, ms = maskSetup(doc, s), pool) {
     const out = [];
-    const sev3 = defaultSeverity2("silk_edge_clearance");
+    const sev3 = defaultSeverity("silk_edge_clearance");
     const edges = edgeShapes(doc);
     if (!edges.shapes.length) return out;
     const silk = elementsOn(doc, s, new Set(SILK), ms, pool);
@@ -5180,7 +9320,7 @@
         }
         if (hit < 0) continue;
         const [x, y] = centre(e.bbox, near[hit].bbox);
-        out.push(marker("silk_over_copper", defaultSeverity2("silk_over_copper"), x, y, "Silkscreen clipped by solder mask" + detail(name, clearance, actual), [e.id]));
+        out.push(marker("silk_over_copper", defaultSeverity("silk_over_copper"), x, y, "Silkscreen clipped by solder mask" + detail(name, clearance, actual), [e.id]));
       }
     }
     return out;
@@ -5357,7 +9497,7 @@
       const key = [b.layer, b.a.uuid, b.b ? b.b.uuid : b.zoneId, b.c ? b.c.uuid : ""].join("|");
       if (keys.has(key)) continue;
       keys.add(key);
-      const m = marker("solder_mask_bridge", defaultSeverity2("solder_mask_bridge"), b.pos[0], b.pos[1], /^F\./.test(b.layer) ? front : back, Array.from(new Set(ids)));
+      const m = marker("solder_mask_bridge", defaultSeverity("solder_mask_bridge"), b.pos[0], b.pos[1], /^F\./.test(b.layer) ? front : back, Array.from(new Set(ids)));
       m.message = true;
       out.push(m);
     }
@@ -5367,6 +9507,1543 @@
     const ms = maskSetup(doc, s);
     const pool = boardElements(doc, s, /* @__PURE__ */ new Set(["F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "F.Cu", "B.Cu"]), ms);
     return [...silkToMaskMarkers(doc, s, rules, ms, pool), ...maskBridgeMarkers(doc, s, rules, ms, pool), ...silkClearanceMarkers(doc, s, rules, ms, pool), ...silkEdgeMarkers(doc, s, rules, ms, pool)];
+  }
+
+  // web/tools/pcb-tools/drc-sliver.ts
+  var SLIVER = { widthTolerance: 0.08, minimumLength: 8e-4, angleTolerance: 20 };
+  function shapePolys(s) {
+    switch (s.t) {
+      case "circle":
+        return s.r > 0 ? [circlePoints(s.x, s.y, s.r, MAX_ERROR)] : [];
+      case "seg":
+        return s.r > 0 ? [stadium(s.a[0], s.a[1], s.b[0], s.b[1], 2 * s.r)] : [];
+      case "path": {
+        const out = [];
+        if (s.r > 0) for (let i = 0; i + 1 < s.pts.length; i++) out.push(stadium(s.pts[i][0], s.pts[i][1], s.pts[i + 1][0], s.pts[i + 1][1], 2 * s.r));
+        return out;
+      }
+      case "rect":
+        return s.w > 0 && s.h > 0 ? [roundRectPoints(s.x, s.y, s.w, s.h, Math.min(s.rr || 0, Math.min(s.w, s.h) / 2), s.rot)] : [];
+      case "poly":
+        return s.pts.length >= 3 ? [s.pts] : [];
+    }
+    return [];
+  }
+  function copperCtx(doc) {
+    const m = boardModel(doc, null);
+    const pads = /* @__PURE__ */ new Map();
+    for (const fp of m.footprints) for (const p of fp.pads) pads.set(p.node, p);
+    return { m, pads, nets: /* @__PURE__ */ new Map() };
+  }
+  function netCopper(layer, conds, cc, outside = false) {
+    const key = (outside === "low" ? "low:" : outside ? "out:" : "") + layer;
+    let got = cc.nets.get(key);
+    if (got) return got;
+    const byNet = /* @__PURE__ */ new Map();
+    for (const c of conds) if (c.layers.has(layer)) {
+      const k = c.net || "";
+      let l = byNet.get(k);
+      if (!l) byNet.set(k, l = []);
+      let polys = conductorPolys(c, layer, cc, outside);
+      if (outside === "low") polys = splitCollinearOutlines(polys);
+      for (const p of polys) l.push(p);
+    }
+    got = /* @__PURE__ */ new Map();
+    for (const [k, polys] of byNet) got.set(k, union2(polys));
+    cc.nets.set(key, got);
+    return got;
+  }
+  function conductorPolys(c, layer, cc, outside = false) {
+    const loc = outside === "low" ? "inside" : "outside", err = outside === "low" ? ARC_LOW_DEF : ARC_HIGH_DEF;
+    if (c.kind === "pad") {
+      const fp = cc.pads.get(c.pad.node);
+      if (fp) {
+        const out = [];
+        padPrims(fp, layer, cc.m, out);
+        return out.flatMap((p) => outside && p.k === "circle" && p.d > 0 ? [circleApprox(p.x, p.y, p.d / 2, err, loc)] : primPolys(p));
+      }
+    }
+    if (outside) return approxShapePolys(c.shape, err, loc);
+    return shapePolys(c.shape);
+  }
+  function approxShapePolys(s, err, loc) {
+    if (s.t === "circle" && s.r > 0) return [circleApprox(s.x, s.y, s.r, err, loc)];
+    if (s.t === "seg" && s.r > 0) return [ovalApprox(s.a, s.b, 2 * s.r, err, loc)];
+    if (s.t === "path" && s.r > 0) {
+      const out = [];
+      for (let i = 0; i + 1 < s.pts.length; i++) out.push(ovalApprox(s.pts[i], s.pts[i + 1], 2 * s.r, err, loc));
+      return out;
+    }
+    return shapePolys(s);
+  }
+  var ARC_HIGH_DEF = 5e-3;
+  var ARC_LOW_DEF = 0.02;
+  function circleSegs(rIU, errIU) {
+    const r = Math.max(1, rIU), e = Math.max(1, errIU);
+    const inc = Math.min(360 / 8, 180 / Math.PI * Math.acos(1 - e / r) * 2);
+    const n = Math.max(Math.round(360 / inc), 2);
+    return Math.ceil(n / 8) * 8;
+  }
+  function outsideRadius(rIU, n) {
+    const a = Math.PI / (n <= 2 ? 3 : n);
+    return rIU + Math.round(Math.abs(rIU * (1 - 1 / Math.cos(a))));
+  }
+  var iu = (v) => Math.round(v * 1e6);
+  var rotIU = (x, y, deg2) => {
+    const a = deg2 * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    return [Math.round(x * c + y * s), Math.round(y * c - x * s)];
+  };
+  var circleOutside = (x, y, r, err = ARC_HIGH_DEF) => circleApprox(x, y, r, err, "outside");
+  function circleApprox(x, y, r, err, loc) {
+    const rIU = iu(r), n = circleSegs(rIU, iu(err)), R = loc === "outside" ? outsideRadius(rIU, n) : rIU, d = 360 / n, cx = iu(x), cy = iu(y);
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      const p = rotIU(R, 0, d / 2 + k * d);
+      out.push([(p[0] + cx) / 1e6, (p[1] + cy) / 1e6]);
+    }
+    return clockwise(out);
+  }
+  var ovalOutside = (a, b, w, err = ARC_HIGH_DEF) => ovalApprox(a, b, w, err, "outside");
+  function ovalApprox(a, b, w, err, loc) {
+    const wIU = iu(w), r0 = Math.trunc(wIU / 2), n = circleSegs(r0, iu(err)), R = loc === "outside" ? outsideRadius(r0, n) : r0, d = 360 / n;
+    let sx = iu(a[0]), sy = iu(a[1]), ex = iu(b[0]) - sx, ey = iu(b[1]) - sy;
+    if (ex < 0) {
+      sx = iu(b[0]);
+      sy = iu(b[1]);
+      ex = -ex;
+      ey = -ey;
+    }
+    const len = Math.round(Math.hypot(ex, ey)), ang = Math.atan2(ey, ex);
+    const poly = [[len, R]];
+    for (let t = d / 2; t < 180; t += d) {
+      const c2 = rotIU(0, R, t);
+      poly.push([c2[0] + len, c2[1]]);
+    }
+    poly.push([len, -R], [0, -R]);
+    for (let t = d / 2; t < 180; t += d) poly.push(rotIU(0, -R, t));
+    poly.push([0, R]);
+    const hw = Math.trunc(wIU / 2);
+    let pts = poly;
+    for (const [lim, sign] of [[hw, 1], [-hw, -1]]) {
+      const res = [];
+      const inside = (p) => sign * p[1] <= sign * lim;
+      for (let i = 0; i < pts.length; i++) {
+        const P = pts[i], Q = pts[(i + 1) % pts.length], pi = inside(P), qi = inside(Q);
+        if (pi) res.push(P);
+        if (pi !== qi) {
+          const t = (lim - P[1]) / (Q[1] - P[1]);
+          res.push([Math.round(P[0] + t * (Q[0] - P[0])), lim]);
+        }
+      }
+      pts = res;
+    }
+    const c = Math.cos(ang), s = Math.sin(ang);
+    return clockwise(pts.map((p) => [(Math.round(p[0] * c - p[1] * s) + sx) / 1e6, (Math.round(p[0] * s + p[1] * c) + sy) / 1e6]));
+  }
+  function clipperArea(pts) {
+    let a = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += (pts[j][1] + pts[i][1]) * (pts[j][0] - pts[i][0]);
+    return a * 0.5;
+  }
+  var CONDUCTOR_KINDS = /* @__PURE__ */ new Set(["segment", "arc", "via", "zone"]);
+  function layerCopperOutlines(doc, layer, conds, cc) {
+    const polys = [];
+    for (const merged of netCopper(layer, conds, cc, "low").values()) for (const p of merged) polys.push(p);
+    for (const it of doc.items.values()) if (!CONDUCTOR_KINDS.has(it.kind)) for (const s of geomShapes(it.geom, layer)) for (const p of splitCollinearOutlines(approxShapePolys(s, ARC_LOW_DEF, "inside"))) polys.push(p);
+    return union2(polys).filter((p) => clipperArea(p) > 0).map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)]));
+  }
+  function approxCollinear(s1, s2, th) {
+    let a = s1, b = s2;
+    const sq = (s) => (s[1][0] - s[0][0]) ** 2 + (s[1][1] - s[0][1]) ** 2;
+    if (sq(a) < sq(b)) [a, b] = [b, a];
+    const p = a[0][1] - a[1][1], q = a[1][0] - a[0][0], r = -p * a[0][0] - q * a[0][1], l = p * p + q * q;
+    if (l === 0) return false;
+    const d1 = p * b[0][0] + q * b[0][1] + r, d2 = p * b[1][0] + q * b[1][1] + r;
+    return d1 * d1 / l <= th * th && d2 * d2 / l <= th * th;
+  }
+  function insideAny(polys, x, y) {
+    for (const pts of polys) {
+      let c = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const [xi, yi] = pts[i], [xj, yj] = pts[j];
+        if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+      }
+      if (c) return true;
+    }
+    return false;
+  }
+  function isExteriorWaist(a, b, polys) {
+    const dx = a[1][0] - a[0][0], dy = a[1][1] - a[0][1];
+    const axis = Math.abs(dx) >= Math.abs(dy) ? 0 : 1;
+    const pts = [a[0], a[1], b[0], b[1]].slice().sort((p, q) => p[axis] - q[axis] || p[1 - axis] - q[1 - axis]);
+    const s0 = pts[1], e0 = pts[2];
+    const mx = Math.trunc((s0[0] + e0[0]) / 2), my = Math.trunc((s0[1] + e0[1]) / 2);
+    const sx = e0[0] - s0[0], sy = e0[1] - s0[1];
+    const len = Math.hypot(sx, sy);
+    if (len <= 25) return false;
+    const px = Math.round(-sy / len * 10), py = Math.round(sx / len * 10);
+    return !insideAny(polys, mx + px, my + py) && !insideAny(polys, mx - px, my - py);
+  }
+  function splitCollinearOutlines(polysMm) {
+    const polys = polysMm.map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)]));
+    let changedAny = false;
+    for (let pi = 0; pi < polys.length; pi++) {
+      for (let guard = 0; guard < 1e4; guard++) {
+        const o = polys[pi];
+        const n = o.length;
+        if (n < 4) break;
+        const cell = 1e6;
+        const grid = /* @__PURE__ */ new Map();
+        const box = (i) => {
+          const a = o[i], b = o[(i + 1) % n];
+          return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+        };
+        const cells = (bx) => {
+          const out = [];
+          for (let gx = Math.floor(bx[0] / cell); gx <= Math.floor(bx[2] / cell); gx++) for (let gy = Math.floor(bx[1] / cell); gy <= Math.floor(bx[3] / cell); gy++) out.push(gx + "," + gy);
+          return out;
+        };
+        for (let i = 0; i < n; i++) for (const k of cells(box(i))) {
+          let l = grid.get(k);
+          if (!l) grid.set(k, l = []);
+          l.push(i);
+        }
+        let segA = -1, segB = -1;
+        for (let i = 0; i < n && segA < 0; i++) {
+          const a = o[i], b = o[(i + 1) % n];
+          const seg = [a, b];
+          const bi = box(i);
+          const seen = /* @__PURE__ */ new Set();
+          for (const k of cells(bi)) for (const j of grid.get(k) || []) {
+            if (segA >= 0 || seen.has(j)) continue;
+            seen.add(j);
+            if (j === i || j === (i + 1) % n || j === (i + n - 1) % n) continue;
+            const bj = box(j);
+            if (bj[0] > bi[2] || bj[2] < bi[0] || bj[1] > bi[3] || bj[3] < bi[1]) continue;
+            const oa = o[j], ob = o[(j + 1) % n];
+            if (oa[0] === a[0] && oa[1] === a[1] && ob[0] === b[0] && ob[1] === b[1] || oa[0] === b[0] && oa[1] === b[1] && ob[0] === a[0] && ob[1] === a[1]) continue;
+            if (approxCollinear(seg, [oa, ob], 10) && isExteriorWaist(seg, [oa, ob], polys)) {
+              segA = i;
+              segB = j;
+            }
+          }
+        }
+        if (segA < 0) break;
+        const a1 = (segA + 1) % n, b0 = segB, b1 = (segB + 1) % n, a0 = segA;
+        const lc1 = [o[a1]];
+        for (let idx = a1; idx !== b0; ) {
+          idx = (idx + 1) % n;
+          lc1.push(o[idx]);
+        }
+        const lc2 = [o[b1]];
+        for (let idx = b1; idx !== a0; ) {
+          idx = (idx + 1) % n;
+          lc2.push(o[idx]);
+        }
+        polys[pi] = lc1;
+        polys.push(lc2);
+        changedAny = true;
+      }
+    }
+    return changedAny ? polys.map((p) => p.map((q) => [q[0] / 1e6, q[1] / 1e6])) : polysMm;
+  }
+  function sliverPoints(pts, opt = SLIVER) {
+    const out = [];
+    const n = pts.length;
+    if (n <= 5) return out;
+    const widthTol = Math.round(opt.widthTolerance * 1e6), sqW = widthTol * widthTol;
+    const cosTol = 2 * Math.cos(opt.angleTolerance * Math.PI / 180);
+    const minLen = Math.round(opt.minimumLength * 1e6);
+    const area3 = (p, q, r) => (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]);
+    const locallyInside = (a, b) => {
+      const prev = (n + a - 1) % n, next = (a + 1) % n;
+      if (area3(pts[prev], pts[a], pts[next]) < 0) return area3(pts[a], pts[b], pts[next]) >= 0 && area3(pts[a], pts[prev], pts[b]) >= 0;
+      return area3(pts[a], pts[b], pts[prev]) < 0 || area3(pts[a], pts[next], pts[b]) < 0;
+    };
+    let offset = 0;
+    for (let kk = 0; kk < n; kk += offset) {
+      const prior = (n + kk - 1) % n;
+      let next = (kk + 1) % n;
+      let pt2 = pts[kk];
+      const ptPrior = pts[prior];
+      let vPrior = [ptPrior[0] - pt2[0], ptPrior[1] - pt2[1]];
+      let fwd = 1;
+      offset = 1;
+      while (Math.abs(vPrior[0]) < minLen && Math.abs(vPrior[1]) < minLen && offset < n) {
+        pt2 = pts[(kk + offset++) % n];
+        vPrior = [ptPrior[0] - pt2[0], ptPrior[1] - pt2[1]];
+      }
+      if (offset >= n) break;
+      let ptAfter = pts[next];
+      let vAfter = [ptAfter[0] - pt2[0], ptAfter[1] - pt2[1]];
+      while (Math.abs(vAfter[0]) < minLen && Math.abs(vAfter[1]) < minLen && fwd < n) {
+        next = (kk + fwd++) % n;
+        ptAfter = pts[next];
+        vAfter = [ptAfter[0] - pt2[0], ptAfter[1] - pt2[1]];
+      }
+      if (vPrior[0] * vAfter[0] + vPrior[1] * vAfter[1] <= 0) continue;
+      if (!locallyInside(prior, next)) continue;
+      const vInc = [ptAfter[0] - ptPrior[0], ptAfter[1] - ptPrior[1]];
+      const arm1 = vPrior[0] ** 2 + vPrior[1] ** 2, arm2 = vAfter[0] ** 2 + vAfter[1] ** 2, opp = vInc[0] ** 2 + vInc[1] ** 2;
+      const cos = Math.abs((opp - arm1 - arm2) / (Math.sqrt(arm1) * Math.sqrt(arm2)));
+      if (cos > cosTol && 2 - cos > 11920929e-14 && opp > sqW) out.push(pt2);
+    }
+    return out;
+  }
+  function sliverMarkers(doc, conds, cc) {
+    const out = [];
+    const ctx = cc || copperCtx(doc);
+    for (const layer of doc.copper) {
+      const name = layerName(doc, layer);
+      for (const poly of layerCopperOutlines(doc, layer, conds, ctx)) for (const p of sliverPoints(poly)) {
+        const m = marker("copper_sliver", "warning", p[0] / 1e6, p[1] / 1e6, `Copper sliver (${name})`, []);
+        m.layer = layer;
+        out.push(m);
+      }
+    }
+    return out;
+  }
+  function layerName(doc, layer) {
+    const l = doc.layers && doc.layers.get(layer);
+    return l && l.userName ? l.userName : layer;
+  }
+
+  // web/tools/pcb-tools/pad-outline.ts
+  var IU = 1e6;
+  var MAX_ERROR_IU = 5e3;
+  var MIN_SEGCOUNT_FOR_CIRCLE = 8;
+  var str3 = (v) => v === void 0 || v === null ? "" : String(v);
+  var num3 = (v) => {
+    const x = Number(v);
+    return isNaN(x) ? 0 : x;
+  };
+  var rnd = (v) => Math.round(v);
+  function arcToSegmentCount(radius, errorMax, arcDeg) {
+    radius = Math.max(1, radius);
+    errorMax = Math.max(1, errorMax);
+    const rel = errorMax / radius;
+    let inc = 180 / Math.PI * Math.acos(1 - rel) * 2;
+    inc = Math.min(360 / MIN_SEGCOUNT_FOR_CIRCLE, inc);
+    return Math.max(rnd(Math.abs(arcDeg) / inc), 2);
+  }
+  var rot2 = (p, deg2) => rotator(deg2)(p[0], p[1]);
+  var resize = (v, len) => {
+    const l = Math.hypot(v[0], v[1]);
+    return l ? [rnd(v[0] * len / l), rnd(v[1] * len / l)] : [0, 0];
+  };
+  var perp = (v) => [-v[1], v[0]];
+  function reflect(a, b, p) {
+    const d = [b[0] - a[0], b[1] - a[1]];
+    const l2 = d[0] * d[0] + d[1] * d[1];
+    if (!l2) return p;
+    const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2;
+    const q = [a[0] + t * d[0], a[1] + t * d[1]];
+    return [rnd(2 * q[0] - p[0]), rnd(2 * q[1] - p[1])];
+  }
+  function circleToPolygon(c, radius, error, minSeg) {
+    let n = Math.max(minSeg, arcToSegmentCount(radius, error, 360));
+    n = Math.floor((n + 7) / 8) * 8;
+    const delta = 360 / n;
+    const out = [];
+    for (let a = delta / 2; a < 360 - 1e-9; a += delta) {
+      const p = rot2([radius, 0], a);
+      out.push([rnd(p[0]) + c[0], rnd(p[1]) + c[1]]);
+    }
+    return out;
+  }
+  function ovalToPolygon(start, end, width, error, minSeg) {
+    const radius = Math.trunc(width / 2);
+    let n = Math.max(minSeg, arcToSegmentCount(radius, error, 360));
+    n = Math.floor((n + 7) / 8) * 8;
+    const delta = 360 / n;
+    let endp = [end[0] - start[0], end[1] - start[1]], startp = start;
+    if (endp[0] < 0) {
+      endp = [start[0] - end[0], start[1] - end[1]];
+      startp = end;
+    }
+    const ang = Math.atan2(endp[1], endp[0]) * 180 / Math.PI;
+    const len = rnd(Math.hypot(endp[0], endp[1]));
+    const poly = [[len, radius]];
+    for (let a = delta / 2; a < 180 - 1e-9; a += delta) {
+      const p = rot2([0, radius], a);
+      poly.push([rnd(p[0]) + len, rnd(p[1])]);
+    }
+    poly.push([len, -radius], [0, -radius]);
+    for (let a = delta / 2; a < 180 - 1e-9; a += delta) {
+      const p = rot2([0, -radius], a);
+      poly.push([rnd(p[0]), rnd(p[1])]);
+    }
+    poly.push([0, radius]);
+    return poly.map((p) => {
+      const q = rot2(p, -ang);
+      return [rnd(q[0]) + startp[0], rnd(q[1]) + startp[1]];
+    });
+  }
+  function cornerListToPolygon(cs, error) {
+    const out = [];
+    let incoming = [cs[0].p[0] - cs[cs.length - 1].p[0], cs[0].p[1] - cs[cs.length - 1].p[1]];
+    for (let i = 0; i < cs.length; i++) {
+      const cur = cs[i], next = cs[(i + 1) % cs.length];
+      const outgoing = [next.p[0] - cur.p[0], next.p[1] - cur.p[1]];
+      if (!cur.r) out.push(cur.p);
+      else {
+        const radius = cur.r;
+        let endAngle, tan2;
+        if (incoming[0] === 0 && outgoing[1] === 0 || incoming[1] === 0 && outgoing[0] === 0) {
+          endAngle = 90;
+          tan2 = 1;
+        } else {
+          const cosNum = incoming[0] * outgoing[0] + incoming[1] * outgoing[1], cosDen = Math.hypot(incoming[0], incoming[1]) * Math.hypot(outgoing[0], outgoing[1]);
+          const a = Math.acos(cosNum / cosDen);
+          tan2 = Math.tan((Math.PI - a) / 2);
+          endAngle = a * 180 / Math.PI;
+        }
+        const numSegs = Math.max(16, arcToSegmentCount(radius, error, 360));
+        const angDelta = 360 / numSegs;
+        let lastSeg = endAngle;
+        if (lastSeg > 0) {
+          while (lastSeg > angDelta) lastSeg -= angDelta;
+        } else {
+          while (lastSeg < -angDelta) lastSeg += angDelta;
+        }
+        let angPos = Math.abs(lastSeg) < 1e-12 ? angDelta : (angDelta + lastSeg) / 2;
+        const dist = tan2 > 0 ? radius / tan2 : 0;
+        const r1 = resize(incoming, dist);
+        const arcStart = [cur.p[0] - r1[0], cur.p[1] - r1[1]];
+        const r2 = resize(perp(incoming), radius);
+        const center = [arcStart[0] + r2[0], arcStart[1] + r2[1]];
+        const arcEnd = reflect(cur.p, center, arcStart);
+        const origin = [arcStart[0] - center[0], arcStart[1] - center[1]];
+        out.push(arcStart);
+        for (; angPos < endAngle - 1e-9; angPos += angDelta) {
+          const q = rot2(origin, -angPos);
+          out.push([rnd(q[0]) + center[0], rnd(q[1]) + center[1]]);
+        }
+        out.push(arcEnd);
+      }
+      incoming = outgoing;
+    }
+    return out;
+  }
+  function removeDuplicates(cs) {
+    let prev = cs[0].p;
+    for (let i = cs.length - 1; i >= 0; i--) {
+      if (cs[i].p[0] === prev[0] && cs[i].p[1] === prev[1]) cs.splice(i, 1);
+      else prev = cs[i].p;
+    }
+  }
+  function trapezoidToPolygon(size, ddx, ddy, error) {
+    const s = [Math.trunc(size[0] / 2), Math.trunc(size[1] / 2)];
+    const cs = [{ p: [-s[0] + ddy, -s[1] - ddx], r: 0 }, { p: [s[0] - ddy, -s[1] + ddx], r: 0 }, { p: [s[0] + ddy, s[1] - ddx], r: 0 }, { p: [-s[0] - ddy, s[1] + ddx], r: 0 }];
+    if (Math.abs(ddy) === Math.abs(s[0]) || Math.abs(ddx) === Math.abs(s[1])) removeDuplicates(cs);
+    return cornerListToPolygon(cs, error);
+  }
+  var CHAMFER_BITS = { top_left: 1, top_right: 2, bottom_left: 4, bottom_right: 8 };
+  function roundChamferedRectToPolygon(size, radius, chamferRatio, chamferCorners, error) {
+    const s = [Math.trunc(size[0] / 2), Math.trunc(size[1] / 2)];
+    const cs = [{ p: [-s[0], -s[1]], r: radius }, { p: [s[0], -s[1]], r: radius }, { p: [s[0], s[1]], r: radius }, { p: [-s[0], s[1]], r: radius }];
+    if (chamferCorners) {
+      const shorter = Math.min(size[0], size[1]);
+      const chamfer = Math.max(0, rnd(chamferRatio * shorter));
+      const chamId = [CHAMFER_BITS.top_left, CHAMFER_BITS.top_right, CHAMFER_BITS.bottom_right, CHAMFER_BITS.bottom_left];
+      const sign = [0, 1, -1, 0, 0, -1, 1, 0];
+      for (let cc = 0, pos = 0; cc < 4; cc++, pos++) {
+        if (!(chamferCorners & chamId[cc])) continue;
+        cs[pos].r = 0;
+        if (chamfer === 0) continue;
+        cs.splice(pos + 1, 0, { p: [cs[pos].p[0], cs[pos].p[1]], r: 0 });
+        cs[pos].p = [cs[pos].p[0] + sign[2 * cc & 7] * chamfer, cs[pos].p[1] + sign[2 * cc - 2 & 7] * chamfer];
+        cs[pos + 1].p = [cs[pos + 1].p[0] + sign[2 * cc + 1 & 7] * chamfer, cs[pos + 1].p[1] + sign[2 * cc - 1 & 7] * chamfer];
+        pos++;
+      }
+      let cnt = 0;
+      for (const b of chamId) if (chamferCorners & b) cnt++;
+      if (cnt > 1 && 2 * chamfer >= shorter) removeDuplicates(cs);
+    }
+    return cornerListToPolygon(cs, error);
+  }
+  function padShapePolygon(pad, shapePos2, maxError = MAX_ERROR_IU) {
+    const at = K.kid(pad, "at") || [];
+    const orient = num3(at[3]);
+    const sz = K.kid(pad, "size");
+    const w = rnd(num3(sz && sz[1]) * IU), h = rnd(num3(sz && sz[2]) * IU);
+    const shape = str3(pad[3]);
+    const minSeg = 16;
+    let local;
+    const dx = Math.trunc(w / 2), dy = Math.trunc(h / 2);
+    if (shape === "circle" || shape === "oval") {
+      if (dx === dy || shape === "circle") local = circleToPolygon([0, 0], dx, maxError, minSeg);
+      else {
+        const half = Math.min(dx, dy);
+        const d = rot2([dx - half, dy - half], orient);
+        const dd = [rnd(d[0]), rnd(d[1])];
+        const pts = ovalToPolygon([-dd[0], -dd[1]], dd, half * 2, maxError, minSeg);
+        return pts.map((p) => [r6mm(p[0]) + shapePos2[0], r6mm(p[1]) + shapePos2[1]]);
+      }
+    } else if (shape === "rect" || shape === "trapezoid") {
+      const d = shape === "trapezoid" ? K.kid(pad, "rect_delta") : null;
+      const ddx = d ? Math.trunc(rnd(num3(d[1]) * IU) / 2) : 0, ddy = d ? Math.trunc(rnd(num3(d[2]) * IU) / 2) : 0;
+      local = trapezoidToPolygon([w, h], ddx, ddy, maxError);
+    } else {
+      const rr = K.kid(pad, "roundrect_rratio");
+      const radius = rr ? rnd(num3(rr[1]) * Math.min(w, h)) : 0;
+      const ch = K.kid(pad, "chamfer");
+      let bits = 0;
+      for (const c of ch ? ch.slice(1) : []) bits |= CHAMFER_BITS[str3(c)] || 0;
+      const cr = K.kid(pad, "chamfer_ratio");
+      const ratio = cr ? num3(cr[1]) : 0.2;
+      local = roundChamferedRectToPolygon([w, h], shape === "roundrect" ? radius : 0, bits ? ratio : 0, bits, maxError);
+    }
+    return local.map((p) => {
+      const q = rot2(p, orient);
+      return [r6mm(rnd(q[0])) + shapePos2[0], r6mm(rnd(q[1])) + shapePos2[1]];
+    });
+  }
+  var r6mm = (iu2) => +(iu2 / IU).toFixed(6);
+
+  // web/tools/pcb-tools/drc-rules.ts
+  function resolve(rules, type, doc, s, A, B, implicitMin, implicitName = "board setup constraints") {
+    const h = rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
+    if (h) return h.severity === "ignore" ? null : { min: h.min, max: h.max, name: h.name, severity: h.severity || null };
+    return implicitMin != null && implicitMin > 0 ? { min: implicitMin, max: null, name: implicitName, severity: null } : null;
+  }
+  function fails(c, actual, eps = 1e-6) {
+    if (!c) return null;
+    if (c.min != null && c.min > 0 && actual < c.min - eps) return { kind: "min", v: c.min };
+    if (c.max != null && actual > c.max + eps) return { kind: "max", v: c.max };
+    return null;
+  }
+  var sev = (c) => c.severity === "warning" || c.severity === "error" ? c.severity : "error";
+  var deg = (v) => v.toFixed(1) + "\xB0";
+  function sizeMarkers(doc, s, rules, conds) {
+    const out = [];
+    for (const c of conds) {
+      if (c.kind === "segment" || c.kind === "arc") {
+        const [a, b] = c.anchors;
+        const layer = layerOf(c.item.node);
+        const A = { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape };
+        const r = resolve(rules, "track_width", doc, s, A, null, s.minTrackWidth || 0);
+        const f = fails(r, c.width);
+        if (r && f) out.push(marker("track_width", sev(r), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (${r.name} ${f.kind} width ${mm4(f.v)}; actual ${mm4(c.width)})`, [c.id]));
+        if (c.kind === "segment" && rules.length) {
+          const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          const rl = resolve(rules, "track_segment_length", doc, s, A, null, null);
+          const fl = fails(rl, L);
+          if (rl && fl) out.push(marker("track_segment_length", sev(rl), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track segment length (${rl.name} ${fl.kind} length ${mm4(fl.v)}; actual ${mm4(L)})`, [c.id]));
+        }
+      } else if (c.kind === "via") {
+        const [a] = c.anchors;
+        const A = { kind: "via", node: c.item.node, item: c.item, layer: null, shape: c.shape };
+        if (c.drill >= c.size - 1e-6) {
+          out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
+          continue;
+        }
+        const rd = resolve(rules, "via_diameter", doc, s, A, null, s.minViaDiameter || 0);
+        const fd = fails(rd, c.size);
+        if (rd && fd) out.push(marker("via_diameter", sev(rd), a[0], a[1], `Via diameter (${rd.name} ${fd.kind} diameter ${mm4(fd.v)}; actual ${mm4(c.size)})`, [c.id]));
+        const micro = viaTypeOf(c.item.node) === "micro";
+        const rh = resolve(rules, "hole_size", doc, s, A, null, micro ? s.minMicroViaDrill || 0 : s.minThroughDrill || 0, micro ? "board setup constraints micro-via" : "board setup constraints");
+        const fh = fails(rh, c.drill);
+        if (rh && fh) out.push(marker(micro ? "microvia_drill_out_of_range" : "drill_out_of_range", sev(rh), a[0], a[1], `${micro ? "Micro via hole size out of range" : "Hole size out of range"} (${rh.name} ${fh.kind} hole ${mm4(fh.v)}; actual ${mm4(c.drill)})`, [c.id]));
+        const ann = (c.size - c.drill) / 2;
+        const ra = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
+        const fa = fails(ra, ann);
+        if (ra && fa) out.push(marker("annular_width", sev(ra), a[0], a[1], `Annular width (${ra.name} ${fa.kind} annular width ${mm4(fa.v)}; actual ${mm4(ann)})`, [c.id]));
+      }
+    }
+    out.push(...padAnnularMarkers(doc, s, rules));
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue;
+      for (const p of padsOf(it)) {
+        const d = K.kid(p.node, "drill");
+        if (!d) continue;
+        const oval = K.str(d[1]) === "oval";
+        const w = oval ? K.num(d[2]) : K.num(d[1]);
+        const h = oval ? K.num(d[3], w) : w;
+        const minor = Math.min(w, h), major = Math.max(w, h);
+        if (!(minor > 0)) continue;
+        const A = { kind: "pad", node: p.node, parent: it, layer: null };
+        const r = resolve(rules, "hole_size", doc, s, A, null, s.minThroughDrill || 0);
+        if (!r) continue;
+        const f = r.min != null && r.min > 0 && minor < r.min - 1e-6 ? { kind: "min", v: r.min, actual: minor } : r.max != null && major > r.max + 1e-6 ? { kind: "max", v: r.max, actual: major } : null;
+        if (f) out.push(marker("drill_out_of_range", sev(r), p.x, p.y, `Hole size out of range (${r.name} ${f.kind} hole ${mm4(f.v)}; actual ${mm4(f.actual)})`, [it.id]));
+      }
+    }
+    return out;
+  }
+  function builtinOutline(q) {
+    if (q.shape === "custom") return null;
+    const [ox, oy] = rotator(q.rot)(q.off[0], q.off[1]);
+    return [padShapePolygon(q.node, [q.x + ox, q.y + oy])];
+  }
+  function holeSlot(q) {
+    const d = K.kid(q.node, "drill");
+    if (!d) return null;
+    const oval = K.str(d[1]) === "oval";
+    const dx = oval ? K.num(d[2]) : K.num(d[1]), dy = oval ? K.num(d[3], dx) : dx;
+    if (!(Math.min(dx, dy) > 0)) return null;
+    const half = Math.abs(dx - dy) / 2, [hx, hy] = dx >= dy ? rotator(q.rot)(half, 0) : rotator(q.rot)(0, half);
+    return { a: [q.x - hx, q.y - hy], b: [q.x + hx, q.y + hy], r: Math.min(dx, dy) / 2 };
+  }
+  function bboxOfPolys(polys) {
+    let b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const p of polys) for (const q of p) b = [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.max(b[2], q[2]), Math.max(b[3], q[3])];
+    return b;
+  }
+  var boxHit = (a, b) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+  var boxIn = (outer, inner) => outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3];
+  function segSegDist2(a, b, c, d) {
+    const cross2 = (o, p, q) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+    const d1 = cross2(c, d, a), d2 = cross2(c, d, b), d3 = cross2(a, b, c), d4 = cross2(a, b, d);
+    if ((d1 > 0 && d2 < 0 || d1 < 0 && d2 > 0) && (d3 > 0 && d4 < 0 || d3 < 0 && d4 > 0)) return 0;
+    return Math.min(dPS(a, c, d), dPS(b, c, d), dPS(c, a, b), dPS(d, a, b));
+  }
+  function slotToOutline(polys, slot) {
+    let d = Infinity;
+    for (const p of polys) for (let i = 0, j = p.length - 1; i < p.length; j = i++) d = Math.min(d, segSegDist2(slot.a, slot.b, p[j], p[i]));
+    return !isFinite(d) || d === 0 ? 0 : Math.abs(d - slot.r);
+  }
+  function padAnnulus(p, sameNum = [], c = { min: 1, max: null }, custom) {
+    const d = K.kid(p.node, "drill");
+    if (!d) return null;
+    const oval = K.str(d[1]) === "oval";
+    const dx = oval ? K.num(d[2]) : K.num(d[1]), dy = oval ? K.num(d[3], dx) : dx;
+    const cr = K.kid(p.node, "chamfer_ratio"), chamfered = !!K.kid(p.node, "chamfer") && !!cr;
+    const offset = Math.abs(p.off[0]) > 1e-9 || Math.abs(p.off[1]) > 1e-9;
+    const handled = !offset && (["circle", "oval", "rect", "roundrect"].includes(p.shape) && (!chamfered || K.num(cr[1]) <= 0.3));
+    const fast = offset ? null : Math.abs(Math.min((p.w - dx) / 2, (p.h - dy) / 2));
+    const outline = (q) => builtinOutline(q) || (custom ? custom(q) : null);
+    const mine = outline(p);
+    if (!mine) return handled ? fast : null;
+    const box = bboxOfPolys(mine);
+    const overlapping = sameNum.filter((q) => {
+      const o = outline(q);
+      return !!o && boxHit(bboxOfPolys(o), box);
+    });
+    let covers = false, holeCuts = false;
+    for (const q of overlapping) {
+      if (boxIn(bboxOfPolys(outline(q)), box)) covers = true;
+      const h = holeSlot(q);
+      if (h) {
+        const hb = [Math.min(h.a[0], h.b[0]) - h.r, Math.min(h.a[1], h.b[1]) - h.r, Math.max(h.a[0], h.b[0]) + h.r, Math.max(h.a[1], h.b[1]) + h.r];
+        if (boxHit(hb, box)) holeCuts = true;
+      }
+    }
+    const hasMin = !!c && c.min != null && c.min > 0, hasMax = !!c && c.max != null;
+    if (handled && overlapping.length && !holeCuts && !covers && hasMin && !hasMax) {
+      if (p.shape === "circle") return fast;
+      if (fast >= c.min - 1e-9) return fast;
+    }
+    if (handled && !overlapping.length) return fast;
+    const slot = holeSlot(p);
+    if (!slot) return fast;
+    if (!sameNum.length) return pointInPoly(mine[0], p.x, p.y) || mine.some((q) => pointInPoly(q, p.x, p.y)) ? slotToOutline(mine, slot) : 0;
+    if (!hasMin) return fast;
+    let agg = mine.slice();
+    const holes = [];
+    for (const q of sameNum) {
+      const o = outline(q);
+      if (o) agg.push(...o);
+      const h = holeSlot(q);
+      if (h) holes.push(stadiumPts(h.a, h.b, h.r));
+    }
+    agg = subtract(union2(agg), holes);
+    if (!agg.some((q) => clipperArea(q) > 0 && pointInPoly(q, p.x, p.y)) || agg.some((q) => clipperArea(q) < 0 && pointInPoly(q, p.x, p.y))) return 0;
+    return slotToOutline(agg, slot);
+  }
+  function stadiumPts(a, b, r) {
+    return stadium(a[0], a[1], b[0], b[1], 2 * r);
+  }
+  function padAnnularMarkers(doc, s, rules) {
+    const out = [];
+    if (!((s.minViaAnnular || 0) > 0) && !rules.some((r) => r.constraints.some((c) => c.type === "annular_width"))) return out;
+    let cc = null;
+    const custom = (q) => {
+      const fp = (cc = cc || copperCtx(doc)).pads.get(q.node);
+      if (!fp) return null;
+      const prims = [];
+      padPrims(fp, "F.Cu", cc.m, prims);
+      const polys = union2(prims.flatMap(primPolys));
+      return polys.length ? polys : null;
+    };
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue;
+      const pads = padsOf(it);
+      for (const p of pads) {
+        if (p.type !== "thru_hole" || !K.kid(p.node, "drill")) continue;
+        const sameNum = p.number ? pads.filter((q) => q !== p && q.number === p.number) : [];
+        const A = { kind: "pad", node: p.node, parent: it, layer: "F.Cu" };
+        const r = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
+        if (!r) continue;
+        const w = padAnnulus(p, sameNum, r, custom);
+        if (w == null) continue;
+        const f = fails(r, w);
+        if (!f) continue;
+        out.push(marker("annular_width", sev(r), p.x, p.y, `Annular width (${r.name} ${f.kind} annular width ${mm4(f.v)}; actual ${mm4(w)})`, [it.id]));
+      }
+    }
+    return out;
+  }
+  function segIntersect(a0, a1, b0, b1) {
+    const e = 1e-9;
+    if (Math.max(a0[0], a1[0]) < Math.min(b0[0], b1[0]) - e || Math.max(b0[0], b1[0]) < Math.min(a0[0], a1[0]) - e || Math.max(a0[1], a1[1]) < Math.min(b0[1], b1[1]) - e || Math.max(b0[1], b1[1]) < Math.min(a0[1], a1[1]) - e) return null;
+    const d1 = [a1[0] - a0[0], a1[1] - a0[1]], d2 = [b1[0] - b0[0], b1[1] - b0[1]], off = [b0[0] - a0[0], b0[1] - a0[1]];
+    const det = d2[0] * d1[1] - d2[1] * d1[0];
+    if (Math.abs(det) < 1e-12) {
+      if (Math.abs(d1[0] * off[1] - d1[1] * off[0]) > 1e-9) return null;
+      const ax = Math.abs(d1[0]) >= Math.abs(d1[1]) ? 0 : 1, o = 1 - ax;
+      const s1 = [Math.min(a0[ax], a1[ax]), Math.max(a0[ax], a1[ax])], s2 = [Math.min(b0[ax], b1[ax]), Math.max(b0[ax], b1[ax])];
+      if (s1[1] < s2[0] - e || s2[1] < s1[0] - e) return null;
+      const proj = (Math.max(s1[0], s2[0]) + Math.min(s1[1], s2[1])) / 2;
+      const other = a1[ax] !== a0[ax] ? a0[o] + (proj - a0[ax]) * (a1[o] - a0[o]) / (a1[ax] - a0[ax]) : a0[o];
+      const r = [0, 0];
+      r[ax] = proj;
+      r[o] = other;
+      return r;
+    }
+    const t = (d2[0] * off[1] - d2[1] * off[0]) / det, u = (d1[0] * off[1] - d1[1] * off[0]) / det;
+    if (t < -e || t > 1 + e || u < -e || u > 1 + e) return null;
+    return [a0[0] + t * d1[0], a0[1] + t * d1[1]];
+  }
+  function trackAngleMarkers(doc, s, rules, conds) {
+    const out = [];
+    if (!rules.some((r) => r.constraints.some((c) => c.type === "track_angle"))) return out;
+    const segs = conds.filter((c) => c.kind === "segment");
+    const pads = conds.filter((c) => c.kind === "pad");
+    const same = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
+    const touches = (a, b) => a.anchors.some((p) => dPS(p, b.anchors[0], b.anchors[1]) <= b.width / 2 + 1e-9);
+    for (const a of segs) {
+      const la = layerOf(a.item.node);
+      for (const b of segs) {
+        if (a === b || a.id === b.id || a.net && b.net && a.net !== b.net || la !== layerOf(b.item.node)) continue;
+        if (!touches(a, b) && !touches(b, a)) continue;
+        const [a0, a1] = a.anchors, [b0, b1] = b.anchors;
+        const p0 = segIntersect(a0, a1, b0, b1);
+        if (!p0) continue;
+        if (pads.some((c) => c.layers.has(la) && shapeGap(c.shape, { t: "circle", x: p0[0], y: p0[1], r: 0 }) <= 0)) continue;
+        const r = resolve(rules, "track_angle", doc, s, { kind: "segment", node: a.item.node, item: a.item, layer: la }, { kind: "segment", node: b.item.node, item: b.item, layer: la }, null);
+        if (!r) continue;
+        const unit2 = (u, v2) => {
+          const d = [v2[0] - u[0], v2[1] - u[1]];
+          const l = Math.hypot(d[0], d[1]) || 1;
+          return [d[0] / l, d[1] / l];
+        };
+        let da = unit2(a0, a1), db = unit2(b0, b1), below90 = false;
+        if (same(a1, p0)) da = [-da[0], -da[1]];
+        else if (!same(a0, p0)) below90 = true;
+        if (same(b1, p0)) db = [-db[0], -db[1]];
+        else if (!same(b0, p0)) below90 = true;
+        let actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
+        if (below90 && actual > 90) actual -= 90;
+        const fmin = r.min != null && actual < r.min, fmax = r.max != null && actual > r.max;
+        if (!fmin && !fmax) continue;
+        const v = fmax ? r.max : r.min;
+        out.push(marker("track_angle", sev(r), p0[0], p0[1], `Track angle (${r.name} ${fmin ? "min" : "max"} angle ${deg(v)}; actual ${deg(actual)})`, [a.id, b.id]));
+      }
+    }
+    return out;
+  }
+  function disallowKinds(kind, node) {
+    if (kind === "segment" || kind === "arc") return ["track"];
+    if (kind === "via") {
+      const t = viaTypeOf(node);
+      return ["via", t === "micro" ? "micro_via" : t === "blind" ? "blind_via" : t === "buried" ? "buried_via" : "through_via"];
+    }
+    if (kind === "pad") return ["pad"];
+    if (kind === "zone") return ["zone"];
+    if (kind === "footprint") return ["footprint"];
+    if (/^(gr|fp)_text/.test(kind) || kind === "text" || kind === "property") return ["text"];
+    if (/^(gr|fp)_(line|rect|circle|arc|poly|curve)$/.test(kind)) return ["graphic"];
+    return [];
+  }
+  function ruleItems(doc) {
+    const out = [];
+    for (const it of doc.items.values()) {
+      if (it.kind === "group" || it.kind === "generated") continue;
+      out.push({ kind: it.kind, node: it.node, item: it, layer: null });
+      if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) out.push({ kind: "pad", node: p, parent: it, layer: null });
+    }
+    return out;
+  }
+  var anchorOf2 = (it) => {
+    if (it.kind === "pad" && it.parent) {
+      const p2 = padsOf(it.parent).find((q) => q.node === it.node);
+      if (p2) return [p2.x, p2.y];
+    }
+    const p = pt(it.node, "at") || pt(it.node, "start") || pt(it.node, "center");
+    if (p) return p;
+    const poly = K.kid(it.node, "polygon");
+    const pts = poly ? K.ptsOf(poly) : [];
+    if (pts.length) return pts[0];
+    const b = it.item && it.item.bbox;
+    return b ? [b[0], b[1]] : [0, 0];
+  };
+  var idOf = (it) => it.parent ? it.parent.id : it.item ? it.item.id : "";
+  function disallowMarkers(doc, s, rules, items) {
+    const out = [];
+    const dr = rules.filter((r) => !r.error && r.constraints.some((c) => c.type === "disallow"));
+    if (!dr.length) return out;
+    for (const it of items || ruleItems(doc)) {
+      const kinds = disallowKinds(it.kind, it.node);
+      if (!kinds.length) continue;
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "disallow");
+        if (!c || !ruleMatches(r, doc, s, it, null)) continue;
+        if (r.severity === "ignore") break;
+        const flags = c.options || [];
+        if (!flags.some((f) => kinds.includes(f) || f === "hole" && (it.kind === "via" || it.kind === "pad" && !!K.kid(it.node, "drill")))) break;
+        const p = anchorOf2(it);
+        out.push(marker("items_not_allowed", r.severity === "warning" ? "warning" : "error", p[0], p[1], `Items not allowed (rule '${r.name}')`, [idOf(it)]));
+        break;
+      }
+    }
+    return out;
+  }
+  function assertionMarkers(doc, s, rules, items) {
+    const out = [];
+    const ar = rules.filter((r) => !r.error && r.constraints.some((c) => c.type === "assertion"));
+    if (!ar.length) return out;
+    for (const it of items || ruleItems(doc)) {
+      for (const r of ar) {
+        if (r.severity === "ignore" || !ruleMatches(r, doc, s, it, null)) continue;
+        for (const c of r.constraints) {
+          if (c.type !== "assertion") continue;
+          const ok = evalAssertion(r, c, doc, s, it);
+          if (ok !== false) continue;
+          const p = anchorOf2(it);
+          out.push(marker("assertion_failure", r.severity === "warning" ? "warning" : "error", p[0], p[1], `Assertion failure (rule '${r.name}')`, [idOf(it)]));
+        }
+      }
+    }
+    return out;
+  }
+
+  // web/tools/pcb-tools/drc-connwidth.ts
+  var DRC_EPSILON = 5e-4;
+  var EXTRA_CLEARANCE = 5e-4;
+  var MAX_ERROR2 = 5e-3;
+  var PolygonTest = class {
+    constructor(limit) {
+      this.limit = limit;
+      this.vertices = [];
+      this.hits = [];
+      this.hitKeys = /* @__PURE__ */ new Set();
+      this.bbox = [0, 0, 0, 0];
+    }
+    zOrder(x, y) {
+      const [bx, by, bw, bh] = this.bbox;
+      const lx = Math.min(Math.max((x - bx) / bw, 0), 1), ly = Math.min(Math.max((y - by) / bh, 0), 1);
+      let X = Math.trunc((isFinite(lx) ? lx : 0) * 32767), Y = Math.trunc((isFinite(ly) ? ly : 0) * 32767);
+      X = (X | X << 8) & 16711935;
+      X = (X | X << 4) & 252645135;
+      X = (X | X << 2) & 858993459;
+      X = (X | X << 1) & 1431655765;
+      Y = (Y | Y << 8) & 16711935;
+      Y = (Y | Y << 4) & 252645135;
+      Y = (Y | Y << 2) & 858993459;
+      Y = (Y | Y << 1) & 1431655765;
+      return (X | Y << 1) >>> 0;
+    }
+    area(p, q, r) {
+      return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+    }
+    same(a, b) {
+      return !!a && !!b && a.x === b.x && a.y === b.y;
+    }
+    insert(i, x, y, last) {
+      const p = { i, x, y, z: 0, prevZ: null, nextZ: null };
+      this.vertices.push(p);
+      if (!last) {
+        p.prev = p;
+        p.next = p;
+      } else {
+        p.next = last.next;
+        p.prev = last;
+        last.next.prev = p;
+        last.next = p;
+      }
+      return p;
+    }
+    remove(p) {
+      p.next.prev = p.prev;
+      p.prev.next = p.next;
+      if (p.prevZ) p.prevZ.nextZ = p.nextZ;
+      if (p.nextZ) p.nextZ.prevZ = p.prevZ;
+      p.dead = true;
+      p.prevZ = p.nextZ = null;
+    }
+    createList(pts) {
+      let tail = null;
+      let sum = 0;
+      const n = pts.length;
+      for (let i = 0; i < n; i++) {
+        const p1 = pts[i], p2 = pts[(i + 1) % n];
+        sum += (p2[0] - p1[0]) * (p2[1] + p1[1]);
+      }
+      let last = null;
+      const add = (i) => {
+        const pt2 = pts[i];
+        if (!last || (pt2[0] - last[0]) ** 2 + (pt2[1] - last[1]) ** 2 > 0) {
+          tail = this.insert(i, pt2[0], pt2[1], tail);
+          last = pt2;
+        }
+      };
+      if (sum > 0) for (let i = n - 1; i >= 0; i--) add(i);
+      else for (let i = 0; i < n; i++) add(i);
+      const t = tail;
+      if (t && t.x === t.next.x && t.y === t.next.y) this.remove(t.next);
+      return t;
+    }
+    updateList(head) {
+      let p = head.next;
+      while (p !== head) {
+        if (p.x === p.next.x && p.y === p.next.y) {
+          p = p.prev;
+          this.remove(p.next);
+          if (p === p.next) break;
+        }
+        if (!p.z) p.z = this.zOrder(p.x, p.y);
+        p = p.next;
+      }
+      if (!head.z) head.z = this.zOrder(head.x, head.y);
+      const q = [head];
+      for (let r = head.next; r && r !== head; r = r.next) q.push(r);
+      q.sort((a, b) => a.z - b.z || a.x - b.x || a.y - b.y || a.i - b.i);
+      let prev = null;
+      for (const e of q) {
+        if (prev) {
+          prev.nextZ = e;
+          e.prevZ = prev;
+        } else e.prevZ = null;
+        prev = e;
+      }
+      if (prev) prev.nextZ = null;
+    }
+    nextOutline(a) {
+      const nz = a.nextZ, pz = a.prevZ;
+      if (nz && this.same(a, nz) && this.same(a.next, nz.prev) && a.y === a.next.y) return nz.next;
+      if (pz && this.same(a, pz) && this.same(a.next, pz.prev) && a.y === a.next.y) return pz.next;
+      return a.next;
+    }
+    prevOutline(a) {
+      const nz = a.nextZ, pz = a.prevZ;
+      if (nz && this.same(a, nz) && a.y === a.prev.y) return nz.prev;
+      if (pz && this.same(a, pz) && a.y === a.prev.y) return pz.prev;
+      return a.prev;
+    }
+    locallyInside(a, b) {
+      const an = this.nextOutline(a), ap = this.prevOutline(a);
+      if (this.area(ap, a, an) < 0) return this.area(a, b, an) >= 0 && this.area(a, ap, b) >= 0;
+      return this.area(a, b, ap) < 0 || this.area(a, an, b) < 0;
+    }
+    isSubstantial(A, B) {
+      let xc = false, yc = false, checked = 0;
+      const total = this.vertices.length;
+      const p0 = A;
+      let p = this.nextOutline(p0);
+      while (!this.same(p, B) && !this.same(p, A) && checked < total && !(xc && yc)) {
+        if (Math.abs(p.x - p0.x) > this.limit) xc = true;
+        if (Math.abs(p.y - p0.y) > this.limit) yc = true;
+        p = this.nextOutline(p);
+        ++checked;
+      }
+      if (checked >= total) return false;
+      if (!this.same(p, A) && (!xc || !yc)) return false;
+      p = this.prevOutline(p0);
+      xc = false;
+      yc = false;
+      checked = 0;
+      while (!this.same(p, B) && !this.same(p, A) && checked < total && !(xc && yc)) {
+        if (Math.abs(p.x - p0.x) > this.limit) xc = true;
+        if (Math.abs(p.y - p0.y) > this.limit) yc = true;
+        p = this.prevOutline(p);
+        ++checked;
+      }
+      if (checked >= total) return false;
+      return this.same(p, A) || xc && yc;
+    }
+    getKink(a) {
+      if (this.locallyInside(a.prev, a.next)) return null;
+      const maxZ = this.zOrder(a.x + this.limit, a.y + this.limit), minZ = this.zOrder(a.x - this.limit, a.y - this.limit);
+      const limit2 = this.limit * this.limit;
+      let best = Infinity, ret = null;
+      const test = (p) => {
+        const di = Math.abs(p.i - a.i);
+        const d2 = (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
+        if (di > 1 && d2 < limit2 && d2 < best && d2 > 0 && this.locallyInside(p, a) && this.isSubstantial(p, a) && this.isSubstantial(a, p)) {
+          best = d2;
+          ret = p;
+        }
+      };
+      for (let p = a.nextZ; p && p.z <= maxZ; p = p.nextZ) test(p);
+      for (let p = a.prevZ; p && p.z >= minZ; p = p.prevZ) test(p);
+      return ret;
+    }
+    /** FindPairs: the vertex index pairs of the necks of one outline. */
+    findPairs(pts) {
+      this.hits = [];
+      this.hitKeys.clear();
+      this.vertices = [];
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of pts) {
+        x0 = Math.min(x0, p[0]);
+        y0 = Math.min(y0, p[1]);
+        x1 = Math.max(x1, p[0]);
+        y1 = Math.max(y1, p[1]);
+      }
+      this.bbox = [x0, y0, x1 - x0, y1 - y0];
+      this.createList(pts);
+      if (!this.vertices.length) return [];
+      const front = this.vertices[0];
+      this.updateList(front);
+      const all = /* @__PURE__ */ new Set();
+      for (let p = front.next; p !== front; p = p.next) {
+        let m = null;
+        if ((all.size === 0 || !all.has(p)) && (m = this.getKink(p)) !== null) {
+          const key = p.i + "," + m.i;
+          if (!all.has(m) && !this.hitKeys.has(key)) {
+            this.hitKeys.add(key);
+            this.hits.push([p.i, m.i]);
+            for (const v of [p, m, p.next, p.prev, m.next, m.prev]) all.add(v);
+          }
+        }
+      }
+      return this.hits.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    }
+  };
+  function connectionWidths(s, rules) {
+    const set = /* @__PURE__ */ new Set([Number(s.minConn) || 0]);
+    for (const r of rules) for (const c of r.constraints) if (c.type === "connection_width" && c.min != null) set.add(c.min);
+    return [...set].sort((a, b) => a - b);
+  }
+  function connectionWidthMarkers(doc, s, rules, conductors2, cc) {
+    const out = [];
+    const eps = 2 * (DRC_EPSILON + MAX_ERROR2 + EXTRA_CLEARANCE);
+    const widths = connectionWidths(s, rules).filter((w) => w - eps > 0);
+    if (!widths.length) return out;
+    const ctx = cc || copperCtx(doc);
+    const ruleItem2 = (c, layer) => c.kind === "pad" ? { kind: c.kind, node: c.pad.node, parent: c.item, layer, shape: c.shape } : { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape };
+    for (const layer of doc.copper) {
+      const onLayer3 = conductors2.filter((c) => c.layers.has(layer));
+      const ordered = [...onLayer3.filter((c) => c.kind !== "zone"), ...onLayer3.filter((c) => c.kind === "zone")];
+      for (const merged of netCopper(layer, conductors2, ctx, true).values()) {
+        const polys = fracture(merged).map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)]));
+        for (const minW of widths) {
+          const test = new PolygonTest(Math.round((minW - eps) * 1e6));
+          for (const chain of polys) for (const [ia, ib] of test.findPairs(chain)) {
+            const A = chain[ia], B = chain[ib];
+            const loc = [Math.trunc((A[0] + B[0]) / 2) / 1e6, Math.trunc((A[1] + B[1]) / 2) / 1e6];
+            const dist = Math.round(Math.hypot(A[0] - B[0], A[1] - B[1])) / 1e6;
+            const at = { t: "circle", x: loc[0], y: loc[1], r: 0 };
+            const hit = ordered.filter((c) => shapeGap(c.shape, at) <= minW);
+            if (!hit.length) continue;
+            const r = resolve(rules, "connection_width", doc, s, ruleItem2(hit[0], layer), hit[1] ? ruleItem2(hit[1], layer) : null, Number(s.minConn) || 0);
+            if (!r || r.min == null || Math.abs(r.min - minW) > 1e-9) continue;
+            const m = marker(
+              "connection_width",
+              r.severity === "warning" || r.severity === "error" ? r.severity : "warning",
+              loc[0],
+              loc[1],
+              `Copper connection too narrow (${r.name} minimum connection width ${mm4(r.min)}; actual ${mm4(dist)}) (${layerName(doc, layer)})`,
+              Array.from(new Set(hit.map((c) => c.id)))
+            );
+            m.layer = layer;
+            m.rule = r.name;
+            out.push(m);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // web/tools/pcb-tools/drc-more.ts
+  var MORE_DEFAULTS = { minHoleToHole: 0.25, minHoleClearance: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
+  var defaultSeverity2 = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
+  var ident = (x, y) => [x, y];
+  function fpTf(fp) {
+    const [fx, fy, frot] = K.atOf(fp.node);
+    const R = rotator(frot);
+    return (x, y) => {
+      const [dx, dy] = R(x, y);
+      return [fx + dx, fy + dy];
+    };
+  }
+  var kindOf = (n) => String(n[0]);
+  function padHole(fp, p) {
+    if (p.type !== "thru_hole" && p.type !== "np_thru_hole") return null;
+    const d = K.kid(p.node, "drill");
+    if (!d) return null;
+    let w, h;
+    if (K.str(d[1]) === "oval") {
+      w = K.num(d[2], 0);
+      h = K.num(d[3], w);
+    } else {
+      w = h = K.num(d[1], 0);
+    }
+    if (!(w > 0) || !(h > 0)) return null;
+    const half = Math.abs(w - h) / 2;
+    const [dx, dy] = rotator(p.rot)(w >= h ? half : 0, w >= h ? 0 : half);
+    return { id: fp.id, kind: "pad", a: [p.x - dx, p.y - dy], b: [p.x + dx, p.y + dy], w: Math.min(w, h), layers: null, micro: false, pad: p, fp, uuid: K.uuidOf(p.node) || fp.id + ":" + p.index };
+  }
+  function viaHole(it) {
+    const a = pt(it.node, "at");
+    if (!a) return null;
+    const d = K.kid(it.node, "drill");
+    const w = d ? K.num(d[1], 0) : 0;
+    if (!(w > 0)) return null;
+    const ls = K.kid(it.node, "layers");
+    const pair = ls ? [K.str(ls[1]), K.str(ls[2])] : ["F.Cu", "B.Cu"];
+    const typed = it.node.includes("blind") || it.node.includes("micro") || it.node.includes("buried");
+    return { id: it.id, kind: "via", a, b: a, w, layers: typed ? new Set(pair) : null, micro: it.node.includes("micro"), uuid: it.id };
+  }
+  var holeShape = (h) => ({ t: "seg", a: h.a, b: h.b, r: h.w / 2 });
+  var holeCentre = (h) => [(h.a[0] + h.b[0]) / 2, (h.a[1] + h.b[1]) / 2];
+  function viaSpan(doc, h) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    if (!h.layers) return new Set(copper);
+    const [x, y] = [...h.layers].map((l) => copper.indexOf(l));
+    const lo = Math.min(x, y), hi = Math.max(x, y);
+    return new Set(copper.filter((_, i) => i >= lo && i <= hi));
+  }
+  function boardHoles(doc) {
+    const out = [];
+    for (const it of doc.items.values()) {
+      if (it.kind === "via") {
+        const h = viaHole(it);
+        if (h) out.push(h);
+      } else if (it.kind === "footprint") for (const p of padsOf(it)) {
+        const h = padHole(it, p);
+        if (h) out.push(h);
+      }
+    }
+    return out;
+  }
+  function holeToHoleMarkers(doc, s, ruleOf, worstRule = 0) {
+    const out = [];
+    const holes = boardHoles(doc);
+    const min0 = typeof s.minHoleToHole === "number" ? s.minHoleToHole : MORE_DEFAULTS.minHoleToHole;
+    const seen = /* @__PURE__ */ new Set();
+    const box = (h) => shapeBBox(holeShape(h));
+    const ri = (h) => ({ kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: "" });
+    const test = (a, b) => {
+      if (a.kind === "via" && b.kind === "via") {
+        const sa = viaSpan(doc, a), sb = viaSpan(doc, b);
+        if (![...sa].some((l) => sb.has(l))) return;
+      }
+      const ca = holeCentre(a), cb = holeCentre(b);
+      const [p, q] = a.uuid > b.uuid ? [b, a] : [a, b];
+      if (Math.hypot(ca[0] - cb[0], ca[1] - cb[1]) < DRC_EPS) {
+        out.push(marker("holes_co_located", defaultSeverity2("holes_co_located"), ca[0], ca[1], "Drilled holes co-located", [p.id, q.id]));
+        return;
+      }
+      const actual = Math.max(0, coreDist(holeShape(a), holeShape(b)) - a.w / 2 - b.w / 2);
+      const hit = ruleOf("hole_to_hole", ri(a), ri(b));
+      if (hit && hit.severity === "ignore") return;
+      const min = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints";
+      if (min >= 0 && actual < Math.max(0, min - DRC_EPS)) out.push(marker("hole_to_hole", defaultSeverity2("hole_to_hole"), ca[0], ca[1], `Drilled hole too close to other hole (${name} min ${mm4(min)}; actual ${mm4(actual)})`, [p.id, q.id]));
+    };
+    const reach = Math.max(min0, worstRule, 0.01);
+    const boxes = holes.map(box);
+    const order = holes.map((_, i) => i).sort((a, b) => boxes[a][0] - boxes[b][0]);
+    const rank = new Int32Array(holes.length);
+    order.forEach((h, k) => {
+      rank[h] = k;
+    });
+    const query = (i) => {
+      const near = [];
+      for (let k = rank[i] - 1; k >= 0; k--) {
+        const j = order[k];
+        if (boxes[j][0] < boxes[i][0] - 30) break;
+        near.push(j);
+      }
+      for (let k = rank[i] + 1; k < order.length; k++) {
+        const j = order[k];
+        if (boxes[j][0] > boxes[i][2] + reach) break;
+        near.push(j);
+      }
+      for (const j of near) {
+        if (!boxesTouch(boxes[i], boxes[j], reach)) continue;
+        const key = i < j ? i + ":" + j : j + ":" + i;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        test(holes[i], holes[j]);
+      }
+    };
+    holes.forEach((h, i) => {
+      if (h.kind === "via" && !h.micro) query(i);
+    });
+    holes.forEach((h, i) => {
+      if (h.kind === "pad") query(i);
+    });
+    return out;
+  }
+  function holeClearanceMarkers(doc, s, ruleOf, worstRule = 0) {
+    const out = [];
+    const min0 = typeof s.holeClearance === "number" ? s.holeClearance : MORE_DEFAULTS.minHoleClearance;
+    const conds = conductors(doc).filter((c) => c.kind !== "zone");
+    if (!conds.length) return out;
+    const holes = boardHoles(doc);
+    const reach = Math.max(min0, worstRule, 0.01);
+    const G = 2, grid = /* @__PURE__ */ new Map();
+    const cell = (v) => Math.floor(v / G);
+    conds.forEach((c, i) => {
+      for (let gx = cell(c.bbox[0]); gx <= cell(c.bbox[2]); gx++) for (let gy = cell(c.bbox[1]); gy <= cell(c.bbox[3]); gy++) {
+        const k = gx + "," + gy;
+        const l = grid.get(k);
+        if (l) l.push(i);
+        else grid.set(k, [i]);
+      }
+    });
+    const near = (b) => {
+      const got = /* @__PURE__ */ new Set();
+      for (let gx = cell(b[0] - reach); gx <= cell(b[2] + reach); gx++) for (let gy = cell(b[1] - reach); gy <= cell(b[3] + reach); gy++) for (const i of grid.get(gx + "," + gy) || []) got.add(i);
+      return [...got].sort((a, b2) => a - b2).map((i) => conds[i]);
+    };
+    const seen = /* @__PURE__ */ new Set();
+    const ownOf = /* @__PURE__ */ new Map();
+    for (const c of conds) {
+      if (c.kind === "via") ownOf.set("v:" + c.id, c);
+      else if (c.kind === "pad") ownOf.set("p:" + c.id + ":" + c.index, c);
+    }
+    for (const h of holes) {
+      const shape = holeShape(h);
+      const hb = shapeBBox(shape);
+      const span = h.kind === "via" ? viaSpan(doc, h) : null;
+      const own = ownOf.get(h.kind === "via" ? "v:" + h.id : "p:" + h.id + ":" + h.pad.index);
+      const hNet = own ? own.net : "";
+      for (const c of near(hb)) {
+        if (!boxesTouch(c.bbox, hb, reach)) continue;
+        if (span && ![...c.layers].some((l) => span.has(l))) continue;
+        if (h.kind === "via" && c.kind === "via" && c.id === h.id) continue;
+        if (h.kind === "pad" && c.kind === "pad" && c.id === h.id && (c.index === h.pad.index || c.pad.number === h.pad.number)) continue;
+        if (c.kind !== "pad" || h.kind === "via") {
+          if (c.net === hNet && (c.kind !== "pad" || hNet)) continue;
+        } else if (hNet && c.net === hNet) continue;
+        const hit = ruleOf("hole_clearance", { kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: [...c.layers][0] }, { kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer: [...c.layers][0] });
+        if (hit && hit.severity === "ignore") continue;
+        const clr = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints hole";
+        if (c.kind === "pad" && !(clr > 0)) continue;
+        const gap = shapeGap(c.shape, shape);
+        if (gap >= clr - DRC_EPS && !(clr === 0 && gap === 0 && coreDist(c.shape, shape) < shapeOffset(c.shape) + shapeOffset(shape) - DRC_EPS)) continue;
+        {
+          if (own && own.net !== c.net && shapeGap(own.shape, c.shape) < Math.max(netClearance(s, own.net), netClearance(s, c.net), s.minClearance || 0) - DRC_EPS) continue;
+        }
+        const ids = [c.id, h.id];
+        const key = ids.join("|") + "|" + h.uuid;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const [cx, cy] = holeCentre(h);
+        out.push(marker("hole_clearance", defaultSeverity2("hole_clearance"), cx, cy, clr ? `Hole clearance violation (${name} clearance ${mm4(clr)}; actual ${mm4(gap)})` : `Hole clearance violation (${name} clearance ${mm4(clr)}; actual < 0)`, ids));
+      }
+    }
+    return out;
+  }
+  function boardTexts(doc) {
+    const out = [];
+    const take = (n, id, tf, fp, layer) => {
+      const k = kindOf(n);
+      const at = pt(n, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K.ptsOf(n)[0] : null) || [0, 0];
+      out.push({ id, node: n, kind: k, layer: layer || layerOf(n, "F.SilkS"), pos: tf(at[0], at[1]), fp });
+    };
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "gr_text" || it.kind === "gr_text_box") take(n, it.id, ident);
+      else if (it.kind === "dimension") {
+        const t = K.kid(n, "gr_text");
+        if (t) take(t, it.id, ident, void 0, layerOf(n, "Dwgs.User"));
+      } else if (it.kind === "footprint") {
+        const tf = fpTf(it);
+        for (const g of n) if (isList(g) && (g[0] === "property" || g[0] === "fp_text" || g[0] === "fp_text_box") && K.kid(g, "layer")) take(g, it.id, tf, it);
+      }
+    }
+    return out;
+  }
+  function effectivePenWidth(n, boardVersion) {
+    const ef = K.effectsOf(n);
+    const minSize = Math.min(Math.abs(ef.size), Math.abs(ef.sizeX));
+    let w;
+    if (ef.thick <= 1e-6) w = ef.bold ? ef.sizeX / 5 : ef.sizeX / 8;
+    else if (ef.bold && !ef.face) w = boardVersion > 0 && boardVersion < 20260826 ? ef.thick : ef.thick * 1.6;
+    else w = ef.thick;
+    return Math.min(w, minSize * 0.25);
+  }
+  function textDimsMarkers(doc, s, ruleOf) {
+    const out = [];
+    const minH = typeof s.minTextHeight === "number" ? s.minTextHeight : MORE_DEFAULTS.minTextHeight, minT = typeof s.minTextThickness === "number" ? s.minTextThickness : MORE_DEFAULTS.minTextThickness;
+    for (const t of boardTexts(doc)) {
+      const ef = K.effectsOf(t.node);
+      if (ef.hide) continue;
+      const silk = t.layer === "F.SilkS" || t.layer === "B.SilkS";
+      const A = { kind: t.kind, node: t.node, layer: t.layer };
+      const check = (type, implicit, implicitName, actual, what) => {
+        const hit = ruleOf(type, A, null);
+        if (hit && hit.severity === "ignore") return;
+        const min = hit ? hit.min : silk ? implicit : null, max = hit ? hit.max : null, name = hit ? hit.name : implicitName;
+        if (min != null && min > 0 && actual < min - 1e-9) out.push(marker(type, defaultSeverity2(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} min ${what} ${mm4(min)}; actual ${mm4(actual)})`, [t.id]));
+        if (max != null && actual > max + 1e-9) out.push(marker(type, defaultSeverity2(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} max ${what} ${mm4(max)}; actual ${mm4(actual)})`, [t.id]));
+      };
+      if (!ef.face) check("text_thickness", minT, "board setup constraints silk text thickness", effectivePenWidth(t.node, doc.version || 0), "thickness");
+      check("text_height", minH, "board setup constraints silk text height", Math.abs(ef.size), "height");
+    }
+    return out;
+  }
+  function textMirroringMarkers(doc) {
+    const out = [];
+    const top = /* @__PURE__ */ new Set(["F.Cu", "F.SilkS", "F.Mask", "F.Fab"]), bottom = /* @__PURE__ */ new Set(["B.Cu", "B.SilkS", "B.Mask", "B.Fab"]);
+    for (const t of boardTexts(doc)) {
+      if (!top.has(t.layer) && !bottom.has(t.layer)) continue;
+      if (doc.layers.size && !doc.layers.has(t.layer)) continue;
+      const ef = K.effectsOf(t.node);
+      if (ef.hide) continue;
+      if (ef.mirror && top.has(t.layer)) out.push(marker("mirrored_text_on_front_layer", defaultSeverity2("mirrored_text_on_front_layer"), t.pos[0], t.pos[1], "Mirrored text on front layer", [t.id]));
+      if (!ef.mirror && bottom.has(t.layer)) out.push(marker("nonmirrored_text_on_back_layer", defaultSeverity2("nonmirrored_text_on_back_layer"), t.pos[0], t.pos[1], "Non-Mirrored text on back layer", [t.id]));
+    }
+    return out;
+  }
+  function courtyardOutlines(fp) {
+    const tf = fpTf(fp);
+    const chains = { "F.CrtYd": [], "B.CrtYd": [] };
+    for (const g of fp.node) {
+      if (!isList(g) || !/^fp_(line|rect|circle|arc|poly)$/.test(g[0])) continue;
+      const layer = layerOf(g, "");
+      if (!chains[layer]) continue;
+      const kind = g[0].slice(3);
+      const P = (key) => {
+        const p = pt(g, key);
+        return p ? tf(p[0], p[1]) : null;
+      };
+      if (kind === "line") {
+        const a = P("start"), b = P("end");
+        if (a && b) chains[layer].push([a, b]);
+      } else if (kind === "rect") {
+        const s0 = pt(g, "start"), e = pt(g, "end");
+        if (s0 && e) {
+          const pts = [tf(s0[0], s0[1]), tf(e[0], s0[1]), tf(e[0], e[1]), tf(s0[0], e[1])];
+          chains[layer].push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "circle") {
+        const c = P("center"), e = P("end");
+        if (c && e) {
+          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+          const pts = [];
+          for (let i = 0; i < 32; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
+          chains[layer].push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "arc") {
+        const a = P("start"), m = P("mid"), b = P("end");
+        if (a && m && b) {
+          const arc = K.arcFrom3(a, m, b);
+          chains[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
+        }
+      } else if (kind === "poly") {
+        const pts = K.ptsOf(g).map(([x, y]) => tf(x, y));
+        if (pts.length > 2) chains[layer].push(pts.concat([pts[0]]));
+      }
+    }
+    const res = {};
+    for (const layer of Object.keys(chains)) {
+      if (!chains[layer].length) {
+        res[layer] = { loops: [], open: null };
+        continue;
+      }
+      const { loops, dangling } = chainLoops(chains[layer], 0.02);
+      let open = null;
+      if (dangling) {
+        const ends = [];
+        for (const c of chains[layer]) {
+          const a = c[0], b = c[c.length - 1];
+          if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.02) ends.push(a, b);
+        }
+        const free = ends.filter((e) => ends.filter((o) => Math.hypot(o[0] - e[0], o[1] - e[1]) <= 0.02).length < 2);
+        open = free[0] || ends[0] || chains[layer][0][0];
+      }
+      res[layer] = { loops, open };
+    }
+    return res;
+  }
+  var allowsMissingCourtyard = (fp) => {
+    const a = K.kid(fp.node, "attr");
+    return !!a && a.slice(1).some((x) => K.str(x) === "allow_missing_courtyard");
+  };
+  function courtyardMarkers(doc) {
+    const out = [];
+    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint").sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const cy = fps.map((fp) => courtyardOutlines(fp));
+    fps.forEach((fp, i) => {
+      const c = cy[i];
+      const bad = ["F.CrtYd", "B.CrtYd"].map((l) => c[l].open).find((p) => p);
+      const [fx, fy] = K.atOf(fp.node);
+      if (bad) out.push(marker("malformed_courtyard", defaultSeverity2("malformed_courtyard"), bad[0], bad[1], "Footprint has malformed courtyard (not a closed shape)", [fp.id]));
+      else if (!c["F.CrtYd"].loops.length && !c["B.CrtYd"].loops.length && !allowsMissingCourtyard(fp)) out.push(marker("missing_courtyard", defaultSeverity2("missing_courtyard"), fx, fy, "Footprint has no courtyard defined", [fp.id]));
+    });
+    const holes = fps.map((fp) => padsOf(fp).map((p) => ({ p, h: padHole(fp, p) })).filter((x) => x.h && !/heatsink/.test(String((K.kid(x.p.node, "property") || [])[1] || ""))));
+    const hitIn = (h, loops) => loops.some((L) => shapeGap({ t: "poly", pts: L }, holeShape(h)) <= 0);
+    const testPads = (bi, ai) => {
+      for (const { p, h } of holes[bi]) {
+        const code = p.type === "np_thru_hole" ? "npth_inside_courtyard" : "pth_inside_courtyard";
+        if (hitIn(h, cy[ai]["F.CrtYd"].loops) || hitIn(h, cy[ai]["B.CrtYd"].loops)) out.push(marker(code, defaultSeverity2(code), p.x, p.y, code === "pth_inside_courtyard" ? "PTH inside courtyard" : "NPTH inside courtyard", [fps[bi].id, fps[ai].id]));
+      }
+    };
+    for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
+      if (fps[i].bbox && fps[j].bbox && !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
+      testPads(j, i);
+      testPads(i, j);
+    }
+    return out;
+  }
+  var EDGE_TEXT = /* @__PURE__ */ new Set(["gr_text", "gr_text_box", "table", "barcode", "dimension"]);
+  function textOnEdgeCutsMarkers(doc) {
+    const out = [];
+    const sev3 = defaultSeverity2("text_on_edge_cuts");
+    for (const it of doc.items.values()) {
+      if (EDGE_TEXT.has(it.kind) && layerOf(it.node, "") === "Edge.Cuts") {
+        const p = pt(it.node, "at") || pt(it.node, "start") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
+        out.push(marker("text_on_edge_cuts", sev3, p[0], p[1], "Text or graphic on Edge.Cuts layer", [it.id]));
+      }
+    }
+    for (const t of boardTexts(doc)) if (t.fp && t.layer === "Edge.Cuts") out.push(marker("text_on_edge_cuts", sev3, t.pos[0], t.pos[1], "Text or graphic on Edge.Cuts layer", [t.id]));
+    return out;
+  }
+  function keepouts(doc) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const out = [];
+    const take = (z, id, tf, fp) => {
+      const ko = K.kid(z, "keepout");
+      if (!ko) return;
+      const no = (k) => {
+        const c = K.kid(ko, k);
+        return !!c && K.str(c[1]) === "not_allowed";
+      };
+      const poly = K.kid(z, "polygon");
+      const pts = poly ? K.ptsOf(poly).map(([x, y]) => tf(x, y)) : [];
+      if (pts.length < 3) return;
+      const layers = /* @__PURE__ */ new Set();
+      for (const l of zoneLayers(z)) {
+        if (l === "*.Cu" || l === "F&B.Cu") copper.forEach((c) => layers.add(c));
+        else layers.add(l);
+      }
+      const nm2 = K.kid(z, "name");
+      out.push({ id, name: nm2 ? K.str(nm2[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
+    };
+    for (const it of doc.items.values()) {
+      if (it.kind === "zone") take(it.node, it.id, ident, null);
+      else if (it.kind === "footprint") {
+        const tf = fpTf(it);
+        for (const g of it.node) if (isList(g) && g[0] === "zone") take(g, it.id, tf, it);
+      }
+    }
+    return out;
+  }
+  function keepoutRuleName(k) {
+    const ref = k.fp ? k.fp.ref || "" : "";
+    if (k.name) return ref ? `keepout area '${k.name}' of ${ref}` : `keepout area '${k.name}'`;
+    return ref ? `keepout area of ${ref}` : "keepout area";
+  }
+  function pointInPolyShape(shape, P) {
+    const probe = shape.t === "circle" ? [[shape.x, shape.y]] : shape.t === "rect" ? [[shape.x, shape.y]] : shape.t === "seg" ? [shape.a, shape.b, [(shape.a[0] + shape.b[0]) / 2, (shape.a[1] + shape.b[1]) / 2]] : shape.t === "path" ? shape.pts.concat(shape.pts.slice(1).map((p, i) => [(p[0] + shape.pts[i][0]) / 2, (p[1] + shape.pts[i][1]) / 2])) : shape.pts;
+    return probe.some((p) => pointInPoly(P, p[0], p[1]) && polyEdgeDist(P, p) > DRC_EPS);
+  }
+  var polyEdgeDist = (P, p) => {
+    let d = Infinity;
+    for (let i = 0; i < P.length; i++) {
+      const a = P[i], b = P[(i + 1) % P.length];
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+      d = Math.min(d, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
+    }
+    return d;
+  };
+  function keepoutMarkers(doc) {
+    const out = [];
+    const kos = keepouts(doc);
+    if (!kos.length) return out;
+    const sev3 = defaultSeverity2("items_not_allowed");
+    const boxes = kos.map((k) => shapeBBox({ t: "poly", pts: k.pts }));
+    const hits = (shape, i) => {
+      if (!boxesTouch(shapeBBox(shape), boxes[i], 0)) return false;
+      const core = coreDist({ t: "poly", pts: kos[i].pts }, shape);
+      return core === 0 && pointInPolyShape(shape, kos[i].pts) || core < shapeOffset(shape) - DRC_EPS;
+    };
+    const firstInside = (shape, pts, P) => pts.find((p) => pointInPoly(P, p[0], p[1])) || (shape.t === "seg" ? shape.a : pts[0]);
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "segment" || it.kind === "arc") {
+        const a = pt(n, "start"), b = pt(n, "end");
+        if (!a || !b) continue;
+        const layer = layerOf(n);
+        const w = K.num((K.kid(n, "width") || [0, 0.25])[1], 0.25);
+        let pts = [a, b];
+        if (it.kind === "arc") {
+          const m = pt(n, "mid");
+          const arc = m && K.arcFrom3(a, m, b);
+          if (arc) pts = arcPoints(arc, a, b);
+        }
+        const shape = { t: "path", pts, r: w / 2 };
+        kos.forEach((k, i) => {
+          if (k.tracks && k.layers.has(layer) && hits(shape, i)) {
+            const p = firstInside(shape, pts, k.pts);
+            out.push(marker("items_not_allowed", sev3, p[0], p[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+          }
+        });
+      } else if (it.kind === "via") {
+        const a = pt(n, "at");
+        if (!a) continue;
+        const size = K.num((K.kid(n, "size") || [0, 0.6])[1], 0.6);
+        const span = viaSpan(doc, viaHole(it) || { layers: null });
+        const shape = { t: "circle", x: a[0], y: a[1], r: size / 2 };
+        kos.forEach((k, i) => {
+          if (k.vias && [...span].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev3, a[0], a[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+        });
+      } else if (it.kind === "footprint") {
+        for (const p of padsOf(it)) {
+          const shape = padShape(p);
+          const layers = /* @__PURE__ */ new Set();
+          for (const l of p.layers) {
+            if (l === "*.Cu" || l === "F&B.Cu") (doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]).forEach((c) => layers.add(c));
+            else layers.add(l);
+          }
+          kos.forEach((k, i) => {
+            if (k.pads && k.fp !== it && [...layers].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev3, p.x, p.y, `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+          });
+        }
+      }
+    }
+    return out;
+  }
+  function disabledLayerMarkers(doc) {
+    const out = [];
+    if (!doc.layers.size) return out;
+    const sev3 = defaultSeverity2("item_on_disabled_layer");
+    const off = (l) => /\.Cu$/.test(l) && !doc.layers.has(l);
+    const report = (id, p, l) => out.push(marker("item_on_disabled_layer", sev3, p[0], p[1], `Item on a disabled copper layer (layer ${l})`, [id]));
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "via") {
+        const ls = K.kid(n, "layers");
+        const pair = ls ? [K.str(ls[1]), K.str(ls[2])] : [];
+        const bad = pair.find(off);
+        const a = pt(n, "at");
+        if (bad && a) report(it.id, a, bad);
+      } else if (it.kind === "footprint") {
+        for (const p of padsOf(it)) {
+          if (p.type !== "smd" && p.type !== "connect") continue;
+          const l = p.layers.find((x) => /\.Cu$/.test(x) && x !== "*.Cu");
+          if (l && off(l)) report(it.id, [p.x, p.y], l);
+        }
+      } else if (it.kind !== "zone") {
+        const l = layerOf(n, "");
+        if (!l || !off(l)) continue;
+        const p = pt(n, "start") || pt(n, "at") || pt(n, "center") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
+        report(it.id, p, l);
+      }
+    }
+    return out;
+  }
+  function moreDrcMarkers(doc, s, rules) {
+    const ruleOf = (type, A, B) => rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
+    const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...holeClearanceMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_clearance").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
+    return all.filter((m) => (s.severities[m.code] || m.severity) !== "ignore");
   }
 
   // web/tools/pcb-tools/drc-zones.ts
@@ -5596,7 +11273,31 @@
   }
 
   // web/tools/pcb-tools/drc.ts
-  var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
+  var DEFAULT_SETTINGS = () => ({
+    clearance: 0.2,
+    edgeClearance: 0.5,
+    trackWidth: 0.2,
+    viaDiameter: 0.6,
+    viaDrill: 0.3,
+    minClearance: 0,
+    minConn: 0,
+    minTrackWidth: 0.2,
+    minViaDiameter: 0.5,
+    minThroughDrill: 0.3,
+    minMicroViaDiameter: 0.2,
+    minMicroViaDrill: 0.1,
+    minViaAnnular: (0.5 - 0.3) / 2,
+    minHoleToHole: 0.25,
+    holeClearance: 0.25,
+    minSilkClearance: 0,
+    minTextHeight: 1 * 0.8,
+    minTextThickness: 0.1 * 0.8,
+    minResolvedSpokes: 2,
+    netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } },
+    netclassOf: {},
+    patterns: [],
+    severities: {}
+  });
   function designSettings(src) {
     const s = DEFAULT_SETTINGS();
     if (!src) return s;
@@ -5616,7 +11317,7 @@
       }
       const setup = tree && K.kid(tree, "setup");
       if (setup) {
-        for (const [key, prop3] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) {
+        for (const [key, prop3] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minThroughDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) {
           const c = K.kid(setup, key);
           if (c) s[prop3] = K.num(c[1], s[prop3]);
         }
@@ -5642,20 +11343,28 @@
     const sev3 = src.board && src.board.design_settings && src.board.design_settings.rule_severities;
     if (sev3) for (const [k, v] of Object.entries(sev3)) s.severities[k] = String(v);
     if (rules) {
-      s.minClearance = rules.min_clearance || 0;
-      s.minTrackWidth = rules.min_track_width || 0;
-      s.minViaDiameter = rules.min_via_diameter || 0;
-      s.minViaDrill = rules.min_through_hole_diameter || 0;
-      s.minViaAnnular = rules.min_via_annular_width || 0;
-      s.minMicroViaDrill = rules.min_microvia_drill || 0;
-      if (rules.min_hole_clearance !== void 0) s.holeClearance = rules.min_hole_clearance;
-      if (rules.min_copper_edge_clearance !== void 0) s.edgeClearance = rules.min_copper_edge_clearance;
-      if (rules.min_hole_to_hole !== void 0) s.minHoleToHole = rules.min_hole_to_hole;
-      if (rules.min_text_height !== void 0) s.minTextHeight = rules.min_text_height;
-      if (rules.min_text_thickness !== void 0) s.minTextThickness = rules.min_text_thickness;
-      if (rules.min_silk_clearance !== void 0) s.minSilkClearance = rules.min_silk_clearance;
-      if (rules.solder_mask_to_copper_clearance !== void 0) s.maskToCopperClearance = rules.solder_mask_to_copper_clearance;
-      if (rules.min_resolved_spokes !== void 0) s.minResolvedSpokes = rules.min_resolved_spokes;
+      const take = (key, prop3) => {
+        const v = rules[key];
+        if (typeof v === "number") s[prop3] = v;
+      };
+      for (const [key, prop3] of [
+        ["min_clearance", "minClearance"],
+        ["min_connection", "minConn"],
+        ["min_track_width", "minTrackWidth"],
+        ["min_via_diameter", "minViaDiameter"],
+        ["min_through_hole_diameter", "minThroughDrill"],
+        ["min_microvia_diameter", "minMicroViaDiameter"],
+        ["min_microvia_drill", "minMicroViaDrill"],
+        ["min_via_annular_width", "minViaAnnular"],
+        ["min_hole_clearance", "holeClearance"],
+        ["min_copper_edge_clearance", "edgeClearance"],
+        ["min_hole_to_hole", "minHoleToHole"],
+        ["min_text_height", "minTextHeight"],
+        ["min_text_thickness", "minTextThickness"],
+        ["min_silk_clearance", "minSilkClearance"],
+        ["solder_mask_to_copper_clearance", "maskToCopperClearance"],
+        ["min_resolved_spokes", "minResolvedSpokes"]
+      ]) take(key, prop3);
     }
     const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults;
     if (dflt) layerDefaults(dflt);
@@ -5956,7 +11665,11 @@
       const p = cl.anchors[0] ? cl.anchors[0].p : [0, 0];
       out.push(marker("shorting_items", "error", p[0], p[1], `Items shorting two nets (${Array.from(cl.nets).join(", ")})`, Array.from(new Set(cl.items.map((c) => c.id)))));
     }
-    const touches = (p, layer, self) => conds.some((c) => c !== self && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS) || nl.conductors.some((c) => c.kind === "zone" && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && pointInPoly(c.shape.pts, p[0], p[1]));
+    const condGrid = boxGrid(conds, (c) => c.bbox), zoneGrid = boxGrid(nl.conductors.filter((c) => c.kind === "zone"), (c) => c.bbox);
+    const touches = (p, layer, self) => {
+      const pb = [p[0], p[1], p[0], p[1]];
+      return condGrid.query(pb, EPS).some((c) => c !== self && c.layers.has(layer) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS) || zoneGrid.query(pb, EPS).some((c) => c.layers.has(layer) && pointInPoly(c.shape.pts, p[0], p[1]));
+    };
     for (const c of conds) {
       if (c.kind === "segment" || c.kind === "arc") {
         const [a, b] = c.anchors;
@@ -5966,8 +11679,13 @@
         if (loose) out.push(marker("track_dangling", "warning", loose[0], loose[1], "Track has unconnected end", [c.id]));
       } else if (c.kind === "via") {
         const [a] = c.anchors;
-        if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
+        if (!condGrid.query(c.bbox, EPS).some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && shapeGap(o.shape, c.shape) <= EPS) && !zoneGrid.query(c.bbox, EPS).some((o) => shareLayer(o.layers, c.layers) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
       }
+    }
+    if (s.severities.copper_sliver !== "ignore" || s.severities.connection_width !== "ignore") {
+      const cc = copperCtx(doc);
+      if (s.severities.copper_sliver !== "ignore") out.push(...sliverMarkers(doc, nl.conductors, cc));
+      if (s.severities.connection_width !== "ignore") out.push(...connectionWidthMarkers(doc, s, rules, nl.conductors, cc));
     }
     out.push(...sizeMarkers(doc, s, rules, conds), ...trackAngleMarkers(doc, s, rules, conds));
     if (rules.length) {
@@ -6364,15 +12082,15 @@
           const fill = K.kid(n, "fill");
           const fm = fill && K.kid(fill, "mode") ? K.str(K.kid(fill, "mode")[1]) : "";
           add("Fill Mode", fm === "hatch" ? "Hatched" : fm ? "Unknown" : "Solid");
-          let area2 = 0;
+          let area3 = 0;
           for (const fp of K.kids(n, "filled_polygon")) {
             const q = K.ptsOf(fp);
             for (let i = 0; i < q.length; i++) {
               const a = q[i], b = q[(i + 1) % q.length];
-              area2 += a[0] * b[1] - b[0] * a[1];
+              area3 += a[0] * b[1] - b[0] * a[1];
             }
           }
-          add("Filled Area", msgArea(Math.abs(area2) / 2, units));
+          add("Filled Area", msgArea(Math.abs(area3) / 2, units));
           const cp = K.kid(n, "connect_pads");
           const cc = cp && K.kid(cp, "clearance");
           const c = msgClearance(s, net);
@@ -7939,7 +13657,7 @@
     return gen;
   }
   var ARC_STEPS = 16;
-  var perp = (u) => [-u[1], u[0]];
+  var perp2 = (u) => [-u[1], u[0]];
   var unit = (a, b) => {
     const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1;
     return [dx / l, dy / l];
@@ -7961,7 +13679,7 @@
     for (let i = 0; i + 1 < P.length; i++) U2.push(unit(P[i], P[i + 1]));
     const out = [];
     const off = (p, u) => {
-      const n = perp(u);
+      const n = perp2(u);
       return [p[0] + n[0] * d, p[1] + n[1] * d];
     };
     out.push(off(P[0], U2[0]));
@@ -7973,7 +13691,7 @@
         continue;
       }
       if (cr * d > 0) {
-        const n0 = perp(u0), n1 = perp(u1);
+        const n0 = perp2(u0), n1 = perp2(u1);
         const den = 1 + n0[0] * n1[0] + n0[1] * n1[1];
         out.push([P[k][0] + (n0[0] + n1[0]) / den * d, P[k][1] + (n0[1] + n1[1]) / den * d]);
       } else {
@@ -8083,7 +13801,7 @@
     const bA = info.base && info.base.length >= 2 ? info.base[0] : origin, bB = info.base && info.base.length >= 2 ? info.base[1] : end;
     return { origin, end, off, offEnd, A: [bA[0] + off[0], bA[1] + off[1]], B: [bB[0] + off[0], bB[1] + off[1]] };
   }
-  var resize = (v, l) => {
+  var resize2 = (v, l) => {
     const n = Math.hypot(v[0], v[1]);
     return n ? [v[0] * l / n, v[1] * l / n] : [0, 0];
   };
@@ -8095,8 +13813,8 @@
     if (info.mode === "diff_pair") amp += info.width + info.gap;
     if (info.st.initialSide === -1) amp = -amp;
     const d = [F.B[0] - F.A[0], F.B[1] - F.A[1]];
-    const wOff = resize(perp(d), amp);
-    const sOff = resize(d, info.st.spacing / IU2 * 1.5);
+    const wOff = resize2(perp2(d), amp);
+    const sOff = resize2(d, info.st.spacing / IU2 * 1.5);
     return [
       { key: "0", p: [F.origin[0] + F.off[0], F.origin[1] + F.off[1]] },
       { key: "1", p: [F.end[0] + F.offEnd[0], F.end[1] + F.offEnd[1]] },
@@ -8677,7 +14395,7 @@
 
   // web/tools/pcb-tools/pad-tool.ts
   var PAD_TOOLS = { pad: "auto", padtht: "tht", padsmd: "smd", padnpth: "npth", padpaste: "paste" };
-  var str3 = (v) => v === void 0 || v === null ? "" : String(v);
+  var str4 = (v) => v === void 0 || v === null ? "" : String(v);
   function refDesPrefix(s) {
     return s.replace(/\d+$/, "");
   }
@@ -8691,17 +14409,17 @@
     return out;
   }
   function nextPadNumber(doc, last, extraUsed) {
-    const used = new Set(fpPads(doc).map((p) => str3(p[1])));
+    const used = new Set(fpPads(doc).map((p) => str4(p[1])));
     if (extraUsed) for (const u of extraUsed) used.add(u);
     const prefix = refDesPrefix(last);
     let num7 = trailingInt(last);
     while (used.has(prefix + num7)) num7++;
     return prefix + num7;
   }
-  var layerSet = (pad) => (K.kid(pad, "layers") || []).slice(1).map(str3);
-  var isAperture = (pad) => str3(pad[2]) === "smd" && !layerSet(pad).some((l) => /\.Cu$/.test(l));
+  var layerSet = (pad) => (K.kid(pad, "layers") || []).slice(1).map(str4);
+  var isAperture = (pad) => str4(pad[2]) === "smd" && !layerSet(pad).some((l) => /\.Cu$/.test(l));
   function typeFromPad(pad) {
-    const a = str3(pad[2]);
+    const a = str4(pad[2]);
     if (a === "thru_hole") return "tht";
     if (a === "smd") {
       if (isAperture(pad)) {
@@ -8756,7 +14474,7 @@
   }
   var padMemory = { lastType: "auto", lastByType: {}, lastNumber: "1" };
   function masterPad(doc, type, selected) {
-    const pads = fpPads(doc).slice().sort((a, b) => strNumCmp(str3(b[1]), str3(a[1])));
+    const pads = fpPads(doc).slice().sort((a, b) => strNumCmp(str4(b[1]), str4(a[1])));
     let t = type;
     if (t === "auto") {
       const sel = selected ? typeFromPad(selected) : null;
@@ -8779,7 +14497,7 @@
     }
     return n;
   }
-  var canHaveNumber = (pad) => str3(pad[2]) !== "np_thru_hole" && !isAperture(pad);
+  var canHaveNumber = (pad) => str4(pad[2]) !== "np_thru_hole" && !isAperture(pad);
   function newPadNode(doc, type, selected, at, angle, number) {
     const p = masterPad(doc, type, selected);
     p[1] = canHaveNumber(p) ? number || "" : "";
@@ -9780,7 +15498,7 @@
     return bb ? [bb[0] - w, bb[1] - w, bb[2] + w, bb[3] + w] : null;
   }
   var inBox = (b, p) => p[0] >= b[0] - PEPS && p[0] <= b[2] + PEPS && p[1] >= b[1] - PEPS && p[1] <= b[3] + PEPS;
-  function mergeAllowed(path, v1, v2, bypass, anchor, area2) {
+  function mergeAllowed(path, v1, v2, bypass, anchor, area3) {
     let covers = false;
     for (let i = v1; i < v2; i++) if (segPtDist(path[i], path[i + 1], anchor) <= 1e-6) {
       covers = true;
@@ -9794,14 +15512,14 @@
       }
       if (!keeps) return false;
     }
-    const p1 = path[v1], p2 = path[v2], in1 = inBox(area2, p1), in2 = inBox(area2, p2);
+    const p1 = path[v1], p2 = path[v2], in1 = inBox(area3, p1), in2 = inBox(area3, p2);
     if (in1 && in2) return true;
     const horiz = (a0, a1, b0, b1) => {
       const d1 = dir8(a0, a1), d2 = dir8(b0, b1);
       return d1 >= 0 && d1 === d2;
     };
-    if (v1 < path.length - 1 && !in1 && in2 && inBox(area2, path[v1 + 1])) return horiz(bypass[0], bypass[1], path[v1], path[v1 + 1]);
-    if (in1 && !in2 && inBox(area2, path[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path[v2 - 1], path[v2]);
+    if (v1 < path.length - 1 && !in1 && in2 && inBox(area3, path[v1 + 1])) return horiz(bypass[0], bypass[1], path[v1], path[v1 + 1]);
+    if (in1 && !in2 && inBox(area3, path[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path[v2 - 1], path[v2]);
     return false;
   }
   function optimizeDragged(O, pts, orig, p, w) {
@@ -9821,7 +15539,7 @@
     }
     let path = pts.map((q) => q.slice());
     if (!path.some((q) => peq(q, anchor))) path.splice(at + 1, 0, anchor);
-    const area2 = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
+    const area3 = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
     const r = w / 2;
     path = simplifyPts(path);
     let step = path.length - 2;
@@ -9837,7 +15555,7 @@
         for (let i = 0; i < 2; i++) {
           const bypass = initialTrace(a, b, -1, i === 1);
           if (bypass.length < 2) continue;
-          if (!pathClear(O, bypass, r) || !mergeAllowed(path, n, n + step + 1, bypass, anchor, area2)) continue;
+          if (!pathClear(O, bypass, r) || !mergeAllowed(path, n, n + step + 1, bypass, anchor, area3)) continue;
           cands[i] = simplifyPts(path.slice(0, n).concat(bypass, path.slice(n + step + 2)));
           cost[i] = cornerCost(cands[i]);
         }
@@ -10279,9 +15997,9 @@
     const refLength = Math.hypot(p[0] - p0[0], p[1] - p0[1]);
     const rev = t.trail.slice().reverse();
     const straight = simplifyPts(legPts(p0, p, false).concat(rev)), diag = simplifyPts(legPts(p0, p, true).concat(rev));
-    const areaS = polyAreaAbs(straight), areaD = polyAreaAbs(diag);
+    const areaS = polyAreaAbs(straight), areaD2 = polyAreaAbs(diag);
     const IU2 = 1e6;
-    const ratio = areaS * IU2 * IU2 / (areaD * IU2 * IU2 + 1);
+    const ratio = areaS * IU2 * IU2 / (areaD2 * IU2 * IU2 + 1);
     if (t.forced && refLength < 10 * t.tol) {
       t.forced = false;
       t.trail = [p0.slice()];
@@ -15264,7 +20982,7 @@
     const l = Math.hypot(v[0], v[1]);
     return l === 0 ? null : [v[0] / l, v[1] / l];
   };
-  var perp2 = (v) => [-v[1], v[0]];
+  var perp3 = (v) => [-v[1], v[0]];
   function nearestEnd(a, b, p, tol) {
     const da = Math.hypot(a[0] - p[0], a[1] - p[1]), db = Math.hypot(b[0] - p[0], b[1] - p[1]);
     const first = da <= db;
@@ -15278,7 +20996,7 @@
     if (sh.t !== "arc") return null;
     const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
     if (turn === 0) return null;
-    let t = perp2(vsubA(p, sh.center));
+    let t = perp3(vsubA(p, sh.center));
     if (turn > 0 === atStart) t = [-t[0], -t[1]];
     return unitOf(t);
   }
@@ -15351,7 +21069,7 @@
       const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
       const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
       if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
-      const ax = unitOf(perp2(vsubA(q, c)));
+      const ax = unitOf(perp3(vsubA(q, c)));
       return ax ? { start: q, dir: ax, axis: true } : null;
     }
     if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
@@ -16445,19 +22163,19 @@
     return [x, y];
   }
   function arrayTransform(o, n, pos) {
-    const iu = (v) => Math.round((v || 0) * AIU);
+    const iu2 = (v) => Math.round((v || 0) * AIU);
     if (o.type === "circular") {
       let a = !o.angle ? 360 * n / o.count : o.angle * n;
       a += o.angleOffset || 0;
       if (o.clockwise) a = -a;
-      const p = [iu(pos[0]), iu(pos[1])], c = [iu(o.centre[0]), iu(o.centre[1])];
+      const p = [iu2(pos[0]), iu2(pos[1])], c = [iu2(o.centre[0]), iu2(o.centre[1])];
       const [rx, ry] = rotator(a)(p[0] - c[0], p[1] - c[1]);
       const np = [Math.round(c[0] + rx), Math.round(c[1] + ry)];
       return { offset: [(np[0] - p[0]) / AIU, (np[1] - p[1]) / AIU], rot: o.rotateItems ? a : 0 };
     }
     let [cx, cy] = arrayGridCoords(o, n);
     if (!o.hThenV) [cx, cy] = [cy, cx];
-    const dx = iu(o.dx), dy = iu(o.dy), ox = iu(o.offX), oy = iu(o.offY);
+    const dx = iu2(o.dx), dy = iu2(o.dy), ox = iu2(o.offX), oy = iu2(o.offY);
     let x = cx * dx + cy * ox, y = cy * dy + cx * oy;
     const st = Math.trunc(o.stagger || 0);
     if (Math.abs(st) > 1) {
@@ -18063,7 +23781,7 @@
   }
 
   // web/tools/pcb-tools/exchange.ts
-  var str4 = (v) => v === void 0 || v === null ? "" : String(v);
+  var str5 = (v) => v === void 0 || v === null ? "" : String(v);
   function eachChildUuid(n, fn) {
     for (let i = 1; i < n.length; i++) {
       const c = n[i];
@@ -18109,10 +23827,10 @@
     const n = K.cloneNode(boardFp);
     const uuidMap = {};
     const own = ownUuid(n);
-    const link = own ? str4(own[1]) : "";
+    const link = own ? str5(own[1]) : "";
     const fresh = (u) => {
       const id = K.newUuid();
-      uuidMap[id] = str4(u[1]);
+      uuidMap[id] = str5(u[1]);
       u[0] = "uuid";
       u[1] = id;
     };
@@ -18120,12 +23838,12 @@
     const back = {};
     eachChildUuid(n, (u) => {
       fresh(u);
-      back[uuidMap[str4(u[1])]] = str4(u[1]);
+      back[uuidMap[str5(u[1])]] = str5(u[1]);
     });
     for (const g of K.kids(n, "group")) {
       const m = K.kid(g, "members");
       if (m) for (let i = 1; i < m.length; i++) {
-        const nu = back[str4(m[i])];
+        const nu = back[str5(m[i])];
         if (nu) m[i] = nu;
       }
     }
@@ -18137,13 +23855,13 @@
     for (const c of n) if (isList(c) && c[0] === "zone") stripNets(c);
     const [, , rot3] = K.atOf(n);
     setFootprintAt(n, 0, 0, rot3);
-    if (str4((K.kid(n, "layer") || [])[1]) !== "F.Cu") flipFootprintNode(n);
+    if (str5((K.kid(n, "layer") || [])[1]) !== "F.Cu") flipFootprintNode(n);
     const a = K.atOf(n)[2];
     if (a) rotateFootprintNode(n, -a);
     setScale(n, 1, 1);
     if (!K.kid(n, "version")) n.splice(2, 0, ["version", boardVersion || 20260728], ["generator", "pcbnew"]);
-    const refP = K.kids(n, "property").find((p) => str4(p[1]) === "Reference");
-    return { node: n, uuidMap, link, reference: refP ? str4(refP[2]) : "" };
+    const refP = K.kids(n, "property").find((p) => str5(p[1]) === "Reference");
+    return { node: n, uuidMap, link, reference: refP ? str5(refP[2]) : "" };
   }
   function orthoAlign(to, from, tol = 1e-4) {
     if (!to.length || to.length !== from.length) return null;
@@ -18158,7 +23876,7 @@
   function uniquePads(fp) {
     const out = /* @__PURE__ */ new Map(), dup = /* @__PURE__ */ new Set();
     for (const p of K.kids(fp, "pad")) {
-      const num7 = str4(p[1]);
+      const num7 = str5(p[1]);
       if (dup.has(num7)) continue;
       if (out.has(num7)) {
         out.delete(num7);
@@ -18189,7 +23907,7 @@
   function boardCopyFromEditor(editorFp, uuidMap) {
     const n = K.cloneNode(editorFp);
     const fix = (u) => {
-      const id = str4(u[1]);
+      const id = str5(u[1]);
       u[0] = "uuid";
       u[1] = uuidMap && uuidMap[id] ? uuidMap[id] : K.newUuid();
     };
@@ -18197,14 +23915,14 @@
     if (own) fix(own);
     const back = {};
     eachChildUuid(n, (u) => {
-      const was = str4(u[1]);
+      const was = str5(u[1]);
       fix(u);
-      back[was] = str4(u[1]);
+      back[was] = str5(u[1]);
     });
     for (const g of K.kids(n, "group")) {
       const m = K.kid(g, "members");
       if (m) for (let i = 1; i < m.length; i++) {
-        const nu = back[str4(m[i])];
+        const nu = back[str5(m[i])];
         if (nu) m[i] = nu;
       }
     }
@@ -18214,13 +23932,13 @@
     }
     return n;
   }
-  var field = (fp, name) => K.kids(fp, "property").find((p) => str4(p[1]) === name) || K.kids(fp, "fp_text").find((p) => str4(p[1]) === name.toLowerCase()) || null;
-  var isRefOrValue = (p) => p[0] === "property" && (str4(p[1]) === "Reference" || str4(p[1]) === "Value") || p[0] === "fp_text" && (str4(p[1]) === "reference" || str4(p[1]) === "value");
+  var field = (fp, name) => K.kids(fp, "property").find((p) => str5(p[1]) === name) || K.kids(fp, "fp_text").find((p) => str5(p[1]) === name.toLowerCase()) || null;
+  var isRefOrValue = (p) => p[0] === "property" && (str5(p[1]) === "Reference" || str5(p[1]) === "Value") || p[0] === "fp_text" && (str5(p[1]) === "reference" || str5(p[1]) === "value");
   var COPPER = /(^|\*|\.)Cu$|^\*\.Cu$|^F&B\.Cu$/;
   function exchangeFootprint(existing, aNew, opts = {}) {
     const n = K.cloneNode(aNew);
     const [ex, ey, eo] = K.atOf(existing);
-    if (str4((K.kid(n, "layer") || [])[1]) !== str4((K.kid(existing, "layer") || [])[1])) flipFootprintNode(n);
+    if (str5((K.kid(n, "layer") || [])[1]) !== str5((K.kid(existing, "layer") || [])[1])) flipFootprintNode(n);
     let px = ex, py = ey, orient = eo, shifted = false;
     if (opts.matchPadPositions !== false) {
       const s = footprintShift(existing, n);
@@ -18236,7 +23954,7 @@
     if (orient - no) rotateFootprintNode(n, orient - no);
     const [sx, sy] = scaleOf(existing);
     setScale(n, sx, sy);
-    setLocked2(n, !!(K.kid(existing, "locked") || existing.includes("locked")) && str4((K.kid(existing, "locked") || ["", "yes"])[1]) !== "no");
+    setLocked2(n, !!(K.kid(existing, "locked") || existing.includes("locked")) && str5((K.kid(existing, "locked") || ["", "yes"])[1]) !== "no");
     const eu = ownUuid(existing), nu = ownUuid(n);
     if (eu) {
       if (nu) nu[1] = eu[1];
@@ -18253,8 +23971,8 @@
     keepUuid(oldRef, newRef);
     keepUuid(oldVal, newVal);
     if (oldRef && newRef) newRef[2] = oldRef[2];
-    const libName = str4(existing[1]).split(":").pop();
-    if (oldVal && newVal && str4(oldVal[2]) !== libName) newVal[2] = oldVal[2];
+    const libName = str5(existing[1]).split(":").pop();
+    if (oldVal && newVal && str5(oldVal[2]) !== libName) newVal[2] = oldVal[2];
     const pairs = matchPads(K.kids(existing, "pad"), K.kids(n, "pad"), K.atOf(existing), K.atOf(n));
     const newPads = K.kids(n, "pad");
     for (const [op, np] of pairs) {
@@ -18272,18 +23990,18 @@
         }
       }
       stripNets(np);
-      const onCopper = (K.kid(np, "layers") || []).slice(1).some((l) => COPPER.test(str4(l)));
+      const onCopper = (K.kid(np, "layers") || []).slice(1).some((l) => COPPER.test(str5(l)));
       const onet = K.kid(op, "net");
       if (onCopper && onet) {
         const pf = K.kid(np, "pinfunction") || K.kid(np, "pintype") || K.kid(np, "uuid");
         np.splice(pf ? np.indexOf(pf) : np.length, 0, K.cloneNode(onet));
       }
     }
-    const taken = new Set(pairs.map(([, np]) => str4((ownUuid(np) || [])[1])));
+    const taken = new Set(pairs.map(([, np]) => str5((ownUuid(np) || [])[1])));
     for (const np of newPads) if (!pairs.some((pp) => pp[1] === np)) {
       stripNets(np);
       const u = ownUuid(np);
-      if (u && taken.has(str4(u[1]))) u[1] = K.newUuid();
+      if (u && taken.has(str5(u[1]))) u[1] = K.newUuid();
     }
     void isRefOrValue;
     return { node: n, shifted };
@@ -18292,13 +24010,13 @@
     const k = K.kid(n, key);
     return k ? K.serialize(k) : "";
   };
-  var padLayerSet = (p) => (K.kid(p, "layers") || []).slice(1).map(str4).sort().join(" ");
+  var padLayerSet = (p) => (K.kid(p, "layers") || []).slice(1).map(str5).sort().join(" ");
   function padstackSimilarity(a, b) {
     let s = 1;
     const differ = (x, y) => {
       if (x !== y) s *= 0.9;
     };
-    differ(kidText(a, "padstack") ? str4((K.kid(K.kid(a, "padstack"), "mode") || [])[1]) : "", kidText(b, "padstack") ? str4((K.kid(K.kid(b, "padstack"), "mode") || [])[1]) : "");
+    differ(kidText(a, "padstack") ? str5((K.kid(K.kid(a, "padstack"), "mode") || [])[1]) : "", kidText(b, "padstack") ? str5((K.kid(K.kid(b, "padstack"), "mode") || [])[1]) : "");
     differ(padLayerSet(a), padLayerSet(b));
     differ(String(K.num((K.kid(a, "at") || [])[3])), String(K.num((K.kid(b, "at") || [])[3])));
     differ(["solder_mask_margin", "tenting"].map((k) => kidText(a, k)).join(), ["solder_mask_margin", "tenting"].map((k) => kidText(b, k)).join());
@@ -18306,7 +24024,7 @@
     differ(kidText(a, "options"), kidText(b, "options"));
     differ(kidText(a, "drill"), kidText(b, "drill"));
     for (const k of ["size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "primitives"]) differ(kidText(a, k), kidText(b, k));
-    differ(str4(a[3]), str4(b[3]));
+    differ(str5(a[3]), str5(b[3]));
     return s;
   }
   function padSimilarity(a, b, fa = [0, 0, 0], fb = [0, 0, 0]) {
@@ -18318,13 +24036,13 @@
     };
     const pa = pos(a, fa), pb = pos(b, fb);
     if (Math.abs(pa[0] - pb[0]) > 1e-6 || Math.abs(pa[1] - pb[1]) > 1e-6) s *= 0.9;
-    if (str4(a[2]) !== str4(b[2])) s *= 0.9;
+    if (str5(a[2]) !== str5(b[2])) s *= 0.9;
     return s * padstackSimilarity(a, b);
   }
   function matchPads(oldPads, newPads, fOld = [0, 0, 0], fNew = [0, 0, 0]) {
     const cand = [];
     oldPads.forEach((op, o) => newPads.forEach((np, w) => {
-      const score = padSimilarity(op, np, fOld, fNew) + (str4(op[1]) === str4(np[1]) ? 2 : 0);
+      const score = padSimilarity(op, np, fOld, fNew) + (str5(op[1]) === str5(np[1]) ? 2 : 0);
       if (score > 0) cand.push({ o, w, score });
     }));
     cand.sort((x, y) => y.score - x.score || x.o - y.o || x.w - y.w);
@@ -18340,9 +24058,9 @@
   var exchangeApi = { editableCopy, exchangeFootprint, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };
 
   // web/tools/pcb-tools/fp-props.ts
-  var str5 = (v) => v === void 0 || v === null ? "" : String(v);
-  var num3 = (v, d = 0) => typeof v === "number" ? v : v !== void 0 && v !== null && v !== "" && isFinite(Number(v)) ? Number(v) : d;
-  var yes2 = (n) => !!n && (n.length < 2 || str5(n[1]) !== "no");
+  var str6 = (v) => v === void 0 || v === null ? "" : String(v);
+  var num4 = (v, d = 0) => typeof v === "number" ? v : v !== void 0 && v !== null && v !== "" && isFinite(Number(v)) ? Number(v) : d;
+  var yes2 = (n) => !!n && (n.length < 2 || str6(n[1]) !== "no");
   var TEXT_MIN_SIZE_MM = 1e-3;
   var TEXT_MAX_SIZE_MM = 250;
   var LIB_NAME_INVALID = '\\ / : " * ? < > |';
@@ -18353,7 +24071,7 @@
     const st = doc.fpState;
     return st ? st.fp : null;
   };
-  var fieldName = (n) => n[0] === "fp_text" ? n[1] === "reference" ? "Reference" : n[1] === "value" ? "Value" : str5(n[1]) : str5(n[1]);
+  var fieldName = (n) => n[0] === "fp_text" ? n[1] === "reference" ? "Reference" : n[1] === "value" ? "Value" : str6(n[1]) : str6(n[1]);
   var MANDATORY = ["Reference", "Value", "Datasheet", "Description"];
   function fieldItems(doc) {
     const all = Array.from(doc.items.values()).filter((i) => i.kind === "property");
@@ -18377,41 +24095,41 @@
     return {
       id: it.id,
       name: fieldName(p),
-      value: str5(p[2]),
+      value: str6(p[2]),
       show: !hidden,
-      w: num3(sz && sz[2], 1),
-      h: num3(sz && sz[1], 1),
-      thick: num3(th && th[1], 0.15),
+      w: num4(sz && sz[2], 1),
+      h: num4(sz && sz[1], 1),
+      thick: num4(th && th[1], 0.15),
       italic,
-      layer: str5((K.kid(p, "layer") || [])[1]) || "F.Fab",
-      rot: num3(at[3], 0),
+      layer: str6((K.kid(p, "layer") || [])[1]) || "F.Fab",
+      rot: num4(at[3], 0),
       unconstrained: unl,
-      x: num3(at[1]),
-      y: num3(at[2])
+      x: num4(at[1]),
+      y: num4(at[2])
     };
   }
   function xyz(n, key, d) {
     const k = n ? K.kid(n, key) : null;
     const v = k ? K.kid(k, "xyz") : null;
-    return v ? [num3(v[1], d), num3(v[2], d), num3(v[3], d)] : [d, d, d];
+    return v ? [num4(v[1], d), num4(v[2], d), num4(v[3], d)] : [d, d, d];
   }
   function readFpProps(doc) {
     const h = header(doc) || ["footprint", ""];
     const one = (key) => K.kid(h, key);
-    const attrs = (one("attr") || []).slice(1).map(str5);
+    const attrs = (one("attr") || []).slice(1).map(str6);
     const opt = (key) => {
       const k = one(key);
-      return k ? num3(k[1], NaN) : NaN;
+      return k ? num4(k[1], NaN) : NaN;
     };
     const zc = one("zone_connect");
     const stack = one("stackup");
-    const stackLayers = stack ? K.kids(stack, "layer").map((l) => str5(l[1])) : [];
+    const stackLayers = stack ? K.kids(stack, "layer").map((l) => str6(l[1])) : [];
     const usedLayers = /* @__PURE__ */ new Set();
     for (const it of doc.items.values()) {
       const l = K.kid(it.node, "layer");
-      if (l) usedLayers.add(str5(l[1]));
+      if (l) usedLayers.add(str6(l[1]));
       const ls = K.kid(it.node, "layers");
-      if (ls) ls.slice(1).forEach((x) => usedLayers.add(str5(x)));
+      if (ls) ls.slice(1).forEach((x) => usedLayers.add(str6(x)));
     }
     const nt = one("net_tie_pad_groups");
     const jg = one("jumper_pad_groups");
@@ -18419,13 +24137,13 @@
     const models = K.kids(h, "model").filter((m) => typeof m[1] === "string").map((m) => {
       const hide = K.kid(m, "hide");
       const op = K.kid(m, "opacity");
-      return { file: str5(m[1]), show: !(hide ? yes2(hide) : m.includes("hide")), opacity: op ? num3(op[1], 1) : 1, offset: xyz(m, "offset", 0), scale: xyz(m, "scale", 1), rotate: xyz(m, "rotate", 0) };
+      return { file: str6(m[1]), show: !(hide ? yes2(hide) : m.includes("hide")), opacity: op ? num4(op[1], 1) : 1, offset: xyz(m, "offset", 0), scale: xyz(m, "scale", 1), rotate: xyz(m, "rotate", 0) };
     });
     const cuCount = stack ? stackLayers.filter((l) => /\.Cu$/.test(l)).length : minimalCopperCount(usedLayers);
     return {
-      name: str5(h[1]),
-      descr: str5((one("descr") || [])[1]),
-      tags: str5((one("tags") || [])[1]),
+      name: str6(h[1]),
+      descr: str6((one("descr") || [])[1]),
+      tags: str6((one("tags") || [])[1]),
       height: opt("height"),
       type: attrs.includes("through_hole") ? "through_hole" : attrs.includes("smd") ? "smd" : "",
       excludeFromSim: attrs.includes("exclude_from_sim"),
@@ -18439,14 +24157,14 @@
       pasteRatio: one("solder_paste_margin_ratio") ? opt("solder_paste_margin_ratio") : opt("solder_paste_ratio"),
       allowBridges: attrs.includes("allow_soldermask_bridges"),
       noCourtyard: attrs.includes("allow_missing_courtyard"),
-      zoneConnect: zc ? str5(zc[1]) : "",
-      privateLayers: (one("private_layers") || []).slice(1).map(str5),
+      zoneConnect: zc ? str6(zc[1]) : "",
+      privateLayers: (one("private_layers") || []).slice(1).map(str6),
       customStackup: !!stack,
       copperCount: COPPER_COUNTS.includes(cuCount) ? cuCount : 2,
       userLayers: stack ? stackLayers.filter((l) => /^User\.\d+$/.test(l)) : Array.from(usedLayers).filter((l) => /^User\.\d+$/.test(l)),
-      netTieGroups: nt ? nt.slice(1).map(str5).filter(Boolean) : [],
+      netTieGroups: nt ? nt.slice(1).map(str6).filter(Boolean) : [],
       dupPadsAreJumpers: yes2(one("duplicate_pad_numbers_are_jumpers")),
-      jumperGroups: jg ? jg.slice(1).filter(isList).map((g) => g.map(str5).join(", ")) : [],
+      jumperGroups: jg ? jg.slice(1).filter(isList).map((g) => g.map(str6).join(", ")) : [],
       models,
       fields: fieldItems(doc).map(fieldRow),
       otherAttrs: attrs.filter((a) => !known.includes(a))
@@ -18493,19 +24211,19 @@
       for (const it of doc.items.values()) {
         const ls = [];
         const l = K.kid(it.node, "layer");
-        if (l) ls.push(str5(l[1]));
+        if (l) ls.push(str6(l[1]));
         const lss = K.kid(it.node, "layers");
-        if (lss) ls.push(...lss.slice(1).map(str5));
+        if (lss) ls.push(...lss.slice(1).map(str6));
         for (const x of ls) if ((/\.Cu$/.test(x) || /^User\.\d+$/.test(x)) && !/^\*/.test(x) && !allowed.has(x)) orphans.add(x);
       }
       if (orphans.size) return { msg: `You are trying to remove layers that are used by the footprint: ${Array.from(orphans).join(", ")}.
 Please remove the objects that use these layers first.`, page: 1 };
     }
     const pads = /* @__PURE__ */ new Set();
-    for (const it of doc.items.values()) if (it.kind === "pad") pads.add(str5(it.node[1]));
+    for (const it of doc.items.values()) if (it.kind === "pad") pads.add(str6(it.node[1]));
     for (let i = 0; i < m.jumperGroups.length; i++) for (const t of splitPadList(m.jumperGroups[i])) if (!pads.has(t)) return { msg: `Pad '${t}' in jumper pad group ${i + 1} does not exist in this footprint.`, page: 3 };
     const orig = header(doc);
-    const origName = orig ? str5(orig[1]) : "";
+    const origName = orig ? str6(orig[1]) : "";
     if (name !== origName && opts && opts.libHas && opts.libHas(name)) return { msg: "", page: 0, overwrite: name };
     return null;
   }
@@ -18558,10 +24276,10 @@ Please remove the objects that use these layers first.`, page: 1 };
       if (K.serialize(cur) !== K.serialize(node)) h[i] = node;
     } else h.push(node);
   }
-  var optNum = (h, key, v) => {
+  var optNum2 = (h, key, v) => {
     const cur = K.kid(h, key);
     if (isFinite(v)) {
-      if (!cur || num3(cur[1], NaN) !== r6(v)) setHeader(h, key, [r6(v)]);
+      if (!cur || num4(cur[1], NaN) !== r6(v)) setHeader(h, key, [r6(v)]);
     } else if (cur) setHeader(h, key, null);
   };
   function modelNode(m) {
@@ -18678,9 +24396,9 @@ Please remove the objects that use these layers first.`, page: 1 };
       toks.push(...m.otherAttrs);
       setHeader(h, "attr", toks.length ? toks : null);
     }
-    optNum(h, "clearance", m.clearance);
-    optNum(h, "solder_mask_margin", m.maskMargin);
-    optNum(h, "solder_paste_margin", m.pasteMargin);
+    optNum2(h, "clearance", m.clearance);
+    optNum2(h, "solder_mask_margin", m.maskMargin);
+    optNum2(h, "solder_paste_margin", m.pasteMargin);
     if (!(isNaN(m.pasteRatio) && isNaN(before.pasteRatio)) && m.pasteRatio !== before.pasteRatio) {
       if (K.kid(h, "solder_paste_ratio")) setHeader(h, "solder_paste_ratio", null);
       setHeader(h, "solder_paste_margin_ratio", isFinite(m.pasteRatio) ? [r6(m.pasteRatio)] : null);
@@ -18742,199 +24460,6 @@ Please remove the objects that use these layers first.`, page: 1 };
   }
   var isMandatoryName = (name) => MANDATORY.includes(name);
   var fpPropsApi = { readFpProps, validateFpProps, fpPropsChanges, newFieldRow, fieldItems, parsePaste, formatPaste, customLayerSet, sortLayers, minimalCopperCount, clampTextPenSize, splitPadList, ZONE_CHOICES, COPPER_COUNTS, isMandatoryName };
-
-  // web/tools/pcb-tools/pad-outline.ts
-  var IU = 1e6;
-  var MAX_ERROR_IU = 5e3;
-  var MIN_SEGCOUNT_FOR_CIRCLE = 8;
-  var str6 = (v) => v === void 0 || v === null ? "" : String(v);
-  var num4 = (v) => {
-    const x = Number(v);
-    return isNaN(x) ? 0 : x;
-  };
-  var rnd = (v) => Math.round(v);
-  function arcToSegmentCount(radius, errorMax, arcDeg) {
-    radius = Math.max(1, radius);
-    errorMax = Math.max(1, errorMax);
-    const rel = errorMax / radius;
-    let inc = 180 / Math.PI * Math.acos(1 - rel) * 2;
-    inc = Math.min(360 / MIN_SEGCOUNT_FOR_CIRCLE, inc);
-    return Math.max(rnd(Math.abs(arcDeg) / inc), 2);
-  }
-  var rot2 = (p, deg2) => rotator(deg2)(p[0], p[1]);
-  var resize2 = (v, len) => {
-    const l = Math.hypot(v[0], v[1]);
-    return l ? [rnd(v[0] * len / l), rnd(v[1] * len / l)] : [0, 0];
-  };
-  var perp3 = (v) => [-v[1], v[0]];
-  function reflect(a, b, p) {
-    const d = [b[0] - a[0], b[1] - a[1]];
-    const l2 = d[0] * d[0] + d[1] * d[1];
-    if (!l2) return p;
-    const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2;
-    const q = [a[0] + t * d[0], a[1] + t * d[1]];
-    return [rnd(2 * q[0] - p[0]), rnd(2 * q[1] - p[1])];
-  }
-  function circleToPolygon(c, radius, error, minSeg) {
-    let n = Math.max(minSeg, arcToSegmentCount(radius, error, 360));
-    n = Math.floor((n + 7) / 8) * 8;
-    const delta = 360 / n;
-    const out = [];
-    for (let a = delta / 2; a < 360 - 1e-9; a += delta) {
-      const p = rot2([radius, 0], a);
-      out.push([rnd(p[0]) + c[0], rnd(p[1]) + c[1]]);
-    }
-    return out;
-  }
-  function ovalToPolygon(start, end, width, error, minSeg) {
-    const radius = Math.trunc(width / 2);
-    let n = Math.max(minSeg, arcToSegmentCount(radius, error, 360));
-    n = Math.floor((n + 7) / 8) * 8;
-    const delta = 360 / n;
-    let endp = [end[0] - start[0], end[1] - start[1]], startp = start;
-    if (endp[0] < 0) {
-      endp = [start[0] - end[0], start[1] - end[1]];
-      startp = end;
-    }
-    const ang = Math.atan2(endp[1], endp[0]) * 180 / Math.PI;
-    const len = rnd(Math.hypot(endp[0], endp[1]));
-    const poly = [[len, radius]];
-    for (let a = delta / 2; a < 180 - 1e-9; a += delta) {
-      const p = rot2([0, radius], a);
-      poly.push([rnd(p[0]) + len, rnd(p[1])]);
-    }
-    poly.push([len, -radius], [0, -radius]);
-    for (let a = delta / 2; a < 180 - 1e-9; a += delta) {
-      const p = rot2([0, -radius], a);
-      poly.push([rnd(p[0]), rnd(p[1])]);
-    }
-    poly.push([0, radius]);
-    return poly.map((p) => {
-      const q = rot2(p, -ang);
-      return [rnd(q[0]) + startp[0], rnd(q[1]) + startp[1]];
-    });
-  }
-  function cornerListToPolygon(cs, error) {
-    const out = [];
-    let incoming = [cs[0].p[0] - cs[cs.length - 1].p[0], cs[0].p[1] - cs[cs.length - 1].p[1]];
-    for (let i = 0; i < cs.length; i++) {
-      const cur = cs[i], next = cs[(i + 1) % cs.length];
-      const outgoing = [next.p[0] - cur.p[0], next.p[1] - cur.p[1]];
-      if (!cur.r) out.push(cur.p);
-      else {
-        const radius = cur.r;
-        let endAngle, tan2;
-        if (incoming[0] === 0 && outgoing[1] === 0 || incoming[1] === 0 && outgoing[0] === 0) {
-          endAngle = 90;
-          tan2 = 1;
-        } else {
-          const cosNum = incoming[0] * outgoing[0] + incoming[1] * outgoing[1], cosDen = Math.hypot(incoming[0], incoming[1]) * Math.hypot(outgoing[0], outgoing[1]);
-          const a = Math.acos(cosNum / cosDen);
-          tan2 = Math.tan((Math.PI - a) / 2);
-          endAngle = a * 180 / Math.PI;
-        }
-        const numSegs = Math.max(16, arcToSegmentCount(radius, error, 360));
-        const angDelta = 360 / numSegs;
-        let lastSeg = endAngle;
-        if (lastSeg > 0) {
-          while (lastSeg > angDelta) lastSeg -= angDelta;
-        } else {
-          while (lastSeg < -angDelta) lastSeg += angDelta;
-        }
-        let angPos = Math.abs(lastSeg) < 1e-12 ? angDelta : (angDelta + lastSeg) / 2;
-        const dist = tan2 > 0 ? radius / tan2 : 0;
-        const r1 = resize2(incoming, dist);
-        const arcStart = [cur.p[0] - r1[0], cur.p[1] - r1[1]];
-        const r2 = resize2(perp3(incoming), radius);
-        const center = [arcStart[0] + r2[0], arcStart[1] + r2[1]];
-        const arcEnd = reflect(cur.p, center, arcStart);
-        const origin = [arcStart[0] - center[0], arcStart[1] - center[1]];
-        out.push(arcStart);
-        for (; angPos < endAngle - 1e-9; angPos += angDelta) {
-          const q = rot2(origin, -angPos);
-          out.push([rnd(q[0]) + center[0], rnd(q[1]) + center[1]]);
-        }
-        out.push(arcEnd);
-      }
-      incoming = outgoing;
-    }
-    return out;
-  }
-  function removeDuplicates(cs) {
-    let prev = cs[0].p;
-    for (let i = cs.length - 1; i >= 0; i--) {
-      if (cs[i].p[0] === prev[0] && cs[i].p[1] === prev[1]) cs.splice(i, 1);
-      else prev = cs[i].p;
-    }
-  }
-  function trapezoidToPolygon(size, ddx, ddy, error) {
-    const s = [Math.trunc(size[0] / 2), Math.trunc(size[1] / 2)];
-    const cs = [{ p: [-s[0] + ddy, -s[1] - ddx], r: 0 }, { p: [s[0] - ddy, -s[1] + ddx], r: 0 }, { p: [s[0] + ddy, s[1] - ddx], r: 0 }, { p: [-s[0] - ddy, s[1] + ddx], r: 0 }];
-    if (Math.abs(ddy) === Math.abs(s[0]) || Math.abs(ddx) === Math.abs(s[1])) removeDuplicates(cs);
-    return cornerListToPolygon(cs, error);
-  }
-  var CHAMFER_BITS = { top_left: 1, top_right: 2, bottom_left: 4, bottom_right: 8 };
-  function roundChamferedRectToPolygon(size, radius, chamferRatio, chamferCorners, error) {
-    const s = [Math.trunc(size[0] / 2), Math.trunc(size[1] / 2)];
-    const cs = [{ p: [-s[0], -s[1]], r: radius }, { p: [s[0], -s[1]], r: radius }, { p: [s[0], s[1]], r: radius }, { p: [-s[0], s[1]], r: radius }];
-    if (chamferCorners) {
-      const shorter = Math.min(size[0], size[1]);
-      const chamfer = Math.max(0, rnd(chamferRatio * shorter));
-      const chamId = [CHAMFER_BITS.top_left, CHAMFER_BITS.top_right, CHAMFER_BITS.bottom_right, CHAMFER_BITS.bottom_left];
-      const sign = [0, 1, -1, 0, 0, -1, 1, 0];
-      for (let cc = 0, pos = 0; cc < 4; cc++, pos++) {
-        if (!(chamferCorners & chamId[cc])) continue;
-        cs[pos].r = 0;
-        if (chamfer === 0) continue;
-        cs.splice(pos + 1, 0, { p: [cs[pos].p[0], cs[pos].p[1]], r: 0 });
-        cs[pos].p = [cs[pos].p[0] + sign[2 * cc & 7] * chamfer, cs[pos].p[1] + sign[2 * cc - 2 & 7] * chamfer];
-        cs[pos + 1].p = [cs[pos + 1].p[0] + sign[2 * cc + 1 & 7] * chamfer, cs[pos + 1].p[1] + sign[2 * cc - 1 & 7] * chamfer];
-        pos++;
-      }
-      let cnt = 0;
-      for (const b of chamId) if (chamferCorners & b) cnt++;
-      if (cnt > 1 && 2 * chamfer >= shorter) removeDuplicates(cs);
-    }
-    return cornerListToPolygon(cs, error);
-  }
-  function padShapePolygon(pad, shapePos2, maxError = MAX_ERROR_IU) {
-    const at = K.kid(pad, "at") || [];
-    const orient = num4(at[3]);
-    const sz = K.kid(pad, "size");
-    const w = rnd(num4(sz && sz[1]) * IU), h = rnd(num4(sz && sz[2]) * IU);
-    const shape = str6(pad[3]);
-    const minSeg = 16;
-    let local;
-    const dx = Math.trunc(w / 2), dy = Math.trunc(h / 2);
-    if (shape === "circle" || shape === "oval") {
-      if (dx === dy || shape === "circle") local = circleToPolygon([0, 0], dx, maxError, minSeg);
-      else {
-        const half = Math.min(dx, dy);
-        const d = rot2([dx - half, dy - half], orient);
-        const dd = [rnd(d[0]), rnd(d[1])];
-        const pts = ovalToPolygon([-dd[0], -dd[1]], dd, half * 2, maxError, minSeg);
-        return pts.map((p) => [r6mm(p[0]) + shapePos2[0], r6mm(p[1]) + shapePos2[1]]);
-      }
-    } else if (shape === "rect" || shape === "trapezoid") {
-      const d = shape === "trapezoid" ? K.kid(pad, "rect_delta") : null;
-      const ddx = d ? Math.trunc(rnd(num4(d[1]) * IU) / 2) : 0, ddy = d ? Math.trunc(rnd(num4(d[2]) * IU) / 2) : 0;
-      local = trapezoidToPolygon([w, h], ddx, ddy, maxError);
-    } else {
-      const rr = K.kid(pad, "roundrect_rratio");
-      const radius = rr ? rnd(num4(rr[1]) * Math.min(w, h)) : 0;
-      const ch = K.kid(pad, "chamfer");
-      let bits = 0;
-      for (const c of ch ? ch.slice(1) : []) bits |= CHAMFER_BITS[str6(c)] || 0;
-      const cr = K.kid(pad, "chamfer_ratio");
-      const ratio = cr ? num4(cr[1]) : 0.2;
-      local = roundChamferedRectToPolygon([w, h], shape === "roundrect" ? radius : 0, bits ? ratio : 0, bits, maxError);
-    }
-    return local.map((p) => {
-      const q = rot2(p, orient);
-      return [r6mm(rnd(q[0])) + shapePos2[0], r6mm(rnd(q[1])) + shapePos2[1]];
-    });
-  }
-  var r6mm = (iu) => +(iu / IU).toFixed(6);
 
   // web/tools/pcb-tools/fp-pads.ts
   var str7 = (v) => v === void 0 || v === null ? "" : String(v);
@@ -21114,6 +26639,19 @@ Press <esc> to cancel all; double-click to finish`;
     canAddCorner,
     canRemoveCorner,
     connectedCopperIds,
+    sliverMarkers,
+    sliverPoints,
+    clipperArea,
+    PolygonTest,
+    padAnnulus,
+    connectionWidthMarkers,
+    boxGrid,
+    boxesTouch,
+    circleOutside,
+    ovalOutside,
+    circleApprox,
+    ovalApprox,
+    splitCollinearOutlines,
     designSettings,
     netclassOf,
     netClearance,
