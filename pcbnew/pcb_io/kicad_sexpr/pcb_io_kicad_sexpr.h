@@ -594,6 +594,32 @@ private:
     friend class FP_CACHE;
 
 protected:
+    /**
+     * True when the board is being written at a kept file format version older than
+     * @a aVersion, i.e. a construct that arrived in @a aVersion has to be left out or written
+     * the old way.  Records that on the formatter, so the writer knows the bytes depend on it.
+     */
+    enum class NET_REF
+    {
+        CODE,               ///< tracks, vias, arcs and shapes: (net 3)
+        CODE_AND_NAME,      ///< pads: (net 3 "GND")
+        CODE_THEN_NET_NAME  ///< zones: (net 3)(net_name "GND")
+    };
+
+    /// Write an item's net reference in the form the file's version uses.
+    void formatNetRef( int aNetCode, const wxString& aNetName, NET_REF aStyle ) const;
+
+    bool writingOlderThan( int aVersion ) const
+    {
+        const int version = m_out ? m_out->GetFileFormatVersion() : 0;
+
+        if( version <= 0 || version >= aVersion )
+            return false;
+
+        m_out->SetUsedLegacyRepresentation();
+        return true;
+    }
+
     wxString               m_error;      ///< for throwing exceptions
 
     FP_CACHE*              m_cache;      ///< Footprint library cache

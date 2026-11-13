@@ -120,6 +120,13 @@ KICOMMON_API bool UsesEscapedStackedPinNotation( const wxString& aPinNumber );
 KICOMMON_API int FileFormatVersionStamp( const wxString& aFilePath );
 
 /**
+ * True when @a aOut is writing a document kept at a file format version older than
+ * @a aVersion, so a construct introduced in @a aVersion has to be left out or written the old
+ * way.  Records that on the formatter, so the caller knows the bytes depend on the version.
+ */
+KICOMMON_API bool WritingOlderThan( OUTPUTFORMATTER* aOut, int aVersion );
+
+/**
  * Writes a boolean to the formatter, in the style (aKey [yes|no])
  *
  * @param aOut is the output formatter to write to

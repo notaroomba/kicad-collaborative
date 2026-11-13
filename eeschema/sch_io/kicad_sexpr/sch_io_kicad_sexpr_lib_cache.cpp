@@ -388,7 +388,10 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
     {
         aFormatter.Print( "(symbol %s", name.c_str() );
 
-        if( aSymbol->IsGlobalPower() )
+        // Before 20250227 every power symbol was global and was written as a bare (power).
+        if( aSymbol->IsGlobalPower() && KICAD_FORMAT::WritingOlderThan( &aFormatter, 20250227 ) )
+            aFormatter.Print( "(power)" );
+        else if( aSymbol->IsGlobalPower() )
             aFormatter.Print( "(power global)" );
         else if( aSymbol->IsLocalPower() )
             aFormatter.Print( "(power local)" );
@@ -397,7 +400,12 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
 
         // TODO: add anchor position token here.
 
-        if( aSymbol->IsMultiBodyStyle() )
+        // Before 20250827 a De Morgan symbol was recognised from its body style 2 units alone,
+        // so a schematic kept at such a version leaves (body_styles demorgan) out.  Named body
+        // styles have no older form and raise the version.
+        if( aSymbol->IsMultiBodyStyle()
+                && !( aSymbol->HasDeMorganBodyStyles()
+                      && KICAD_FORMAT::WritingOlderThan( &aFormatter, 20250827 ) ) )
         {
             aFormatter.Print( "(body_styles " );
 
@@ -438,10 +446,22 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
         KICAD_FORMAT::FormatBool( &aFormatter, "exclude_from_sim",  aSymbol->GetExcludedFromSim() );
         KICAD_FORMAT::FormatBool( &aFormatter, "in_bom", !aSymbol->GetExcludedFromBOM() );
         KICAD_FORMAT::FormatBool( &aFormatter, "on_board", !aSymbol->GetExcludedFromBoard() );
-        KICAD_FORMAT::FormatBool( &aFormatter, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() );
+        // Inside a schematic kept at a version older than 20251028 (a library file is written
+        // at the current version), leave out the default, which an older file means anyway.
+        if( aSymbol->GetExcludedFromPosFiles()
+                || !KICAD_FORMAT::WritingOlderThan( &aFormatter, 20251028 ) )
+        {
+            KICAD_FORMAT::FormatBool( &aFormatter, "in_pos_files",
+                                      !aSymbol->GetExcludedFromPosFiles() );
+        }
 
-        KICAD_FORMAT::FormatBool( &aFormatter, "duplicate_pin_numbers_are_jumpers",
-                                  aSymbol->GetDuplicatePinNumbersAreJumpers() );
+        // Absent before 20250227, where it means false.
+        if( aSymbol->GetDuplicatePinNumbersAreJumpers()
+                || !KICAD_FORMAT::WritingOlderThan( &aFormatter, 20250227 ) )
+        {
+            KICAD_FORMAT::FormatBool( &aFormatter, "duplicate_pin_numbers_are_jumpers",
+                                      aSymbol->GetDuplicatePinNumbersAreJumpers() );
+        }
 
         const JUMPER_GROUP_SET& jumperGroups = aSymbol->JumperPinGroups();
 

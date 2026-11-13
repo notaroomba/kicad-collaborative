@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <cmath>
 
 #include <wx/dir.h>
@@ -897,19 +898,25 @@ void PCB_IO_KICAD_SEXPR::formatSetup( const BOARD* aBoard ) const
     KICAD_FORMAT::FormatBool( m_out, "back", bds.m_TentViasBack );
     m_out->Print( 0, ")" );
 
-    m_out->Print( 0, " (covering " );
-    KICAD_FORMAT::FormatBool( m_out, "front", bds.m_CoverViasFront );
-    KICAD_FORMAT::FormatBool( m_out, "back", bds.m_CoverViasBack );
-    m_out->Print( 0, ")" );
+    // The IPC-4761 via protection defaults arrived in 20250228.  Absent, they all read back as
+    // off, so a board kept at an older version leaves them out unless one is actually on.
+    if( bds.m_CoverViasFront || bds.m_CoverViasBack || bds.m_PlugViasFront || bds.m_PlugViasBack
+            || bds.m_CapVias || bds.m_FillVias || !writingOlderThan( 20250228 ) )
+    {
+        m_out->Print( 0, " (covering " );
+        KICAD_FORMAT::FormatBool( m_out, "front", bds.m_CoverViasFront );
+        KICAD_FORMAT::FormatBool( m_out, "back", bds.m_CoverViasBack );
+        m_out->Print( 0, ")" );
 
-    m_out->Print( 0, " (plugging " );
-    KICAD_FORMAT::FormatBool( m_out, "front", bds.m_PlugViasFront );
-    KICAD_FORMAT::FormatBool( m_out, "back", bds.m_PlugViasBack );
-    m_out->Print( 0, ")" );
+        m_out->Print( 0, " (plugging " );
+        KICAD_FORMAT::FormatBool( m_out, "front", bds.m_PlugViasFront );
+        KICAD_FORMAT::FormatBool( m_out, "back", bds.m_PlugViasBack );
+        m_out->Print( 0, ")" );
 
-    KICAD_FORMAT::FormatBool( m_out, "capping", bds.m_CapVias );
+        KICAD_FORMAT::FormatBool( m_out, "capping", bds.m_CapVias );
 
-    KICAD_FORMAT::FormatBool( m_out, "filling", bds.m_FillVias );
+        KICAD_FORMAT::FormatBool( m_out, "filling", bds.m_FillVias );
+    }
 
     if( !bds.m_ZoneLayerProperties.empty() )
     {
@@ -1119,6 +1126,34 @@ void PCB_IO_KICAD_SEXPR::formatVariants( const BOARD* aBoard ) const
 }
 
 
+void PCB_IO_KICAD_SEXPR::formatNetRef( int aNetCode, const wxString& aNetName,
+                                       NET_REF aStyle ) const
+{
+    // From 20251028 a reference is the net's name.  Before that it is the number the board's
+    // net list gives the net, followed by the name on pads and by a separate (net_name) on zones.
+    if( !writingOlderThan( 20251028 ) )
+    {
+        m_out->Print( "(net %s)", m_out->Quotew( aNetName ).c_str() );
+        return;
+    }
+
+    switch( aStyle )
+    {
+    case NET_REF::CODE:
+        m_out->Print( "(net %d)", aNetCode );
+        break;
+
+    case NET_REF::CODE_AND_NAME:
+        m_out->Print( "(net %d %s)", aNetCode, m_out->Quotew( aNetName ).c_str() );
+        break;
+
+    case NET_REF::CODE_THEN_NET_NAME:
+        m_out->Print( "(net %d)(net_name %s)", aNetCode, m_out->Quotew( aNetName ).c_str() );
+        break;
+    }
+}
+
+
 void PCB_IO_KICAD_SEXPR::formatHeader( const BOARD* aBoard ) const
 {
     formatGeneral( aBoard );
@@ -1131,6 +1166,30 @@ void PCB_IO_KICAD_SEXPR::formatHeader( const BOARD* aBoard ) const
 
     // Properties
     formatProperties( aBoard );
+
+    // Before 20251028 items name their net by number, so the board lists the numbers.
+    if( writingOlderThan( 20251028 ) )
+    {
+        std::vector<const NETINFO_ITEM*> nets;
+
+        for( const NETINFO_ITEM* net : aBoard->GetNetInfo() )
+        {
+            if( net )
+                nets.push_back( net );
+        }
+
+        std::sort( nets.begin(), nets.end(),
+                   []( const NETINFO_ITEM* a, const NETINFO_ITEM* b )
+                   {
+                       return a->GetNetCode() < b->GetNetCode();
+                   } );
+
+        for( const NETINFO_ITEM* net : nets )
+        {
+            m_out->Print( "(net %d %s)", net->GetNetCode(),
+                          m_out->Quotew( net->GetNetname() ).c_str() );
+        }
+    }
 
     // Variants
     formatVariants( aBoard );
@@ -1592,7 +1651,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
     }
 
     if( !( m_ctl & CTL_OMIT_PAD_NETS ) && aShape->GetNetCode() > 0 )
-        m_out->Print( "(net %s)", m_out->Quotew( aShape->GetNetname() ).c_str() );
+        formatNetRef( aShape->GetNetCode(), aShape->GetNetname(), NET_REF::CODE );
 
     KICAD_FORMAT::FormatUuid( m_out, aShape->m_Uuid );
     KICAD_FORMAT::FormatCustomProperties( m_out, *aShape );
@@ -1991,8 +2050,13 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint, bool aInLibFile ) 
         m_out->Print( ")" );
     }
 
-    KICAD_FORMAT::FormatBool( m_out, "duplicate_pad_numbers_are_jumpers",
-                              aFootprint->GetDuplicatePadNumbersAreJumpers() );
+    // Before 20250309 the flag did not exist and an absent flag means false, so an older board
+    // kept at its version only says it when it is set (which then raises the version).
+    if( aFootprint->GetDuplicatePadNumbersAreJumpers() || !writingOlderThan( 20250309 ) )
+    {
+        KICAD_FORMAT::FormatBool( m_out, "duplicate_pad_numbers_are_jumpers",
+                                  aFootprint->GetDuplicatePadNumbersAreJumpers() );
+    }
 
     const JUMPER_GROUP_SET& jumperGroups = aFootprint->JumperPadGroups();
 
@@ -2513,7 +2577,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
     // Unconnected pad is default net so don't save it.
     if( !( m_ctl & CTL_OMIT_PAD_NETS ) && aPad->GetNetCode() > 0 )
-        m_out->Print( "(net %s)", m_out->Quotew( aPad->GetNetname() ).c_str() );
+        formatNetRef( aPad->GetNetCode(), aPad->GetNetname(), NET_REF::CODE_AND_NAME );
 
     // Pin functions and types are closely related to nets, so if CTL_OMIT_NETS is set, omit
     // them as well (for instance when saved from library editor).
@@ -3692,11 +3756,35 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* aTrack ) const
             m_out->Print( 0, ")" );
         }
 
-        if( padstack.Drill().is_capped.has_value() )
+        // A board older than 20250228 has no via protection tokens, and its vias load with each
+        // feature explicitly off.  Kept at that version, a via only says what an older file
+        // cannot already mean: anything on, or left to the board default, raises the version.
+        auto saysOnlyOff =
+                [&]( const std::optional<bool>& aFront, const std::optional<bool>& aBack )
+                {
+                    return ( !aFront.has_value() || !*aFront ) && ( !aBack.has_value() || !*aBack )
+                           && ( aFront.has_value() || aBack.has_value() );
+                };
+
+        const bool olderProtection =
+                saysOnlyOff( padstack.FrontOuterLayers().has_covering,
+                             padstack.BackOuterLayers().has_covering )
+                && saysOnlyOff( padstack.FrontOuterLayers().has_plugging,
+                                padstack.BackOuterLayers().has_plugging )
+                && saysOnlyOff( padstack.Drill().is_capped, std::nullopt )
+                && saysOnlyOff( padstack.Drill().is_filled, std::nullopt )
+                && padstack.FrontOuterLayers().has_covering.has_value()
+                && padstack.BackOuterLayers().has_covering.has_value()
+                && padstack.FrontOuterLayers().has_plugging.has_value()
+                && padstack.BackOuterLayers().has_plugging.has_value()
+                && writingOlderThan( 20250228 );
+
+        if( padstack.Drill().is_capped.has_value() && !olderProtection )
             KICAD_FORMAT::FormatOptBool( m_out, "capping", padstack.Drill().is_capped );
 
-        if( padstack.FrontOuterLayers().has_covering.has_value()
-            || padstack.BackOuterLayers().has_covering.has_value() )
+        if( ( padstack.FrontOuterLayers().has_covering.has_value()
+              || padstack.BackOuterLayers().has_covering.has_value() )
+            && !olderProtection )
         {
             m_out->Print( 0, " (covering " );
             KICAD_FORMAT::FormatOptBool( m_out, "front",
@@ -3706,8 +3794,9 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* aTrack ) const
             m_out->Print( 0, ")" );
         }
 
-        if( padstack.FrontOuterLayers().has_plugging.has_value()
-            || padstack.BackOuterLayers().has_plugging.has_value() )
+        if( ( padstack.FrontOuterLayers().has_plugging.has_value()
+              || padstack.BackOuterLayers().has_plugging.has_value() )
+            && !olderProtection )
         {
             m_out->Print( 0, " (plugging " );
             KICAD_FORMAT::FormatOptBool( m_out, "front",
@@ -3717,7 +3806,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* aTrack ) const
             m_out->Print( 0, ")" );
         }
 
-        if( padstack.Drill().is_filled.has_value() )
+        if( padstack.Drill().is_filled.has_value() && !olderProtection )
             KICAD_FORMAT::FormatOptBool( m_out, "filling", padstack.Drill().is_filled );
 
         if( padstack.Mode() != PADSTACK::MODE::NORMAL )
@@ -3797,7 +3886,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* aTrack ) const
     }
 
     if( !( m_ctl & CTL_OMIT_PAD_NETS ) )
-        m_out->Print( "(net %s)", m_out->Quotew( aTrack->GetNetname() ).c_str() );
+        formatNetRef( aTrack->GetNetCode(), aTrack->GetNetname(), NET_REF::CODE );
 
     KICAD_FORMAT::FormatUuid( m_out, aTrack->m_Uuid );
     KICAD_FORMAT::FormatCustomProperties( m_out, *aTrack );
@@ -3812,7 +3901,7 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
     if( !( m_ctl & CTL_OMIT_PAD_NETS ) && aZone->IsOnCopperLayer() && !aZone->GetIsRuleArea()
             && aZone->GetNetCode() > 0 )
     {
-        m_out->Print( "(net %s)", m_out->Quotew( aZone->GetNetname() ).c_str() );
+        formatNetRef( aZone->GetNetCode(), aZone->GetNetname(), NET_REF::CODE_THEN_NET_NAME );
     }
 
     if( aZone->IsLocked() )
@@ -3830,10 +3919,16 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
     else
         formatLayer( aZone->GetFirstLayer() );
 
-    if( !aZone->IsTeardropArea() )
+    // The current format leaves a teardrop's uuid and name out, since teardrops are rebuilt.
+    // A board kept at an older version was written with them by the KiCad that made it; keep
+    // writing them, or the teardrops come back in a different order after every save.
+    const bool teardropKeepsId = aZone->IsTeardropArea()
+                                 && writingOlderThan( SEXPR_BOARD_FILE_VERSION );
+
+    if( !aZone->IsTeardropArea() || teardropKeepsId )
         KICAD_FORMAT::FormatUuid( m_out, aZone->m_Uuid );
 
-    if( !aZone->GetZoneName().empty() && !aZone->IsTeardropArea() )
+    if( !aZone->GetZoneName().empty() && ( !aZone->IsTeardropArea() || teardropKeepsId ) )
         m_out->Print( "(name %s)", m_out->Quotew( aZone->GetZoneName() ).c_str() );
 
     // Save the outline aux info
@@ -3891,6 +3986,12 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
 
     m_out->Print( "(min_thickness %s)",
                   formatInternalUnits( aZone->GetMinThickness() ).c_str() );
+
+    // Before 20250210 a zone without (filled_areas_thickness no) is read as a KiCad 5 stroked
+    // fill and its copper is inflated on load, by KiCad and by Junction alike.  KiCad 9 wrote
+    // the flag on every zone; a board kept at such a version has to as well.
+    if( writingOlderThan( 20250210 ) )
+        KICAD_FORMAT::FormatBool( m_out, "filled_areas_thickness", false );
 
     if( aZone->GetIsRuleArea() )
     {

@@ -130,18 +130,33 @@ void PCB_PLOT_PARAMS::SetSvgPrecision( unsigned aPrecision )
 }
 
 
+static std::string formatLegacyLayerLSET( const LSET& aLayers );
+
+
 void PCB_PLOT_PARAMS::Format( OUTPUTFORMATTER* aFormatter ) const
 {
     aFormatter->Print( "(pcbplotparams" );
 
-    aFormatter->Print( "(layerselection 0x%s)", m_layerSelection.FmtHex().c_str() );
+    // Layers were renumbered at 20240819.  A board kept at an older version is read back with
+    // the old numbering, so write the selections in it.
+    const int  fileVersion = aFormatter->GetFileFormatVersion();
+    const bool legacyLayerIds = fileVersion > 0 && fileVersion < 20240819;
+
+    if( legacyLayerIds )
+        aFormatter->SetUsedLegacyRepresentation();
+
+    aFormatter->Print( "(layerselection 0x%s)",
+                       legacyLayerIds ? formatLegacyLayerLSET( m_layerSelection ).c_str()
+                                      : m_layerSelection.FmtHex().c_str() );
 
     LSET commonLayers;
 
     for( PCB_LAYER_ID commonLayer : m_plotOnAllLayersSequence )
         commonLayers.set( commonLayer );
 
-    aFormatter->Print( "(plot_on_all_layers_selection 0x%s)", commonLayers.FmtHex().c_str() );
+    aFormatter->Print( "(plot_on_all_layers_selection 0x%s)",
+                       legacyLayerIds ? formatLegacyLayerLSET( commonLayers ).c_str()
+                                      : commonLayers.FmtHex().c_str() );
 
     KICAD_FORMAT::FormatBool( aFormatter, "disableapertmacros", m_gerberDisableApertMacros );
     KICAD_FORMAT::FormatBool( aFormatter, "usegerberextensions", m_useGerberProtelExtensions );
@@ -535,6 +550,18 @@ static const std::map<LEGACY_PCB_LAYER_ID, PCB_LAYER_ID> s_legacyLayerIdMap{
     {LEGACY_User_9,    User_9},
     {LEGACY_Rescue,    Rescue},
 };
+
+
+/// The inverse of remapLegacyLayerLSET(), as the hex a pre-20240819 board stores.
+static std::string formatLegacyLayerLSET( const LSET& aLayers )
+{
+    BASE_SET legacy( LEGACY_PCB_LAYER_ID_COUNT );
+
+    for( const auto& [legacyLayer, newLayer] : s_legacyLayerIdMap )
+        legacy[legacyLayer] = aLayers[newLayer];
+
+    return legacy.FmtHex();
+}
 
 
 LSET remapLegacyLayerLSET( const BASE_SET& aLegacyLSET )

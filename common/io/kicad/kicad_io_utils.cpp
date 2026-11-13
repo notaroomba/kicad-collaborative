@@ -1021,6 +1021,18 @@ int FileFormatVersionStamp( const wxString& aFilePath )
 }
 
 
+bool WritingOlderThan( OUTPUTFORMATTER* aOut, int aVersion )
+{
+    const int version = aOut ? aOut->GetFileFormatVersion() : 0;
+
+    if( version <= 0 || version >= aVersion )
+        return false;
+
+    aOut->SetUsedLegacyRepresentation();
+    return true;
+}
+
+
 bool UsesEscapedStackedPinNotation( const wxString& aPinNumber )
 {
     const size_t len = aPinNumber.length();

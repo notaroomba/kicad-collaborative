@@ -1297,14 +1297,13 @@ BOARD* PCB_IO_KICAD_SEXPR_PARSER::parseBOARD_unchecked()
 
     parseHeader();
 
+    // Junction opens a board from a newer KiCad instead of refusing it on its stamp alone:
+    // a newer board often uses nothing this build does not know.  When it does, the parse fails
+    // on the first unknown construct and parseBOARD() reports that as a newer-format error, so
+    // nothing is ever dropped silently.
     auto checkVersion =
             [&]()
             {
-                if( m_requiredVersion > SEXPR_BOARD_FILE_VERSION )
-                {
-                    throw FUTURE_FORMAT_ERROR( fmt::format( "{}", m_requiredVersion ),
-                                               m_generatorVersion );
-                }
             };
 
     std::vector<BOARD_ITEM*> bulkAddedItems;

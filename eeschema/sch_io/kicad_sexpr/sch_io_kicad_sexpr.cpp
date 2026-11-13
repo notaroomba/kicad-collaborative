@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <ki_exception.h>
 #include <algorithm>
 
 #include <fmt/format.h>
@@ -343,7 +344,26 @@ void SCH_IO_KICAD_SEXPR::loadFile( const wxString& aFileName, SCH_SHEET* aSheet 
     SCH_IO_KICAD_SEXPR_PARSER parser( &reader, m_progressReporter, lineCount, m_rootSheet,
                                       m_appending, m_sheetLoad );
 
-    parser.ParseSchematic( aSheet );
+    try
+    {
+        parser.ParseSchematic( aSheet );
+    }
+    catch( const FUTURE_FORMAT_ERROR& )
+    {
+        throw;
+    }
+    catch( const PARSE_ERROR& parseError )
+    {
+        // A file from a newer KiCad that uses something this build does not know.
+        if( parser.GetParsedRequiredVersion() > SEXPR_SCHEMATIC_FILE_VERSION )
+        {
+            throw FUTURE_FORMAT_ERROR( parseError,
+                                       wxString::Format( wxS( "%d" ),
+                                                         parser.GetParsedRequiredVersion() ) );
+        }
+
+        throw;
+    }
 
     // Net chains live at the root-sheet level. Sub-sheet parses always produce empty maps,
     // so applying them would wipe the chains restored from the root file.
@@ -1106,12 +1126,21 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
     }
 
     m_out->Print( "(unit %d)", unit );
-    m_out->Print( "(body_style %d)", aSymbol->GetBodyStyle() );
+    // (body_style) arrived in 20250827; before it the De Morgan form was (convert 2), and the
+    // normal body style was not written at all.
+    if( !KICAD_FORMAT::WritingOlderThan( m_out, 20250827 ) )
+        m_out->Print( "(body_style %d)", aSymbol->GetBodyStyle() );
+    else if( aSymbol->GetBodyStyle() > 1 )
+        m_out->Print( "(convert %d)", aSymbol->GetBodyStyle() );
 
     KICAD_FORMAT::FormatBool( m_out, "exclude_from_sim", aSymbol->GetExcludedFromSim() );
     KICAD_FORMAT::FormatBool( m_out, "in_bom", !aSymbol->GetExcludedFromBOM() );
     KICAD_FORMAT::FormatBool( m_out, "on_board", !aSymbol->GetExcludedFromBoard() );
-    KICAD_FORMAT::FormatBool( m_out, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() );
+    // (in_pos_files) arrived in 20251028; absent, a symbol is in the position files.  A sheet
+    // kept at an older version only says it when the symbol is left out (raising the version).
+    if( aSymbol->GetExcludedFromPosFiles() || !KICAD_FORMAT::WritingOlderThan( m_out, 20251028 ) )
+        KICAD_FORMAT::FormatBool( m_out, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() );
+
     KICAD_FORMAT::FormatBool( m_out, "dnp", aSymbol->GetDNP() );
     formatPinMapOverride( m_out, aSymbol->GetPinMapOverride() );
     // Persist passthrough mode as enum string for tri-state support, but omit when DEFAULT

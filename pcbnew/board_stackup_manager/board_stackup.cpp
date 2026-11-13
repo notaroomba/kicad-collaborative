@@ -880,7 +880,20 @@ void BOARD_STACKUP::FormatBoardStackup( OUTPUTFORMATTER* aFormatter, const BOARD
                                    FormatDouble2Str( item->GetLossTangent( idx ) ).c_str() );
             }
 
-            if( item->HasSpecFreqValue() && item->HasMaterialValue( idx ) )
+            // Before 20260511 a file has no way to say either of these, and a file that does not
+            // say them reads back as a constant model at the FR4 frequency.  Writing them for a
+            // board kept at such a version would lock out the KiCad that wrote it, so leave them
+            // out when they hold only what an older file means anyway.
+            const int  fileVersion = aFormatter->GetFileFormatVersion();
+            const bool impliedByOlderFormat =
+                    fileVersion > 0 && fileVersion < 20260511
+                    && item->GetDielectricModel( idx ) == DIELECTRIC_MODEL::CONSTANT
+                    && ( item->GetSpecFreq( idx ) == 1e9 || item->GetSpecFreq( idx ) == 0.0 );
+
+            if( impliedByOlderFormat && item->HasSpecFreqValue() && item->HasMaterialValue( idx ) )
+                aFormatter->SetUsedLegacyRepresentation();
+
+            if( !impliedByOlderFormat && item->HasSpecFreqValue() && item->HasMaterialValue( idx ) )
             {
                 aFormatter->Print( "(spec_frequency %s)", FormatDouble2Str( item->GetSpecFreq( idx ) ).c_str() );
 

@@ -3174,13 +3174,13 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
 
     bool fileHasUuid = false;
 
+    // Junction opens a schematic from a newer KiCad instead of refusing it on its stamp alone:
+    // a newer file often uses nothing this build does not know.  When it does, the parse fails
+    // on the first unknown construct and SCH_IO_KICAD_SEXPR reports that as a newer-format
+    // error, so nothing is ever dropped silently.
     auto checkVersion =
             [&]()
             {
-                if( m_requiredVersion > SEXPR_SCHEMATIC_FILE_VERSION )
-                {
-                    throw FUTURE_FORMAT_ERROR( fmt::format( "{}", m_requiredVersion ), m_generatorVersion );
-                }
             };
 
     T token;
