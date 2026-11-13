@@ -102,7 +102,9 @@ export function netMap(): Computed | null { try { return compute(); } catch (e) 
 /** The sheet instance on screen. */
 export function currentInstance(c: Computed | null = netMap()): SheetInstance | null {
   const cur = curEntry(); if (!c || !cur) return null;
-  return SN().instanceFor(c.instances, cur.path, preferHuman || (E.kdoc as KDoc & { sheetPath?: string } | null)?.sheetPath || null);
+  // the instance asked for (the navigator, the hierarchy pane) when it is one of this file's, else the sheet's own path
+  const asked = preferHuman && c.instances.some((i) => i.file === cur.path && i.human === preferHuman) ? preferHuman : null;
+  return SN().instanceFor(c.instances, cur.path, asked || (E.kdoc as KDoc & { sheetPath?: string } | null)?.sheetPath || null);
 }
 export function docOfInstance(c: Computed, inst: SheetInstance): KDoc | null { return c.docs.get(inst.file) || null; }
 

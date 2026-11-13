@@ -5,6 +5,8 @@
 // BOM name, whether it is included and whether rows group by it; view presets are KiCad's built-ins plus the project's.
 import { E, appState, toast, toolCtx, cloneNode } from "./editor";
 import { KD, checkbox, download, h, promptFields, promptText, select, textInput, type GridApi, type GridColumn } from "./dom";
+import { messageBox } from "./sch-items";
+import { fieldNamesAreDuplicates } from "./sch-items-logic";
 import { ATTR_FIELDS, BOM_FMT_PRESETS, BOM_PRESETS, ITEM_NO, QTY, bomExport, bomRows, fieldNames, str, symbolRows, withAllFields, type BomField, type BomFmt, type BomPreset, type BomRow, type SymRow } from "./logic";
 import { loadProject, obj, projectDocs, projectName, readDoc, saveProject, sub, submitDocOp, type Json, type JsonObj } from "./project";
 import { variantDocView, variantEditNode } from "./variant-edits";
@@ -191,7 +193,11 @@ export function openFieldsTable(exportTab = false): void {
         if (["Reference", "Value", "Footprint", "Datasheet", "Description", QTY, ITEM_NO].includes(f.name) || ATTR_FIELDS[f.name]) { toast(`The ${f.name} field is mandatory and cannot be removed`); return; }
         preset.fields_ordered.splice(fieldGrid!.selected(), 1); for (const r of rows) { if (r.values[f.name] !== undefined && r.values[f.name] !== "") { r.values[f.name] = ""; for (const m of r.members) editOf(m).values[f.name] = ""; } } markUnsaved(); refreshFields(); refreshGrid(); });
       fbtn("✎", "Rename selected field", "kd-sft-renamefield", () => { const f = preset.fields_ordered[fieldGrid!.selected()]; if (!f) return; void promptText("Rename Field", "New field name:", f.label).then((n) => { if (n) { f.label = n; markUnsaved(); refreshFields(); refreshGrid(); } }); });
-      fbtn("+", "Add a new field", "kd-sft-addfield", () => { void promptText("Add Field", "New field name:").then((n) => { n = (n || "").trim(); if (!n) return; if (preset.fields_ordered.some((f) => f.name === n)) { toast(`Field name '${n}' already in use.`); return; } preset.fields_ordered.push({ name: n, label: n, show: true, group_by: false }); markUnsaved(); refreshFields(); refreshGrid(); }); });
+      fbtn("+", "Add a new field", "kd-sft-addfield", () => { void promptText("Add Field", "New field name:").then((n) => {
+        // DIALOG_FIELDS_TABLE::OnAddField: Cancel does nothing; an empty or taken name is a DisplayError box
+        if (n === null) return;
+        if (!n) { void messageBox("Field must have a name."); return; }
+        if (preset.fields_ordered.some((f) => fieldNamesAreDuplicates(n, f.name))) { void messageBox(`Field name '${n}' already in use.`); return; } preset.fields_ordered.push({ name: n, label: n, show: true, group_by: false }); markUnsaved(); refreshFields(); refreshGrid(); }); });
       presetSel = select([], "", (v) => {
         if (v === SAVE) { fillPresetSel(); void promptText("Save BOM Preset", "BOM preset name:", presetName === UNSAVED ? "" : presetName).then((n) => { n = (n || "").trim(); if (!n) return; if (BOM_PRESETS.some((p) => p.name === n)) { toast("Default presets cannot be modified.\nPlease use a different name."); return; }
           userPresets = userPresets.filter((p) => p.name !== n); userPresets.push(Object.assign(clone(preset), { name: n })); presetName = n; dirtySettings = true; fillPresetSel(); }); return; }

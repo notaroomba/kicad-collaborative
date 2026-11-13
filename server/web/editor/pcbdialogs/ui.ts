@@ -244,26 +244,28 @@ export const currentUnits = (): Units => (E.units === "in" || E.units === "mil" 
 export const unitName = (): string => UNIT[currentUnits()].name;
 const trim = (s: string): string => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
 /** A millimetre length in the editor's units, without the unit name ("0.2", "7.87"). */
-export function fmtLen(mm: number): string { const u = UNIT[currentUnits()]; return trim((mm / u.per).toFixed(u.digits)) || "0"; }
+export function fmtLen(mm: number, units: Units = currentUnits()): string { const u = UNIT[units] || UNIT.mm; return trim((mm / u.per).toFixed(u.digits)) || "0"; }
 /** …with the unit name, as KiCad's grids and reports show it ("0.2 mm"). */
 export function fmtLenU(mm: number): string { return fmtLen(mm) + " " + unitName(); }
 /** A typed length ("0.2", "0.2mm", "8 mils", "0.01in") in millimetres; NaN when it is no number. */
-export function parseLen(text: string): number {
+export function parseLen(text: string, units: Units = currentUnits()): number {
   const m = /^\s*(-?\d*[.,]?\d+(?:e-?\d+)?)\s*(mm|in|inch|"|mils?|thou|um|µm)?\s*$/i.exec(text);
   if (!m) return NaN;
   const v = Number(m[1].replace(",", ".")), s = (m[2] || "").toLowerCase();
-  const per = s === "mm" ? 1 : s === "in" || s === "inch" || s === '"' ? 25.4 : s.startsWith("mil") || s === "thou" ? 0.0254 : s === "um" || s === "µm" ? 0.001 : UNIT[currentUnits()].per;
+  const per = s === "mm" ? 1 : s === "in" || s === "inch" || s === '"' ? 25.4 : s.startsWith("mil") || s === "thou" ? 0.0254 : s === "um" || s === "µm" ? 0.001 : (UNIT[units] || UNIT.mm).per;
   return +(v * per).toFixed(6);
 }
 
 export interface Field<T> { el: HTMLElement; get(): T; set(v: T): void; input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement }
 /** A length: the text control; pair it with unitLabel() in a form row. */
-export function lenField(mm: number, opts?: { ro?: boolean; key?: string; min?: number; allowEmpty?: boolean }): Field<number> {
+export function lenField(mm: number, opts?: { ro?: boolean; key?: string; min?: number; allowEmpty?: boolean; units?: Units; onChange?: (mm: number) => void }): Field<number> {
   let cur = mm;
-  const input = h("input", { type: "text", value: opts && opts.allowEmpty && !isFinite(mm) ? "" : fmtLen(mm), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
-  input.addEventListener("change", () => { const v = parseLen(input.value); if (isNaN(v)) { if (opts && opts.allowEmpty && !input.value.trim()) { cur = NaN; return; } input.value = isFinite(cur) ? fmtLen(cur) : ""; return; } cur = opts && opts.min !== undefined ? Math.max(opts.min, v) : v; input.value = fmtLen(cur); });
+  // `units`: another frame's units than the open editor's (a Preferences page of the schematic editor)
+  const u = (opts && opts.units) || undefined, fmt = (v: number): string => fmtLen(v, u), parse = (t: string): number => parseLen(t, u);
+  const input = h("input", { type: "text", value: opts && opts.allowEmpty && !isFinite(mm) ? "" : fmt(mm), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
+  input.addEventListener("change", () => { const v = parse(input.value); if (isNaN(v)) { if (opts && opts.allowEmpty && !input.value.trim()) { cur = NaN; return; } input.value = isFinite(cur) ? fmt(cur) : ""; return; } cur = opts && opts.min !== undefined ? Math.max(opts.min, v) : v; input.value = fmt(cur); if (opts && opts.onChange) opts.onChange(cur); });
   // an untouched field gives back the value it was given, not its display rounding (0.58642 shown as 0.5864)
-  return { el: input, input, get: () => { if (isFinite(cur) && input.value === fmtLen(cur)) return cur; const v = parseLen(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmtLen(v) : ""; } };
+  return { el: input, input, get: () => { if (isFinite(cur) && input.value === fmt(cur)) return cur; const v = parse(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmt(v) : ""; } };
 }
 /**
  * A board position (UNIT_BINDER with SetCoordType( ABS_X_COORD / ABS_Y_COORD )): shown from the user origin with the

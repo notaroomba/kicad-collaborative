@@ -256,7 +256,10 @@ export function onKeyCapture(ev: KeyboardEvent) {
   if (ev.key === "Escape") {
     let took = true;
     if (S.pedit) pointEditEnd(ctx, false); else if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
-    else if (S.carry) cancelCarry(ctx); else if (S.pinPlace) cancelPinPlace(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight && S.escClearsNetHighlight !== false) clearHighlight(ctx); else took = false;
+    else if (S.carry) cancelCarry(ctx); else if (S.pinPlace) cancelPinPlace(ctx); else if (S.drag) endDrag(ctx, false);
+    // SCH_SELECTION_TOOL: an Esc with something selected only clears the selection; the one that finds nothing
+    // selected clears the net highlighting (input.esc_clears_net_highlight)
+    else if (S.highlight && S.escClearsNetHighlight !== false && !hasSelection(ctx)) clearHighlight(ctx); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; S.selEnds = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
   } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {
@@ -265,6 +268,11 @@ export function onKeyCapture(ev: KeyboardEvent) {
     ctx.setTool("hlabel");
     if (S.cursor) promptFor(ctx, "hierarchical_label", S.cursor, S.cursorClient);
   }
+}
+/** SCH_SELECTION_TOOL::GetSelection() is not empty: an item, a multi-selection, a wire end or a field. */
+function hasSelection(ctx: SchCtx): boolean {
+  const c = ctx as SchCtx & { selection?: Set<string>; selected?: unknown; selField?: unknown };
+  return !!(S.sel || S.selEnds || c.selected || (c.selection && c.selection.size) || c.selField);
 }
 // KiCad's label and text tools (SCH_DRAWING_TOOLS::createNewLabel / createNewText) open the properties dialog
 // of the new item first; OK puts it on the cursor and the next click places it.  A local or global label clicked

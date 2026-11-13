@@ -45,13 +45,49 @@ export function letterSubReference(unit: number): string {
   return s;
 }
 
-/** TestSimilarLabels' normalizeLabel: SplitString's "+" prefix dropped, micro signs read as 'u', case folded. */
+const isDigit = (c: string): boolean => c >= "0" && c <= "9";
+/** NUMERIC_EVALUATOR::IsOldSchoolDecimalSeparator: the SI letters that may stand for the decimal point (4K7). */
+const OLD_SCHOOL = new Set(["p", "n", "\u00b5", "\u03bc", "u", "m", "L", "R", "F", "k", "K", "M", "G", "T"]);
+/** ApplyModifier (string_utils.cpp), whether it takes the text: a multiplier letter, then nothing or a unit it knows. */
+function applyModifierTakes(t: string): boolean {
+  if (!t.length) return false;
+  const st = t.replace(/\s+$/, "");
+  if (st === "m" || st === "mils" || st === "in") return true;
+  const units = ("afpnu\u00b5\u03bcmLRFkKMGTPE".includes(t[0]) ? t.slice(1) : t).replace(/\s+$/, "");
+  return !units.length || ["f", "hz", "\u03c9", "w", "v", "a", "h", "s", "m"].includes(units.toLowerCase());
+}
+/**
+ * SplitString (string_utils.cpp): the text before the number, the number and what follows.  One SI letter inside the
+ * number (4K7, 1u5F) is its decimal point: the number gets a "." and the letter goes to the front of the suffix.
+ */
+export function splitString(s: string): [string, string, string] {
+  if (!s.length) return ["", "", ""];
+  let ii = s.length - 1;
+  for (; ii >= 0; ii--) if (isDigit(s[ii])) break;
+  if (ii < 0) return [s, "", ""];
+  let end = s.slice(ii + 1), infix = "";
+  const position = ii + 1;
+  for (; ii >= 0; ii--) {
+    const c = s[ii];
+    if (isDigit(c)) continue;
+    // one infix only (4K7, not 4KK7); not the first character unless nothing follows (K7, not K7X); a valid SI
+    // separator (not 4X7) that makes sense with the suffix (not T9G)
+    if (!infix && (ii > 0 || !end) && OLD_SCHOOL.has(c) && applyModifierTakes(c + end)) { infix = c; continue; }
+    if (c === "." || c === ",") continue;
+    break;
+  }
+  let beg = "", digits: string;
+  if (ii < 0) digits = s.slice(0, position);
+  else { digits = s.slice(ii + 1, position); beg = s.slice(0, ii + 1); }
+  if (infix) { digits = digits.split(infix).join("."); end = infix + end; }
+  return [beg, digits, end];
+}
+/** TestSimilarLabels' normalizeLabel: SplitString, a "+" prefix dropped, micro signs in the suffix read as 'u', case folded. */
 export function normalizeSimilar(label: string): string {
-  let s = label.trim();
-  if (/^\+\d/.test(s)) s = s.slice(1);
-  const last = s.search(/\d(?!.*\d)/);
-  if (last >= 0) s = s.slice(0, last + 1) + s.slice(last + 1).replace(/[µμ]/g, "u");
-  return s.toLowerCase();
+  let [prefix, value, units] = splitString(label.trim());
+  if (prefix === "+") prefix = "";
+  units = units.replace(/[\u00b5\u03bc]/g, "u");
+  return prefix.toLowerCase() + value.toLowerCase() + units.toLowerCase();
 }
 
 /** The name ERC compares for a net: its power symbol, else a global, hierarchical or local label (driver priority). */

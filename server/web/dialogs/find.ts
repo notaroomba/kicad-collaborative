@@ -10,6 +10,8 @@ import { keyName } from "../keys";
 
 interface FindState extends FindOpts { replacement: string; backward: boolean; currentSheetOnly: boolean }
 const F: FindState = { query: "", replacement: "", backward: false, matchCase: false, wholeWord: false, regex: false, pins: false, hiddenFields: false, currentSheetOnly: false, selectionOnly: false, replaceRefs: false, netNames: false };
+/** FindNext's searchAllSheets: !searchCurrentSheetOnly (Find Next Marker shares the dialog's search data). */
+export const findSearchesAllSheets = (): boolean => !F.currentSheetOnly && !F.selectionOnly;
 let last: { docId: string | null; key: string } | null = null;   // the hit the cursor sits on
 let api: DlgApi | null = null, statusEl: HTMLElement | null = null;
 const otherDocs = new Map<string, KDoc>();

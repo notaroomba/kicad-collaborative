@@ -190,7 +190,8 @@ interface ToolModule {
   /** Menu entries + hotkeys the chrome binds generically; may be absent or empty. */
   actions?: Record<string, ToolModuleAction>;
   state: Record<string, unknown> & { sel?: unknown; lineMode?: string; dragMode?: string; drag?: unknown };
-  onActivate?(toolId: string, ctx: ToolCtx): void;
+  /** `before`: what was selected before the tool change cleared it (SCH_DRAWING_TOOLS reads GetSelection().Front() first). */
+  onActivate?(toolId: string, ctx: ToolCtx, before?: string[]): void;
   onPointerDown?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): boolean;
   onPointerMove?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): void;
   onPointerUp?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): void;

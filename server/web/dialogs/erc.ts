@@ -10,6 +10,8 @@
 // Exclusions are kept in the project's erc_exclusions (ERC_SETTINGS::m_ErcExclusions) in the form its erc schema
 // already uses, so a re-run excludes the same violations again (SCHEMATIC::ResolveERCExclusions).
 import { E, appState, applyView, centerOn, openDocId, requestRender, store, toast, toolCtx } from "./editor";
+import { preferInstance } from "../editor/schnets";
+import { setStatusBar } from "../editor/appstore";
 import { syntaxHelp } from "../editor/syntax-help";
 import { KD, checkbox, download, h, popupMenu, type DlgApi, type PopItem } from "./dom";
 import { ERC_RULES, defaultSeverity, stepMarker } from "./erc-rules";
@@ -20,7 +22,8 @@ import { messageBox, textEntryBox } from "../editor/pcbdialogs/ui";
 import type { Units } from "../store";
 import { ercTextReport, sevOf, shownBy } from "./erc-report";
 import { sheetList, type SheetInstance } from "./sch-hierarchy";
-import { allMarkers, distribute, ercProjectOpts, forgetHierErc, onSheetOpened, runHierErc, type HierMarker } from "./erc-hier";
+import { allMarkers, distribute, ercProjectOpts, forgetHierErc, onOpenSheet, onSheetOpened, runHierErc, runSheetList, type HierMarker } from "./erc-hier";
+import { findSearchesAllSheets } from "./find";
 export { ercTextReport, sevOf, shownBy };
 
 export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean; items?: { x: number; y: number; desc: string; len?: number }[] }
@@ -65,7 +68,7 @@ const liveMarkers = (): ErcViolation[] => ((E as unknown as { markers?: ErcViola
 /** Every marker of the hierarchy the last Run ERC found (the open sheet's are the canvas list itself). */
 export const markers = (): ErcViolation[] => allMarkers(liveMarkers() as unknown as HierMarker[]) as unknown as ErcViolation[];
 const hereDoc = (): string | null => (appState as unknown as { docId: string | null }).docId;
-const onOtherSheet = (m: ErcViolation): boolean => { const d = (m as { docId?: string }).docId; return !!d && d !== hereDoc(); };
+const onOtherSheet = (m: ErcViolation): boolean => !onOpenSheet(m as { docId?: string; sheetKey?: string });
 /** Hand a changed marker list (or the same list, changed) to the canvas and the module: each sheet keeps its own. */
 function publishMarkers(all: ErcViolation[]): void {
   const l = distribute(all as unknown as HierMarker[]) as unknown as ErcViolation[];
@@ -135,17 +138,52 @@ export function ercCrossProbe(m: ErcViolation, open: boolean): void {
   if (!isLive()) { if (!open) return; openErc(); }
   if (isLive()) live!.show(m);
 }
-/** Find Next Marker (Ctrl+Shift+F3, SCH_FIND_REPLACE_TOOL with data.markersOnly): the next marker on the sheet, selected and centred. */
-export function findNextMarker(): boolean {
-  const all = markers().filter((m) => !isExcluded(m)); if (!all.length) return false;
-  // nextMatch walks the screen's items in their sorted order: top to bottom, then left to right
-  const order = all.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  const cur = selectedMarker(), i = cur ? order.indexOf(cur) : -1, m = order[(i + 1) % order.length];
+/** nextMatch's order over a screen's markers (top to bottom, then left to right); excluded ones are skipped. */
+const screenOrder = (l: ErcViolation[]): ErcViolation[] => l.filter((m) => !isExcluded(m)).sort((a, b) => (a.y - b.y) || (a.x - b.x));
+/** The found marker: selected alone and centred (FindNext's ClearSelection / AddItemToSel / FocusOnLocation). */
+function focusMarker(m: ErcViolation): void {
   const ctx = toolCtx(); ctx.setSelection([]); selectMarker(m);
   if (E.zoom < 2) { E.zoom = 3; E.viewTouched = true; applyView(); }
   centerOn(m.x, m.y);
   if (isLive()) live!.show(m);
   const hooks = (E as unknown as { hooks?: { markerSelectionChanged?: () => void } }).hooks; if (hooks && hooks.markerSelectionChanged) hooks.markerSelectionChanged();
+}
+/** SCH_ACTIONS::changeSheet to a run's sheet instance, then `then` once it is on screen. */
+function changeSheet(sh: { docId: string; sheetPath: string }, then: () => void): void {
+  preferInstance(sh.sheetPath);
+  if (sh.docId === hereDoc()) { onSheetOpened(); then(); return; }
+  const before = E.kdoc; openDocId(sh.docId);
+  let tries = 0; const wait = (): void => { if (E.kdoc && E.kdoc !== before && hereDoc() === sh.docId) { onSheetOpened(); then(); return; } if (++tries < 100) setTimeout(wait, 100); };
+  setTimeout(wait, 100);
+}
+/**
+ * Find Next Marker (Ctrl+Shift+F3, SCH_FIND_REPLACE_TOOL::FindNext with data.markersOnly): nextMatch walks the current
+ * screen's markers after the found one; past the last, unless the Find dialog searches the current sheet only, the
+ * sheets that follow in page order (SCH_ACTIONS::changeSheet to the first with a marker); then it wraps around
+ * ("Reached end of schematic.").  Another sheet's markers are never selected without opening that sheet.
+ */
+export function findNextMarker(): boolean {
+  const here = screenOrder(liveMarkers()), cur = here.find((m) => m.selected) || null;
+  const i = cur ? here.indexOf(cur) : -1;
+  if (i + 1 < here.length) { focusMarker(here[i + 1]); return true; }
+  const { sheets, open } = runSheetList();
+  const firstOn = (k: number): ErcViolation | null => { const l = screenOrder((sheets[k].markers as unknown as ErcViolation[])); return l[0] || null; };
+  const goTo = (k: number, wrapped: boolean): boolean => {
+    if (k === open) { const m = here[0]; if (!m) return false; focusMarker(m); }
+    else changeSheet(sheets[k], () => { const m = screenOrder(liveMarkers())[0]; if (m) focusMarker(m); });
+    if (wrapped) setStatusBar({ message: "Reached end of schematic." });
+    return true;
+  };
+  if (findSearchesAllSheets() && sheets.length && open >= 0) {
+    // a fresh session (nothing found yet) starts at the first sheet; else at the one after the current sheet
+    for (let k = cur ? open + 1 : 0; k < sheets.length; k++) if (k !== open && firstOn(k)) return goTo(k, false);
+    if (!cur) { setStatusBar({ message: "No matches found." }); return false; }
+    for (let k = 0; k < sheets.length; k++) if (k === open ? here.length : firstOn(k)) return goTo(k, true);
+    return false;
+  }
+  if (!here.length) { setStatusBar({ message: "No matches found." }); return false; }
+  focusMarker(here[0]);
+  if (cur) setStatusBar({ message: findSearchesAllSheets() ? "Reached end of schematic." : "Reached end of sheet." });
   return true;
 }
 
@@ -193,12 +231,16 @@ export function openErc(): void {
     fillIgnored();
   };
   // DIALOG_ERC::OnERCItemSelected: the marker is selected; with cross-probing its items are and the view centres on it
-  const pick = (m: ErcViolation, fromCanvas = false) => {
+  const pick = (m: ErcViolation, fromCanvas = false, opened = false): void => {
     current = m;
     // a marker on another sheet: that sheet opens (SCH_EDIT_FRAME::FocusOnItem changes the current sheet), then it is picked there
-    if (!fromCanvas && onOtherSheet(m)) {
-      const target = (m as { docId?: string }).docId!, before = E.kdoc; openDocId(target);
-      let tries = 0; const wait = (): void => { if (E.kdoc && E.kdoc !== before && hereDoc() === target) { onSheetOpened(); pick(m); return; } if (++tries < 100) setTimeout(wait, 100); };
+    if (!fromCanvas && !opened && onOtherSheet(m)) {
+      const own = m as { docId?: string; sheetPath?: string }, target = own.docId!, before = E.kdoc;
+      // the instance of a sheet used more than once (SCH_SHEET_PATH): the hierarchy shows that one
+      preferInstance(own.sheetPath || null);
+      if (target === hereDoc()) { onSheetOpened(); pick(m, false, true); return; }
+      openDocId(target);
+      let tries = 0; const wait = (): void => { if (E.kdoc && E.kdoc !== before && hereDoc() === target) { onSheetOpened(); pick(m, false, true); return; } if (++tries < 100) setTimeout(wait, 100); };
       setTimeout(wait, 100); refresh(); return;
     }
     if (!fromCanvas) {

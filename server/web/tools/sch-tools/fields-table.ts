@@ -13,6 +13,12 @@ export const refCmp = (a: unknown, b: unknown) => { const ma = str(a).match(/^(.
 export interface FieldsRow { id: string; ref: string; values: Record<string, string> }
 /** An edit of the table: new field values (by name) for one symbol. */
 export interface FieldsEdit { id: string; values?: Record<string, unknown> }
+/** FieldNamesAreDuplicates (template_fieldnames.cpp): the same name, or a case variant of a mandatory field's name. */
+function fieldNamesAreDuplicates(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.toLowerCase() !== b.toLowerCase()) return false;
+  return ["reference", "value", "footprint", "datasheet", "description"].includes(a.toLowerCase());
+}
 export function fieldsTableRows(doc: KDoc) {
   const fields = ["Reference", "Value", "Footprint", "Datasheet"], rows: FieldsRow[] = [];
   for (const it of doc.items.values()) {
@@ -61,10 +67,16 @@ export function openFieldsTable(ctx: SchCtx) {
       build(b: HTMLElement) { b.innerHTML = '<p style="margin:0 0 8px">New field name:</p><input type="text" data-kd-newfield style="width:100%">'; inp = b.querySelector("input"); setTimeout(() => inp && inp.focus(), 0); },
       ok() {
         const name = inp ? inp.value : "";
-        if (!name) { ctx.toast("Field must have a name."); return; }
-        if (fields.some((f) => f.toLowerCase() === name.toLowerCase())) { ctx.toast(`Field name '${name}' already in use.`); return; }
+        // DisplayError: a modal error box once the entry dialog has closed
+        if (!name) { setTimeout(() => displayError("Field must have a name."), 0); return; }
+        if (fields.some((f) => fieldNamesAreDuplicates(name, f))) { setTimeout(() => displayError(`Field name '${name}' already in use.`), 0); return; }
         collect(); fields.push(name); render();
       } });
+  };
+  // DisplayError( this, … ): a modal box with the message and OK
+  const displayError = (msg: string) => {
+    KD.open({ title: "Error", width: 380, buttons: [{ label: "OK", primary: true, isDefault: true, close: true }],
+      build(b: HTMLElement) { const p = document.createElement("p"); p.id = "kd-msgbox-text"; p.style.cssText = "margin:4px 0;white-space:pre-wrap"; p.textContent = msg; b.append(p); } });
   };
   const collect = () => { for (const inp of body!.querySelectorAll<HTMLInputElement>("input[data-id]")) { const r = table.rows.find((x) => x.id === inp.dataset.id); if (r) r.values[inp.dataset.field!] = inp.value; } };
   const original = new Map(table.rows.map((r) => [r.id, Object.assign({}, r.values)]));

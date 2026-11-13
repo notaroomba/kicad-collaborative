@@ -282,5 +282,28 @@ test("Increment Annotations From: references of the start's prefix numbered at l
   assert.strictEqual(sch.incrementAnnotationChanges(d, "R", 1).length, 0, "no number: nothing to split");
 });
 
+test("Increment Annotations From 'R?': Split gives prefix R and atoi(\"\") = 0, so every R moves up, unannotated ones too", () => {
+  const { d, c } = fresh();
+  d.lib.set("T:R", K.parse(LIB("T:R", "R", PIN("passive", "~", "1", 0, 0))));
+  ["R?", "R2", "R10", "C1"].forEach((r, i) => place(c, "T:R", [25.4 + i * 12.7, 25.4], r));
+  const ch = sch.incrementAnnotationChanges(d, "R?", 5);
+  assert.strictEqual(ch.length, 3);
+  for (const x of ch) assert.ok(K.applyChange(d, x, IU));
+  const now = Array.from(d.items.values()).filter((x) => x.kind === "symbol").map((x) => K.str(K.kids(x.node, "property").find((q) => K.str(q[1]) === "Reference")[2]));
+  assert.deepStrictEqual(now.sort(), ["C1", "R15", "R5", "R7"]);
+});
+
+test("TestSimilarLabels normalisation is SplitString: one SI infix is the decimal point (4K7 = 4.7K, 4u7 = 4µ7)", () => {
+  assert.strictEqual(_.normalizeSimilar("4K7"), _.normalizeSimilar("4.7K"));
+  assert.strictEqual(_.normalizeSimilar("4u7"), _.normalizeSimilar("4\u00b57"));
+  assert.strictEqual(_.normalizeSimilar("4u7"), _.normalizeSimilar("4.7u"));
+  assert.strictEqual(_.normalizeSimilar("1u5F"), _.normalizeSimilar("1.5uF"));
+  assert.notStrictEqual(_.normalizeSimilar("4X7"), _.normalizeSimilar("4.7X"), "X is no SI separator");
+  assert.notStrictEqual(_.normalizeSimilar("4KK7"), _.normalizeSimilar("4.7KK"), "one infix only");
+  assert.notStrictEqual(_.normalizeSimilar("+3V3"), _.normalizeSimilar("3.3V"), "V is no SI separator: +3V is the prefix");
+  assert.strictEqual(_.normalizeSimilar("+5V"), _.normalizeSimilar("5v"));
+  assert.strictEqual(_.normalizeSimilar("VCC"), "vcc");
+});
+
 console.log(`sch-sweep9: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

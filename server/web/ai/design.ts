@@ -254,19 +254,61 @@ export async function geometry(input: { doc?: string; silk?: boolean }): Promise
 }
 
 /** The ERC as the editor's Run ERC runs it: the project's Pin Conflicts Map and rule severities (Schematic Setup > Electrical Rules). */
-export function projectErc(doc: any, extra?: Record<string, unknown>): any[] {
+/**
+ * ERC_TESTER::RunTests for one sheet.  The tests over the whole SCH_SHEET_LIST (TestMissingUnits,
+ * TestMultiunitFootprints, CheckAnnotation's unit values, the label name tests) run over every sheet of the
+ * hierarchy, and this sheet's share of them is kept: another unit of a symbol placed on another sheet is not missing.
+ */
+export async function projectErc(doc: any, path: string, extra?: Record<string, unknown>): Promise<any[]> {
   const s = SCH(); if (!s || !s.ercCheck) throw new ToolError("The ERC is not available.");
   let pro: any = {}; try { pro = (ED().proSettings ? JSON.parse(ED().proSettings) : null) || {}; } catch { pro = {}; }
   const erc = pro.erc || {}, ns = pro.net_settings || {}, cg = pro.schematic && pro.schematic.connection_grid_size;
   const classes = Array.isArray(ns.classes) ? ns.classes.map((c: any) => String((c && c.name) || "")).filter(Boolean) : null;
-  const marks = s.ercCheck(doc, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined, netclasses: classes, connectionGrid: typeof cg === "number" && cg > 0 ? cg * 0.0254 : 1.27 }, extra || {}));
+  const cross = !!s.ercHierarchy;
+  const marks = s.ercCheck(doc, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined, netclasses: classes, connectionGrid: typeof cg === "number" && cg > 0 ? cg * 0.0254 : 1.27 }, extra || {}, cross ? { crossSheet: false } : {}));
+  if (cross) {
+    const sheets = await hierarchyDocs(doc, path);
+    const i = sheets.findIndex((x) => x.doc === doc);
+    try { const per = s.ercHierarchy(sheets.map((x) => ({ doc: x.doc, key: x.path }))); if (i >= 0 && per[i]) marks.push(...per[i]); } catch { /* the sheet's own tests stand */ }
+  }
   return applySeverities(marks, erc.rule_severities && typeof erc.rule_severities === "object" ? erc.rule_severities : null);
+}
+/** The schematic documents of the hierarchy `doc` belongs to (BuildSheetList): from the sheets no other sheet names, down
+ *  through their sheet symbols.  Each document is listed once. */
+async function hierarchyDocs(doc: any, path: string): Promise<{ doc: any; path: string }[]> {
+  const entries = projectDocs().filter((d) => d.docType === "kicad_sch");
+  const loaded = new Map<string, any>();
+  for (const e of entries) {
+    if (e.path === path) { loaded.set(e.path, doc); continue; }
+    try { loaded.set(e.path, (await resolveDoc(e.path)).doc); } catch { /* unreadable: left out */ }
+  }
+  if (!loaded.has(path)) loaded.set(path, doc);
+  const dirOf = (p: string): string => p.split("/").slice(0, -1).join("/");
+  const children = (p: string): string[] => {
+    const d = loaded.get(p), out: string[] = []; if (!d) return out;
+    for (const it of d.items.values()) {
+      if (it.kind !== "sheet" || !it.file) continue;
+      const rel = dirOf(p) ? `${dirOf(p)}/${it.file}` : String(it.file), base = String(it.file).split("/").pop();
+      const hit = loaded.has(rel) ? rel : Array.from(loaded.keys()).find((k) => k.split("/").pop() === base);
+      if (hit) out.push(hit);
+    }
+    return out;
+  };
+  const named = new Set<string>(); for (const p of loaded.keys()) for (const c of children(p)) if (c !== p) named.add(c);
+  const roots = Array.from(loaded.keys()).filter((p) => !named.has(p));
+  // the hierarchy that holds this sheet
+  for (const r of roots) {
+    const seen = new Set<string>(), walk = (p: string): void => { if (seen.has(p)) return; seen.add(p); for (const c of children(p)) walk(c); };
+    walk(r);
+    if (seen.has(path)) return Array.from(seen).map((p) => ({ doc: loaded.get(p), path: p }));
+  }
+  return [{ doc, path }];
 }
 
 export async function runChecks(input: { doc?: string }): Promise<unknown> {
   const { doc, path } = await resolveDoc(input.doc);
   let markers: any[];
-  if (doc.type === "sch") markers = projectErc(doc);
+  if (doc.type === "sch") markers = await projectErc(doc, path);
   else { const P = PCB(); if (!P || !P.drc) throw new ToolError("The DRC is not available."); markers = P.drc(doc, P.designSettings(ED().proSettings || null), {}); }
   const refs = (ids: string[]) => Array.from(new Set((ids || []).map((id) => doc.items.get(id)).filter(Boolean).map((it: any) => it.ref).filter(Boolean)));
   const rows = markers.map((m) => ({ severity: m.severity, code: m.code, message: m.text, x: r3(m.x), y: r3(m.y), refs: refs(m.ids) }));
@@ -275,7 +317,7 @@ export async function runChecks(input: { doc?: string }): Promise<unknown> {
   }
   const errors = rows.filter((m) => m.severity === "error").length; const cap = 200;
   return { document: path, check: doc.type === "sch" ? "ERC" : "DRC", errors, warnings: rows.length - errors, violations: rows.slice(0, cap), truncated: rows.length > cap ? `showing ${cap} of ${rows.length}` : undefined,
-    note: doc.type === "sch" ? "This ERC covers the one sheet; nets that leave it through hierarchical or global labels are treated as driven elsewhere." : "This DRC is the editor's subset: clearance, edge clearance, unconnected items, shorts, dangling tracks, annular width, courtyards, plus Junction's own track_right_angle (no square corners outside antenna and RF nets)." };
+    note: doc.type === "sch" ? "This ERC covers the one sheet; nets that leave it through hierarchical or global labels are treated as driven elsewhere. The tests across sheets (symbol units, footprints and values of a multi-unit symbol, label names) look at every sheet of the hierarchy." : "This DRC is the editor's subset: clearance, edge clearance, unconnected items, shorts, dangling tracks, annular width, courtyards, plus Junction's own track_right_angle (no square corners outside antenna and RF nets)." };
 }
 
 export async function boardInfo(): Promise<unknown> {

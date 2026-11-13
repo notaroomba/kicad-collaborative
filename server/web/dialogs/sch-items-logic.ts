@@ -535,3 +535,11 @@ export function supportsEndings(kind: string, n: SNode): boolean {
   const a = pts[0], b = pts[pts.length - 1]; const f = kid(n, "fill"); const filled = !!f && !!kid(f, "type") && str((kid(f, "type") as SNode)[1]) !== "none";
   return pts.length === 2 || (!filled && !(num(a[1]) === num(b[1]) && num(a[2]) === num(b[2])));
 }
+
+/** FieldNamesAreDuplicates (template_fieldnames.cpp): the same name, or a case variant of a mandatory field's name
+ *  (the parser folds those). */
+export function fieldNamesAreDuplicates(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.toLowerCase() !== b.toLowerCase()) return false;
+  return ["reference", "value", "footprint", "datasheet", "description"].includes(a.toLowerCase());
+}

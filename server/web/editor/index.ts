@@ -628,7 +628,9 @@ document.addEventListener("keydown", (ev) => {
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
     if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField && !E.selPins.length) CollabTools.sch.exitGroup();
     if (!isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup && !selectionIds().length && !E.selField && !(CollabTools.pcb.state && (CollabTools.pcb.state.padSel || (CollabTools.pcb.state as { escCleared?: unknown }).escCleared === ev))) CollabTools.pcb.exitGroup(toolCtx());
-    clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
+    // a schematic's net highlighting belongs to the module's Esc (SCH_SELECTION_TOOL: cleared only with nothing selected)
+    const schNetHl = isSch() && !!(CollabTools.sch && (CollabTools.sch.state as { highlight?: unknown }).highlight);
+    clearAllSelection(false); if (E.highlightIds && !schNetHl) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   // a schematic field selected on its own: Delete hides it, M / G carry it (SCH_EDIT_TOOL::DoDelete, SCH_MOVE_TOOL); a board
   // field goes on to the board module (Delete: "Hide Field") and the Move action (gestures.ts startFieldMove)

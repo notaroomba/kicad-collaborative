@@ -90,14 +90,34 @@ const unitLetter = (unit: number): string => { let n = unit, s = ""; while (n > 
  * reference has the start reference's prefix and a number at least the start's moves up by `by`.  A start reference
  * without a number (SCH_REFERENCE::IsSplitNeeded false) changes nothing.
  */
+/** SCH_REFERENCE::Split: the prefix and the number text ("R?" and "R" are "R" and ""; "U 12" is "U" and " 12"). */
+export function splitReference(ref: string): { prefix: string; num: string } {
+  if (!ref) return { prefix: ref, num: "" };
+  const last = ref[ref.length - 1];
+  if (last === "?") return { prefix: ref.slice(0, -1), num: "" };
+  if (!/[0-9]/.test(last)) return { prefix: ref, num: "" };
+  for (let ll = ref.length - 1; ll >= 0; ll--) {
+    const c = ref[ll];
+    if (c <= " " || /[0-9]/.test(c)) continue;
+    return { prefix: ref.slice(0, ll + 1), num: ref.slice(ll + 1) };
+  }
+  return { prefix: ref, num: "" };
+}
+/** atoi: leading blanks, a sign and digits; anything else is 0. */
+const atoi = (t: string): number => { const n = parseInt(t, 10); return isFinite(n) ? n : 0; };
+/**
+ * SCH_EDITOR_CONTROL::IncrementAnnotations: a start reference that IsSplitNeeded (ends in a digit or "?") gives the
+ * prefix and the first number (atoi, so "R?" starts at 0 and takes the unannotated ones too); every symbol whose
+ * split reference has that prefix and a number at or above it moves up by `by`.
+ */
 export function incrementAnnotationChanges(doc: KDoc, start: string, by: number): KChange[] {
-  const m = str(start).match(/^(.*?)(\d+)$/); if (!m) return [];
-  const prefix = m[1], from = parseInt(m[2], 10), changes: KChange[] = [];
+  const st = str(start); if (!st || !/[?0-9]$/.test(st)) return [];
+  const s0 = splitReference(st), prefix = s0.prefix, from = atoi(s0.num), changes: KChange[] = [];
   for (const it of doc.items.values()) {
     if (it.kind !== "symbol") continue;
     const rf = refField(it.node); if (!rf) continue;
-    const r = str(rf[2]).match(/^(.*?)(\d+)$/); if (!r || r[1] !== prefix) continue;
-    const num = parseInt(r[2], 10); if (num < from) continue;
+    const r = splitReference(str(rf[2])); if (r.prefix !== prefix) continue;
+    const num = atoi(r.num); if (num < from) continue;
     const node = deep(it.node); setReference(node, prefix + String(num + by)); changes.push(modChange(doc, it, node));
   }
   return changes;

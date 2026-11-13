@@ -14,9 +14,9 @@ import { repeatLast } from "./repeat";
 import { deleteAt, deleteSelected, duplicateSelected, orientSelected } from "./selection-edits";
 import { finishSchArc, showSchArcMode, schArcBackup, schArcDrawMode, schArcMove, schArcPosture, switchSchArcMode } from "./arcs";
 import { cancelDraw, drawClick, drawPoint, finishDraw, undoDrawPoint } from "./shapes";
-import { beginPinPlace, movePinPlace, sheetAt, sheetPinClick } from "./sheets";
+import { movePinPlace, sheetAt, sheetPinClick } from "./sheets";
 import { mmPerPx, snapConn } from "./snap";
-import { DRAW_TOOLS, S, TEXT_KINDS, atOf, toolOf } from "./state";
+import { DRAW_TOOLS, S, TEXT_KINDS, toolOf } from "./state";
 import { restoreBreak } from "./transforms";
 import { ghost, same } from "./util";
 import { startWire, switchPosture, undoSegment, wireClick, wireFollow } from "./wire";
@@ -49,7 +49,7 @@ export function syntheticClick(ctx: SchCtx) {
   if (!S.cursor) return false;
   return onPointerDown({ button: 0, synthetic: true }, S.cursor, ctx);
 }
-export function onActivate(toolId: string, ctx: SchCtx) {
+export function onActivate(toolId: string, ctx: SchCtx, before: string[] = []) {
   S.ctx = ctx; installDom(ctx); announceModes(ctx);
   if (!S.internalSwitch && busyMessage()) { ctx.toast(busyMessage()!); ctx.requestRender(); return; }   // refused: the operation keeps going
   S.tool = toolId;
@@ -60,12 +60,12 @@ export function onActivate(toolId: string, ctx: SchCtx) {
   S.sel = null; S.hover = null; S.selEnds = null;
   if (toolId !== "place" && toolId !== "power" && toolId !== "image") S.carry = null;   // a carried duplicate rides into the place tool
   if (toolId !== "image") S.imageWait = false;    // a file chosen after leaving the tool is ignored anyway
-  // TwoClickPlace( placeSheetPin ): the selected sheet is the one to work on, and the first pin comes up at once
+  // TwoClickPlace( placeSheetPin ): GetSelection().Front(), taken before the selection is cleared, is the sheet the
+  // first click works on wherever it lands
   S.pinPlace = null; S.pinSheet = null;
   if (toolId === "sheetpin" && !ctx.viewOnly) {
-    const ids = ctx.selection ? Array.from(ctx.selection as Iterable<string>) : [];
-    const sh = ids.map((id) => ctx.doc.items.get(id)).find((it) => it && it.kind === "sheet") || (ctx.selected ? ctx.doc.items.get(ctx.selected.id) : undefined);
-    if (sh && sh.kind === "sheet") { S.pinSheet = sh.id; beginPinPlace(ctx, sh, S.cursor || atOf(sh.node) as Pt); }
+    const front = before.length ? ctx.doc.items.get(before[0]) : undefined;
+    if (front && front.kind === "sheet") S.pinSheet = front.id;
   }
   if (toolId === "junction") startCarry(ctx, "junction", junctionNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "noconnect") startCarry(ctx, "no_connect", noConnectNode(S.cursor || [0, 0]), S.cursor);

@@ -9,6 +9,7 @@ import { openDoc, rootSchematic } from "../doc";
 import { E } from "../state";
 import { toast } from "../util";
 import { selectionIds } from "../gestures";
+import { applyHighlight, preferInstance } from "../schnets";
 import { projectJson, saveProject, sub } from "../../dialogs/project";
 import { KC, currentDocId, isSchDoc, kdoc, openDocs, panelStore, projectId, projectName, textEntry, type DocEntryLite, tctx } from "./core";
 
@@ -86,6 +87,17 @@ export function publishHierarchy(): void {
   panelStore.set({ hierarchy: { root, version: panelStore.get().hierarchy.version + 1 } });
 }
 
+/** The human sheet path of a tree path ("/" for the root, "/Sub/Inner/" below it), as the net map names instances. */
+function humanOf(path: string): string {
+  let n = panelStore.get().hierarchy.root, out = "/";
+  if (!n || path === "/") return "/";
+  const ids = path.split("/").filter(Boolean);
+  for (let i = 0; i < ids.length && n; i++) {
+    const p: string = "/" + ids.slice(0, i + 1).join("/") + "/", c: HierNode | undefined = n.children.find((x: HierNode) => x.path === p);
+    if (!c) break; out += c.name + "/"; n = c;
+  }
+  return out;
+}
 function find(path: string): HierNode | null {
   const walk = (n: HierNode | null): HierNode | null => { if (!n) return null; if (n.path === path) return n; for (const c of n.children) { const r = walk(c); if (r) return r; } return null; };
   return walk(panelStore.get().hierarchy.root);
@@ -191,7 +203,14 @@ function namesTo(path: string): string[] {
 
 export function hierarchyDispatch(a: PanelAction): boolean {
   switch (a.t) {
-    case "hierOpen": { const n = find(a.path); if (!n) return true; if (!n.docId) { toast("That sheet isn't in the shared project yet"); return true; } if (n.docId !== currentDocId()) { const d = schDocs().find((x) => x.docId === n.docId); if (d) void openDoc(d); } return true; }
+    case "hierOpen": {
+      const n = find(a.path); if (!n) return true; if (!n.docId) { toast("That sheet isn't in the shared project yet"); return true; }
+      // the SCH_SHEET_PATH the row stands for: a sheet used twice shows as the instance that was clicked
+      preferInstance(humanOf(a.path));
+      if (n.docId !== currentDocId()) { const d = schDocs().find((x) => x.docId === n.docId); if (d) void openDoc(d); }
+      else applyHighlight();   // the same file as another instance: the net map's listeners take the new instance
+      return true;
+    }
     case "hierRename": void rename(a.path); return true;
     case "hierPage": void editPage(a.path); return true;
     default: return false;

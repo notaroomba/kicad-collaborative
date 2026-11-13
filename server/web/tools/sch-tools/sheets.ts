@@ -7,6 +7,7 @@ import { mmPerPx } from "./snap";
 import { K, S, atOf, kid, kids, num, str } from "./state";
 import { addNode, deep, ghost, modChange, r4, segDist } from "./util";
 import { strNumCmp, subsheetDoc } from "./erc";
+import { switchTool } from "./junction";
 
 // ---------------------------------------------------------------- hierarchical sheets (the sheet file lives on the server first)
 export const SHEET_EXT = ".kicad_sch";
@@ -193,7 +194,8 @@ export function beginPinPlace(ctx: SchCtx, sheet: KItem, mm: Pt): void {
     const cur = ctx.doc.items.get(sheet.id); if (!cur) return;
     if (!sub) { ctx.toast("The sheet's file is not loaded", 2000); return; }
     const label = importHierLabel(cur, sub);
-    if (!label) { ctx.toast("No new hierarchical labels found.", 2000); return; }
+    // the message, then `break` out of TwoClickPlace's event loop: the tool ends and selection resumes
+    if (!label) { ctx.toast("No new hierarchical labels found.", 2000); S.pinSheet = null; switchTool(ctx, "select"); ctx.requestRender(); return; }
     S.pinPlace = { sheetId: cur.id, name: label.name, shape: label.shape, node: cur.node, item: null, p: [0, 0], side: "left" };
     movePinPlace(ctx, S.cursor || mm);
   };

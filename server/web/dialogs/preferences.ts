@@ -8,8 +8,8 @@ import { keyName } from "../keys";
 import { hotkeysPanel } from "./hotkeys-panel";
 import type { UserHotkeys } from "../menuspec";
 import { KD, checkbox, h, select } from "./dom";
-import { messageBox } from "../editor/pcbdialogs/ui";
-import { loadUnits, messageText } from "../units";
+import { lenField, messageBox } from "../editor/pcbdialogs/ui";
+import { loadUnits, messageText, unitName } from "../units";
 import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, editorId, gridLabel, savePrefs, scaleOf, type EditorId, type Prefs, type SchThemeId } from "./prefs";
 import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
@@ -208,12 +208,10 @@ export function openPreferences(page?: string, staged?: Staged): void {
               checkbox("<ESC> clears net highlighting", se.escClearsNetHighlight, (on) => { se.escClearsNetHighlight = on; }, { id: "kd-pref-escnet", title: "First <ESC> in selection tool clears selection, next clears net highlighting" }),
               checkbox("Automatically annotate symbols", se.autoAnnotate, (on) => { se.autoAnnotate = on; }, { id: "kd-pref-autoannotate" }));
             // Repeated Items: the pitches through UNIT_BINDER in the schematic editor's units, the label step a spin control
-            const su = loadUnits("eeschema").units, per = su === "mil" ? 0.0254 : su === "in" ? 25.4 : 1, uname = su === "mil" ? "mils" : su;
-            const show = (mm: number): string => String(+(mm / per).toFixed(su === "in" ? 4 : su === "mil" ? 2 : 4));
+            const su = loadUnits("eeschema").units, uname = unitName(su);
             const pitch = (id: string, mm: number, set: (v: number) => void): HTMLInputElement => {
-              const inp = h("input", { type: "text", id, value: show(mm), style: "width:90px" }) as HTMLInputElement;
-              inp.addEventListener("change", () => { const v = parseFloat(inp.value); if (isFinite(v)) { set(+(v * per).toFixed(6)); inp.value = show(v * per); } else inp.value = show(mm); });
-              return inp;
+              const f = lenField(mm, { units: su, onChange: set }); f.input.id = id; f.input.style.width = "90px";
+              return f.input as HTMLInputElement;
             };
             const inc = h("input", { type: "number", id: "kd-pref-repeatinc", min: "-100000", max: "100000", step: "1", value: String(se.repeatIncrement), style: "width:90px" }) as HTMLInputElement;
             inc.addEventListener("change", () => { const v = Math.round(+inc.value); if (isFinite(v)) { se.repeatIncrement = Math.max(-100000, Math.min(100000, v)); inc.value = String(se.repeatIncrement); } });

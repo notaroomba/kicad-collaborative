@@ -224,10 +224,10 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       body = b;
       // Label: (a combo of the existing names for local and global labels, a single line for hierarchical ones)
       if (!dir) {
-        // m_valueCombo: an editable combo box (a themed list, never the browser's datalist popup)
+        // m_valueCombo: a FILTER_COMBOBOX (a themed list with its Filter: entry, never the browser's datalist popup)
         const single = textInput(st.text, undefined, { id: "kd-lbl-text", disabled: ro, style: "width:100%" });
         const host = h("div", { style: "flex:1;min-width:0" }, single);
-        const combo = (kind === "label" || kind === "global_label") ? comboBox(single, existingLabels(kind, doc)) : null;
+        const combo = (kind === "label" || kind === "global_label") ? comboBox(single, existingLabels(kind, doc), { filter: true }) : null;
         const singleEl: HTMLElement = combo ? combo.el : single;
         const area = h("textarea", { id: "kd-lbl-multi", rows: 5, style: "width:100%;font-family:inherit", disabled: ro }) as HTMLTextAreaElement; area.value = st.text;
         textEl = single;

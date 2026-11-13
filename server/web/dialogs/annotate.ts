@@ -10,7 +10,7 @@ import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
 import { obj, projectDocs, projectJson, readDoc, saveProject, sub, submitDocOp } from "./project";
 import { effectiveTheme } from "../theme";
 import { subsheetFiles } from "./annotate-logic";
-import { reportPanel, type ReportLine } from "../editor/pcbdialogs/ui";
+import { messageBox, reportPanel, type ReportLine } from "../editor/pcbdialogs/ui";
 export { subsheetFiles };
 
 /** BITMAPS::annotate_down_right / annotate_right_down (24 px, light and dark), beside the two sort orders. */
@@ -223,7 +223,8 @@ export function openIncrementAnnotations(): void {
     },
     ok() {
       const start = ref ? ref.value : "", step = by ? Math.max(1, Math.min(64, Math.round(+by.value) || 1)) : 1;
-      if (!start) { toast("A start reference designator is required."); return false; }
+      // m_FirstRefDes's wxTextValidator( wxFILTER_EMPTY ): wxWidgets' own box, and the dialog stays
+      if (!start) { messageBox("Validation conflict", "Required information entry is empty."); if (ref) ref.focus(); return false; }
       void runIncrement(start, step, !!(all && all.checked));
     } });
 }

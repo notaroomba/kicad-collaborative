@@ -4,7 +4,7 @@ import { setGroupCurrent, setStatusBar, state, store } from "./appstore";
 import { refreshCrosshair } from "./crosshair";
 import { refreshCursor } from "./cursors";
 import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./doc";
-import { toolChanging } from "./gestures";
+import { selectionIds, toolChanging } from "./gestures";
 import { sendOp } from "./net";
 import { cycleFollow } from "./peers";
 import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, scopeToEnteredGroup, selFilter } from "./selection";
@@ -204,7 +204,8 @@ export function setTool(t: string) {
   // "Press <ESC> to cancel …" in the infobar and keeps going)
   const vm = activeModule() as unknown as { vetoTool?: (id: string, c: unknown) => boolean } | null;
   if (vm && vm.vetoTool && t !== "pan" && t !== "zoomtool") { try { if (vm.vetoTool(t, toolCtx())) return; } catch (e) { console.warn(e); } }
-  const prev = E.tool; if (t !== prev) toolChanging(t);   // a drag in flight is put back; a drawing tool starts with nothing selected
+  const prev = E.tool, before = t !== prev ? selectionIds() : [];
+  if (t !== prev) toolChanging(t);   // a drag in flight is put back; a drawing tool starts with nothing selected
   E.tool = t;
   store.slice("tool", { current: t });
   const mt = moduleTool(t);
@@ -212,7 +213,7 @@ export function setTool(t: string) {
   if (t !== "measure" && E.measure) { E.measure = null; requestRepaint(); }
   refreshCursor();   // the tool's KICURSOR
   if (t === "comment" && !E.canComment) { toast(state.me ? "You have view-only access: ask the owner to let you comment" : "Sign in to comment"); setTool("select"); return; }
-  const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx()); } catch (e) { console.warn(e); } }
+  const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx(), before); } catch (e) { console.warn(e); } }
   requestRender();
 }
 
