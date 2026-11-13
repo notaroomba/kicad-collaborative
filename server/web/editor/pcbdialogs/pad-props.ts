@@ -5,10 +5,11 @@
 // item dialog.  Only what the user changed is written, and each child goes where PCB_IO_KICAD_SEXPR::format(PAD)
 // puts it (PAD_ORDER below), in the writer's number format, so the desktop reads back exactly what it would have
 // written itself.  Pads with a front/inner/back or custom padstack show their front-layer values (the mode is shown,
-// not editable here); the Backdrill page, teardrop overrides, custom primitives and pad-to-die delay are kept as
-// stored.
+// not editable here); the Backdrill page and custom primitives are kept as stored.
 import { box, checkField, form, h, coordField, lenField, notebook, openDialog, selectField, textField, unitLabel, unitName, fmtLen, parseLen, type Field } from "./ui";
 import type { DlgShape, DlgType, PadModel, padModel as PadModelApi } from "../../canvas/pad-model";
+import { popupMenu } from "../../dialogs/dom";
+import { fitMenu } from "../../menufit";
 
 const PM = (): typeof PadModelApi => (KiCadCanvas as unknown as { padModel: typeof PadModelApi }).padModel;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -114,14 +115,23 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const chamferRows = form([["Chamfer size:", cratio, unitLabel("%")], ["Chamfer corners:", h("div", { class: "pp-corners" }, ...corner.map((c) => c.el))]]);
       shapeProps.append(trapRows, chamferRows, roundRows);
       const sx = lenField(m.w, { ro, key: "sizeX" }), sy = lenField(m.h, { ro, key: "sizeY" });
-      const angle = h("input", { type: "text", value: f6(m.angle), list: "pp-angles", disabled: ro, "data-k": "angle", style: "width:100px" });
-      const angles = h("datalist", { id: "pp-angles" }, ...["0", "90", "-90", "180"].map((a) => h("option", { value: a })));
+      // m_cb_padrotation: an editable combo box with the 0 / 90 / -90 / 180 presets
+      const angle = h("input", { type: "text", value: f6(m.angle), disabled: ro, "data-k": "angle", style: "width:100px" });
+      const angles = h("button", { type: "button", class: "btn pp-combo", disabled: ro, "data-k": "anglePresets", title: "Preset angles" }, "▾");
+      angles.addEventListener("click", () => {
+        const r = angle.getBoundingClientRect();
+        const menu = popupMenu(r.left, r.bottom, ["0", "90", "-90", "180"].map((a) => ({ label: a, run: () => { angle.value = a; angle.dispatchEvent(new Event("change", { bubbles: true })); } })));
+        menu.style.minWidth = Math.round(r.width + angles.getBoundingClientRect().width) + "px";
+        fitMenu(menu, { below: r, gap: 0 });
+      });
       const offOn = checkField(m.offset, "Offset shape from hole", { ro, key: "offset", onChange: (v) => { m.offset = v; offX.input.disabled = offY.input.disabled = ro || !v; redraw(); } });
       const offX = lenField(m.ox, { ro: ro || !m.offset, key: "offsetX" }), offY = lenField(m.oy, { ro: ro || !m.offset, key: "offsetY" });
       const holeShape = selectField<number>(m.holeOblong ? 1 : 0, [[0, "Round"], [1, "Oblong"]], { ro, key: "holeShape", onChange: (v) => { m.holeOblong = v === 1; holeY.input.disabled = ro || !m.holeOblong || !holed(); redraw(); } });
       const holeX = lenField(m.hx, { ro, key: "holeX" }), holeY = lenField(m.holeOblong ? m.hy : m.hx, { ro: ro || !m.holeOblong, key: "holeY" });
       const dieOn = checkField(m.dieOn, "Specify pad to die length", { ro, key: "dieOn", onChange: (v) => { m.dieOn = v; die.input.disabled = ro || !v; } });
       const die = lenField(m.die, { ro: ro || !m.dieOn, key: "dieLength" });
+      const delayOn = checkField(m.dieDelayOn, "Specify pad to die delay", { ro, key: "dieDelayOn", onChange: (v) => { m.dieDelayOn = v; delay.disabled = ro || !v; } });
+      const delay = h("input", { type: "text", value: f6(m.dieDelay), disabled: ro || !m.dieDelayOn, "data-k": "dieDelay", style: "width:110px" });
       const xy = (a: Field<number>, b: Field<number>): HTMLElement => h("span", { class: "pd-xy" }, a.el, h("span", { class: "unit" }, unitName()), h("label", null, "Y:"), b.el);
       const left = h("div", { class: "pp-col" },
         form([["Pad type:", type.el], ["Pad number:", number.el], ["Net name:", net.el], ["Position X:", xy(px, py), unitLabel()]], true),
@@ -129,12 +139,13 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
         form([["Padstack mode:", psModeSel.el], ["Edit layer:", selectField<string>("F.Cu", [["F.Cu", padstack ? "F.Cu" : "All layers"]], { ro: true, key: "editLayer" }).el]], true),
         h("hr", { class: "pp-hr" }),
         form([["Pad shape:", shape.el]], true), shapeProps,
-        form([["Pad size X:", xy(sx, sy), unitLabel()], ["Angle:", h("span", null, angle, angles), unitLabel("deg")]], true),
+        form([["Pad size X:", xy(sx, sy), unitLabel()], ["Angle:", h("span", { class: "pp-anglebox" }, angle, angles), unitLabel("deg")]], true),
         h("div", { class: "pp-row" }, offOn.el), form([["X:", xy(offX, offY), unitLabel()]], true),
         h("hr", { class: "pp-hr" }),
         form([["Hole shape:", holeShape.el], ["Hole size X:", xy(holeX, holeY), unitLabel()]], true),
         h("hr", { class: "pp-hr" }),
-        h("div", { class: "pp-row" }, dieOn.el, die.el, unitLabel()));
+        h("div", { class: "pp-row" }, dieOn.el, die.el, unitLabel()),
+        h("div", { class: "pp-row" }, delayOn.el, delay, unitLabel("ps")));
       // layers (the middle column)
       const copperSel = h("k-select", { disabled: ro, "data-k": "copperLayers" }) as HTMLSelectElement;
       const fillCopper = (): void => { copperSel.replaceChildren(...PM().copperChoices(m.type).map((l, i) => h("option", { value: String(i) }, l))); if (m.copper >= copperSel.options.length) m.copper = 0; copperSel.selectedIndex = m.copper; copperSel.disabled = ro || m.type === "aperture"; };
@@ -142,12 +153,13 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const techChecks = PM().TECH.map(([label, l]) => checkField(!!m.tech[l], label, { ro, key: "layer-" + l, onChange: (v) => { m.tech[l] = v; redraw(); } }));
       const prop = selectField<string>(m.property, PM().PROPS, { ro, key: "fabProperty", onChange: (v) => { m.property = v; } });
       prop.input.title = "Optional property to specify a special purpose or constraint in fabrication files:\nBGA attribute is for pads in BGA footprints\nFiducial local is a fiducial for the parent footprint\nFiducial global is a fiducial for the whole board\nTest Point specifies an electrical test point\nHeatsink specifies a thermal pad\nCastellated specifies a through hole pad on a board edge\nMechanical specifies a through-hole pad that is used for mechanical support";
+      const sim = selectField<string>(m.simType === "source" || m.simType === "sink" ? m.simType : "", [["", "None"], ["source", "Source"], ["sink", "Sink"]], { ro, key: "simType", onChange: (v) => { m.simType = v; } });
       const middle = h("div", { class: "pp-col" },
         h("div", { class: "pd-box" },
           flipped ? h("div", { class: "pd-info" }, "Parent footprint on board is flipped.\nLayers will be reversed.") : null,
           form([["Copper layers:", copperSel]], true),
           h("div", { class: "pp-techhd" }, "Technical Layers"), h("div", { class: "pp-tech" }, ...techChecks.map((c) => c.el))),
-        form([["Fabrication property:", prop.el]], true));
+        form([["Fabrication property:", prop.el], ["Simulation electrical type:", sim.el]], true));
       // preview
       const cv = h("canvas", { class: "pp-preview" });
       const sketch = checkField(false, "Preview pad in sketch mode", { key: "sketch", onChange: () => redraw() });
@@ -159,9 +171,30 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const optLen = (v: number, key: string): Field<number> => lenField(v, { ro, key, allowEmpty: true });
       const gap = optLen(m.gap, "reliefGap"), spoke = optLen(m.spoke, "spokeWidth");
       const spokeAngle = h("input", { type: "text", value: f6(m.spokeAngle), disabled: ro, "data-k": "spokeAngle", style: "width:100px" });
+      // the Teardrops box (TEARDROP_PARAMETERS); a board with legacy teardrops greys it and says so
+      const td = m.td;
+      const legacy = !!(doc as unknown as { legacyTeardrops?: boolean }).legacyTeardrops;
+      const tdRo = ro || legacy;
+      const tdOn = checkField(td.enabled, "Add teardrops on pad's track connections", { ro: tdRo, key: "tdEnabled", onChange: (v) => { td.enabled = v; } });
+      const tdZone = checkField(td.preferZone, "Prefer zone connection", { ro: tdRo, key: "tdPreferZone", tip: "Do not create teardrops on tracks connected to pads that are also connected to a copper zone.", onChange: (v) => { td.preferZone = v; } });
+      const tdTwo = checkField(td.twoSegments, "Allow teardrops to span 2 track segments", { ro: tdRo, key: "tdTwoSegments", tip: "Allows a teardrop to spread over 2 tracks if the first track segment is too short", onChange: (v) => { td.twoSegments = v; } });
+      const pctIn = (v: number, key: string): HTMLInputElement => h("input", { type: "text", value: f6(v * 100), disabled: tdRo, "data-k": key, style: "width:70px" });
+      const tdHD = pctIn(td.filterRatio, "tdFilterRatio"), tdLen = pctIn(td.lenRatio, "tdLenRatio"), tdWid = pctIn(td.widthRatio, "tdWidthRatio");
+      tdHD.title = "Tracks which are similar in size to the pad do not need teardrops.";
+      const tdMaxLen = lenField(td.maxLen, { ro: tdRo, key: "tdMaxLen" }), tdMaxWid = lenField(td.maxWidth, { ro: tdRo, key: "tdMaxWidth" });
+      const tdCurved = checkField(td.curved, "Curved edges", { ro: tdRo, key: "tdCurved", onChange: (v) => { td.curved = v; } });
+      const pctRow = (input: HTMLInputElement): HTMLElement => h("span", { class: "pp-row" }, input, h("span", { class: "unit" }, "%( d )"));
+      const teardrops = box("Teardrops",
+        legacy ? h("div", { class: "pd-info" }, "Board contains legacy teardrops.\nUse Edit > Edit Teardrops to apply automatic teardrops.") : null,
+        h("div", { class: "pp-col" }, tdOn.el, tdZone.el, tdTwo.el),
+        form([["Track width limit:", pctRow(tdHD), h("span"), "Max pad/via size to track width ratio to create a teardrop.\n100 always creates a teardrop."]]),
+        h("div", { class: "pp-techhd" }, "Teardrop Shape"),
+        form([["Best length (L):", pctRow(tdLen)], ["Maximum length (L):", tdMaxLen.el, unitLabel()], ["Best width (W):", pctRow(tdWid)], ["Maximum width (W):", tdMaxWid.el, unitLabel()]]),
+        tdCurved.el);
       const connections = h("div", { class: "pp-page" },
         box("Connection to Copper Zones", form([["Pad connection:", zc.el], ["Zone knockout:", knock.el]], true)),
-        box("Thermal Relief Overrides", form([["Relief gap:", gap.el, unitLabel()], ["Spoke width:", spoke.el, unitLabel()], ["Spoke angle:", spokeAngle, unitLabel("deg")]])));
+        box("Thermal Relief Overrides", form([["Relief gap:", gap.el, unitLabel()], ["Spoke width:", spoke.el, unitLabel()], ["Spoke angle:", spokeAngle, unitLabel("deg")]])),
+        teardrops);
       // ---- Clearance Overrides
       const clr = optLen(m.clearance, "padClearance"), mask = optLen(m.mask, "maskMargin");
       const pasteText = (): string => { const parts: string[] = []; if (!isNaN(m.paste)) parts.push(fmtLen(m.paste) + " " + unitName()); if (!isNaN(m.pasteRatio)) parts.push((parts.length && m.pasteRatio >= 0 ? "+ " : "") + f6(m.pasteRatio * 100) + "%"); return parts.join(" "); };
@@ -213,6 +246,10 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
         const r = Number(ratio.value.replace(",", ".")); if (!isNaN(r)) m.rratio = Math.max(0, Math.min(50, r)) / 100;
         const c = Number(cratio.value.replace(",", ".")); if (!isNaN(c)) m.cratio = Math.max(0, Math.min(50, c)) / 100;
         m.ox = offX.get(); m.oy = offY.get(); m.hx = holeX.get(); m.hy = m.holeOblong ? holeY.get() : m.hx; m.die = die.get();
+        const dd = Number(String(delay.value).replace(",", ".")); if (!isNaN(dd)) m.dieDelay = dd;
+        const pctOf = (i: HTMLInputElement, cur: number): number => { const v = Number(i.value.replace(",", ".")); return isNaN(v) ? cur : v / 100; };
+        td.filterRatio = pctOf(tdHD, td.filterRatio); td.lenRatio = pctOf(tdLen, td.lenRatio); td.widthRatio = pctOf(tdWid, td.widthRatio);
+        td.maxLen = tdMaxLen.get(); td.maxWidth = tdMaxWid.get();
         m.gap = gap.get(); m.spoke = spoke.get(); const sa = Number(spokeAngle.value.replace(",", ".")); if (!isNaN(sa)) m.spokeAngle = sa;
         m.clearance = clr.get(); m.mask = mask.get();
         const pt = paste.value.trim(); if (!pt) { m.paste = NaN; m.pasteRatio = NaN; }
@@ -270,4 +307,7 @@ const PP_CSS = `
 .pp-wrap .pd-xy { display: inline-flex; gap: 6px; align-items: center; }
 .pp-wrap .pd-xy input { width: 92px; }
 .pd-info { white-space: pre-line; }
+.pp-anglebox { display: inline-flex; align-items: stretch; }
+.pp-anglebox input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pp-combo { padding: 0 6px; border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
 `;

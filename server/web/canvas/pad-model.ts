@@ -43,6 +43,29 @@ export interface PadModel {
   copper: number; tech: Record<string, boolean>; property: string;
   zoneConnect: number; knockout: "outline" | "convexhull"; gap: number; spoke: number; spokeAngle: number;
   clearance: number; mask: number; paste: number; pasteRatio: number;
+  /** pad to die delay (ps), PAD_SIM_ELECTRICAL_TYPE ("" / "source" / "sink") */
+  dieDelayOn: boolean; dieDelay: number; simType: string;
+  /** TEARDROP_PARAMETERS (written only when they differ from the defaults: isDefaultTeardropParameters) */
+  td: Teardrops;
+}
+export interface Teardrops { enabled: boolean; twoSegments: boolean; preferZone: boolean; maxLen: number; maxWidth: number; lenRatio: number; widthRatio: number; filterRatio: number; curved: boolean }
+/** TEARDROP_PARAMETERS(): the values a pad without (teardrops …) has. */
+export const TD_DEFAULTS: Teardrops = { enabled: false, twoSegments: true, preferZone: true, maxLen: 1, maxWidth: 2, lenRatio: 0.5, widthRatio: 1, filterRatio: 0.9, curved: false };
+const sameTd = (a: Teardrops, b: Teardrops): boolean => (Object.keys(TD_DEFAULTS) as (keyof Teardrops)[]).every((k) => (typeof a[k] === "number" ? Math.abs((a[k] as number) - (b[k] as number)) < 1e-9 : a[k] === b[k]));
+/** PCB_IO_KICAD_SEXPR_PARSER::parseTEARDROP_PARAMETERS over a pad's (teardrops …). */
+export function readTeardrops(pad: SNode): Teardrops {
+  const t = kid(pad, "teardrops"); const out: Teardrops = { ...TD_DEFAULTS }; if (!t) return out;
+  const n = (k: string, d: number): number => { const c = kid(t, k); return c ? num(c[1], d) : d; };
+  const b = (k: string, d: boolean): boolean => { const c = kid(t, k); return c ? String(c[1]) !== "no" : d; };
+  out.lenRatio = n("best_length_ratio", out.lenRatio); out.maxLen = n("max_length", out.maxLen); out.widthRatio = n("best_width_ratio", out.widthRatio); out.maxWidth = n("max_width", out.maxWidth);
+  out.curved = b("curved_edges", out.curved); out.filterRatio = n("filter_ratio", out.filterRatio); out.enabled = b("enabled", out.enabled); out.twoSegments = b("allow_two_segments", out.twoSegments);
+  out.preferZone = b("prefer_zone_connections", out.preferZone);
+  return out;
+}
+/** formatTeardropParameters. */
+export function formatTeardrops(t: Teardrops): string {
+  const yn = (v: boolean): string => (v ? "yes" : "no");
+  return `(teardrops (best_length_ratio ${f6(t.lenRatio)}) (max_length ${f6(t.maxLen)}) (best_width_ratio ${f6(t.widthRatio)}) (max_width ${f6(t.maxWidth)}) (curved_edges ${yn(t.curved)}) (filter_ratio ${f6(t.filterRatio)}) (enabled ${yn(t.enabled)}) (allow_two_segments ${yn(t.twoSegments)}) (prefer_zone_connections ${yn(t.preferZone)}))`;
 }
 /** Technical layer checkboxes: label and the front-side layer name (a flipped footprint swaps F/B). */
 export const TECH: [string, string][] = [["Front adhesive", "F.Adhes"], ["Back adhesive", "B.Adhes"], ["Front solder paste", "F.Paste"], ["Back solder paste", "B.Paste"],
@@ -125,6 +148,8 @@ export function readPad(doc: KDoc, fp: SNode, pad: SNode, netName: string): PadM
     zoneConnect: zc ? num(zc[1], -1) : -1, knockout: str((kid(opts, "clearance") || [])[1]) === "convexhull" ? "convexhull" : "outline",
     gap: opt("thermal_gap"), spoke: opt("thermal_bridge_width"), spokeAngle: sa ? num(sa[1], defAngle) : defAngle,
     clearance: opt("clearance"), mask: opt("solder_mask_margin"), paste: opt("solder_paste_margin"), pasteRatio: opt("solder_paste_margin_ratio"),
+    dieDelayOn: !!kid(pad, "die_delay") && num((kid(pad, "die_delay") || [])[1]) !== 0, dieDelay: num((kid(pad, "die_delay") || [])[1]),
+    simType: str((kid(pad, "sim_electrical_type") || [])[1]), td: readTeardrops(pad),
   };
 }
 
@@ -228,6 +253,9 @@ export function writePad(doc: KDoc, fp: SNode, pad: SNode, m: PadModel, was: Pad
     setPadChild(pad, "net", !m.net ? null : numbered ? `(net ${netCode(m.net)} ${quote(m.net)})` : `(net ${quote(m.net)})`);
   }
   if (m.dieOn !== was.dieOn || !sameNum(m.die, was.die)) setPadChild(pad, "die_length", m.dieOn && m.die ? `(die_length ${f6(m.die)})` : null);
+  if (m.dieDelayOn !== was.dieDelayOn || !sameNum(m.dieDelay, was.dieDelay)) setPadChild(pad, "die_delay", m.dieDelayOn && m.dieDelay ? `(die_delay ${f6(m.dieDelay)})` : null);
+  if (m.simType !== was.simType) setPadChild(pad, "sim_electrical_type", m.simType === "source" || m.simType === "sink" ? `(sim_electrical_type ${m.simType})` : null);
+  if (!sameTd(m.td, was.td)) setPadChild(pad, "teardrops", sameTd(m.td, TD_DEFAULTS) ? null : formatTeardrops(m.td));
   const optional = (key: string, v: number, v0: number, fmt = f6): void => { if (!sameNum(v, v0)) setPadChild(pad, key, isNaN(v) ? null : `(${key} ${fmt(v)})`); };
   optional("solder_mask_margin", m.mask, was.mask); optional("solder_paste_margin", m.paste, was.paste); optional("solder_paste_margin_ratio", m.pasteRatio, was.pasteRatio);
   optional("clearance", m.clearance, was.clearance);
@@ -245,4 +273,4 @@ export function writePad(doc: KDoc, fp: SNode, pad: SNode, m: PadModel, was: Pad
 }
 
 
-export const padModel = { PAD_ORDER, TECH, PROPS, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };
+export const padModel = { PAD_ORDER, TECH, PROPS, TD_DEFAULTS, readTeardrops, formatTeardrops, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };

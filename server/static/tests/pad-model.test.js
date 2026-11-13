@@ -81,5 +81,19 @@ test("CheckPad: errors stop, warnings tell", () => {
   assert.deepEqual(M.checkPad(Object.assign(clone(m), { hx: 0 })).errors, ["Error: Through hole pad has no hole."]);
   assert.deepEqual(M.checkPad(Object.assign(clone(m), { hx: 2, hy: 2 })).warnings, ["Warning: (PTH pad hole leaves no copper)"]);
 });
+test("pad to die delay, simulation electrical type and teardrops write where the writer puts them", () => {
+  const fp = K.parse(FP_THT), d = doc([fp]); const was = M.readPad(d, fp, pad0(fp), "/VPP");
+  assert.equal(was.dieDelayOn, false); assert.equal(was.simType, ""); assert.deepEqual(was.td, M.TD_DEFAULTS);
+  const m = clone(was); m.dieDelayOn = true; m.dieDelay = 12.5; m.simType = "source"; m.td.enabled = true;
+  M.writePad(d, fp, pad0(fp), m, was, () => 0);
+  const out = K.serialize(pad0(fp));
+  assert.ok(/\(drill 0\.8\)\s*\(sim_electrical_type source\)\s*\(layers/.test(out), out);
+  assert.ok(/\(pintype "passive"\)\s*\(die_delay 12\.5\)/.test(out), out);
+  assert.ok(/\(teardrops \(best_length_ratio 0\.5\) \(max_length 1\) \(best_width_ratio 1\) \(max_width 2\) \(curved_edges no\) \(filter_ratio 0\.9\) \(enabled yes\) \(allow_two_segments yes\) \(prefer_zone_connections yes\)\)\s*\(uuid/.test(out), out);
+  const back = M.readPad(d, fp, pad0(fp), "/VPP"); assert.equal(back.dieDelay, 12.5); assert.equal(back.simType, "source"); assert.equal(back.td.enabled, true);
+  // back to the defaults drops (teardrops …)
+  const m2 = clone(back); m2.td.enabled = false; m2.simType = ""; m2.dieDelayOn = false; M.writePad(d, fp, pad0(fp), m2, back, () => 0);
+  const out2 = K.serialize(pad0(fp)); assert.ok(!/teardrops|sim_electrical_type|die_delay/.test(out2), out2);
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
