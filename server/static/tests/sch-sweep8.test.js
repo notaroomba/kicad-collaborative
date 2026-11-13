@@ -120,5 +120,11 @@ test("AutoPlaceSheetPins: outputs right, the rest left, sorted, below existing p
   assert.strictEqual(_.autoPlaceSheetPinsNode(n, sub), null, "nothing left to place");
 });
 
+test("sizeSheet: the sheet keeps its origin, is at least 500 x 150 mil and its corner sits on the grid", () => {
+  assert.deepStrictEqual(_.sheetCorner([100.33, 50.8], [90, 40], 1.27), [113.03, 54.61], "up-left of the click: the minimum, from the origin");
+  assert.deepStrictEqual(_.sheetCorner([100.33, 50.8], [130.2, 70.1], 1.27), [130.81, 69.85]);
+  assert.deepStrictEqual(_.sheetCorner([100, 50], [100.1, 50.1], 1.27), [113.03, 54.61], "never rounded inside the minimum");
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

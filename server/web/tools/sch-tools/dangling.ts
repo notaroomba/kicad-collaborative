@@ -9,9 +9,9 @@ import { drawEditPoints } from "./point-edit";
 import { collisionCursor, collisionMarkers, drawCollision } from "./collision";
 import { snapAnchor, snapConn } from "./snap";
 import { drawSchArcPreview } from "./arcs";
-import { drawTableLines } from "./nodes";
+import { drawTableLines, sheetCorner, sheetNode } from "./nodes";
 import { CLR, K, S, atOf, kids, ptsOf, str, toolOf } from "./state";
-import { r4, same, segDist, segs } from "./util";
+import { ghost, r4, same, segDist, segs } from "./util";
 import { segNull } from "./wire";
 
 // ---------------------------------------------------------------- dangling ends (UpdateDanglingState + SCH_PAINTER::drawDanglingIndicator)
@@ -194,7 +194,12 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
     const cur = d.await ? d.pts[1] : d.cur, p0 = d.pts[0];
     if (d.shape === "sheet") c.strokeStyle = K.SCH.sheet; else if (d.shape === "rulearea") { c.strokeStyle = K.SCH.ruleArea; c.setLineDash([4 * px, 3 * px]); }
     if (d.shape === "table") { c.beginPath(); for (const l of drawTableLines(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27, labelDefaults().textSize)) { c.moveTo(l[0], l[1]); c.lineTo(l[2], l[3]); } c.stroke(); }
-    else if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
+    else if (d.shape === "sheet") {
+      // the preview is the sheet itself (a Clone with "Untitled Sheet" / "untitled.kicad_sch"), sized by sizeSheet
+      const b = d.await ? cur : sheetCorner(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27), it = ghost(doc, sheetNode(p0, b, "Untitled Sheet", "untitled.kicad_sch"));
+      if (it) { c.restore(); paintItems(c, view, doc, [it], {}); c.save(); }
+    }
+    else if (d.shape === "rect" || d.shape === "textbox") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
     else if (d.shape === "circle") { c.beginPath(); c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2); c.stroke(); }
     else if (d.shape === "arc" && d.arc) drawSchArcPreview(c, d, px);
     else if (d.shape === "bezier") {
@@ -208,7 +213,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
       if (d.shape !== "lines" && d.pts.length >= 2) c.closePath();   // polygons and rule areas close back to the first point
       c.stroke();
     }
-    c.fillStyle = CLR.sel; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+    if (d.shape !== "sheet") { c.fillStyle = CLR.sel; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
     c.restore();
   }
   if (S.carry && S.carry.item) {

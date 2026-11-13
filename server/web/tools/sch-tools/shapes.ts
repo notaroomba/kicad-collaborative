@@ -2,7 +2,7 @@ import type { SchCtx, Pt } from "./types";
 import { root } from "../root";
 import { commitSchArc, schArcClick } from "./arcs";
 import { closePrompt, labelDefaults, promptImpl } from "./dom";
-import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, drawTableNode, textBoxNode } from "./nodes";
+import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetCorner, sheetNode, drawTableNode, textBoxNode } from "./nodes";
 import { rememberPlaced } from "./repeat";
 import { SHEET_EXT, nextPage, placeSheet, placeSheetNode, sheetFileFor, sheetInstance } from "./sheets";
 import { K, S, kids, str } from "./state";
@@ -32,6 +32,7 @@ export function drawClick(ctx: SchCtx, shape: string, p: Pt) {
     if (d.pts.length === 2 && same(p, d.pts[0])) { ctx.toast("The curve's end must differ from its start"); return; }
     d.pts.push(p); if (d.pts.length === 4) finishDraw(ctx); else ctx.requestRender(); return;
   }
+  if (shape === "sheet") { d.pts.push(sheetCorner(d.pts[0], p, ctx.gridPitch)); finishDraw(ctx); return; }   // sizeSheet: never smaller than the minimum
   if (same(p, last) && shape !== "table") return;   // a zero-size shape is not a shape (a table is at least one cell)
   d.pts.push(p); finishDraw(ctx);
 }

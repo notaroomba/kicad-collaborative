@@ -45,6 +45,19 @@ export function textBoxNode(text: string, a: Pt, b: Pt): SNode {
 // then the Sheetname / Sheetfile fields where SCH_SHEET::AutoplaceFields puts them for a horizontal sheet:
 // margin = round(border/2) + 4 IU + text size × 0.5 (name, above) or × 0.4 (file, below).
 export const SHEET_BORDER = 0.1524, SHEET_NAME_OFF = r4(SHEET_BORDER / 2 + 0.000004 + 1.27 * 0.5), SHEET_FILE_OFF = r4(SHEET_BORDER / 2 + 0.000004 + 1.27 * 0.4);
+/**
+ * SCH_DRAWING_TOOLS::sizeSheet: the sheet keeps its first corner and grows toward the cursor only, at least
+ * MIN_SHEET_WIDTH x MIN_SHEET_HEIGHT (500 x 150 mil), its far corner on the nearest grid point but never rounded
+ * inside the minimum.
+ */
+export function sheetCorner(p0: Pt, cur: Pt, grid: number): Pt {
+  const g = grid > 0 ? grid : 1.27, minW = 12.7, minH = 3.81;
+  const w = Math.max(cur[0] - p0[0], minW), h = Math.max(cur[1] - p0[1], minH);
+  let gx = Math.round((p0[0] + w) / g) * g, gy = Math.round((p0[1] + h) / g) * g;
+  if (gx - p0[0] < minW - 1e-9) gx += g;
+  if (gy - p0[1] < minH - 1e-9) gy += g;
+  return [r4(gx), r4(gy)];
+}
 export function sheetNode(a: Pt, b: Pt, name: string, file: string): SNode {
   const [x0, y0, x1, y1] = corners(a, b);
   return ["sheet", ["at", x0, y0], ["size", r4(x1 - x0), r4(y1 - y0)], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["fields_autoplaced", "yes"],
