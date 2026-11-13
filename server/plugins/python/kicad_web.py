@@ -1114,6 +1114,9 @@ def boot(identifier, files, bridge=None, name=""):
         if importlib.util.find_spec("numpy") is not None:        # loaded for this plugin: it imports numpy
             import kicad_compat
             kicad_compat.numpy_wide_counts()
+        if importlib.util.find_spec("scipy") is not None:
+            import kicad_compat
+            kicad_compat.scipy_lean_direct_solve()
     except Exception as e:
         log.warning("numpy could not be prepared: %s", e)
     try:

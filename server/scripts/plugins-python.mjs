@@ -18,7 +18,8 @@
 // name its own board in a first line "# board: <path from the repository root>", and defines
 // after_run(action_name), which works the plugin's window and raises if the plugin did not do its job.
 // A plugin whose window is a modal dialog is worked from modal(dialog), called while the dialog is open.
-// What after_run returns is reported as the action's "drive".  NO_DRIVE=1 runs without them.
+// What after_run returns is reported as the action's "drive".  NO_DRIVE=1 runs without them.  A drive whose plugin
+// honestly takes long (a field solver on a fine mesh) says so in a line "# minutes: <n>", which lifts TIMEOUT for it.
 
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -599,10 +600,14 @@ async function all() {
   const src = process.env.PCM_SRC; if (!src) { console.error("set PCM_SRC to a folder of unpacked PCM packages"); process.exit(2); }
   const dirs = fs.readdirSync(src).filter((d) => fs.existsSync(path.join(src, d, "plugins")) && (!process.env.ONLY || d.includes(process.env.ONLY))).sort();
   const results = {}; let next = 0;
+  const minutes = (d) => {
+    let id = d; try { id = JSON.parse(fs.readFileSync(path.join(src, d, "metadata.json"), "utf8")).identifier || d; } catch { /* none */ }
+    try { const m = /^# minutes: (\d+)/m.exec(fs.readFileSync(path.join(here, "plugin-drives", id + ".py"), "utf8")); return m ? Number(m[1]) * 60000 : 0; } catch { return 0; }
+  };
   const runOne = (d) => new Promise((resolve) => {
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--one", path.join(src, d), ...(process.env.BOARD ? ["--board", path.resolve(process.env.BOARD)] : [])], { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = ""; child.stdout.on("data", (b) => { out += b; }); child.stderr.on("data", (b) => { err += b; });
-    const timer = setTimeout(() => { child.kill("SIGKILL"); results[d] = { identifier: d, timeout: true, actions: [] }; }, Number(process.env.TIMEOUT || 120000));
+    const timer = setTimeout(() => { child.kill("SIGKILL"); results[d] = { identifier: d, timeout: true, actions: [] }; }, Math.max(Number(process.env.TIMEOUT || 120000), process.env.NO_DRIVE ? 0 : minutes(d)));
     child.on("close", () => { clearTimeout(timer); if (!results[d]) { try { results[d] = JSON.parse(out.slice(out.indexOf("\n{\"identifier\"") + 1)); } catch { results[d] = null; if (process.env.VERBOSE) console.error(d, err.slice(-600), out.slice(-300)); } } resolve(); });
   });
   const worker = async () => { while (next < dirs.length) { const d = dirs[next++]; await runOne(d); const r = results[d]; console.log(`${verdict(r).padEnd(11)} ${d}${r && r.loadError ? "  — " + r.loadError.slice(0, 110) : ""}${r && r.actions ? r.actions.filter((a) => !a.ok).map((a) => `  — ${a.name}: ${String(a.error).slice(0, 110)}`).join("") : ""}`); } };

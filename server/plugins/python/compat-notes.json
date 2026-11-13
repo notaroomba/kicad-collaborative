@@ -18,8 +18,8 @@
       "note": "The panel is checked in full. The stencil Gerbers are drawn by the web editor's own Gerber writer."
     },
     "com.gitlab.egloff-studio.z0-field-solver": {
-      "status": "partly",
-      "note": "It solves boards whose signal layers lie close to a plane (a four-layer stackup with 0.1 mm prepreg: its 50 ohm width agrees with the textbook formula). A thick two-layer board (1.5 mm core) makes a mesh of over a million cells, and solving that needs more memory than a browser tab gives: it reports a memory error there."
+      "status": "works",
+      "note": "Works out track widths for each layer's impedance with its own field solver. Checked on a four-layer board (0.1 mm prepreg) and with the top dielectric made 1.5 mm, as on a two-layer board: the 50 ohm widths agree with the Hammerstad and Jensen formulas. A thick board's mesh holds about 1.5 million cells, so each layer there takes several minutes to solve."
     },
     "com.gitlab.egloff-studio.z0-wavelab": {
       "status": "works",

@@ -1,12 +1,16 @@
 # board: demos/openair-max/One-Air-Max.kicad_pcb
+# minutes: 25
 """Z0 field solver, on a four-layer board whose outer layers lie 0.1 mm over a plane (FR4 of 4.5, 35 um copper):
 press Calculate with the window's own 50 ohm profile and expect a width for the outer layers whose impedance the
 solver puts within 1 ohm of 50 and which the Hammerstad and Jensen microstrip formulas, worked out here on their
 own, put within 8 % of 50; the same width on both outer layers (the stackup is symmetric); a narrower track for the
-inner layer between two planes; and those numbers in the results table."""
+inner layer between two planes; and those numbers in the results table.  Then the dielectric under the top layer is
+made 1.5 mm in the window's stackup table, as on a two-layer board, and the width for 50 ohm there must again be
+within 1 ohm by the solver and within 8 % by the formulas, while the bottom layer keeps its width.  That mesh holds
+about 1.5 million cells: the whole drive takes about 12 minutes."""
 import math
 import wx
-from drive_util import click, messages, texts
+from drive_util import click, fire, messages, texts
 
 seen = {}
 
@@ -33,6 +37,19 @@ def modal(dlg):
     click("Calculate", dlg)
     seen["results"] = [dict(r) for r in dlg.results]
     seen["table"] = [dlg.grid_res.GetCellValue(r, c) for r in range(dlg.grid_res.GetNumberRows()) for c in range(dlg.grid_res.GetNumberCols())]
+    # the same board with 1.5 mm under its top layer, as on a two-layer board: type the thickness into the stackup
+    # table, pick the quick quality (a mesh of about half a million cells) and calculate again
+    grid = dlg.grid_diel
+    seen["first_dielectric"] = grid.GetCellValue(0, 1)
+    grid._wx_edit(grid._rows[0], 1, "1.5")
+    dlg.choice_quality.SetSelection(0)
+    fire(dlg.choice_quality, wx.EVT_CHOICE)
+    assert dlg.grid.GetCellValue(1, 1) == "USB90", dlg.grid.GetCellValue(1, 1)
+    dlg.grid._wx_edit(dlg.grid._rows[1], 0, "0")          # the 50 ohm profile only this time: untick the pair profile
+    click("Calculate", dlg)
+    seen["thick"] = [dict(r) for r in dlg.results]
+    import kicad_compat
+    seen["solves"] = list(kicad_compat.solves)
     return wx.ID_CANCEL
 
 
@@ -49,4 +66,15 @@ def after_run(_action):
     assert not inner["error"] and 0.05 < inner["width_mm"] < top["width_mm"] and abs(inner["z0"] - 50) < 1, "the inner layer: %s" % {k: inner[k] for k in ("width_mm", "z0", "error")}
     shown = "%.4f" % top["width_mm"]
     assert any(shown in cell for cell in seen["table"]), "the results table does not show %s mm: %s" % (shown, [c for c in seen["table"] if c][:12])
-    return {"top_width_mm": round(top["width_mm"], 4), "solver_ohm": round(top["z0"], 2), "formula_ohm": round(z, 2), "inner_width_mm": round(inner["width_mm"], 4)}
+    assert seen["first_dielectric"] == "0.1", "the first dielectric is shown as %s mm" % seen["first_dielectric"]
+    thick = {r["layer"]: r for r in seen["thick"] if r["profile"] == "SE50"}
+    wide, same = thick["F.Cu"], thick["B.Cu"]
+    assert not wide["error"] and wide["width_mm"], "no width for 50 ohm 1.5 mm over a plane: %s" % wide["error"]
+    assert abs(wide["z0"] - 50) < 1, "the solver's own impedance for its width on the thick board is %.2f ohm" % wide["z0"]
+    zt, _ = _microstrip(wide["width_mm"], 1.5, 0.035, 4.5)
+    assert abs(zt - 50) < 4, "a %.4f mm track 1.5 mm over a plane is %.1f ohm by Hammerstad and Jensen, not near 50" % (wide["width_mm"], zt)
+    assert not any(r["profile"] == "USB90" for r in seen["thick"]), "the unticked profile was calculated"
+    # the quick quality's coarser mesh moves a width by up to a tenth; the 1.5 mm above did not reach the bottom layer
+    assert not same["error"] and abs(same["width_mm"] - bottom["width_mm"]) < 0.12 * bottom["width_mm"], "the bottom layer, still 0.1 mm over its plane, moved from %.4f to %s mm" % (bottom["width_mm"], same["width_mm"])
+    return {"solves": seen["solves"], "thick_top_width_mm": round(wide["width_mm"], 4), "thick_solver_ohm": round(wide["z0"], 2), "thick_formula_ohm": round(zt, 2),
+            "top_width_mm": round(top["width_mm"], 4), "solver_ohm": round(top["z0"], 2), "formula_ohm": round(z, 2), "inner_width_mm": round(inner["width_mm"], 4)}
