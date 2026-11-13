@@ -857,6 +857,12 @@ function strokeAdvance(ch) {
   return cp2 < 32 ? 0 : glyphOrQuestion(cp2).adv;
 }
 var HAS_PATH2D = typeof Path2D !== "undefined";
+function opaque(ctx, color) {
+  if (ctx.globalAlpha !== 1 || typeof color !== "string") return false;
+  const c = color.charCodeAt(0);
+  if (c === 35) return color.length === 7 || color.length === 4;
+  return /^rgba?\([^)]*\)$/.test(color) && (color.split(",").length < 4 || /,\s*1(\.0*)?\s*\)$/.test(color));
+}
 function strokeOrigin(width, h, v, penX, penY) {
   const fx = penX / 1.52;
   const x = h === "left" ? fx : h === "right" ? -(width + fx) : -width / 2;
@@ -881,15 +887,28 @@ function drawStrokeText(ctx, base, t, color, minPen) {
     ctx.setTransform(m0, m1, m2, m3, e + m0 * ox + m2 * oy, f + m1 * ox + m3 * oy);
     ctx.lineWidth = pen / sy;
     if (HAS_PATH2D && !ctx.__plot) {
-      if (!line.path) {
-        const p = new Path2D();
-        for (const st of line.strokes) {
-          p.moveTo(st[0], st[1]);
-          for (let i = 2; i < st.length; i += 2) p.lineTo(st[i], st[i + 1]);
+      if (opaque(ctx, color)) {
+        let runs = line.runs;
+        if (!runs) {
+          runs = line.runs = line.strokes.map((st) => {
+            const p = new Path2D();
+            p.moveTo(st[0], st[1]);
+            for (let i = 2; i < st.length; i += 2) p.lineTo(st[i], st[i + 1]);
+            return p;
+          });
         }
-        line.path = p;
+        for (let i = 0; i < runs.length; i++) ctx.stroke(runs[i]);
+      } else {
+        if (!line.path) {
+          const p = new Path2D();
+          for (const st of line.strokes) {
+            p.moveTo(st[0], st[1]);
+            for (let i = 2; i < st.length; i += 2) p.lineTo(st[i], st[i + 1]);
+          }
+          line.path = p;
+        }
+        ctx.stroke(line.path);
       }
-      ctx.stroke(line.path);
     } else {
       ctx.beginPath();
       for (const st of line.strokes) {
@@ -52787,7 +52806,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -53446,7 +53465,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -56311,7 +56330,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -56927,7 +56946,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
   if (typeof clipOrFillRule === "number") {
