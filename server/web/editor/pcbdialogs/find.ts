@@ -7,7 +7,7 @@
 import { E } from "../state";
 import { applyView, mmH, mmW, mmX0, mmY0, stage, world } from "../view";
 import { centerOn } from "../comments";
-import { clearSelection } from "../selection";
+import { clearSelection, filterAllows } from "../selection";
 import { keyName } from "../../keys";
 import { setStatusBar } from "../appstore";
 import { showPane } from "../panes";
@@ -18,6 +18,9 @@ interface FindOpts { findString: string; matchCase: boolean; wholeWord: boolean;
 type Hit = { kind: "item"; id: string; what: string } | { kind: "marker"; index: number; x: number; y: number; text: string } | { kind: "net"; name: string; code: number };
 interface FindApi {
   boardFindHits(doc: KDoc, o: FindOpts, src: { markers?: { x: number; y: number; text: string }[]; nets?: { name: string; code: number }[] }): Hit[];
+  unescapeKiCad(s: string): string;
+  netTable(doc: KDoc): { key(net: unknown): string };
+  netOf(node: SNode): unknown;
   findStep(pos: number, count: number, forward: boolean, fresh: boolean, wrap: boolean): { pos: number; endReached: boolean };
   netlist(doc: KDoc): { nets: Map<string, { name: string; code: number; tracks: { id: string }[]; vias: { id: string }[]; zones: { id: string }[]; pads: { id: string }[] }> };
   state: { docVer: number; markers: { x: number; y: number; text: string }[]; sel: Set<string>; padSel: string | null };
@@ -89,7 +92,11 @@ function focusHit(hit: Hit): void {
     // SelectAllItemsOnNet: the net's tracks, arcs and vias; the view goes to the net's bounding box centre
     const net = [...P.netlist(doc).nets.values()].find((n) => n.name === hit.name);
     if (net) {
-      const ids = [...net.tracks, ...net.vias].map((c) => c.id); toolCtx().setSelection(ids);
+      // PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T and PCB_SHAPE_T (graphics assigned to the net), each through itemPassesFilter
+      const NT = P.netTable(doc);
+      const shapes = [...doc.items.values()].filter((it) => /^gr_/.test(it.kind) && it.kind !== "gr_text" && it.kind !== "gr_text_box" && KiCadCanvas.kid(it.node, "net") && NT.key(P.netOf(it.node)) === hit.name);
+      const ids = [...new Set([...net.tracks, ...net.vias, ...shapes].map((c) => c.id))].filter((id) => { const it = doc.items.get(id); return !!it && filterAllows(it.kind, it); });
+      toolCtx().setSelection(ids);
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const c of [...net.tracks, ...net.vias, ...net.zones, ...net.pads]) { const b = doc.items.get(c.id)?.bbox; if (b) { x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); } }
       if (x0 < Infinity) { box = [x0, y0, x1 - x0, y1 - y0]; center = [(x0 + x1) / 2, (y0 + y1) / 2]; }
@@ -144,12 +151,21 @@ export function openBoardFind(): void {
   const doc = E.kdoc; if (!doc) return;
   let preload = "";
   const ids = new Set<string>(E.selection as Set<string>); if (E.selected) ids.add(E.selected.id); const P = PT(); if (P) for (const id of P.state.sel) ids.add(id);
-  if (ids.size === 1) {
+  const unesc = (t: string) => (P ? P.unescapeKiCad(t) : t);
+  const at = current && current.kind === "item" ? current.id : null;
+  if (E.selField && !ids.size) {
+    // PCB_FIELD_T: a footprint's Reference, Value or user field picked on its own
+    const it = doc.items.get(E.selField.id), name = E.selField.name;
+    if (it) {
+      const p = KiCadCanvas.kids(it.node, "property").find((q) => KiCadCanvas.str(q[1]) === name)
+        || KiCadCanvas.kids(it.node, "fp_text").find((q) => KiCadCanvas.str(q[1]) === name.toLowerCase());
+      if (p) preload = unesc(KiCadCanvas.str(p[2])).split("\n")[0];
+    }
+  } else if (ids.size === 1) {
     const it = doc.items.get([...ids][0]);
-    const at = current && current.kind === "item" ? current.id : null;
     if (it && it.id !== at) {
-      if (it.kind === "footprint") { const v = KiCadCanvas.kids(it.node, "property").find((p) => KiCadCanvas.str(p[1]) === "Value"); preload = v ? KiCadCanvas.str(v[2]) : it.value || ""; }
-      else if (it.kind === "gr_text") preload = KiCadCanvas.str(it.node[1]).split("\n")[0];
+      if (it.kind === "footprint") { const v = KiCadCanvas.kids(it.node, "property").find((p) => KiCadCanvas.str(p[1]) === "Value") || KiCadCanvas.kids(it.node, "fp_text").find((p) => KiCadCanvas.str(p[1]) === "value"); preload = unesc(v ? KiCadCanvas.str(v[2]) : it.value || ""); }
+      else if (it.kind === "gr_text") preload = unesc(KiCadCanvas.str(it.node[1])).split("\n")[0];
     }
   }
   if (preload) searchText = preload;
@@ -163,7 +179,7 @@ export function openBoardFind(): void {
       combo.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); search(true); } });
       const chk = (label: string, key: keyof typeof O, id: string) => {
         const box = h("input", { type: "checkbox", id, checked: O[key] }) as HTMLInputElement;
-        box.addEventListener("change", () => { O[key] = box.checked; });
+        box.addEventListener("change", () => { O[key] = box.checked; if (key !== "wrap") upToDate = false; });   // DIALOG_FIND::onOptionChanged
         return h("label", { class: "kd-chk", style: "display:flex;align-items:center;gap:6px;margin:3px 0;white-space:nowrap" }, box, label);
       };
       const btn = (label: string, id: string, fn: () => void, primary = false) => h("button", { class: "btn" + (primary ? " primary" : ""), type: "button", id, style: "width:120px", onclick: fn }, label);

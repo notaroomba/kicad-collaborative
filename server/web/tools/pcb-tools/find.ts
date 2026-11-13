@@ -63,7 +63,14 @@ function fieldsOf(fp: SNode): { name: string; text: string; hidden: boolean }[] 
 /** PCB_FIELD::Matches: a hidden field only with "Include hidden fields". */
 const fieldMatches = (f: { text: string; hidden: boolean }, o: FindOptions) => (!f.hidden || !!o.hiddenFields) && edaMatches(unescapeKiCad(f.text), o);
 
-/** The marker list and the nets: the DRC run's markers (pcb state) and the board's nets by netcode. */
+/** NETINFO_LIST iterates NETNAMES_MAP (std::map<wxString, NETINFO_ITEM*>): the nets in wxString order, which
+ *  compares code points (std::wstring on Linux and macOS), not UTF-16 units. */
+export function netNameCmp(a: string, b: string): number {
+  const x = Array.from(a), y = Array.from(b), n = Math.min(x.length, y.length);
+  for (let i = 0; i < n; i++) { const d = x[i].codePointAt(0)! - y[i].codePointAt(0)!; if (d) return d; }
+  return x.length - y.length;
+}
+/** The marker list and the nets: the DRC run's markers (pcb state) and the board's nets (walked in net-name order). */
 export interface FindSources { markers?: { x: number; y: number; text: string; title?: string }[]; nets?: { name: string; code: number }[] }
 
 /** DIALOG_FIND::search's hit list for the options (m_hitList, in the order the dialog walks it). */
@@ -89,7 +96,7 @@ export function boardFindHits(doc: BoardDoc, o: FindOptions, src: FindSources = 
     }
   }
   if (on(o.markers)) (src.markers || []).forEach((m, index) => { if (edaMatches(m.text || m.title || "", o)) hits.push({ kind: "marker", index, x: m.x, y: m.y, text: m.text }); });
-  if (on(o.nets)) for (const n of [...(src.nets || [])].sort((a, b) => a.code - b.code)) if (edaMatches(n.name, o)) hits.push({ kind: "net", name: n.name, code: n.code });
+  if (on(o.nets)) for (const n of [...(src.nets || [])].sort((a, b) => netNameCmp(a.name, b.name))) if (edaMatches(n.name, o)) hits.push({ kind: "net", name: n.name, code: n.code });
   return hits;
 }
 

@@ -81,3 +81,11 @@ test("the cursor: Find Next walks and wraps, Find Previous walks back; without W
   assert.deepEqual(P.findStep(0, 3, false, false, false), { pos: 0, endReached: true });
   assert.deepEqual(P.findStep(-1, 0, true, true, true), { pos: -1, endReached: false });
 });
+test("nets come in net-name order (NETNAMES_MAP, a std::map<wxString>), not netcode order", () => {
+  const d = doc();
+  const nets = [{ name: "VCC", code: 1 }, { name: "GND", code: 2 }, { name: "Net-(D1-K)", code: 3 }, { name: "/CLOCK", code: 4 }, { name: "unconnected-(P3-Pad2)", code: 5 }, { name: "/DATA", code: 6 }];
+  const hits = P.boardFindHits(d, { findString: "*", wildcards: true, references: false, values: false, texts: false, markers: false, nets: true }, { nets });
+  assert.deepEqual(hits.map((h) => h.name), ["/CLOCK", "/DATA", "GND", "Net-(D1-K)", "VCC", "unconnected-(P3-Pad2)"]);
+  assert.ok(P.netNameCmp("Z", "a") < 0, "upper case sorts before lower case (code points)");
+  assert.ok(P.netNameCmp("\u{1F600}", "～") > 0, "code points, not UTF-16 units");
+});
