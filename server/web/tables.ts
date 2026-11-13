@@ -205,6 +205,7 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "ACT_SwitchCornerModeToNext", "ACT_SwitchCornerMode45", "ACT_SwitchCornerModeArc45", "ACT_SwitchCornerMode90", "ACT_SwitchCornerModeArc90",
     "ACT_PlaceThroughVia", "ACT_PlaceBlindVia", "ACT_PlaceMicroVia", "ACT_SelLayerAndPlaceThroughVia", "ACT_SelLayerAndPlaceBlindVia", "ACT_SelLayerAndPlaceMicroVia",
     "ACT_CustomTrackWidth",   // the router's Q and TRACK_WIDTH_MENU's Use Custom Values... (router_tool.cpp), in no menu bar
+    "drag45Degree", "dragFreeAngle",   // D and G: EDIT_TOOL's context menu (edit_tool.cpp:903-906), in no menu bar
     // Line Modes live on the left toolbar's radio group and Shift+Space; Ctrl++ / Ctrl+- (incWidth / decWidth) are the drawing tools' context menu
     "lineModeFree", "lineModeNext", "incWidth", "decWidth",
     // the arc tool's modes: the Arc toolbar group and DRAWING_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
