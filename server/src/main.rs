@@ -268,6 +268,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/static/dist/styleguide.js", get(pages::styleguide_js))
         .route("/welcome", get(pages::landing_page))
         .route("/favicon.svg", get(pages::favicon))
+        .route("/brand/{v}/{name}", get(pages::brand_file))
         .route("/favicon.ico", get(pages::favicon_ico))
         .route("/favicon.png", get(pages::icon_file))
         .route("/icon-64.png", get(pages::icon_file))

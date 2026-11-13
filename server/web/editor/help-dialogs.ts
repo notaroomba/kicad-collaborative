@@ -15,6 +15,7 @@ import { E } from "./state";
 import { activeModule } from "./tools";
 import { esc, toast } from "./util";
 import { isSch } from "./view";
+import { ICON_URL } from "../brand";
 
 interface DialogSpec { title: string; width?: number; build(body: HTMLElement): void; okLabel?: string; ok?(): boolean | void }
 const dialogs = () => (window as unknown as { KDialogs?: { open(spec: DialogSpec): void } }).KDialogs;
@@ -80,7 +81,7 @@ export function openHotkeyList(): void {
 
 const RELEASES = "https://github.com/notaroomba/junction/releases";
 const SOURCE = "https://github.com/notaroomba/junction";
-const LOGO = `<img src="/favicon.svg" width="64" height="64" alt="">`;
+const LOGO = `<img src="${ICON_URL}" width="64" height="64" alt="">`;
 
 /** The text KiCad's "Copy Version Info" puts on the clipboard, for this client. */
 export function versionInfo(): string {

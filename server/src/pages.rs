@@ -13,6 +13,11 @@ pub(crate) fn esc(s: &str) -> String {
 }
 
 pub(crate) const MARK: &str = include_str!("../static/icon.svg");
+/// The icon's versioned folder.  Pages link the icon under `/brand/<ICON_V>/`, served as immutable,
+/// so a changed icon gets a new address and no browser or CDN cache can keep showing the old one
+/// (Cloudflare kept serving the KiCad "Ki" mark at `/favicon.svg` after the rename).  Bump it
+/// whenever `static/icon.svg` changes, together with `ICON_V` in `web/brand.ts`.
+pub(crate) const ICON_V: &str = "j2";
 
 /// The whole theme: tokens, then the shared components (static/theme.css).  Every page uses it,
 /// linked (`/static/theme.css`) or inlined, so no page carries a palette of its own.
@@ -22,7 +27,7 @@ pub(crate) const THEME_CSS: &str = include_str!("../static/theme.css");
 /// the layout of a single centred dialog.
 pub(crate) const STYLE: &str = concat!(r#"
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="alternate icon" href="/favicon.ico" sizes="any"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="/brand/j2/icon.svg"><link rel="icon" type="image/png" sizes="192x192" href="/brand/j2/icon-192.png"><link rel="alternate icon" href="/brand/j2/favicon.ico" sizes="any"><link rel="apple-touch-icon" href="/brand/j2/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 "#, include_str!("../static/theme.css"), r#"
@@ -245,7 +250,7 @@ pub async fn landing_js_map() -> Response {
 /// Product screenshots shown on the home page (static/landing/*.webp).
 /// The icon as a file, for browser tabs.
 pub async fn favicon() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "public, max-age=86400")], MARK)
+    ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, UNVERSIONED_CACHE)], MARK)
 }
 
 /// The icon as PNG, drawn once per size from the same SVG.  Favicon services and the apps that
@@ -280,7 +285,7 @@ fn icon_ico() -> &'static [u8] {
 }
 
 pub async fn favicon_ico() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "image/x-icon"), (header::CACHE_CONTROL, "public, max-age=86400")], icon_ico())
+    ([(header::CONTENT_TYPE, "image/x-icon"), (header::CACHE_CONTROL, UNVERSIONED_CACHE)], icon_ico())
 }
 
 /// `/icon-{size}.png`, `/favicon.png` and the Apple touch icon names.
@@ -292,7 +297,27 @@ pub async fn icon_file(uri: axum::http::Uri) -> Response {
         "/icon-512.png" => 512,
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
-    ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], icon_png(size)).into_response()
+    ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, UNVERSIONED_CACHE)], icon_png(size)).into_response()
+}
+
+/// The well-known icon names (`/favicon.ico`, `/apple-touch-icon.png`, ...) that browsers and
+/// services ask for without reading a page: cached briefly and revalidated, so a new icon shows
+/// within minutes there too.
+const UNVERSIONED_CACHE: &str = "public, max-age=300, must-revalidate";
+
+/// `/brand/<v>/icon.svg`, `/brand/<v>/favicon.ico` and `/brand/<v>/icon-<size>.png`.  The current
+/// version is cached for good; any other version is answered with today's icon but not cached, so
+/// a page still holding an old link gets the right picture.
+pub async fn brand_file(Path((v, name)): Path<(String, String)>) -> Response {
+    let cache = if v == ICON_V { "public, max-age=31536000, immutable" } else { "no-cache" };
+    match name.as_str() {
+        "icon.svg" => ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, cache)], MARK).into_response(),
+        "favicon.ico" => ([(header::CONTENT_TYPE, "image/x-icon"), (header::CACHE_CONTROL, cache)], icon_ico()).into_response(),
+        _ => {
+            let size = match name.as_str() { "icon-64.png" => 64, "icon-180.png" => 180, "icon-192.png" => 192, "icon-512.png" => 512, _ => return axum::http::StatusCode::NOT_FOUND.into_response() };
+            ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, cache)], icon_png(size)).into_response()
+        }
+    }
 }
 
 pub async fn landing_image(Path(name): Path<String>) -> Response {
@@ -1279,6 +1304,6 @@ mod landing_tests {
         // The demo design it draws is real KiCad files, bundled into the page script.
         assert!(include_str!("../web/landing/demo/blinker.kicad_sch").starts_with("(kicad_sch"));
         assert!(include_str!("../web/landing/demo/blinker.kicad_pcb").starts_with("(kicad_pcb"));
-        assert!(html.contains("href=\"/favicon.svg\"") && super::MARK.starts_with("<svg"));
+        assert!(html.contains(&format!("href=\"/brand/{}/icon.svg\"", super::ICON_V)) && super::MARK.starts_with("<svg"));
     }
 }

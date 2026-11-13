@@ -106,8 +106,10 @@ from the tokens, and their buttons and fields match `.btn` and `.input`.
 
 The icon is a junction: two wires and the dot that joins them, in near-white on a near-black
 rounded tile (`#FAFAFA` on `#111113`), with a hairline edge so the tile holds on dark pages. It is
-one file, `server/static/icon.svg`, used by `pages::MARK`, `/favicon.svg`, the PNG and ICO sizes
-drawn from it, the menu bar and the About dialog. Its colours belong to the icon only and are not
+one file, `server/static/icon.svg`, used by `pages::MARK`, `/brand/<v>/icon.svg` (plus `/favicon.svg`), the
+PNG and ICO sizes drawn from it, the menu bar and the About dialog. Pages link it by its versioned
+address (`ICON_V` in `src/pages.rs` and `web/brand.ts`, also written in the three static HTML heads);
+bump the version whenever the icon changes so no cache keeps the old one. Its colours belong to the icon only and are not
 theme tokens. Use it at 18 to 20px in title bars; never recolour or redraw it.
 
 ## Adding UI

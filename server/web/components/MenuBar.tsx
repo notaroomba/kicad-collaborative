@@ -24,6 +24,7 @@ import { cx } from "../util";
 import { usePluginMenus } from "../plugins/PluginUi";
 import { PRODUCT_VERSION } from "../generated/product-version";
 import { KIcon } from "./Icon";
+import { ICON_URL } from "../brand";
 
 // ---------------------------------------------------------------- the menu tree
 interface ItemNode { kind: "item"; id: string; label?: string }
@@ -161,7 +162,7 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
         className={cx("flex items-center gap-2 font-semibold border-0 py-1 px-1.5 -ml-1.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", open ? "bg-paper shadow-[inset_0_0_0_1px_var(--line)]" : "bg-transparent")}
         onPointerDown={(ev) => { if (ev.button !== 0) return; ev.preventDefault(); if (open) close(); else { setOpen(true); setSel(-1); } }}
         onKeyDown={(ev) => { if (!open && (ev.key === "Enter" || ev.key === " " || ev.key === "ArrowDown")) { ev.preventDefault(); setOpen(true); setSel(items[0] ?? -1); } }}>
-        <img className="logo w-4.5 h-4.5 block" src="/favicon.svg" alt="" />
+        <img className="logo w-4.5 h-4.5 block" src={ICON_URL} alt="" />
         <span className="max-[1100px]:hidden">Junction</span> <span className="ver max-[1100px]:hidden text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
         <span className="text-2xs text-ink-3" aria-hidden="true">▾</span>
       </button>

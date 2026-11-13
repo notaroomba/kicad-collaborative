@@ -369,9 +369,9 @@ async fn handle(state: &AppState, caller: &Arc<Caller>, site: &str, message: Val
                 "serverInfo": { "name": "junction", "title": "Junction", "version": env!("CARGO_PKG_VERSION"),
                     "websiteUrl": site,
                     "icons": [
-                        { "src": format!("{site}/icon-192.png"), "mimeType": "image/png", "sizes": ["192x192"] },
-                        { "src": format!("{site}/icon-512.png"), "mimeType": "image/png", "sizes": ["512x512"] },
-                        { "src": format!("{site}/favicon.svg"), "mimeType": "image/svg+xml", "sizes": ["any"] },
+                        { "src": format!("{site}/brand/{v}/icon-192.png", v = crate::pages::ICON_V), "mimeType": "image/png", "sizes": ["192x192"] },
+                        { "src": format!("{site}/brand/{v}/icon-512.png", v = crate::pages::ICON_V), "mimeType": "image/png", "sizes": ["512x512"] },
+                        { "src": format!("{site}/brand/{v}/icon.svg", v = crate::pages::ICON_V), "mimeType": "image/svg+xml", "sizes": ["any"] },
                     ] },
                 "instructions": INSTRUCTIONS,
             }))
