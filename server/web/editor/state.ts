@@ -62,7 +62,7 @@ export const E: any = {
   localOrigin: [0, 0],
   lastCursorMm: [0, 0],
   lastClient: null,   // the pointer's last client position over the canvas (where a Clarify Selection popup opens)
-  hooks: {},          // candidatesAt / clarify / handoffDrag for the tool modules' hover selection (contextmenu.ts, gestures.ts)
+  hooks: {},          // candidatesAt / clarify / handoffDrag / selectionKeys (menu-actions.ts: ids + picked pads) for the tool modules' hover selection (contextmenu.ts, gestures.ts)
   polarCoords: false,
   crosshairMode: "small",
   renderOpts: {},

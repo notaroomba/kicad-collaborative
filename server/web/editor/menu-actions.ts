@@ -247,4 +247,12 @@ for (const id of ["toggleDirectiveLabels", "markSimExclusions", "toggleERCErrors
 setToggle("toggleERCExclusions", false);
 
 /** Exposed for the chrome (window.CollabApp.selectionCount) so menus can grey out what needs a selection. */
-export function selectionCount(): number { return E.kdoc ? selectedIds().length : 0; }
+export function selectionCount(): number { return E.kdoc ? selectionKeys().length : 0; }
+/** Everything selected, pads included: the item ids of selectedIds() plus the board's picked pads as
+ *  "footprintId#padIndex" (PCB_PAD_T in KiCad's selection).  Also window.CollabEditor.hooks.selectionKeys(). */
+export function selectionKeys(): string[] {
+  const ids = selectedIds(); if (isSch()) return ids;
+  const P = W.CollabTools && W.CollabTools.pcb; const pads: string[] = P && P.selectedPadKeys ? P.selectedPadKeys() : [];
+  return [...ids, ...pads.filter((k) => !ids.includes(k))];
+}
+E.hooks.selectionKeys = selectionKeys;

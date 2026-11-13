@@ -64,7 +64,7 @@ export function selectedItems(): KItem[] {
   for (const id of ids) { const it = doc.items.get(id); if (it) out.push(it); }
   return out;
 }
-export function selectionSignature(): string { return selectedItems().map((it) => it.id).sort().join(",") + E.selPins.map((p: { id: string; number: string }) => "|pin:" + p.id + ":" + p.number).join("") + "|" + String(E.units) + "|" + (E.viewOnly ? 1 : 0); }
+export function selectionSignature(): string { return selectedItems().map((it) => it.id).sort().join(",") + selectedPads().map((p) => "|pad:" + p.key).join("") + E.selPins.map((p: { id: string; number: string }) => "|pin:" + p.id + ":" + p.number).join("") + "|" + String(E.units) + "|" + (E.viewOnly ? 1 : 0); }
 
 // ---------------------------------------------------------------- shared property builders
 const BASIC = "Basic Properties";
@@ -295,6 +295,14 @@ function footprintProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
 function padProps(fp: KItem, doc: KDoc): PropDef[] {
   const h = H(), G = "Pad Properties"; const pads = h.kids(fp.node, "pad"); if (!pads.length) return [];
   let idx = padIndexOf.get(fp.id) || 0; if (idx >= pads.length) idx = 0;
+  const picker: PropDef = { group: G, name: "Pad", type: "enum", choices: pads.map((p, i): [string, string] => { const net = h.netNameOf(doc, p); return [String(i), h.str(p[1]) + (net ? " · " + net : "")]; }), get: () => String(idx), local: (v, x) => { padIndexOf.set(x.id, +(v as string) || 0); } };
+  const own = padDefs(doc, idx).filter((d) => d.group === G || d.group === "Overrides").map((d) => d.group === "Overrides" ? Object.assign(d, { group: "Pad Overrides" }) : d);
+  return [picker, ...own];
+}
+/** PAD's registered properties (pad.cpp PAD_DESC) for pad `idx` of a footprint item: Basic (position, orientation),
+ *  Net, Pad Properties and the clearance / mask / paste Overrides; every setter edits the footprint's (cloned) node. */
+function padDefs(doc: KDoc, idx: number): PropDef[] {
+  const h = H(), G = "Pad Properties";
   const info = (x: KItem) => { const p = h.padNode(x.node, idx); return p ? h.padInfo(doc, p) : null; };
   const edit = (patch: (v: Raw, n: SNode) => Record<string, unknown>) => (n: SNode, v: Raw) => h.setPad(n, idx, patch(v, n), doc);
   const drillOf = (x: KItem): [number, number] => { const i = info(x); if (!i || !i.drill) return [0, 0]; const p = i.drill.split(/x/i).map(Number); return [p[0] || 0, p.length > 1 ? p[1] || 0 : p[0] || 0]; };
@@ -302,24 +310,73 @@ function padProps(fp: KItem, doc: KDoc): PropDef[] {
   const padKid = (name: string, key: string, type: PropType, before: string[]): PropDef => ({ group: "Overrides", name, type, get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, key); return k ? h.num(k[1]) : 0; },
     set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, key, [r6(v as number)], before); else h.delKid(p, key); } });
   const tail = ["zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "tenting", "uuid", "tstamp"];
-  const defs: PropDef[] = [
-    { group: G, name: "Pad", type: "enum", choices: pads.map((p, i): [string, string] => { const net = h.netNameOf(doc, p); return [String(i), h.str(p[1]) + (net ? " · " + net : "")]; }), get: () => String(idx), local: (v, x) => { padIndexOf.set(x.id, +(v as string) || 0); } },
-    { group: G, name: "Pad Number", type: "text", get: (x) => info(x)?.number ?? null, set: edit((v) => ({ number: String(v) })) },
+  // PAD::GetPosition is the board position: the footprint's position plus the pad's local offset rotated by the footprint
+  const padPos = (n: SNode): [number, number] | null => { const p = h.padNode(n, idx); if (!p) return null; const [fx, fy, fr] = K().atOf(n), [lx, ly] = K().atOf(p); const [rx, ry] = padRot(lx, ly, fr); return [fx + rx, fy + ry]; };
+  const setPos = (n: SNode, x: number, y: number): boolean => { const p = h.padNode(n, idx), at = p && h.kid(p, "at"); if (!at) return false; const [fx, fy, fr] = K().atOf(n); const [lx, ly] = padRot(x - fx, y - fy, -fr); at[1] = r6(lx); at[2] = r6(ly); return true; };
+  return [
+    { group: BASIC, name: "Position X", type: "coord", get: (x) => padPos(x.node)?.[0] ?? null, set: (n, v) => { const c = padPos(n); return !!c && setPos(n, v as number, c[1]); } },
+    { group: BASIC, name: "Position Y", type: "coord", get: (x) => padPos(x.node)?.[1] ?? null, set: (n, v) => { const c = padPos(n); return !!c && setPos(n, c[0], v as number); } },
+    { group: BASIC, name: "Orientation", type: "angle", get: (x) => { const i = info(x); return i ? h.normDeg(i.rot - K().atOf(x.node)[2]) : null; }, set: edit((v, n) => ({ rot: (v as number) + K().atOf(n)[2] })) },
+    { group: "Net", name: "Net", type: "enum", choices: nets, get: (x) => info(x)?.net ?? null, set: edit((v) => ({ net: String(v) })) },
     { group: G, name: "Pad Type", type: "enum", choices: PAD_TYPES, get: (x) => info(x)?.type ?? null, set: edit((v) => ({ type: String(v) })) },
     { group: G, name: "Pad Shape", type: "enum", choices: PAD_SHAPES, get: (x) => info(x)?.shape ?? null, set: edit((v) => ({ shape: String(v) })) },
-    { group: G, name: "Size X", type: "length", get: (x) => info(x)?.w ?? null, set: edit((v) => ({ w: v })) },
-    { group: G, name: "Size Y", type: "length", get: (x) => info(x)?.h ?? null, set: edit((v) => ({ h: v })) },
-    { group: G, name: "Orientation", type: "angle", get: (x) => { const i = info(x); return i ? h.normDeg(i.rot - K().atOf(x.node)[2]) : null; }, set: edit((v, n) => ({ rot: (v as number) + K().atOf(n)[2] })) },
-    { group: G, name: "Hole Size X", type: "length", get: (x) => drillOf(x)[0], set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const d = h.padInfo(doc, p).drill.split(/x/i).map(Number); return h.setPad(n, idx, { drill: [v as number, d.length > 1 ? d[1] : (v as number)] }, doc); } },
-    { group: G, name: "Hole Size Y", type: "length", get: (x) => drillOf(x)[1], set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const d = h.padInfo(doc, p).drill.split(/x/i).map(Number); return h.setPad(n, idx, { drill: [d[0] || (v as number), v as number] }, doc); } },
-    { group: G, name: "Net", type: "enum", choices: nets, get: (x) => info(x)?.net ?? null, set: edit((v) => ({ net: String(v) })) },
+    { group: G, name: "Pad Number", type: "text", get: (x) => info(x)?.number ?? null, set: edit((v) => ({ number: String(v) })) },
     { group: G, name: "Pin Name", type: "text", get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, "pinfunction"); return k ? h.str(k[1]) : ""; } },
     { group: G, name: "Pin Type", type: "text", get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, "pintype"); return k ? h.str(k[1]) : ""; } },
+    { group: G, name: "Size X", type: "length", get: (x) => info(x)?.w ?? null, set: edit((v) => ({ w: v })) },
+    { group: G, name: "Size Y", type: "length", get: (x) => info(x)?.h ?? null, set: edit((v) => ({ h: v })) },
+    { group: G, name: "Hole Size X", type: "length", get: (x) => drillOf(x)[0], set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const d = h.padInfo(doc, p).drill.split(/x/i).map(Number); return h.setPad(n, idx, { drill: [v as number, d.length > 1 ? d[1] : (v as number)] }, doc); } },
+    { group: G, name: "Hole Size Y", type: "length", get: (x) => drillOf(x)[1], set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const d = h.padInfo(doc, p).drill.split(/x/i).map(Number); return h.setPad(n, idx, { drill: [d[0] || (v as number), v as number] }, doc); } },
     padKid("Clearance Override", "clearance", "length", tail),
     { group: "Overrides", name: "Soldermask Margin Override", type: "length", get: (x) => info(x)?.maskMargin ?? 0, set: edit((v) => ({ maskMargin: v || null })) },
     { group: "Overrides", name: "Solderpaste Margin Override", type: "length", get: (x) => info(x)?.pasteMargin ?? 0, set: edit((v) => ({ pasteMargin: v || null })) },
   ];
-  return defs.map((d) => d.group === "Overrides" ? Object.assign(d, { group: "Pad Overrides" }) : d);
+}
+/** RotatePoint (trigo.cpp) with KiCad's Y-down board axes. */
+function padRot(x: number, y: number, deg: number): [number, number] { const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); return [x * c + y * s, -x * s + y * c]; }
+
+// ---------------------------------------------------------------- selected pads (PCB_PAD_T in the selection)
+interface PadPick { key: string; fp: KItem; idx: number }
+/** The pads picked on their own (CollabTools.pcb.selectedPadKeys(): "footprintId#padIndex"), when no item is selected. */
+export function selectedPads(): PadPick[] {
+  const doc = kdoc(); if (!doc || isSchDoc()) return [];
+  const P = window.CollabTools && window.CollabTools.pcb; const keys: string[] = P && P.selectedPadKeys ? P.selectedPadKeys() : [];
+  const out: PadPick[] = [];
+  for (const key of keys) { const i = key.lastIndexOf("#"); const fp = doc.items.get(key.slice(0, i)); const idx = +key.slice(i + 1); if (fp && H().padNode(fp.node, idx)) out.push({ key, fp, idx }); }
+  return out;
+}
+function padGrid(doc: KDoc, pads: PadPick[], ro: boolean): PropGrid {
+  const defs = pads.map((p) => new Map(padDefs(doc, p.idx).map((d): [string, PropDef] => [defId(d), d])));
+  const groups: PropGroup[] = [];
+  for (const d of defs[0].values()) {
+    const id = defId(d); let value = "", mixed = false, writable = true;
+    pads.forEach((p, i) => { const own = defs[i].get(id)!; if (!own.set) writable = false; let raw: Raw = null; try { raw = own.get(p.fp); } catch (e) { raw = null; } const text = show(own, raw); if (i === 0) value = text; else if (text !== value) mixed = true; });
+    const row: PropRow = { id, name: d.name, type: d.type, value: mixed ? "" : value, mixed, readOnly: ro || !writable, choices: d.choices };
+    let g = groups.find((x) => x.name === d.group); if (!g) { g = { name: d.group, rows: [] }; groups.push(g); }
+    g.rows.push(row);
+  }
+  return { title: pads.length === 1 ? "Pad" : `${pads.length} objects selected`, count: pads.length, groups, readOnly: ro };
+}
+/** Commit one property to every selected pad: one whole-footprint replace per footprint, all in one undo step. */
+function setPadProp(doc: KDoc, pads: PadPick[], id: string, text: string): string | null {
+  const head = padDefs(doc, pads[0].idx).find((d) => defId(d) === id); if (!head || !head.set) return "No such property";
+  const parsed = parse(head, text); if (typeof parsed === "string") return parsed;
+  const byFp = new Map<string, PadPick[]>(); for (const p of pads) { const l = byFp.get(p.fp.id) || []; l.push(p); byFp.set(p.fp.id, l); }
+  const changes: KChange[] = [];
+  for (const list of byFp.values()) {
+    const fp = list[0].fp; const node = K().cloneNode(fp.node); let touched = false;
+    for (const p of list) {
+      const d = padDefs(doc, p.idx).find((x) => defId(x) === id); if (!d || !d.set) continue;
+      let cur: Raw = null; try { cur = d.get(Object.assign({}, fp, { node })); } catch (e) { cur = null; }
+      if (show(d, cur) === show(d, parsed.v)) continue;
+      try { if (d.set(node, parsed.v, fp) !== false) touched = true; } catch (e) { console.warn(e); }
+    }
+    if (touched) changes.push(K().replaceChange(doc, Object.assign({}, fp, { node, geom: [], bbox: null })));
+  }
+  if (!changes.length) return null;
+  tctx().commit(changes, head.name.toLowerCase());
+  panelStore.set({ selVersion: panelStore.get().selVersion + 1 });
+  return null;
 }
 const VIA_TYPES: [string, string][] = [["through", "Through"], ["blind", "Blind"], ["buried", "Buried"], ["micro", "Micro"]];
 function viaProps(doc: KDoc): PropDef[] {
@@ -571,6 +628,7 @@ export function propGrid(): PropGrid {
   if (!doc) return { title: "No objects selected", count: 0, groups: [], readOnly: true };
   const { items, defs, shared } = resolve(); const ro = !!E.viewOnly;
   if (!items.length && E.selPins.length && isSchDoc()) { const g = pinGrid(doc); if (g) return g; }
+  if (!items.length) { const pads = selectedPads(); if (pads.length) return padGrid(doc, pads, ro); }
   if (!items.length) return { title: "No objects selected", count: 0, groups: [], readOnly: ro };
   const groups: PropGroup[] = [];
   for (const d of shared) {
@@ -636,7 +694,9 @@ const SYNCED = new Set(["Value", "Exclude From Board", "Exclude From Bill of Mat
 export function setProp(id: string, text: string): string | null {
   const doc = kdoc(); if (!doc) return "No document";
   if (E.viewOnly) return "View-only access";
-  const { items, defs } = resolve(); if (!items.length) return "Nothing selected";
+  const { items, defs } = resolve();
+  if (!items.length) { const pads = selectedPads(); if (pads.length) return setPadProp(doc, pads, id, text); }
+  if (!items.length) return "Nothing selected";
   const head = defs[0].get(id); if (!head) return "No such property";
   const parsed = parse(head, text); if (typeof parsed === "string") return parsed;
   if (head.local) { items.forEach((it, i) => { const d = defs[i].get(id); if (d && d.local) d.local(parsed.v, it); }); panelStore.set({ selVersion: panelStore.get().selVersion + 1 }); return null; }
