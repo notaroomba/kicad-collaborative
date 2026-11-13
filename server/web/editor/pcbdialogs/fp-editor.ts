@@ -277,8 +277,9 @@ export function enumPadsDialog(done: (p: { start: number; step: number; prefix: 
   const start = numField(mem.start, { key: "start", digits: 0 }), step = numField(mem.step, { key: "step", digits: 0 }), prefix = textField(mem.prefix, { key: "prefix" });
   return !!openDialog({ title: "Renumber Pads", width: 420,
     build(body) {
-      body.append(form([["First pad number:", start.el], ["Numbering step:", step.el], ["Pad name prefix:", prefix.el, null, "Optional prefix (e.g. A for A1, A2, etc)"]]),
-        note("Pad numbers are assigned in the order you click on pads.  Double-click to finish, or press Esc to cancel."));
+      // dialog_enum_pads_base.cpp: the info line, then Pad name prefix, First pad number, Numbering step
+      body.append(note("Pad names are restricted to 4 characters (including number)."),
+        form([["Pad name prefix:", prefix.el], ["First pad number:", start.el], ["Numbering step:", step.el]]));
     },
     ok() { const p = { start: Math.max(0, Math.round(start.get())), step: Math.max(1, Math.round(step.get())), prefix: prefix.get() }; (window as unknown as { __kcEnum?: unknown }).__kcEnum = p; done(p); return true; } });
 }
