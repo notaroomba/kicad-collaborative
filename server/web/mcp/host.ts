@@ -302,7 +302,9 @@ async function runPython(req: Request): Promise<Reply> {
       const r = await applyChanges(Object.assign(sub, { tool: "apply_changes", args: Object.assign({}, args, { title: args.title || title, dry_run: false }) }), live);
       if (r.record) records.push(r.record as ChangeRecord);
       const res: any = r.result; const c = res && res.connectivity;
-      return Object.assign({}, res, { connectivity: c && typeof c === "object" ? c.changed : undefined });
+      // the ids of the items this batch made, as the local workspace gives them: the harness takes a via or a text back by its id
+      const added = r.record ? ((r.record as ChangeRecord).undo.inverse || []).filter((x: any) => x.kind === "REMOVED").map((x: any) => x.id).reverse() : [];
+      return Object.assign({}, res, { added, connectivity: c && typeof c === "object" ? c.changed : undefined });
     }
     const name = HARNESS_CALLS[tool]; if (!name) throw new ToolError(`Unknown harness call ${tool}.`);
     sub.tool = name; return (await TOOLS[name](sub)).result;
