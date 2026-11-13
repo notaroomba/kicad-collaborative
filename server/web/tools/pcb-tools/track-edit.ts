@@ -131,3 +131,45 @@ export function cleanupPlan(doc: BoardDoc, opts?: CleanupOpts | null): CleanupPl
   return { remove, replace: replaceOut, items };
 }
 export function cleanupChanges(doc: BoardDoc, plan: CleanupPlan) { const out: PcbChange[] = []; for (const { item, node } of plan.replace) out.push(replacedChange(item, node)); for (const id of plan.remove) { const it = doc.items.get(id); if (it) out.push(removedChange(it)); } return out; }
+
+/**
+ * DIALOG_UNUSED_PAD_LAYERS::updatePadsAndVias: through-hole pads and vias that span inner layers get their unconnected
+ * layers removed (keeping the outside ones when asked) or restored.  `ids` limits it to those items (a footprint for
+ * all its pads); null is the whole board.  A through via counts only on a board of more than two copper layers, a
+ * blind / buried one when it spans more than one layer pair; a pad when it is plated through-hole.
+ */
+export function unusedPadLayerChanges(doc: BoardDoc, ids: Iterable<string> | null, o: { vias: boolean; pads: boolean; remove: boolean; keepOutside: boolean }): PcbChange[] {
+  const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+  const pick = ids ? new Set(ids) : null;
+  const depth = (a: string, b: string): number => Math.abs(copper.indexOf(a) - copper.indexOf(b));
+  const setFlags = (n: SNode, keepTag: string, pad: boolean): boolean => {
+    const before = JSON.stringify(n);
+    for (const k of ["remove_unused_layers", "keep_end_layers"]) { const i = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === k); if (i > 0) n.splice(i, 1); }
+    let at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "layers"); at = at > 0 ? at + 1 : n.length;
+    // PCB_IO_KICAD_SEXPR: a plated pad always says whether it removes them, a via only when it does
+    const add: SNode[] = [];
+    if (o.remove) add.push(["remove_unused_layers", "yes"], [keepTag, o.keepOutside ? "yes" : "no"]);
+    else if (pad) add.push(["remove_unused_layers", "no"]);
+    n.splice(at, 0, ...add);
+    return JSON.stringify(n) !== before;
+  };
+  const out: PcbChange[] = [];
+  for (const it of doc.items.values()) {
+    if (it.kind === "via" && o.vias && (!pick || pick.has(it.id))) {
+      const ls = K.kid(it.node, "layers"); const a = ls ? K.str(ls[1]) : "F.Cu", b = ls ? K.str(ls[2]) : "B.Cu";
+      const through = !it.node.includes("blind") && !it.node.includes("micro") && !it.node.includes("buried");
+      if (through ? copper.length <= 2 : depth(a, b) <= 1) continue;
+      const n = clone(it.node); if (setFlags(n, "keep_end_layers", false)) out.push(replacedChange(it, n));
+    } else if (it.kind === "footprint" && o.pads) {
+      const whole = !pick || pick.has(it.id), n = clone(it.node); let changed = false;
+      for (const p of K.kids(n, "pad")) {
+        if (K.str(p[2]) !== "thru_hole") continue;   // PAD_ATTRIB::PTH
+        const u = K.kid(p, "uuid");   // a selected pad picks itself, a selected footprint all of its pads
+        if (!whole && !(pick && u && pick.has(K.str(u[1])))) continue;
+        if (setFlags(p, "keep_end_layers", true)) changed = true;
+      }
+      if (changed) out.push(replacedChange(it, n));
+    }
+  }
+  return out;
+}

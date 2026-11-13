@@ -2215,3 +2215,28 @@ test("Draw Dimension takes Board Setup's dimension defaults; Switch Dimension Ar
   assert.ok(K.serialize(lastNode(log, "dimension")).includes("(arrow_direction inward)"));
   ctx.setTool("select"); assert.equal(P.runAction("changeDimensionArrows", ctx), false, "only while a dimension is drawn");
 });
+
+test("remove unused pads: PTH pads and multi-layer vias get remove_unused_layers / keep_end_layers (DIALOG_UNUSED_PAD_LAYERS)", () => {
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (footprint "T:J" (layer "F.Cu") (uuid "fp-1") (at 10 10)
+    (pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "pad-1"))
+    (pad "2" smd rect (at 3 0) (size 1 1) (layers "F.Cu" "F.Mask") (uuid "pad-2")))
+  (via (at 20 20) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (uuid "v-1"))
+  (via blind (at 25 20) (size 0.8) (drill 0.4) (layers "F.Cu" "In1.Cu") (uuid "v-2"))
+  (via blind (at 30 20) (size 0.8) (drill 0.4) (layers "F.Cu" "In2.Cu") (uuid "v-3")))`, "kicad_pcb");
+  const ch = P.unusedPadLayerChanges(doc, null, { vias: true, pads: true, remove: true, keepOutside: true });
+  assert.deepEqual(ch.map((c) => c.id).sort(), ["fp-1", "v-1", "v-3"], "a blind via over one layer pair is left alone");
+  const via = node(ch.find((c) => c.id === "v-1"));
+  assert.deepEqual([K.kid(via, "remove_unused_layers"), K.kid(via, "keep_end_layers")].map((x) => x && x[1]), ["yes", "yes"]);
+  const fp = node(ch.find((c) => c.id === "fp-1")), pads = K.kids(fp, "pad");
+  assert.equal(K.kid(pads[0], "remove_unused_layers")[1], "yes"); assert.ok(!K.kid(pads[1], "remove_unused_layers"), "an SMD pad is not touched");
+  const li = pads[0].findIndex((c) => Array.isArray(c) && c[0] === "layers"); assert.equal(pads[0][li + 1][0], "remove_unused_layers", "written right after (layers ...)");
+  for (const c of ch) assert.ok(K.applyChange(doc, c, IU));
+  const back = P.unusedPadLayerChanges(doc, ["v-1"], { vias: true, pads: true, remove: false, keepOutside: true });
+  assert.equal(back.length, 1); const v = node(back[0]);
+  assert.ok(!K.kid(v, "remove_unused_layers"), "restoring a via drops both tokens"); assert.ok(!K.kid(v, "keep_end_layers"));
+  const fpBack = node(P.unusedPadLayerChanges(doc, ["fp-1"], { vias: false, pads: true, remove: false, keepOutside: true })[0]);
+  assert.equal(K.kid(K.kids(fpBack, "pad")[0], "remove_unused_layers")[1], "no", "a plated pad always says so");
+  assert.ok(!K.kid(K.kids(fpBack, "pad")[0], "keep_end_layers"));
+});
