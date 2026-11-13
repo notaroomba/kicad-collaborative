@@ -152,6 +152,7 @@ export class SymbolEditor {
     delete document.documentElement.dataset.symedit;
     if (this.hostUnits) { E.units = this.hostUnits.units; E.lastImperial = this.hostUnits.lastImperial; this.hostUnits = null; window.removeEventListener("kc:prefs", this.prefsHook); }
     if (this.root) this.root.remove();
+    if (this.hostTitle) { document.title = this.hostTitle; this.hostTitle = ""; }
     try { const u = new URL(location.href); if (u.searchParams.has("symedit")) { u.searchParams.delete("symedit"); history.replaceState(history.state, "", u.toString()); } } catch (e) { /* no history */ }
   }
 
@@ -598,7 +599,7 @@ export class SymbolEditor {
       ["Inspect", [a("showDatasheet", () => has() && !!M.fieldValue(this.symbol()!, "Datasheet")), S, a("checkSymbol", has)]],
       ["Preferences", [a("configurePaths"), a("showSymbolLibTable", () => !!appState.project), a("openPreferences"), S, { label: "Set Language" }]],
       // EDA_BASE_FRAME::AddStandardHelpMenu, with the app's own entries (HELP_MENU)
-      ["Help", [link("help"), link("gettingStarted"), a("listHotKeys"), link("getInvolved"), link("donate"), link("reportBug"), S, link("downloadDesktop"), link("sourceCode"), S,
+      ["Help", [link("help"), link("gettingStarted"), a("listHotKeys"), link("getInvolved"), link("donate"), link("reportBug"), S,
         { id: "about", label: LOCAL_LABELS.about || "About", icon: "about", run: () => { const app = window.CollabApp; if (app) app.dispatch({ type: "action", id: "about", anchor: null }); }, enabled: () => true }]],
     ];
   }
@@ -611,10 +612,13 @@ export class SymbolEditor {
       b.addEventListener("pointerenter", () => { if (document.querySelector(".se-mb.open") && !b.classList.contains("open")) openIt(); });
       mb.append(b);
     }
-    const t = this.tab;
-    mb.append(h("span", { class: "se-title", id: "se-title" }, t ? `Symbol Editor — ${t.origin ? t.name + " [from schematic]" : t.lib ? t.lib + ":" + M.unescapeLibId(t.name) : M.unescapeLibId(t.name)}${t && this.isModified(t) ? " *" : ""}` : "Symbol Editor"));
-    mb.append(h("button", { class: "btn sm se-close", id: "se-close", onclick: () => void this.close() }, "Close"));
+    // SYMBOL_EDIT_FRAME::UpdateTitle: the frame's title is "Symbol Editor", whatever symbol is open; the frame
+    // closes from File > Close (Ctrl+W), it has no button of its own
+    if (!this.hostTitle) this.hostTitle = document.title || "Junction";
+    document.title = "Symbol Editor";
   }
+  /** The window title the host frame had when the Symbol Editor opened, put back on close. */
+  private hostTitle = "";
 
   // toolbars ---------------------------------------------------------------
   private tbButton(id: string, onTool?: boolean, bind = true): HTMLElement {

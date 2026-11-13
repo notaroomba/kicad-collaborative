@@ -13,10 +13,8 @@ export const CSS = `
 .se-root{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:var(--fs-sm,12px)/1.35 var(--font);}
 .se-root *{box-sizing:border-box}
 .se-menubar{display:flex;align-items:center;gap:2px;padding:0 6px;height:28px;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line)}
-.se-menubar .se-title{margin-left:auto;min-width:0;color:var(--ink-2);padding-right:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .se-mb{flex:none;padding:3px 8px;border-radius:var(--r-1,3px);cursor:default;user-select:none}
 .se-mb:hover,.se-mb.open{background:var(--sel-soft)}
-.se-close{margin-left:6px;flex:none}
 .se-tb{flex:none;display:flex;align-items:center;gap:1px;padding:2px 4px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;min-height:34px}
 .se-tbv{display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 2px;background:var(--panel);overflow-y:auto}
 .se-tbl{border-right:1px solid var(--line)} .se-tbr{border-left:1px solid var(--line)}

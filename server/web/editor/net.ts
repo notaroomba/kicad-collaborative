@@ -10,6 +10,7 @@ import { api, toast } from "./util";
 import { historyActive, holdViewOnly, noteEdit, onVersionsNotice } from "./versions";
 import type { ItemSummary, PendingOp, ServerError } from "./types";
 import { dragG, drawPeers, peersG, scheduleRenderRefresh } from "./view";
+import { updateTitle } from "./title";
 // ---- websocket / presence / ops ----
 export function setConn(cls: string, text?: string) { store.slice("connection", { status: cls === "live" ? "live" : cls === "err" ? "error" : "offline", text: text || (cls === "live" ? "live" : "offline") }); }
 
@@ -116,7 +117,7 @@ export async function connect() {
     if (msg.type === "peer_left" && msg.clientId) { delete E.peerState[msg.clientId]; drawPeers(E.peerState); applyFollowWeb(E.peerState); renderPeers(); }
     // Our own ops are acked, never broadcast back to us, so the ack is how their seq enters our
     // count — without it the next remote op would read as a gap and trigger a needless resync.
-    if (msg.type === "ack" && msg.clientOpId) { E.pendingOps.delete(msg.clientOpId); E.lastSeq = Math.max(E.lastSeq, Number(msg.seq) || 0); }
+    if (msg.type === "ack" && msg.clientOpId) { E.pendingOps.delete(msg.clientOpId); E.lastSeq = Math.max(E.lastSeq, Number(msg.seq) || 0); updateTitle(); }
     if (msg.type === "error" && (msg.code === "permission_denied" || msg.code === "bad_op" || msg.code === "internal" || msg.code === "not_found")) onOpRejected(sock, msg);
     if (msg.type === "error" && msg.code === "desynced") requestResync(sock, true);
     if (msg.type === "error" && msg.code === "no_desktop") toast("Nobody has this board open in the desktop app, so zones keep their last fill. They refill as soon as someone opens it there.", 5000);
@@ -291,7 +292,7 @@ export function sendOp(changes: KChange[], transient?: boolean) {
   // Journal first, send second.  Anything still here when the socket comes back is replayed,
   // so an edit made during a blip (or before the join lands) survives instead of being wiped
   // by the reconnect snapshot.
-  if (!transient) E.pendingOps.set(clientOpId, { docId: state.docId, changes });
+  if (!transient) { E.pendingOps.set(clientOpId, { docId: state.docId, changes }); updateTitle(); }
   if (E.ws && E.ws.readyState === 1 && E.joinedDocId === state.docId) {
     E.ws.send(JSON.stringify({ type: "op", docId: state.docId, clientOpId, baseSeq: null, changes }));
   } else if (!transient && (!E.ws || E.ws.readyState !== 1)) {
