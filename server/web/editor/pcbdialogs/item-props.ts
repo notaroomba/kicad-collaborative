@@ -17,6 +17,7 @@ import { boardXref } from "./xref";
 import * as VM from "../../canvas/variant-model";
 import { syntaxHelpLink } from "../syntax-help";
 import { refImageDialog } from "./refimage";
+import { zoneSettingsPanel, type ZoneDefaults } from "./board-setup-pages";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -103,43 +104,74 @@ function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, bui
 const xyRow = (lx: string, x: Field<number>, y: Field<number>): [string, HTMLElement, HTMLElement] => [lx, h("span", { class: "pd-xy" }, x.el, h("label", null, "Y:"), y.el), unitLabel()];
 
 // ---------------------------------------------------------------- Copper Zone Properties
+const PAD_CONN: [string, number][] = [["yes", 2], ["thermal", 1], ["thru_hole_only", 3], ["no", 0]];
+const OUTLINE: [string, number][] = [["none", 0], ["edge", 2], ["full", 1]];
+const SMOOTH: [string, number][] = [["none", 0], ["chamfer", 1], ["fillet", 2]];
+const toNum = (m: [string, number][], v: string, d: number): number => { const e = m.find((x) => x[0] === v); return e ? e[1] : d; };
+const toTok = (m: [string, number][], v: number): string => (m.find((x) => x[1] === v) || m[0])[0];
+/** PANEL_ZONE_PROPERTIES::TransferZoneSettingsToWindow's values, read off a zone node. */
+function zoneValues(node: SNode): ZoneDefaults {
+  const cp = kid(node, "connect_pads") || ["connect_pads"], fill = kid(node, "fill") || ["fill"], hatch = kid(node, "hatch");
+  const mode0 = typeof cp[1] === "string" ? String(cp[1]) : "thermal";
+  return { clearance: nval(kid(cp, "clearance"), 1, 0.5), minWidth: nval(kid(node, "min_thickness"), 1, 0.25), padConnection: toNum(PAD_CONN, mode0, 1),
+    thermalGap: nval(kid(fill, "thermal_gap"), 1, 0.5), spokeWidth: nval(kid(fill, "thermal_bridge_width"), 1, 0.5), outline: toNum(OUTLINE, sval(hatch) || "edge", 2), hatchPitch: nval(hatch, 2, 0.5),
+    fillMode: sval(kid(fill, "mode")) === "hatch" ? 1 : 0, hatchOrientation: nval(kid(fill, "hatch_orientation")), hatchWidth: nval(kid(fill, "hatch_thickness"), 1, 1), hatchGap: nval(kid(fill, "hatch_gap"), 1, 1.5),
+    smoothLevel: nval(kid(fill, "hatch_smoothing_level")), smoothValue: nval(kid(fill, "hatch_smoothing_value"), 1, 0.1), cornerSmoothing: toNum(SMOOTH, sval(kid(fill, "smoothing")) || "none", 0),
+    cornerRadius: nval(kid(fill, "radius")), islands: nval(kid(fill, "island_removal_mode")), islandArea: nval(kid(fill, "island_area_min"), 1, 10) };
+}
+/** TransferZoneSettingsFromWindow onto a zone node: what the panel shows, the children it does not show kept. */
+function writeZone(n: SNode, v: ZoneDefaults, v0: ZoneDefaults): void {
+      put(n, "hatch", `(hatch ${toTok(OUTLINE, v.outline)} ${f6(v.hatchPitch)})`, ["priority", "connect_pads"]);
+      // connect_pads and fill keep the children this dialog does not show
+      let c = kid(n, "connect_pads"); if (!c) { put(n, "connect_pads", "(connect_pads)", ["min_thickness", "filled_areas_thickness", "fill", "polygon"]); c = kid(n, "connect_pads") as SNode; }
+      const tok = toTok(PAD_CONN, v.padConnection);
+      if (typeof c[1] === "string") c.splice(1, 1);
+      if (tok !== "thermal") c.splice(1, 0, tok);
+      put(c, "clearance", `(clearance ${f6(v.clearance)})`);
+      put(n, "min_thickness", `(min_thickness ${f6(v.minWidth)})`, ["filled_areas_thickness", "fill", "polygon"]);
+      let f = kid(n, "fill"); if (!f) { put(n, "fill", "(fill)", ["polygon", "filled_polygon"]); f = kid(n, "fill") as SNode; }
+      // the fill mode changes only when Hatched fill was switched (a thieving zone stays one)
+      if ((v.fillMode === 1) !== (v0.fillMode === 1)) put(f, "mode", v.fillMode === 1 ? "(mode hatch)" : null, ["thermal_gap", "thermal_bridge_width", "smoothing", "radius", "island_removal_mode"]);
+      put(f, "thermal_gap", `(thermal_gap ${f6(v.thermalGap)})`, ["thermal_bridge_width", "smoothing", "radius", "island_removal_mode"]);
+      put(f, "thermal_bridge_width", `(thermal_bridge_width ${f6(v.spokeWidth)})`, ["smoothing", "radius", "island_removal_mode"]);
+      if (v.cornerSmoothing === 0) { put(f, "smoothing", null); put(f, "radius", null); }
+      else { put(f, "smoothing", `(smoothing ${toTok(SMOOTH, v.cornerSmoothing)})`, ["radius", "island_removal_mode", "island_area_min"]); if (v.cornerRadius) put(f, "radius", `(radius ${f6(v.cornerRadius)})`, ["island_removal_mode", "island_area_min"]); else put(f, "radius", null); }
+      const im = v.islands;
+      if (im || kid(f, "island_removal_mode")) put(f, "island_removal_mode", `(island_removal_mode ${im})`, ["island_area_min", "hatch_thickness"]);
+      if (im === 2) put(f, "island_area_min", `(island_area_min ${f6(v.islandArea)})`, ["hatch_thickness"]); else put(f, "island_area_min", null);
+      if (v.fillMode === 1) {
+        const H = ["hatch_border_algorithm", "hatch_min_hole_area"];
+        put(f, "hatch_thickness", `(hatch_thickness ${f6(v.hatchWidth)})`, ["hatch_gap", "hatch_orientation", "hatch_smoothing_level", ...H]);
+        put(f, "hatch_gap", `(hatch_gap ${f6(v.hatchGap)})`, ["hatch_orientation", "hatch_smoothing_level", ...H]);
+        put(f, "hatch_orientation", `(hatch_orientation ${f6(v.hatchOrientation)})`, ["hatch_smoothing_level", ...H]);
+        if (v.smoothLevel > 0) { put(f, "hatch_smoothing_level", `(hatch_smoothing_level ${Math.round(v.smoothLevel)})`, ["hatch_smoothing_value", ...H]); put(f, "hatch_smoothing_value", `(hatch_smoothing_value ${f6(v.smoothValue)})`, H); }
+        else { put(f, "hatch_smoothing_level", null); put(f, "hatch_smoothing_value", null); }
+        if (!kid(f, "hatch_border_algorithm")) put(f, "hatch_border_algorithm", "(hatch_border_algorithm hatch_thickness)", ["hatch_min_hole_area"]);
+        if (!kid(f, "hatch_min_hole_area")) put(f, "hatch_min_hole_area", "(hatch_min_hole_area 0.3)");
+      } else if (v0.fillMode === 1) for (const k of ["hatch_thickness", "hatch_gap", "hatch_orientation", "hatch_smoothing_level", "hatch_smoothing_value", "hatch_border_algorithm", "hatch_min_hole_area"]) put(f, k, null);
+}
+/** DIALOG_COPPER_ZONE: the layers, then PANEL_ZONE_PROPERTIES (name, net, locked, the notebook, corner smoothing, islands) and Open Zone Manager... */
 function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc;
-  return itemDialog(ctx, item, "Copper Zone Properties", 760, (node, body, ro) => {
+  return itemDialog(ctx, item, "Copper Zone Properties", 780, (node, body, ro) => {
     const l1 = kid(node, "layer"), ln = kid(node, "layers");
     const cur = new Set<string>(l1 ? [sval(l1)] : ln ? ln.slice(1).map(String) : []);
     const layerChecks = withCurrent(copperLayers(doc), "").map(([name, label]) => ({ name, f: checkField(cur.has(name), label, { ro, key: "layer-" + name }) }));
     const name = textField(sval(kid(node, "name")), { ro, key: "name" });
     name.input.title = "A unique name for this zone, used to identify it in DRC rules";
     const net = netField(doc, node, ro), locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
-    const prio = numField(nval(kid(node, "priority")), { ro, key: "priority", digits: 0 });
-    const cp = kid(node, "connect_pads") || ["connect_pads"], fill = kid(node, "fill") || ["fill"], hatch = kid(node, "hatch");
-    const mode0 = typeof cp[1] === "string" ? String(cp[1]) : "thermal";
-    const clearance = lenField(nval(kid(cp, "clearance"), 1, 0.5), { ro, key: "clearance" }), minW = lenField(nval(kid(node, "min_thickness"), 1, 0.25), { ro, key: "minWidth" });
-    const conn = selectField<string>(mode0, [["yes", "Solid"], ["thermal", "Thermal reliefs"], ["thru_hole_only", "Reliefs for PTH"], ["no", "None"]], { ro, key: "padConnections" });
-    const gap = lenField(nval(kid(fill, "thermal_gap"), 1, 0.5), { ro, key: "thermalGap" }), spoke = lenField(nval(kid(fill, "thermal_bridge_width"), 1, 0.5), { ro, key: "spokeWidth" });
-    const outline = selectField<string>(sval(hatch) || "edge", [["none", "Line"], ["edge", "Hatched"], ["full", "Fully hatched"]], { ro, key: "outline" });
-    const pitch = lenField(nval(hatch, 2, 0.5), { ro, key: "hatchPitch" });
-    const smooth = selectField<string>(sval(kid(fill, "smoothing")) || "none", [["none", "None"], ["chamfer", "Chamfer"], ["fillet", "Fillet"]], { ro, key: "smoothing" });
-    const radius = lenField(nval(kid(fill, "radius")), { ro, key: "radius" });
-    const islands = selectField<number>(nval(kid(fill, "island_removal_mode")), [[0, "Always"], [1, "Never"], [2, "Below area limit"]], { ro, key: "islands" });
-    islands.input.title = "Choose what to do with unconnected copper islands";
-    const area = numField(nval(kid(fill, "island_area_min"), 1, 10), { ro, key: "islandArea" });
+    const v0 = zoneValues(node);
+    const panel = zoneSettingsPanel(v0, ro);
+    const zm = h("button", { type: "button", class: "btn", "data-k": "openZoneManager" }, "Open Zone Manager...");
+    zm.addEventListener("click", () => { const dlg = zm.closest(".kd-overlay, .kd-dialog"); const esc = dlg && dlg.querySelector<HTMLButtonElement>(".kd-foot button"); if (esc) esc.click(); setTimeout(() => runKicadAction("zoneManager"), 0); });
     body.append(h("div", { class: "pd-zone" },
-      h("div", { class: "pd-zonelayers" }, h("div", { class: "pd-colhead" }, "Layers:"), h("div", { class: "pd-list", style: "padding:4px 8px;max-height:330px" }, ...layerChecks.map((l) => l.f.el))),
-      h("div", null,
-        box("General", form([["Zone name:", name.el], ["Net name:", net.el], ["Zone priority level:", prio.el]], true), locked.el),
-        h("div", { class: "pd-cols2" },
-          box("Clearances & Pad Connections", form([["Clearance:", clearance.el, unitLabel()], ["Minimum width:", minW.el, unitLabel(), "Minimum thickness of filled areas."], ["Pad connections:", conn.el],
-            ["Thermal relief gap:", gap.el, unitLabel(), "Clearance between pads in the same net and filled areas."], ["Thermal spoke width:", spoke.el, unitLabel(), "Width of copper in thermal reliefs."]])),
-          h("div", null,
-            box("Display Overrides", form([["Outline display:", outline.el], ["Outline hatch pitch:", pitch.el, unitLabel()]])),
-            box("Fill", form([["Corner smoothing:", smooth.el], ["Radius:", radius.el, unitLabel()], ["Remove islands:", islands.el], ["Area limit:", area.el, unitLabel("mm²"), "Isolated islands smaller than this will be removed"]])))))));
+      h("div", { class: "pd-zonelayers" }, h("div", { class: "pd-colhead" }, "Layers:"), h("div", { class: "pd-list", style: "padding:4px 8px;max-height:330px" }, ...layerChecks.map((l) => l.f.el)), h("div", { class: "pd-row", style: "margin-top:8px" }, zm)),
+      h("div", null, form([["Zone name:", name.el, null, "A unique name for this zone, used to identify it in DRC rules"], ["Net name:", net.el]], true), locked.el, panel.el)));
     return (n) => {
       const on = layerChecks.filter((l) => l.f.get()).map((l) => l.name);
       if (!on.length) return "No layer selected.";
-      if (minW.get() < 0.001) return { msg: `Minimum width must be at least ${fmtLenU(0.001)}.`, focus: minW };
-      if ((conn.get() === "thermal" || conn.get() === "thru_hole_only") && spoke.get() < minW.get()) return { msg: "Thermal spoke width cannot be smaller than the minimum width.", focus: spoke };
+      const bad = panel.validate(); if (bad) return { msg: bad.msg, focus: bad.ctrl || null };
+      const v = panel.get();
       if (net.get() !== PH().netNameOf(doc, n)) setNet(doc, n, net.get());
       if (on.join(" ") !== Array.from(cur).join(" ")) {
         put(n, "layer", null); put(n, "layers", null);
@@ -147,22 +179,7 @@ function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
       }
       if (name.get().trim()) put(n, "name", `(name ${quote(name.get().trim())})`, ["hatch", "priority", "connect_pads"]); else put(n, "name", null);
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
-      put(n, "hatch", `(hatch ${outline.get()} ${f6(pitch.get())})`, ["priority", "connect_pads"]);
-      const p = Math.max(0, Math.round(prio.get() || 0)); if (p) put(n, "priority", `(priority ${p})`, ["connect_pads", "min_thickness"]); else put(n, "priority", null);
-      // connect_pads and fill keep the children this dialog does not show
-      let c = kid(n, "connect_pads"); if (!c) { put(n, "connect_pads", "(connect_pads)", ["min_thickness", "filled_areas_thickness", "fill", "polygon"]); c = kid(n, "connect_pads") as SNode; }
-      if (typeof c[1] === "string") c.splice(1, 1);
-      if (conn.get() !== "thermal") c.splice(1, 0, conn.get());
-      put(c, "clearance", `(clearance ${f6(clearance.get())})`);
-      put(n, "min_thickness", `(min_thickness ${f6(minW.get())})`, ["filled_areas_thickness", "fill", "polygon"]);
-      let f = kid(n, "fill"); if (!f) { put(n, "fill", "(fill)", ["polygon", "filled_polygon"]); f = kid(n, "fill") as SNode; }
-      put(f, "thermal_gap", `(thermal_gap ${f6(gap.get())})`, ["thermal_bridge_width", "smoothing", "radius", "island_removal_mode"]);
-      put(f, "thermal_bridge_width", `(thermal_bridge_width ${f6(spoke.get())})`, ["smoothing", "radius", "island_removal_mode"]);
-      if (smooth.get() === "none") { put(f, "smoothing", null); put(f, "radius", null); }
-      else { put(f, "smoothing", `(smoothing ${smooth.get()})`, ["radius", "island_removal_mode", "island_area_min"]); put(f, "radius", `(radius ${f6(radius.get())})`, ["island_removal_mode", "island_area_min"]); }
-      const im = islands.get();
-      if (im || kid(f, "island_removal_mode")) put(f, "island_removal_mode", `(island_removal_mode ${im})`, ["island_area_min", "hatch_thickness"]);
-      if (im === 2) put(f, "island_area_min", `(island_area_min ${f6(area.get())})`, ["hatch_thickness"]); else put(f, "island_area_min", null);
+      writeZone(n, v, v0);
       return undefined;
     };
   }, create, "Edit Zone Properties");
@@ -317,6 +334,84 @@ function nonCopperZoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | 
   }, create, "Edit Zone Properties");
 }
 /** InvokeCopperZonesEditor / InvokeRuleAreaEditor / InvokeNonCopperZonesEditor on the template of a zone about to be drawn. */
+// ---------------------------------------------------------------- Zone Manager
+/**
+ * DIALOG_ZONE_MANAGER (Edit > Zone Manager..., the zone dialog's Open Zone Manager...): the copper zones in priority
+ * order (top = highest) with the name / net filter and the layer filter, Move Top / Up / Down / Bottom, and the zone
+ * properties of the highlighted zone; OK writes every zone that changed as one "Zone Manager" commit, then refills
+ * when Refill zones is ticked.
+ */
+export function openZoneManager(ctx: ToolCtx): boolean {
+  const doc = ctx.doc as KDoc; if (!doc) return false;
+  const ro = !!ctx.viewOnly;
+  const isCopperZone = (it: KItem): boolean => it.kind === "zone" && !kid(it.node, "keepout") && Array.from(zoneLayerSet(doc, it.node)).some((l) => /\.Cu$/.test(l));
+  interface Row { item: KItem; name: string; net: string; layers: string[]; v0: ZoneDefaults; v: ZoneDefaults; prio0: number }
+  const rows: Row[] = Array.from(doc.items.values()).filter(isCopperZone).map((it) => ({ item: it, name: sval(kid(it.node, "name")), net: PH().netNameOf(doc, it.node) || "", layers: Array.from(zoneLayerSet(doc, it.node)).filter((l) => /\.Cu$/.test(l)),
+    v0: zoneValues(it.node), v: zoneValues(it.node), prio0: nval(kid(it.node, "priority")) }));
+  rows.sort((a, b) => b.prio0 - a.prio0);   // ZONE_SETTINGS_BAG: the highest priority first
+  if (!rows.length) { errorMessage("No copper zones on this board."); return true; }
+  let sel = 0, panel: ReturnType<typeof zoneSettingsPanel> | null = null;
+  const filter = h("input", { type: "search", class: "kd-input", placeholder: "Filter", "data-k": "zoneFilter", style: "width:100%" });
+  const byName = checkField(true, "Name", { key: "filterName" }), byNet = checkField(true, "Net", { key: "filterNet" });
+  const layerFilter = selectField<string>("", [["", "All Layers"], ...doc.copper.map((l): [string, string] => [l, layerLabel(doc, l)])], { key: "layerFilter" });
+  const table = h("tbody"), right = h("div", { style: "min-width:0" });
+  const visible = (r: Row): boolean => {
+    const t = filter.value.trim().toLowerCase();
+    if (t && !((byName.get() && r.name.toLowerCase().includes(t)) || (byNet.get() && r.net.toLowerCase().includes(t)))) return false;
+    return !layerFilter.get() || r.layers.includes(layerFilter.get());
+  };
+  const keep = (): void => { if (panel && rows[sel]) rows[sel].v = panel.get(); };
+  const selectOnCanvas = checkField(false, "Select on canvas", { key: "autoSelect", tip: "Select and focus the highlighted zone on the board canvas" });
+  const showPanel = (): void => {
+    const r = rows[sel]; if (!r) { right.replaceChildren(); panel = null; return; }
+    panel = zoneSettingsPanel(r.v, ro);
+    right.replaceChildren(h("div", { class: "pd-colhead" }, r.name || "(unnamed zone)", r.net ? `  [${r.net}]` : ""), panel.el);
+    if (selectOnCanvas.get() && CollabTools.pcb) { (CollabTools.pcb.state as unknown as { sel: Set<string> }).sel = new Set([r.item.id]); ctx.requestRender(); }
+  };
+  const draw = (): void => {
+    table.replaceChildren();
+    rows.forEach((r, i) => {
+      if (!visible(r)) return;
+      const tr = h("tr", { class: i === sel ? "sel" : "", "data-row": i }, h("td", null, r.name), h("td", null, r.net), h("td", null, r.layers.map((l) => layerLabel(doc, l)).join(",")));
+      tr.addEventListener("click", () => { keep(); sel = i; draw(); showPanel(); });
+      table.append(tr);
+    });
+  };
+  const move = (to: (i: number) => number): void => {
+    keep(); const j = Math.max(0, Math.min(rows.length - 1, to(sel))); if (j === sel) return;
+    const [r] = rows.splice(sel, 1); rows.splice(j, 0, r); sel = j; draw();
+  };
+  const TIP = "Top zone has the highest priority. When a zone is inside another zone, if its priority is higher, its outlines are removed from the other zone.";
+  const mv = (label: string, fn: (i: number) => number): HTMLButtonElement => { const b = h("button", { type: "button", class: "btn", title: TIP, disabled: ro }, label); b.addEventListener("click", () => move(fn)); return b; };
+  filter.addEventListener("input", draw); byName.input.addEventListener("change", draw); byNet.input.addEventListener("change", draw); layerFilter.input.addEventListener("change", draw);
+  const refill = checkField(true, "Refill zones", { key: "repour", tip: "Refill zones after changes made on board" });
+  openDialog({ title: "Zone Manager", width: 1000, readOnly: ro, persist: true,
+    build(body) {
+      const list = h("div", { class: "pd-grid", style: "max-height:360px" }, h("table", null, h("thead", null, h("tr", null, h("th", null, "Name"), h("th", null, "Net"), h("th", null, "Layers"))), table));
+      body.append(h("div", { class: "pd-cols2", style: "grid-template-columns:2fr 3fr;gap:12px" },
+        h("div", null, filter, h("div", { class: "pd-row" }, byName.el, byNet.el, h("label", { style: "margin-left:auto" }, "Layer:"), layerFilter.el), list,
+          h("div", { class: "pd-row", style: "margin-top:6px;flex-wrap:wrap" }, mv("Move to Top", () => 0), mv("Move Up", (i) => i - 1), mv("Move Down", (i) => i + 1), mv("Move to Bottom", () => rows.length - 1))),
+        right), h("div", { class: "pd-row", style: "margin-top:8px" }, refill.el, selectOnCanvas.el));
+      draw(); showPanel();
+    },
+    ok() {
+      if (ro) return true;
+      keep();
+      const bad = panel ? panel.validate() : null; if (bad) { showApplyError({ msg: bad.msg, focus: bad.ctrl || null }); return false; }
+      const changes: KChange[] = [];
+      rows.forEach((r, i) => {
+        const node = (K().cloneNode as (n: SNode) => SNode)(r.item.node), before = K().serialize(node);
+        writeZone(node, r.v, r.v0);
+        const prio = rows.length - 1 - i;   // the top of the list is the highest priority
+        if (prio !== r.prio0) { if (prio) put(node, "priority", `(priority ${prio})`, ["connect_pads", "min_thickness"]); else put(node, "priority", null); }
+        if (K().serialize(node) !== before) changes.push(K().replaceChange(doc, { ...r.item, node, geom: [], bbox: null }));
+      });
+      if (changes.length) ctx.commit(changes, "Zone Manager");
+      if (refill.get() && changes.length) setTimeout(() => runKicadAction("zoneFillAll"), 0);
+      return true;
+    } });
+  return true;
+}
 export function newZoneDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean {
   const item = { id: "", kind: "zone", node, geom: [], bbox: null } as unknown as KItem;
   const keepout = !!kid(node, "keepout"), copper = Array.from(zoneLayerSet(ctx.doc as KDoc, node)).some((l) => /\.Cu$/.test(l));

@@ -150,7 +150,10 @@ export function zoneSettingsPanel(v: ZoneDefaults, ro: boolean): { el: HTMLEleme
   const islands = selectField<number>(v.islands, [[0, "Always"], [1, "Never"], [2, "Below area limit"]], { ro, key: "islands" });
   islands.input.title = "Choose what to do with unconnected copper islands";
   const area = numField(v.islandArea, { ro, key: "islandArea" });
-  const radiusRow = [h("label", null, "Radius:"), radius.el, unitLabel()], areaRow = [h("label", null, "Area limit:"), area.el, unitLabel("mm²")];
+  conn.input.title = "Default pad connection type to zone.\nThis setting can be overridden by local  pad settings";
+  level.input.title = "Value of smoothing effort\n0 = no smoothing\n1 = chamfer\n2 = round corners\n3 = round corners (finer shape)";
+  amount.input.title = "Ratio between smoothed corners size and the gap between lines\n0 = no smoothing\n1.0 = max radius/chamfer size (half gap value)";
+  const radiusRow = [h("label", null, "Radius:"), radius.el, unitLabel()], areaRow = [h("label", { title: "Isolated islands smaller than this will be removed" }, "Area limit:"), area.el, unitLabel("mm²")];
   const sync = (): void => {
     // PANEL_ZONE_PROPERTIES::OnUpdateUI: m_cornerRadius.Show( smoothing != NONE ), m_islandThreshold.Show( mode == AREA ), the hatch controls enabled with Hatched fill
     for (const e of radiusRow) (e as HTMLElement).style.display = smooth.get() === 0 ? "none" : "";
@@ -163,10 +166,10 @@ export function zoneSettingsPanel(v: ZoneDefaults, ro: boolean): { el: HTMLEleme
   const tabs = h("div");
   // the notebook
   const pages: [string, HTMLElement][] = [
-    ["Clearances & Pad Connections", form([["Clearance:", clearance.el, unitLabel()], ["Minimum width:", minW.el, unitLabel(), "Minimum thickness of filled areas."], ["Pad connections:", conn.el],
-      ["Thermal relief gap:", gap.el, unitLabel(), "Clearance between pads in the same net and filled areas."], ["Thermal spoke width:", spoke.el, unitLabel(), "Width of copper in thermal reliefs."]])],
+    ["Clearances & Pad Connections", form([["Clearance:", clearance.el, unitLabel(), "Copper clearance for this zone (set to 0 to use the netclass clearance)"], ["Minimum width:", minW.el, unitLabel(), "Minimum thickness of filled areas."], ["Pad connections:", conn.el, null, "Default pad connection type to zone.\nThis setting can be overridden by local  pad settings"],
+      ["Thermal relief gap:", gap.el, unitLabel(), "The distance that will be kept clear between the filled area of the zone and a pad connected by thermal relief spokes."], ["Thermal spoke width:", spoke.el, unitLabel(), "Width of copper in thermal reliefs."]])],
     ["Display Overrides", form([["Outline display:", outline.el], ["Outline hatch pitch:", pitch.el, unitLabel()]])],
-    ["Hatched Fill", h("div", null, hatched.el, form([["Orientation:", orient.el, unitLabel("deg")], ["Hatch width:", hw.el, unitLabel()], ["Hatch gap:", hg.el, unitLabel()], ["Smoothing effort:", level.el], ["Smoothing amount:", amount.el]]))]];
+    ["Hatched Fill", h("div", null, hatched.el, form([["Orientation:", orient.el, unitLabel("deg")], ["Hatch width:", hw.el, unitLabel()], ["Hatch gap:", hg.el, unitLabel()], ["Smoothing effort:", level.el, null, "Value of smoothing effort\n0 = no smoothing\n1 = chamfer\n2 = round corners\n3 = round corners (finer shape)"], ["Smoothing amount:", amount.el, null, "Ratio between smoothed corners size and the gap between lines\n0 = no smoothing\n1.0 = max radius/chamfer size (half gap value)"]]))]];
   const bar = h("div", { class: "pd-tabs" }), host = h("div", { style: "padding:4px 2px 8px" });
   const show = (i: number): void => { Array.from(bar.children).forEach((b, k) => b.classList.toggle("on", k === i)); host.replaceChildren(pages[i][1]); };
   pages.forEach(([label], i) => { const b = h("button", { type: "button", class: "pd-tab", "data-k": "tab-" + i }, label); b.addEventListener("click", () => show(i)); bar.append(b); });

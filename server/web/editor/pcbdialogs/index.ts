@@ -8,7 +8,7 @@ import "./find";   // Edit > Find (DIALOG_FIND): registers E.hooks.boardFind / b
 import { openFootprintFields } from "./fp-fields";
 import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, prevMarker } from "./inspect";
 import { showPane } from "../panes";
-import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";
+import { newTextDialog, newZoneDialog, openZoneManager, pcbItemDialog } from "./item-props";
 import { tracksOnly, trackViaDialog } from "./track-via";
 import { newTextBoxDialog } from "./textbox";
 import { newTableDialog } from "./table";
@@ -42,6 +42,7 @@ export function installPcbDialogs(): void {
   if (nd) nd({ gr_text: newTextDialog, gr_text_box: newTextBoxDialog, table: newTableDialog, zone: newZoneDialog });   // Add Text, Draw Text Box and Draw Zone / Rule Area open their properties dialog first
   action("createArray", "Create Array...", "", (ctx) => { createArrayDialog(ctx); });   // PCB_ACTIONS::createArray (ARRAY_TOOL)
   action("boardSetup", "Board Setup...", "", (ctx) => { void openBoardSetup(ctx); });
+  action("zoneManager", "Zone Manager...", "", (ctx) => { openZoneManager(ctx); });   // GLOBAL_EDIT_TOOL::ZoneManager
   action("updatePcbFromSchematic", "Update PCB from Schematic...", "F8", (ctx) => { void openUpdatePcb(ctx); });
   // GLOBAL_EDIT_TOOL::ExchangeFootprints (DIALOG_EXCHANGE_FOOTPRINTS)
   action("updateFootprint", "Update Footprint...", "", (ctx) => { openExchangeFootprints(ctx, "updateFootprint"); });
