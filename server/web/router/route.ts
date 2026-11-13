@@ -168,12 +168,14 @@ export class Router {
     const nl = P.netlist(doc); const all = copper.map((_, i) => i);
     const obstacles = this.collectObstacles(nl);
     const pads: number[][] = []; let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
-    const hv = copper.map(() => [0, 0]); const smd: Shape[] = [];
+    const hv = copper.map(() => [0, 0]); const smd: Shape[] = [], chip: Shape[] = [];
+    // the pads of two and three pad parts (chip resistors and capacitors, small diodes and transistors): the ones a via can stand on end
+    const chipPads = new Set<string>(); for (const it of doc.items.values()) if (it.kind === "footprint") { const ps: any[] = P.padsOf(it); if (ps.length <= 3) for (const p of ps) chipPads.add(p.x.toFixed(3) + "," + p.y.toFixed(3)); }
     for (const c of nl.conductors) {
       if (c.kind === "zone") continue;
       const layers = Array.from(c.layers as Set<string>).map((l) => copper.indexOf(l)).filter((i) => i >= 0); if (!layers.length) continue;
       if (c.bbox[0] < bx0) bx0 = c.bbox[0]; if (c.bbox[1] < by0) by0 = c.bbox[1]; if (c.bbox[2] > bx1) bx1 = c.bbox[2]; if (c.bbox[3] > by1) by1 = c.bbox[3];
-      if (c.kind === "pad") { const fine = c.pad.type === "smd" && Math.min(c.pad.w, c.pad.h) <= 0.35 ? 25 : 1; const ax = padAxis(c.pad); const along = Math.abs(ax[0]) > 0.7; pads.push([c.pad.x, c.pad.y, fine > 1 && along ? 0.2 : fine, fine > 1 && !along ? 0.2 : fine]); if (layers.length < L || L === 1) smd.push(c.shape); }
+      if (c.kind === "pad") { const fine = c.pad.type === "smd" && Math.min(c.pad.w, c.pad.h) <= 0.35 ? 25 : 1; const ax = padAxis(c.pad); const along = Math.abs(ax[0]) > 0.7; pads.push([c.pad.x, c.pad.y, fine > 1 && along ? 0.2 : fine, fine > 1 && !along ? 0.2 : fine]); if (layers.length < L || L === 1) { smd.push(c.shape); if (chipPads.has(c.pad.x.toFixed(3) + "," + c.pad.y.toFixed(3))) chip.push(c.shape); } }
       if (c.kind === "segment") { const [a, b] = c.anchors; const dx = Math.abs(b[0] - a[0]), dy = Math.abs(b[1] - a[1]); if (dy < dx * 0.2) hv[layers[0]][0] += dx; else if (dx < dy * 0.2) hv[layers[0]][1] += dy; }
     }
     const outline: Pt[] | null = P.boardOutline(doc).outline;
@@ -196,6 +198,9 @@ export class Router {
       let front: number[] = []; for (let iy = 0; iy < H; iy++) for (let ix = 0; ix < W; ix++) { if (off(ix, iy)) continue; if (off(ix - 1, iy) || off(ix + 1, iy) || off(ix, iy - 1) || off(ix, iy + 1)) { rim[iy * W + ix] = 1; front.push(iy * W + ix); } }
       for (let d = 1; d < r && front.length; d++) { const next: number[] = []; for (const i of front) { const ix = i % W, iy = (i - ix) / W; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const x = ix + dx, y = iy + dy; if (off(x, y)) continue; const j = y * W + x; if (!rim[j]) { rim[j] = 1; next.push(j); } } } front = next; } }
     for (const sh of smd) stamp(G, G.noVia, sh, 0, 1);
+    // no via in or against a small part's solder pad: the hole drains the solder and stands the part on end (a centre
+    // just outside the pad's corner still puts the hole in it), so via centres keep a drill radius off those pads
+    for (const sh of chip) stamp(G, G.noVia, sh, 0.15, 1);
     // rule areas
     const zoneLayers = (n: any): number[] => { const l = K.kid(n, "layer"), ls = K.kid(n, "layers"); const names: string[] = l ? [K.str(l[1])] : ls ? ls.slice(1).map(K.str) : []; const out = new Set<number>(); for (const nm of names) { if (nm === "*.Cu" || nm === "F&B.Cu") all.forEach((i) => out.add(i)); else { const i = copper.indexOf(nm); if (i >= 0) out.add(i); } } return Array.from(out); };
     // A zone's outline may carry holes as further polygons: inside means inside an odd number of them.
@@ -235,6 +240,20 @@ export class Router {
       const b = this.cellBox(ko.box); if (!b) continue; const ls = ko.layers && ko.layers.length ? ko.layers.map((nm) => copper.indexOf(nm)).filter((i) => i >= 0) : all;
       for (const l of ls) { const m = G.keep[l] || (G.keep[l] = new Uint8Array(W * H)); for (let iy = b[1]; iy <= b[3]; iy++) m.fill(1, iy * W + b[0], iy * W + b[2] + 1); }
       for (let iy = b[1]; iy <= b[3]; iy++) for (let ix = b[0]; ix <= b[2]; ix++) G.noVia[iy * W + ix]++;
+    }
+    // Under a crystal nothing runs but the crystal's own nets (and ground): its two nodes are the most sensitive on a
+    // digital board.  The area is the part's courtyard, on every layer.
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue; const ref = refOf(K, it.node) || ""; const pads: any[] = P.padsOf(it);
+      if (!(/^(Y|XTAL)\d/i.test(ref) || /crystal|xtal|resonator/i.test(String(it.lib || "") + " " + String(it.value || ""))) || pads.length < 2 || pads.length > 6) continue;
+      const nets = pads.map((p) => nl.table.key(p.net) || ""); if (nets.some((n) => /^\/?(\+|VCC|VDD|VBUS|VBAT|VIN)|\dV\d?$/i.test(n))) continue;      // an oscillator module is not a bare crystal
+      let b: Box = [Infinity, Infinity, -Infinity, -Infinity];
+      try { const cy = P.courtyards({ node: it.node }); for (const key of Object.keys(cy)) for (const loop of cy[key]) for (const q of loop) b = [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.max(b[2], q[0]), Math.max(b[3], q[1])]; } catch { /* no courtyard */ }
+      if (b[0] > b[2]) for (const p of pads) b = [Math.min(b[0], p.x - 0.6), Math.min(b[1], p.y - 0.6), Math.max(b[2], p.x + 0.6), Math.max(b[3], p.y + 0.6)];
+      b = [b[0] - 0.1, b[1] - 0.1, b[2] + 0.1, b[3] + 0.1];      // a track must not even touch the area
+      const cb = this.cellBox(b); if (!cb) continue; const q = G.quiet || (G.quiet = new Uint8Array(W * H));
+      for (let iy = cb[1]; iy <= cb[3]; iy++) q.fill(1, iy * W + cb[0], iy * W + cb[2] + 1);
+      for (const n of nets) if (n) this.xtalNets.add(n);
     }
     for (const it of doc.items.values()) if (it.kind === "footprint") { const ref = refOf(K, it.node); for (const p of P.padsOf(it)) this.padNames.set(p.x.toFixed(3) + "," + p.y.toFixed(3), (ref || "?") + "." + p.number); }
     this.pref = hv.map(([h, v]) => h + v > 20 ? (h - v) / (h + v) : 0);
@@ -295,6 +314,7 @@ export class Router {
     }
   }
 
+  private xtalNets = new Set<string>();
   /** The rule class a net routes with (its netclass's track width, clearance and via), built on first use. */
   classFor(netKey: string, cap = Infinity, want = 0, smallVia = false): RuleClass {
     const { P, s, G } = this; const nc = P.netclassOf(s, netKey); const plan = (this.opts.netOpts || {})[netKey]; const pw = plan && +plan.width! > 0 ? +plan.width! : 0;
@@ -309,8 +329,9 @@ export class Router {
     // array has no room for it).  Only when the board states its minimums; the hole keeps its annular ring.
     if (smallVia && s.minViaDiameter > 0 && s.minThroughDrill > 0 && s.minViaDiameter < viaD0 - 1e-6) { const d = Math.max(s.minViaDiameter, s.minThroughDrill + 2 * (s.minViaAnnular || 0.05)); if (d < viaD0 - 1e-6) { viaD = d; viaDrill = Math.min(viaDrill, s.minThroughDrill); } }
     const kind = this.relax ? undefined : this.kindFor(netKey);
-    const key = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : ""); let c = G.classes.get(key);
-    if (!c) { c = buildClass(G, key, width, clr, viaD, viaDrill, kind); if (this.conns.length) for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, c, sh, 1, false); }
+    const open = !G.quiet || this.xtalNets.has(netKey) || /^\/?(GND|AGND|DGND|PGND|VSS)/i.test(netKey);
+    const key = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : "") + (open ? "" : "/q"); let c = G.classes.get(key);
+    if (!c) { c = buildClass(G, key, width, clr, viaD, viaDrill, kind, open); if (this.conns.length) for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, c, sh, 1, false); }
     return c;
   }
   relax = false; relaxed = new Set<string>(); pairNets = new Set<string>(); private kindMemo = new Map<string, NetKind>(); private domains: boolean | null = null;
@@ -542,8 +563,8 @@ export class Router {
     const Pa = cp.a, Pb = cp.b, Na = pr.swap ? cn.b : cn.a, Nb = pr.swap ? cn.a : cn.b;
     const layers = G.layers.map((_, l) => l).filter((l) => G.routable[l] && [Pa, Pb, Na, Nb].every((a) => a.layers.includes(l)));
     if (!layers.length) return "its pads are not all on one layer";
-    const key = `pair/${w}/${gap}/${clr}`; let wide = G.classes.get(key);
-    if (!wide) { wide = buildClass(G, key, 2 * w + gap, clr, cp.cls.viaD, cp.cls.viaDrill, cp.cls.kind); for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, wide, sh, 1, false); }
+    const key = `pair/${w}/${gap}/${clr}` + (cp.cls.open === false ? "/q" : ""); let wide = G.classes.get(key);
+    if (!wide) { wide = buildClass(G, key, 2 * w + gap, clr, cp.cls.viaD, cp.cls.viaDrill, cp.cls.kind, cp.cls.open !== false); for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, wide, sh, 1, false); }
     const half = (a: Anchor) => { const sh = a.shape as any; return sh ? (sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0) : 0; };
     // Each end gathers the pair a little way off its pads, square to the line between them, on either side of it.
     const gather = (a: Anchor, b: Anchor, toward: Anchor): { g: Anchor; e: Pt; q: Pt; s: number }[] => {

@@ -73143,9 +73143,9 @@ function stampClass(G2, c, o, sign2, fixed) {
   stampObstacle(G2, c, o, sign2, c.full, c.vfull);
   if (fixed) stampObstacle(G2, c, o, sign2, c.fixed, c.vfixed);
 }
-function buildClass(G2, key2, width, clr, viaD, viaDrill, kind) {
+function buildClass(G2, key2, width, clr, viaD, viaDrill, kind, open2 = true) {
   const n2 = G2.W * G2.H;
-  const c = { key: key2, width, clr, viaD, viaDrill, kind, full: [], fixed: [], vfull: [], vfixed: [] };
+  const c = { key: key2, width, clr, viaD, viaDrill, kind, open: open2, full: [], fixed: [], vfull: [], vfixed: [] };
   for (let l = 0; l < G2.layers.length; l++) {
     const m = new Uint16Array(n2);
     if (G2.outside) {
@@ -73154,6 +73154,9 @@ function buildClass(G2, key2, width, clr, viaD, viaDrill, kind) {
     const k = G2.keep[l];
     if (k) {
       for (let i = 0; i < n2; i++) if (k[i]) m[i]++;
+    }
+    if (!open2 && G2.quiet) {
+      for (let i = 0; i < n2; i++) if (G2.quiet[i]) m[i]++;
     }
     c.fixed.push(m);
     c.vfixed.push(m.slice());
@@ -73576,6 +73579,7 @@ var Router = class _Router {
     this.zoneCovered = 0;
     this.dropped = [];
     this.stat = { noSoft: 0, noBlockers: 0, tooMany: 0, ripped: 0, ripLimit: 0 };
+    this.xtalNets = /* @__PURE__ */ new Set();
     this.relax = false;
     this.relaxed = /* @__PURE__ */ new Set();
     this.pairNets = /* @__PURE__ */ new Set();
@@ -73658,7 +73662,12 @@ var Router = class _Router {
     const pads = [];
     let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
     const hv = copper.map(() => [0, 0]);
-    const smd = [];
+    const smd = [], chip = [];
+    const chipPads = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) if (it.kind === "footprint") {
+      const ps = P.padsOf(it);
+      if (ps.length <= 3) for (const p of ps) chipPads.add(p.x.toFixed(3) + "," + p.y.toFixed(3));
+    }
     for (const c of nl.conductors) {
       if (c.kind === "zone") continue;
       const layers = Array.from(c.layers).map((l) => copper.indexOf(l)).filter((i) => i >= 0);
@@ -73672,7 +73681,10 @@ var Router = class _Router {
         const ax = padAxis(c.pad);
         const along2 = Math.abs(ax[0]) > 0.7;
         pads.push([c.pad.x, c.pad.y, fine > 1 && along2 ? 0.2 : fine, fine > 1 && !along2 ? 0.2 : fine]);
-        if (layers.length < L || L === 1) smd.push(c.shape);
+        if (layers.length < L || L === 1) {
+          smd.push(c.shape);
+          if (chipPads.has(c.pad.x.toFixed(3) + "," + c.pad.y.toFixed(3))) chip.push(c.shape);
+        }
       }
       if (c.kind === "segment") {
         const [a, b] = c.anchors;
@@ -73753,6 +73765,7 @@ var Router = class _Router {
       }
     }
     for (const sh of smd) stamp(G2, G2.noVia, sh, 0, 1);
+    for (const sh of chip) stamp(G2, G2.noVia, sh, 0.15, 1);
     const zoneLayers = (n2) => {
       const l = K7.kid(n2, "layer"), ls = K7.kid(n2, "layers");
       const names = l ? [K7.str(l[1])] : ls ? ls.slice(1).map(K7.str) : [];
@@ -73840,6 +73853,27 @@ var Router = class _Router {
         for (let iy = b[1]; iy <= b[3]; iy++) m.fill(1, iy * W10 + b[0], iy * W10 + b[2] + 1);
       }
       for (let iy = b[1]; iy <= b[3]; iy++) for (let ix = b[0]; ix <= b[2]; ix++) G2.noVia[iy * W10 + ix]++;
+    }
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue;
+      const ref = refOf(K7, it.node) || "";
+      const pads2 = P.padsOf(it);
+      if (!(/^(Y|XTAL)\d/i.test(ref) || /crystal|xtal|resonator/i.test(String(it.lib || "") + " " + String(it.value || ""))) || pads2.length < 2 || pads2.length > 6) continue;
+      const nets = pads2.map((p) => nl.table.key(p.net) || "");
+      if (nets.some((n2) => /^\/?(\+|VCC|VDD|VBUS|VBAT|VIN)|\dV\d?$/i.test(n2))) continue;
+      let b = [Infinity, Infinity, -Infinity, -Infinity];
+      try {
+        const cy = P.courtyards({ node: it.node });
+        for (const key2 of Object.keys(cy)) for (const loop of cy[key2]) for (const q2 of loop) b = [Math.min(b[0], q2[0]), Math.min(b[1], q2[1]), Math.max(b[2], q2[0]), Math.max(b[3], q2[1])];
+      } catch {
+      }
+      if (b[0] > b[2]) for (const p of pads2) b = [Math.min(b[0], p.x - 0.6), Math.min(b[1], p.y - 0.6), Math.max(b[2], p.x + 0.6), Math.max(b[3], p.y + 0.6)];
+      b = [b[0] - 0.1, b[1] - 0.1, b[2] + 0.1, b[3] + 0.1];
+      const cb = this.cellBox(b);
+      if (!cb) continue;
+      const q = G2.quiet || (G2.quiet = new Uint8Array(W10 * H));
+      for (let iy = cb[1]; iy <= cb[3]; iy++) q.fill(1, iy * W10 + cb[0], iy * W10 + cb[2] + 1);
+      for (const n2 of nets) if (n2) this.xtalNets.add(n2);
     }
     for (const it of doc.items.values()) if (it.kind === "footprint") {
       const ref = refOf(K7, it.node);
@@ -73965,10 +73999,11 @@ var Router = class _Router {
       }
     }
     const kind = this.relax ? void 0 : this.kindFor(netKey);
-    const key2 = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : "");
+    const open2 = !G2.quiet || this.xtalNets.has(netKey) || /^\/?(GND|AGND|DGND|PGND|VSS)/i.test(netKey);
+    const key2 = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : "") + (open2 ? "" : "/q");
     let c = G2.classes.get(key2);
     if (!c) {
-      c = buildClass(G2, key2, width, clr, viaD, viaDrill, kind);
+      c = buildClass(G2, key2, width, clr, viaD, viaDrill, kind, open2);
       if (this.conns.length) {
         for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G2, c, sh, 1, false);
       }
@@ -74405,10 +74440,10 @@ var Router = class _Router {
     const Pa = cp2.a, Pb = cp2.b, Na = pr.swap ? cn.b : cn.a, Nb = pr.swap ? cn.a : cn.b;
     const layers = G2.layers.map((_, l) => l).filter((l) => G2.routable[l] && [Pa, Pb, Na, Nb].every((a) => a.layers.includes(l)));
     if (!layers.length) return "its pads are not all on one layer";
-    const key2 = `pair/${w}/${gap}/${clr}`;
+    const key2 = `pair/${w}/${gap}/${clr}` + (cp2.cls.open === false ? "/q" : "");
     let wide = G2.classes.get(key2);
     if (!wide) {
-      wide = buildClass(G2, key2, 2 * w + gap, clr, cp2.cls.viaD, cp2.cls.viaDrill, cp2.cls.kind);
+      wide = buildClass(G2, key2, 2 * w + gap, clr, cp2.cls.viaD, cp2.cls.viaDrill, cp2.cls.kind, cp2.cls.open !== false);
       for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G2, wide, sh, 1, false);
     }
     const half = (a) => {
@@ -91557,11 +91592,13 @@ function reviewPhysics(doc, P, k, settings, add) {
       if (!segs.length) continue;
       let n2 = 0, bad = 0, pl = 0;
       let first = null;
+      const own = viasOf.get(net) || [];
       for (const t of segs) {
         const refs = S2.refLayers(Array.from(t.layers)[0]);
         if (!refs.length) continue;
         S2.walk(t, 0.5, (x, y) => {
           n2++;
+          if (own.some((v) => Math.hypot(v.shape.x - x, v.shape.y - y) < 1)) return;
           const what = refs.map((l) => S2.pourAt(x, y, l));
           if (what.includes("gnd")) return;
           if (what.includes("plane")) pl++;
@@ -91597,6 +91634,7 @@ function reviewPhysics(doc, P, k, settings, add) {
       if (!e.p || !e.n) continue;
       const tp = tracksOf.get(e.p) || [], tn = tracksOf.get(e.n) || [];
       if (!tp.length || !tn.length) continue;
+      if (/^(XTAL|XTL|OSC|XIN|XOUT|XI\b|XO\b)/i.test(bare(e.p))) continue;
       const name = bare(base).replace(/[_\-]$/, "") || bare(e.p);
       const lp = S2.lengthOf(e.p), ln = S2.lengthOf(e.n);
       const ifc = pairInterface(bare(e.p));
@@ -91606,7 +91644,16 @@ function reviewPhysics(doc, P, k, settings, add) {
       if (Math.abs(lp - ln) > limit + 1e-6) skew.push(`${label}: ${r22(lp)} mm and ${r22(ln)} mm, ${r22(Math.abs(lp - ln))} mm apart (limit ${limit} mm)`);
       if (rule && rule.max && Math.max(lp, ln) > rule.max) long.push(`${label}: ${r22(Math.max(lp, ln))} mm (at most about ${rule.max} mm)`);
       const vp = (viasOf.get(e.p) || []).length, vn = (viasOf.get(e.n) || []).length, vmax = rule && rule.vias ? rule.vias : 2;
-      if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`);
+      const twice = [e.p, e.n].some((net) => {
+        const seen = /* @__PURE__ */ new Set();
+        for (const q of padsOf.get(net) || []) {
+          if (seen.has(q.fp)) return true;
+          seen.add(q.fp);
+        }
+        return false;
+      });
+      if (twice && Math.abs(vp - vn) <= 2 && Math.max(vp, vn) <= vmax) {
+      } else if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`);
       else if (vp > vmax) vias.push(`${name}: ${vp} vias on each track (at most ${vmax})`);
       let n2 = 0, lone = 0;
       for (const t of tp) {
@@ -91846,7 +91893,31 @@ function reviewPhysics(doc, P, k, settings, add) {
         seen.add(p.net);
         const ts = (tracksOf.get(p.net) || []).filter((t) => t.length > 1);
         if (!ts.length) continue;
-        const w = Math.min(...ts.map((t) => t.width || (t.shape.r ? t.shape.r * 2 : 1)));
+        const wOf = (t) => t.width || (t.shape.r ? t.shape.r * 2 : 1);
+        const narrow = (tracksOf.get(p.net) || []).filter((t) => wOf(t) < LIMITS.powerPath - 1e-6);
+        const group = /* @__PURE__ */ new Map();
+        let gi = 0;
+        for (const t of narrow) {
+          if (group.has(t)) continue;
+          const id = gi++;
+          const todo = [t];
+          group.set(t, id);
+          while (todo.length) {
+            const u = todo.pop();
+            for (const v of narrow) if (!group.has(v) && P.shapeGap(u.shape, v.shape) <= 0.01) {
+              group.set(v, id);
+              todo.push(v);
+            }
+          }
+        }
+        const signalOnly = /* @__PURE__ */ new Set();
+        for (let id = 0; id < gi; id++) {
+          const mine = narrow.filter((t) => group.get(t) === id);
+          const touched = (padsOf.get(p.net) || []).filter((q) => mine.some((t) => P.shapeGap({ t: "circle", x: q.x, y: q.y, r: 0.05 }, t.shape) <= 0.3));
+          if (touched.length && touched.every((q) => /^R\d/i.test(q.fp.ref))) signalOnly.add(id);
+        }
+        const load = ts.filter((t) => !(group.has(t) && signalOnly.has(group.get(t))));
+        const w = load.length ? Math.min(...load.map(wOf)) : Infinity;
         if (w < LIMITS.powerPath - 1e-6) thin.push(`${bare(p.net)} at ${f2.ref} ${f2.value}: ${r22(w)} mm`.replace(/\s+:/, ":"));
       }
     }
@@ -93428,8 +93499,9 @@ async function reviewBoard(doc, path2) {
         const g2 = (item && item.geom || []).find((q) => q.t === "text" && String(q.text) === f2.ref);
         const tx = g2 ? g2.x : a[0], ty = g2 ? g2.y : a[1];
         const tw = (g2 ? k.textWidth(g2.text, g2.size, g2.w || 0) : f2.ref.length) / 2 + 0.1, th = (g2 ? g2.size : 1) / 2 + 0.1;
+        const printed = /^B\./.test(l) ? "back" : "front";
         for (const o of fps) {
-          if (o.side !== f2.side) continue;
+          if (o.side !== printed && !o.pads.some((q) => q.type === "thru_hole")) continue;
           if (o === f2) continue;
           const p = o.pads.find((q) => Math.abs(q.x - tx) < q.w / 2 + Math.min(tw, 0.3) && Math.abs(q.y - ty) < q.h / 2 + th * 0.5);
           if (p && g2) {
@@ -93452,7 +93524,10 @@ async function reviewBoard(doc, path2) {
     for (const side of ["front", "back"]) {
       if (!smd(side)) continue;
       const n2 = fps.filter((f2) => f2.side === side && (/^FID\d/i.test(f2.ref) || /fiducial/i.test(f2.lib))).length;
-      if (n2 < 3) add("fiducials", "warning", `The ${side} is machine assembled and has ${n2} fiducial${n2 === 1 ? "" : "s"}; pick and place needs three (board.fiducials()).`);
+      const ext = fps.reduce((e, f2) => [Math.min(e[0], f2.box[0]), Math.min(e[1], f2.box[1]), Math.max(e[2], f2.box[2]), Math.max(e[3], f2.box[3])], [Infinity, Infinity, -Infinity, -Infinity]);
+      const small = Math.min(ext[2] - ext[0], ext[3] - ext[1]) < 25;
+      if (n2 < 3 && small) add("fiducials", "note", `The ${side} has ${n2} fiducial${n2 === 1 ? "" : "s"}. The board is too narrow to hold three clear of its parts: have it assembled on a panel and put the three fiducials on the panel rails.`);
+      else if (n2 < 3) add("fiducials", "warning", `The ${side} is machine assembled and has ${n2} fiducial${n2 === 1 ? "" : "s"}; pick and place needs three (board.fiducials()).`);
     }
     try {
       const marks = P.drc(doc, settings, {});

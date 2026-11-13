@@ -375,8 +375,9 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
   {
     const cut: string[] = [], power: string[] = []; let noPlane = 0;
     for (const net of fastNets) {
-      const segs = tracksOf.get(net) || []; if (!segs.length) continue; let n = 0, bad = 0, pl = 0; let first: Pt | null = null;
-      for (const t of segs) { const refs = S.refLayers(Array.from(t.layers as Set<string>)[0]); if (!refs.length) continue; S.walk(t, 0.5, (x, y) => { n++; const what = refs.map((l) => S.pourAt(x, y, l)); if (what.includes("gnd")) return; if (what.includes("plane")) pl++; else { bad++; if (!first) first = [x, y]; } }); }
+      const segs = tracksOf.get(net) || []; if (!segs.length) continue; let n = 0, bad = 0, pl = 0; let first: Pt | null = null; const own = viasOf.get(net) || [];
+      for (const t of segs) { const refs = S.refLayers(Array.from(t.layers as Set<string>)[0]); if (!refs.length) continue; S.walk(t, 0.5, (x, y) => { n++; if (own.some((v) => Math.hypot(v.shape.x - x, v.shape.y - y) < 1.0)) return;      // the plane is open round the net's own via: that hole is the via's, not a gap in the return path
+        const what = refs.map((l) => S.pourAt(x, y, l)); if (what.includes("gnd")) return; if (what.includes("plane")) pl++; else { bad++; if (!first) first = [x, y]; } }); }
       if (!n) continue; if (!gz) { noPlane++; continue; }
       if (bad * 0.5 > Math.max(1, n * 0.05) && first) cut.push(`${bare(net)}: ${r2(bad * 0.5)} mm of ${r2(n * 0.5)} mm has no plane under it, first near ${at(first[0], first[1])}`);
       else if (pl > n * 0.5) power.push(bare(net));
@@ -396,13 +397,19 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
     const skew: string[] = [], vias: string[] = [], apart: string[] = [], long: string[] = [];
     for (const [base, e] of pairBase) {
       if (!e.p || !e.n) continue; const tp = tracksOf.get(e.p) || [], tn = tracksOf.get(e.n) || []; if (!tp.length || !tn.length) continue;
+      // a crystal's two nodes are named like a pair (XTAL_P, XTAL_N) but are not one: the crystal rule covers them
+      if (/^(XTAL|XTL|OSC|XIN|XOUT|XI\b|XO\b)/i.test(bare(e.p))) continue;
       const name = bare(base).replace(/[_\-]$/, "") || bare(e.p); const lp = S.lengthOf(e.p), ln = S.lengthOf(e.n);
       const ifc = pairInterface(bare(e.p)); const rule = ifc ? INTERFACES[ifc] : null; const label = ifc ? `${name} (${ifc})` : name;
       const limit = rule && rule.skew ? rule.skew : LIMITS.pairSkew;
       if (Math.abs(lp - ln) > limit + 1e-6) skew.push(`${label}: ${r2(lp)} mm and ${r2(ln)} mm, ${r2(Math.abs(lp - ln))} mm apart (limit ${limit} mm)`);
       if (rule && rule.max && Math.max(lp, ln) > rule.max) long.push(`${label}: ${r2(Math.max(lp, ln))} mm (at most about ${rule.max} mm)`);
       const vp = (viasOf.get(e.p) || []).length, vn = (viasOf.get(e.n) || []).length, vmax = rule && rule.vias ? rule.vias : 2;
-      if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`); else if (vp > vmax) vias.push(`${name}: ${vp} vias on each track (at most ${vmax})`);
+      // A connector that carries each line on two pins (USB-C: A6/B6 and A7/B7) makes one line cross the other to
+      // join its second pin: that one layer change (two vias) on one track only is how the part is wired, not a fault.
+      const twice = [e.p, e.n].some((net) => { const seen = new Set<any>(); for (const q of padsOf.get(net) || []) { if (seen.has(q.fp)) return true; seen.add(q.fp); } return false; });
+      if (twice && Math.abs(vp - vn) <= 2 && Math.max(vp, vn) <= vmax) { /* as the connector needs */ }
+      else if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`); else if (vp > vmax) vias.push(`${name}: ${vp} vias on each track (at most ${vmax})`);
       let n = 0, lone = 0; for (const t of tp) { const lay = Array.from(t.layers as Set<string>)[0]; const others = tn.filter((q) => q.layers.has(lay)); S.walk(t, 0.5, (x, y) => { n++; const reach = Math.max(1, 4 * t.width); if (!others.some((q) => P.shapeGap({ t: "circle", x, y, r: 0 }, q.shape) <= reach)) lone++; }); }
       if (lone * 0.5 > Math.max(3, n * 0.5 * 0.25)) apart.push(`${name}: ${r2(lone * 0.5)} mm of ${r2(lp)} mm runs without its partner beside it`);
     }
@@ -545,7 +552,15 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
       for (const p of f.pads) {
         if (!p.net || isGnd(p.net) || seen.has(p.net)) continue; seen.add(p.net);
         const ts = (tracksOf.get(p.net) || []).filter((t) => t.length > 1); if (!ts.length) continue;
-        const w = Math.min(...ts.map((t) => t.width || (t.shape.r ? t.shape.r * 2 : 1)));
+        const wOf = (t: any) => t.width || (t.shape.r ? t.shape.r * 2 : 1);
+        // A thin branch that only reaches resistors (a sense divider, a pull-up, an LED's resistor) carries no load
+        // current: the narrow tracks are grouped by touch, and a group whose only pads are resistor pads is left out.
+        const narrow = (tracksOf.get(p.net) || []).filter((t) => wOf(t) < LIMITS.powerPath - 1e-6); const group = new Map<any, number>(); let gi = 0;
+        for (const t of narrow) { if (group.has(t)) continue; const id = gi++; const todo = [t]; group.set(t, id); while (todo.length) { const u = todo.pop(); for (const v of narrow) if (!group.has(v) && P.shapeGap(u.shape, v.shape) <= 0.01) { group.set(v, id); todo.push(v); } } }
+        const signalOnly = new Set<number>();
+        for (let id = 0; id < gi; id++) { const mine = narrow.filter((t) => group.get(t) === id); const touched = (padsOf.get(p.net) || []).filter((q) => mine.some((t) => P.shapeGap({ t: "circle", x: q.x, y: q.y, r: 0.05 }, t.shape) <= 0.3)); if (touched.length && touched.every((q) => /^R\d/i.test(q.fp.ref))) signalOnly.add(id); }
+        const load = ts.filter((t) => !(group.has(t) && signalOnly.has(group.get(t)!)));
+        const w = load.length ? Math.min(...load.map(wOf)) : Infinity;
         if (w < LIMITS.powerPath - 1e-6) thin.push(`${bare(p.net)} at ${f.ref} ${f.value}: ${r2(w)} mm`.replace(/\s+:/, ":"));
       }
     }

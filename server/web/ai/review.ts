@@ -516,7 +516,8 @@ export async function reviewBoard(doc: any, path: string): Promise<any> {
         const l = layerOf(c); if (!/SilkS/.test(l)) continue; if (k.kid(c, "hide") && k.str(k.kid(c, "hide")[1]) !== "no") continue;
         const a = k.atOf(c); if (!a) continue; const item = doc.items.get(k.str((k.kid(f.node, "uuid") || [])[1] || "")); const g = (item && item.geom || []).find((q: any) => q.t === "text" && String(q.text) === f.ref);
         const tx = g ? g.x : a[0], ty = g ? g.y : a[1]; const tw = (g ? k.textWidth(g.text, g.size, g.w || 0) : f.ref.length) / 2 + 0.1, th = (g ? g.size : 1) / 2 + 0.1;
-        for (const o of fps) { if (o.side !== f.side) continue; if (o === f) continue; const p = o.pads.find((q: any) => Math.abs(q.x - tx) < q.w / 2 + Math.min(tw, 0.3) && Math.abs(q.y - ty) < q.h / 2 + th * 0.5); if (p && g) { over.push(`${f.ref} is printed over pad ${o.ref}.${p.number}`); break; } }
+        const printed = /^B\./.test(l) ? "back" : "front";      // a name printed on the other side of the board lies on that side's pads, not on its own part's
+        for (const o of fps) { if (o.side !== printed && !o.pads.some((q: any) => q.type === "thru_hole")) continue; if (o === f) continue; const p = o.pads.find((q: any) => Math.abs(q.x - tx) < q.w / 2 + Math.min(tw, 0.3) && Math.abs(q.y - ty) < q.h / 2 + th * 0.5); if (p && g) { over.push(`${f.ref} is printed over pad ${o.ref}.${p.number}`); break; } }
       }
     }
     if (over.length) add("silk.refs", "warning", "Reference designators must not sit on pads: the fab cuts them off and they cannot be read. board.silkscreen() (or the silkscreen edit) moves, shrinks or turns every reference into the clear.", over);
@@ -526,7 +527,12 @@ export async function reviewBoard(doc: any, path: string): Promise<any> {
     if (lacks.length && fps.length > 3) add("silk.title", "warning", `The silkscreen lacks ${lacks.join(", ")}. Put the organisation, the board's name, its version and the date on it: board.mark("Name", rev="V1").`);
     for (const side of ["front", "back"]) {
       if (!smd(side)) continue; const n = fps.filter((f) => f.side === side && (/^FID\d/i.test(f.ref) || /fiducial/i.test(f.lib))).length;
-      if (n < 3) add("fiducials", "warning", `The ${side} is machine assembled and has ${n} fiducial${n === 1 ? "" : "s"}; pick and place needs three (board.fiducials()).`);
+      // a board narrower than about 25 mm has no three corners to spare (a fiducial wants 3 mm of clear board): its
+      // fiducials go on the panel rails, as the assembler does for small boards anyway
+      const ext = fps.reduce((e, f) => [Math.min(e[0], f.box[0]), Math.min(e[1], f.box[1]), Math.max(e[2], f.box[2]), Math.max(e[3], f.box[3])], [Infinity, Infinity, -Infinity, -Infinity]);
+      const small = Math.min(ext[2] - ext[0], ext[3] - ext[1]) < 25;
+      if (n < 3 && small) add("fiducials", "note", `The ${side} has ${n} fiducial${n === 1 ? "" : "s"}. The board is too narrow to hold three clear of its parts: have it assembled on a panel and put the three fiducials on the panel rails.`);
+      else if (n < 3) add("fiducials", "warning", `The ${side} is machine assembled and has ${n} fiducial${n === 1 ? "" : "s"}; pick and place needs three (board.fiducials()).`);
     }
     try { const marks: any[] = P.drc(doc, settings, {}); const e = marks.filter((m) => m.severity === "error");
       if (e.length) { const kinds = new Map<string, number>(); for (const m of e) kinds.set(m.code, (kinds.get(m.code) || 0) + 1); add("drc", "error", `The DRC reports ${e.length} error${e.length > 1 ? "s" : ""} (board.check() lists them).`, Array.from(kinds.entries()).map(([c, n]) => `${c}: ${n}`)); }
