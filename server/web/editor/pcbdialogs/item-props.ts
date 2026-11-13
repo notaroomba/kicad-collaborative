@@ -5,9 +5,10 @@
 // Each edits a copy of the item's node and stores it as one MODIFIED change on OK.  KDialogs.openItem asks
 // pcbItemDialog first and falls back to the generic property sheet for the kinds not handled here (pads
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
-import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
+import { KICAD_FONT, faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { trackViaDialog } from "./track-via";
-import { box, checkField, errorMessage, fmtLenU, form, grid, h, coordField, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { box, checkField, errorMessage, fmtLenU, form, grid, h, coordField, iconToggle, lenField, messageBox, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { comboInput } from "../../dialogs/dom";
 import { E } from "../state";
 import { kicadActionAvailable, runKicadAction } from "../hotkeys";
 import { dimensionDialog } from "./dimension";
@@ -428,9 +429,27 @@ function fontFlags(doc: KDoc, font: SNode, flag: "bold" | "italic", on: boolean)
   if (!on) return;
   if (modern) put(font, flag, `(${flag} yes)`, flag === "bold" ? ["italic", "color"] : ["color"]); else font.push(flag);
 }
+// EDA_TEXT: TEXT_MIN_SIZE_MM / TEXT_MAX_SIZE_MM; GetPenSizeForNormal; ClampTextPenSize (not strict)
+const TEXT_MIN_SIZE = 0.001, TEXT_MAX_SIZE = 250;
+const penForNormal = (size: number): number => +(size / 8).toFixed(6);
+/** UNIT_BINDER::Validate's message ("Width must be at least 0.001 mm."), or null. */
+function sizeError(label: string, v: number): string | null {
+  if (v < TEXT_MIN_SIZE) return `${label} must be at least ${fmtLenU(TEXT_MIN_SIZE)}.`;
+  if (v > TEXT_MAX_SIZE) return `${label} must be less than ${fmtLenU(TEXT_MAX_SIZE)}.`;
+  return null;
+}
+/** EDA_ANGLE::Normalize180 / Normalize, to the angle binder's three decimals. */
+const norm180 = (a: number): number => { let r = a % 360; if (r > 180) r -= 360; if (r <= -180) r += 360; return +r.toFixed(3); };
+const norm360 = (a: number): number => { let r = a % 360; if (r < 0) r += 360; return +r.toFixed(3); };
+/** The orientation combo: a degrees field with the 0.0 / 90.0 / -90.0 / 180.0 presets. */
+function orientationField(deg: number, ro: boolean, key: string): Field<number> {
+  const f = numField(norm180(deg), { ro, key, digits: 3 });
+  comboInput(f.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);
+  return f;
+}
 function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc;
-  return itemDialog(ctx, item, "Text Properties", 560, (node, body, ro) => {
+  return itemDialog(ctx, item, "Text Properties", 600, (node, body, ro) => {
     const at = K().atOf(node), ly = kid(node, "layer"), fx = FH().fieldEffects(node);
     const eff = kid(node, "effects"), font = eff ? kid(eff, "font") : null, sz = font ? kid(font, "size") : null;
     const text = h("textarea", { class: "pd-text", style: "min-height:90px", readOnly: ro, "data-key": "text" }); const xref = boardXref(doc), shownText = xref.toRefs(sval(node)); text.value = shownText;   // the reader already turned the file's "\\n" into new lines; cross-references shown as ${REF:FIELD}
@@ -438,32 +457,62 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const layer = selectField<string>(sval(ly), withCurrent(allLayers(doc), sval(ly)), { ro, key: "layer" });
     const knockout = checkField(!!ly && ly.includes("knockout"), "Knockout", { ro, key: "knockout" });
-    const bold = checkField(fx.bold, "Bold", { ro, key: "bold" }), italic = checkField(fx.italic, "Italic", { ro, key: "italic" }), mirror = checkField(fx.mirror, "Mirrored", { ro, key: "mirror" });
-    const face0 = faceOfFont(font), face = fontField(doc, face0, { ro, key: "face" });
-    const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" }), th = lenField(fx.thick || 0.15, { ro, key: "thickness" });
-    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
-    const hj = selectField<string>(fx.h, [["left", "Left"], ["center", "Center"], ["right", "Right"]], { ro, key: "hjustify" }), vj = selectField<string>(fx.v, [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]], { ro, key: "vjustify" });
+    // the BITMAP_BUTTONs: bold, italic | left, center, right | top, center, bottom | mirrored
+    const bold = iconToggle("bold", "Bold", fx.bold, { ro, key: "bold" }), italic = iconToggle("italic", "Italic", fx.italic, { ro, key: "italic" });
+    const hBtn = (v: string, icon: "alignLeft" | "alignCenter" | "alignRight", tip: string) => iconToggle(icon, tip, fx.h === v, { ro, key: "align-" + v, group: "h" });
+    const vBtn = (v: string, icon: "valignTop" | "valignCenter" | "valignBottom", tip: string) => iconToggle(icon, tip, fx.v === v, { ro, key: "valign-" + v, group: "v" });
+    const hl = hBtn("left", "alignLeft", "Align left"), hc = hBtn("center", "alignCenter", "Align horizontal center"), hr = hBtn("right", "alignRight", "Align right");
+    const vt = vBtn("top", "valignTop", "Align top"), vc = vBtn("center", "valignCenter", "Align vertical center"), vb = vBtn("bottom", "valignBottom", "Align bottom");
+    const mirror = iconToggle("mirror", "Mirrored", fx.mirror, { ro, key: "mirror" });
+    const sep = () => h("span", { class: "vsep" });
+    const toggles = h("div", { class: "pd-togrow" }, bold.el, italic.el, sep(), hl.el, hc.el, hr.el, sep(), vt.el, vc.el, vb.el, sep(), mirror.el);
+    const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" });
+    // GetAutoThickness: no (thickness) in the file; the field shows the base width, frozen
+    const auto0 = !!font && !kid(font, "thickness");
+    const th = lenField(auto0 ? penForNormal(nval(sz, 2, 1)) : fx.thick, { ro: ro || auto0, key: "thickness" });
+    const autoTh = iconToggle("link", "Adjust the text thickness", auto0, { ro, key: "autoThickness", onChange: (on) => { (th.input as HTMLInputElement).disabled = ro || on; if (on) th.set(penForNormal(w.get())); } });
+    w.input.addEventListener("change", () => { if (autoTh.get()) th.set(penForNormal(w.get())); });   // onTextSize
+    const face0 = faceOfFont(font);
+    // onFontSelected: the thickness only for the stroke font
+    const strokeOnly = (face: string): void => { const stroke = !face || face === KICAD_FONT; thRow.style.display = stroke ? "" : "none"; };
+    const face = fontField(doc, face0, { ro, key: "face", onChange: (v) => strokeOnly(v) });
+    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = orientationField(at[2] || 0, ro, "orientation");
+    const thRow = h("div", { class: "pd-form", style: "grid-column:1/-1" }, h("label", null, "Thickness:"), h("span", { style: "display:flex;gap:4px;align-items:center" }, th.el, autoTh.el), unitLabel());
+    strokeOnly(face0);
     const help = syntaxHelpLink(true); help.style.margin = "3px";
     body.append(h("label", { class: "pd-lbl" }, "Text:"), text, h("div", null, help), h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
       h("div", { class: "pd-cols2" },
-        form([["Layer:", layer.el], knockout.el, ["Font:", face.el], h("span", { class: "pd-inline" }, bold.el, italic.el, mirror.el), ["Horizontal:", hj.el], ["Vertical:", vj.el]], true),
-        form([["Width:", w.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Thickness:", th.el, unitLabel()], ["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")]])));
+        form([["Layer:", layer.el], knockout.el, ["Font:", face.el], toggles], true),
+        h("div", null, form([["Width:", w.el, unitLabel(), "Text width"], ["Height:", ht.el, unitLabel(), "Text height"]]), thRow,
+          form([["Position X:", x.el, unitLabel(), "Text pos X"], ["Position Y:", y.el, unitLabel(), "Text pos Y"], ["Orientation:", rot.el, unitLabel("deg"), "Text orientation"]]))));
     return (n) => {
-      if (!(w.get() > 0) || !(ht.get() > 0)) return { msg: "Text width and height must be greater than zero.", focus: !(w.get() > 0) ? w : ht };
+      const ew = sizeError("Width", w.get()); if (ew) return { msg: ew, focus: w };
+      const eh = sizeError("Height", ht.get()); if (eh) return { msg: eh, focus: ht };
       const t = text.value.replace(/\r/g, "");   // new lines stay new lines: the writer escapes them as "\\n"
-      if (t !== shownText) { const stored = xref.toKiids(t); if (stored !== sval(n)) n[1] = stored; }
+      if (t && t !== shownText) { const stored = xref.toKiids(t); if (stored !== sval(n)) n[1] = stored; }   // an emptied text keeps its old one
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
-      K().setAt(n, +f6(x.get()), +f6(y.get()), +f6(rot.get()));
+      K().setAt(n, +f6(x.get()), +f6(y.get()), norm360(rot.get()));
       put(n, "layer", `(layer ${quote(layer.get())}${knockout.get() ? " knockout" : ""})`, ["uuid", "tstamp", "effects"]);
       let e = kid(n, "effects"); if (!e) { put(n, "effects", "(effects (font (size 1 1) (thickness 0.15)))"); e = kid(n, "effects") as SNode; }
       let f = kid(e, "font"); if (!f) { e.splice(1, 0, K().parse("(font)") as SNode); f = kid(e, "font") as SNode; }
       if (face.get() !== face0) setFaceOfFont(f, face.get());
       put(f, "size", `(size ${f6(ht.get())} ${f6(w.get())})`, ["thickness", "bold", "italic"]);
-      put(f, "thickness", `(thickness ${f6(th.get())})`, ["bold", "italic", "color"]);
+      let clamped = false;
+      if (autoTh.get()) { if (!auto0) put(f, "thickness", null); }
+      else {
+        let tv = th.get();
+        const maxPen = +(Math.min(Math.abs(w.get()), Math.abs(ht.get())) * 0.25).toFixed(6);
+        if (tv > maxPen) { tv = maxPen; clamped = true; }
+        if (auto0 || Math.abs(tv - fx.thick) > 1e-9) put(f, "thickness", `(thickness ${f6(tv)})`, ["bold", "italic", "color"]);
+      }
       if (bold.get() !== fx.bold) fontFlags(doc, f, "bold", bold.get());
       if (italic.get() !== fx.italic) fontFlags(doc, f, "italic", italic.get());
-      const j: string[] = []; if (hj.get() !== "center") j.push(hj.get()); if (vj.get() !== "center") j.push(vj.get()); if (mirror.get()) j.push("mirror");
-      put(e, "justify", j.length ? `(justify ${j.join(" ")})` : null, ["hide", "href"]);
+      const hj = hl.get() ? "left" : hc.get() ? "center" : "right", vj = vb.get() ? "bottom" : vc.get() ? "center" : "top";
+      if (hj !== fx.h || vj !== fx.v || mirror.get() !== fx.mirror) {
+        const j: string[] = []; if (hj !== "center") j.push(hj); if (vj !== "center") j.push(vj); if (mirror.get()) j.push("mirror");
+        put(e, "justify", j.length ? `(justify ${j.join(" ")})` : null, ["hide", "href"]);
+      }
+      if (clamped) messageBox("Error", "The text thickness is too large for the text size.\nIt will be clamped.");
       return undefined;
     };
   }, create, "Edit Text Properties");

@@ -68,6 +68,10 @@ const CSS = `
 .pd-iconbtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); color: var(--ink); padding: 0; }
 .pd-iconbtn:hover { border-color: var(--ink-3, var(--ink-2)); }
 .pd-iconbtn:disabled { opacity: .4; cursor: default; }
+.pd-iconbtn.pd-tog { border-color: transparent; background: transparent; }
+.pd-iconbtn.pd-tog.on { background: var(--sel-soft, var(--paper)); border-color: var(--line-2); }
+.pd-togrow { display: flex; align-items: center; gap: 2px; }
+.pd-togrow .vsep { width: 1px; height: 18px; background: var(--line); margin: 0 5px; }
 .pd-report { border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); overflow: auto; font-size: 12px; padding: 4px 8px; min-height: 120px; }
 .pd-report .ln { padding: 1px 0; white-space: pre-wrap; }
 .pd-report .ln.error { color: var(--err); }
@@ -487,7 +491,33 @@ export const ICONS = {
   down: svg('<path d="M8 3v10M3.5 8.5L8 13l4.5-4.5"/>'),
   library: svg('<path d="M2.5 3v10M5 3v10M7.5 3.5l3 9.5M11 3l2.5 9.5" stroke-width="1.4"/>'),
   sort: svg('<path d="M4.5 13V3M2 5.5L4.5 3 7 5.5M9 4h5M9 8h3.5M9 12h2" stroke-width="1.5"/>'),
+  // BITMAPS::text_bold / text_italic / text_align_* / text_valign_* / text_mirrored / link
+  bold: svg('<path d="M4.5 2.5h4.2a2.6 2.6 0 010 5.2H4.5zM4.5 7.7h4.8a2.9 2.9 0 010 5.8H4.5z" stroke-width="1.8"/>'),
+  italic: svg('<path d="M7 2.5h5M4 13.5h5M10 2.5l-4 11" stroke-width="1.6"/>'),
+  alignLeft: svg('<path d="M2.5 3.5h11M2.5 6.5h7M2.5 9.5h11M2.5 12.5h7" stroke-width="1.5"/>'),
+  alignCenter: svg('<path d="M2.5 3.5h11M4.5 6.5h7M2.5 9.5h11M4.5 12.5h7" stroke-width="1.5"/>'),
+  alignRight: svg('<path d="M2.5 3.5h11M6.5 6.5h7M2.5 9.5h11M6.5 12.5h7" stroke-width="1.5"/>'),
+  valignTop: svg('<path d="M2.5 2.5h11M8 5v8.5M5.5 7.5L8 5l2.5 2.5" stroke-width="1.5"/>'),
+  valignCenter: svg('<path d="M2.5 8h11M8 1.5v4M8 10.5v4M6 3.5L8 5.5 10 3.5M6 12.5l2-2 2 2" stroke-width="1.4"/>'),
+  valignBottom: svg('<path d="M2.5 13.5h11M8 2.5V11M5.5 8.5L8 11l2.5-2.5" stroke-width="1.5"/>'),
+  mirror: svg('<path d="M8 1.5v13M6 4L2.5 12H6zM10 4l3.5 8H10z" stroke-width="1.3"/>'),
+  link: svg('<path d="M6.5 9.5l3-3M5 7.5L3.5 9a2.1 2.1 0 003 3L8 10.5M11 8.5L12.5 7a2.1 2.1 0 00-3-3L8 5.5" stroke-width="1.5"/>'),
 };
+/**
+ * BITMAP_BUTTON::SetIsCheckButton: an icon that stays pressed.  `group` makes the buttons sharing it a set where at
+ * most one is on (onAlignButton: pressing one releases the others; pressing the pressed one releases it).
+ */
+export function iconToggle(icon: keyof typeof ICONS, title: string, on: boolean, opts?: { key?: string; group?: string; ro?: boolean; onChange?(on: boolean): void }): Field<boolean> & { el: HTMLButtonElement } {
+  const b = h("button", { class: "pd-iconbtn pd-tog" + (on ? " on" : ""), type: "button", title, "aria-pressed": on ? "true" : "false", "data-k": opts && opts.key, "data-nopersist": "", "data-group": opts && opts.group, disabled: !!(opts && opts.ro) }) as HTMLButtonElement;
+  b.innerHTML = ICONS[icon];
+  const set = (v: boolean): void => { b.classList.toggle("on", v); b.setAttribute("aria-pressed", v ? "true" : "false"); };
+  b.addEventListener("click", () => {
+    const now = !b.classList.contains("on");
+    if (now && opts && opts.group && b.parentElement) for (const o of Array.from(b.parentElement.querySelectorAll<HTMLButtonElement>(`.pd-tog[data-group="${opts.group}"]`))) if (o !== b) { o.classList.remove("on"); o.setAttribute("aria-pressed", "false"); }
+    set(now); if (opts && opts.onChange) opts.onChange(now);
+  });
+  return { el: b, input: b as unknown as HTMLInputElement, get: () => b.classList.contains("on"), set };
+}
 export function iconButton(icon: keyof typeof ICONS, title: string, fn: () => void, disabled?: boolean): HTMLButtonElement {
   const b = h("button", { class: "pd-iconbtn", type: "button", title, disabled: !!disabled });
   b.innerHTML = ICONS[icon]; b.addEventListener("click", fn); return b;
