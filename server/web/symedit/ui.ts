@@ -132,7 +132,7 @@ export function meta(id: string): { label: string; tip: string; icon: string | n
   return { label: m ? m.label : id, tip: m ? m.tip || m.label : id, icon: m ? m.icon : null, key: m && m.key ? m.key : "" };
 }
 
-export interface MenuEntry { id?: string; label?: string; sep?: boolean; sub?: MenuEntry[]; check?: () => boolean; enabled?: () => boolean; run?: () => void; icon?: string | null; key?: string }
+export interface MenuEntry { id?: string; label?: string; sep?: boolean; sub?: MenuEntry[]; check?: () => boolean; enabled?: () => boolean; run?: () => void; icon?: string | null; key?: string; tip?: string }
 let openMenu: HTMLElement[] = [];
 export function closeMenus(): void { for (const m of openMenu) m.remove(); openMenu = []; for (const b of Array.from(document.querySelectorAll(".se-mb.open"))) b.classList.remove("open"); }
 /** A dropdown (or context menu) at (x, y). */
@@ -145,6 +145,7 @@ export function showMenu(x: number, y: number, items: MenuEntry[], depth = 0, an
     const on = it.enabled ? it.enabled() : !!it.run || !!it.sub;
     const row = h("div", { class: "se-mi" + (on ? "" : " dim"), role: "menuitem", "data-id": it.id || undefined },
       h("span", { class: "ck" }, it.check ? (it.check() ? "✓" : "") : ""), it.icon !== undefined ? icon(it.icon) : h("span", { style: "width:16px" }), h("span", null, it.label || ""), h("span", { class: "k" }, it.sub ? "▸" : menuKey(it.key)));
+    if (it.tip) row.title = it.tip;
     if (!on && it.id && !it.run) row.title = "Runs in the KiCad desktop app";
     row.addEventListener("pointerenter", () => { if (it.sub) { const r = row.getBoundingClientRect(); showMenu(r.right - 2, r.top - 3, it.sub, depth + 1, { row: r, parent: m.getBoundingClientRect(), overlap: 2 }); } else { for (const o of openMenu.splice(depth + 1)) o.remove(); } });
     row.addEventListener("click", (ev) => { ev.stopPropagation(); if (!on || it.sub) return; closeMenus(); if (it.run) it.run(); });

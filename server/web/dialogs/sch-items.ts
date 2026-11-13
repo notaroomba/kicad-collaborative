@@ -49,7 +49,7 @@ export function messageBox(message: string, title = "Error"): Promise<void> {
   });
 }
 /** COLOR_SWATCH: the colour or the checkered "unspecified"; a click picks, × resets to unspecified. */
-export function swatch(initial: L.Color, id: string, onPick?: (c: L.Color) => void, disabled = false): { el: HTMLElement; get(): L.Color; set(c: L.Color): void; enable(on: boolean): void } {
+export function swatch(initial: L.Color, id: string, onPick?: (c: L.Color) => void, disabled = false): { el: HTMLElement; get(): L.Color; set(c: L.Color): void; enable(on: boolean): void; pick(): void } {
   let color: L.Color = initial;
   const input = h("input", { type: "color", id, value: L.colorToHex(color), style: "position:absolute;opacity:0;width:0;height:0;pointer-events:none" });
   const face = h("span", { style: "display:inline-block;width:26px;height:16px;border:1px solid var(--line);border-radius:2px;vertical-align:middle" });
@@ -58,7 +58,9 @@ export function swatch(initial: L.Color, id: string, onPick?: (c: L.Color) => vo
   const btn = h("button", { type: "button", class: "btn", style: "padding:1px 4px;position:relative", title: "Choose color", disabled, onclick: () => { input.value = L.colorToHex(color); input.click(); } }, face, input);
   const clear = h("button", { type: "button", class: "btn", style: "padding:0 5px", title: "Unspecified (use the default color)", disabled, onclick: () => { color = null; paint(); if (onPick) onPick(color); } }, "×");
   paint();
-  return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center", "data-swatch": id }, btn, clear), get: () => color, set: (c) => { color = c; paint(); }, enable: (on) => { btn.disabled = !on; clear.disabled = !on; } };
+  return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center", "data-swatch": id }, btn, clear), get: () => color, set: (c) => { color = c; paint(); }, enable: (on) => { btn.disabled = !on; clear.disabled = !on; },
+    // COLOR_SWATCH::GetNewSwatchColor: open the picker on the current colour
+    pick: () => { if (!btn.disabled) btn.click(); } };
 }
 /** Faces a grid's font column offers: the stroke font and the faces the sheet already uses (the dialogs' own font
  *  choice, font-picker.ts, adds every Google Font). */

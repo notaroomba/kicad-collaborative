@@ -50,16 +50,25 @@ export interface PadModel {
 }
 export interface Teardrops { enabled: boolean; twoSegments: boolean; preferZone: boolean; maxLen: number; maxWidth: number; lenRatio: number; widthRatio: number; filterRatio: number; curved: boolean }
 /** TEARDROP_PARAMETERS(): the values a pad without (teardrops …) has. */
+/** SEXPR_BOARD_FILE_VERSION 20260521 (Pad simulation electrical types) and 20251027 (pad-to-die delays with correct
+ *  scaling): an older file can't take (sim_electrical_type) / (die_delay) without a format bump. */
+export const SIM_ELECTRICAL_TYPE_VERSION = 20260521, DIE_DELAY_VERSION = 20251027;
 export const TD_DEFAULTS: Teardrops = { enabled: false, twoSegments: true, preferZone: true, maxLen: 1, maxWidth: 2, lenRatio: 0.5, widthRatio: 1, filterRatio: 0.9, curved: false };
 const sameTd = (a: Teardrops, b: Teardrops): boolean => (Object.keys(TD_DEFAULTS) as (keyof Teardrops)[]).every((k) => (typeof a[k] === "number" ? Math.abs((a[k] as number) - (b[k] as number)) < 1e-9 : a[k] === b[k]));
-/** PCB_IO_KICAD_SEXPR_PARSER::parseTEARDROP_PARAMETERS over a pad's (teardrops …). */
+/** PCB_IO_KICAD_SEXPR_PARSER::parseTEARDROP_PARAMETERS over a pad's (teardrops …). A pad without the node has
+ *  TEARDROP_PARAMETERS()'s values; a present node starts at m_Enabled = false, m_AllowUseTwoTracks = false and
+ *  m_TdOnPadsInZones = true (prefer zone connections off), and a bare keyword is parseMaybeAbsentBool's default: true
+ *  for enabled / allow_two_segments / curved_edges, false for prefer_zone_connections. */
 export function readTeardrops(pad: SNode): Teardrops {
   const t = kid(pad, "teardrops"); const out: Teardrops = { ...TD_DEFAULTS }; if (!t) return out;
+  out.enabled = false; out.twoSegments = false; out.preferZone = false;
   const n = (k: string, d: number): number => { const c = kid(t, k); return c ? num(c[1], d) : d; };
-  const b = (k: string, d: boolean): boolean => { const c = kid(t, k); return c ? String(c[1]) !== "no" : d; };
+  const b = (k: string, d: boolean, bare: boolean): boolean => { const c = kid(t, k); if (!c) return d; if (c.length < 2) return bare; const v = String(c[1]); return v === "yes" || v === "true" ? true : v === "no" || v === "false" ? false : d; };
   out.lenRatio = n("best_length_ratio", out.lenRatio); out.maxLen = n("max_length", out.maxLen); out.widthRatio = n("best_width_ratio", out.widthRatio); out.maxWidth = n("max_width", out.maxWidth);
-  out.curved = b("curved_edges", out.curved); out.filterRatio = n("filter_ratio", out.filterRatio); out.enabled = b("enabled", out.enabled); out.twoSegments = b("allow_two_segments", out.twoSegments);
-  out.preferZone = b("prefer_zone_connections", out.preferZone);
+  const cp = kid(t, "curve_points"); if (cp) out.curved = num(cp[1], 0) > 0;   // legacy token
+  out.curved = b("curved_edges", out.curved, true); out.filterRatio = n("filter_ratio", out.filterRatio);
+  out.enabled = b("enabled", out.enabled, true); out.twoSegments = b("allow_two_segments", out.twoSegments, true);
+  out.preferZone = b("prefer_zone_connections", out.preferZone, false);
   return out;
 }
 /** formatTeardropParameters. */
@@ -273,4 +282,4 @@ export function writePad(doc: KDoc, fp: SNode, pad: SNode, m: PadModel, was: Pad
 }
 
 
-export const padModel = { PAD_ORDER, TECH, PROPS, TD_DEFAULTS, readTeardrops, formatTeardrops, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };
+export const padModel = { PAD_ORDER, TECH, PROPS, TD_DEFAULTS, SIM_ELECTRICAL_TYPE_VERSION, DIE_DELAY_VERSION, readTeardrops, formatTeardrops, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };

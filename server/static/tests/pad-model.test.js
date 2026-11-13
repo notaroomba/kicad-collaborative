@@ -95,5 +95,15 @@ test("pad to die delay, simulation electrical type and teardrops write where the
   const m2 = clone(back); m2.td.enabled = false; m2.simType = ""; m2.dieDelayOn = false; M.writePad(d, fp, pad0(fp), m2, back, () => 0);
   const out2 = K.serialize(pad0(fp)); assert.ok(!/teardrops|sim_electrical_type|die_delay/.test(out2), out2);
 });
+test("readTeardrops follows parseTEARDROP_PARAMETERS: a present node starts with every flag off, bare keywords", () => {
+  const td = (inner) => M.readTeardrops(K.parse(`(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") ${inner})`));
+  assert.deepEqual(td(""), M.TD_DEFAULTS);
+  const partial = td("(teardrops (best_length_ratio 0.4))");
+  assert.equal(partial.enabled, false); assert.equal(partial.twoSegments, false); assert.equal(partial.preferZone, false); assert.equal(partial.lenRatio, 0.4); assert.equal(partial.maxLen, 1);
+  const bare = td("(teardrops (enabled) (allow_two_segments) (curved_edges) (prefer_zone_connections))");
+  assert.equal(bare.enabled, true); assert.equal(bare.twoSegments, true); assert.equal(bare.curved, true); assert.equal(bare.preferZone, false);
+  assert.equal(td("(teardrops (prefer_zone_connections yes) (curve_points 5))").preferZone, true);
+  assert.equal(td("(teardrops (curve_points 5))").curved, true);
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -252,7 +252,11 @@ export function editShape(se: SymbolEditor, id: string): void {
   const ro = se.readOnly();
   const width = lenInput(Math.max(0, st.width), "shape-width");
   const style = select(L.LINE_STYLES.map(([v, l]) => [v, l] as [string, string]), st.style, undefined, { id: "shape-style" });
-  const bc = swatch(st.color, "shape-bcolor", undefined, ro);
+  // the fill swatch follows the radios (TransferDataToWindow / onFillRadioButton / onBorderSwatch): the border colour or
+  // LAYER_DEVICE for an outline fill, LAYER_DEVICE_BACKGROUND for a background fill, unspecified for no fill
+  const layer = (k: "outline" | "body"): L.Color => L.hexToColor(K().SCH[k] || (k === "outline" ? "#840000" : "#FFFFC2"));
+  const fillRadio = (v: string) => document.getElementById("shape-fill-" + v) as HTMLInputElement | null;
+  const bc = swatch(st.color, "shape-bcolor", (c) => { if (fillRadio("outline")?.checked) fc.set(c || layer("outline")); }, ro);
   const cbIn = (l: HTMLLabelElement) => l.querySelector("input") as HTMLInputElement;
   const enableBorder = (on: boolean) => { width.disabled = !on; style.disabled = !on; bc.enable(on && !ro); };
   const border = checkbox("Border", st.width >= 0, (on) => { enableBorder(on); if (on && !(parseLen(width.value) ?? 0)) width.value = toUser(0); }, { id: "shape-border" });
@@ -260,9 +264,10 @@ export function editShape(se: SymbolEditor, id: string): void {
   const cur = fmode === "outline" ? "outline" : fmode === "background" ? "background" : fmode === "color" ? "color" : "none";
   const radio = (v: string, label: string, extra?: Node) => {
     const i = h("input", { type: "radio", name: "shape-fill", value: v, id: "shape-fill-" + v, style: "width:auto;margin:0" }) as HTMLInputElement; i.checked = cur === v; i.disabled = ro;
+    i.addEventListener("change", () => { if (!i.checked) return; if (v === "none") fc.set(null); else if (v === "outline") fc.set(bc.get() || layer("outline")); else if (v === "background") fc.set(layer("body")); else fc.pick(); });
     return h("label", { style: "display:flex;gap:6px;align-items:center" }, i, label, ...(extra ? [extra] : []));
   };
-  const fc = swatch(cur === "color" ? fcol : null, "shape-fcolor", () => { (document.getElementById("shape-fill-color") as HTMLInputElement).checked = true; }, ro);
+  const fc = swatch(cur === "color" ? fcol : cur === "outline" ? st.color || layer("outline") : cur === "background" ? layer("body") : null, "shape-fcolor", () => { (document.getElementById("shape-fill-color") as HTMLInputElement).checked = true; }, ro);
   const priv = checkbox("Private to Symbol Editor", n[1] === "private", undefined, { id: "shape-private" });
   const allUnits = checkbox("Common to all units in symbol", multiUnit && ref.unit === 0, undefined, { id: "shape-all-units", disabled: !multiUnit });
   const allBodies = checkbox("Common to all body styles", multiBody && ref.body === 0, undefined, { id: "shape-all-bodies", disabled: !multiBody });
@@ -1074,13 +1079,16 @@ export function pinTable(se: SymbolEditor): void {
       body.append(boxes);
       const eb = KD().staticBox(boxes, "Export"); const ib = KD().staticBox(boxes, "Import");
       eb.append(h("div", { style: "display:flex;gap:14px;align-items:center;flex-wrap:wrap" }, expAll, expShown, h("span", { style: "flex:1" }),
-        h("button", { class: "btn sm", id: "pt-export", onclick: () => download(M.symName(sym) + "-pins.csv", exp(",")) }, "To File..."),
+        h("button", { class: "btn sm", id: "pt-export", onclick: () => download(M.symName(sym) + ".csv", exp(",")) }, "To File..."),
         h("button", { class: "btn sm", id: "pt-export-clip", onclick: () => { try { void navigator.clipboard.writeText(exp("\t")); } catch (e) { /* no clipboard */ } } }, "To Clipboard")));
       ib.append(h("div", { style: "display:flex;gap:14px;align-items:center;flex-wrap:wrap" }, impReplace, impAppend, h("span", { style: "flex:1" }),
         h("button", { class: "btn sm", id: "pt-import", disabled: ro, onclick: () => void pickFile(".csv,.tsv,.txt").then(async (f) => {
           if (!f) return; const got = M.pinsFromCsv(await f.text(), sym, (s) => parseLen(s) || 0);
+          // OnImportButtonClick: the reporter's messages in an Errors box that can cancel; nothing to import leaves the pins alone
+          if (got.errors.length && !(await confirmBox("Errors", got.errors.join("\n")))) return;
+          if (!got.rows.length) return;
           if ((impReplace.querySelector("input") as HTMLInputElement).checked) rows.length = 0;
-          rows.push(...got); rebuild(); }) }, "From File...")));
+          rows.push(...got.rows); rebuild(); }) }, "From File...")));
     },
     ok() { if (ro) return true; se.edit("Edit Pins", (s) => { M.applyPinRows(s, rows); }); return true; },
   });

@@ -78,10 +78,24 @@ test("pin table: CSV export and import round-trip, summary collapses runs and li
   const s = mk(2); for (const [n, x, u] of [["1", 0, 1], ["2", 2.54, 1], ["3", 5.08, 2], ["3", 7.62, 2]]) { const p = M.newPinInfo(x, 0, M.initialPinDefaults(), u, 1); p.number = n; p.name = "P" + n; M.placePin(s, p, false); }
   const rows = M.pinRows(s); const csv = M.pinsToCsv(rows, s);
   assert.ok(csv.startsWith("Number,Name,Electrical Type,Graphic Style,Orientation,"), csv);
-  const back = M.pinsFromCsv(csv, s);
+  const back = M.pinsFromCsv(csv, s).rows;
   assert.deepStrictEqual(back.map((r) => [r.number, r.name, r.type, r.shape, r.x, r.unit]), rows.map((r) => [r.number, r.name, r.type, r.shape, r.x, r.unit]));
   const sum = M.pinNumberSummary(rows); assert.strictEqual(sum.numbers, "1-3"); assert.strictEqual(sum.count, 4); assert.strictEqual(sum.duplicates, "3");
   M.applyPinRows(s, back.slice(0, 2)); assert.strictEqual(M.allPins(s).length, 2);
+});
+test("pin table export / import as PIN_INFO_FORMATTER (True/False, Unit A or the unit name, ALL on a single-unit symbol)", () => {
+  const s = mk(2); for (const [n, u] of [["1", 1], ["2", 2]]) { const p = M.newPinInfo(0, 0, M.initialPinDefaults(), u, 1); p.number = n; M.placePin(s, p, false); }
+  const csv = M.pinsToCsv(M.pinRows(s), s); const lines = csv.trim().split("\n");
+  assert.ok(lines[1].endsWith(",True,Unit A,ALL"), lines[1]); assert.ok(lines[2].endsWith(",True,Unit B,ALL"), lines[2]);
+  const back = M.pinsFromCsv(csv, s); assert.deepStrictEqual(back.rows.map((r) => r.unit), [1, 2]); assert.deepStrictEqual(back.errors, []);
+  const one = mk(1); const p = M.newPinInfo(0, 0, M.initialPinDefaults(), 1, 1); p.number = "1"; M.placePin(one, p, false);
+  assert.ok(M.pinsToCsv(M.pinRows(one), one).trim().split("\n")[1].endsWith(",True,ALL,ALL"));
+  // a single-unit symbol skips Unit and Body Style on import
+  assert.strictEqual(M.pinsFromCsv("Number,Unit\n1,Unit B\n", one).rows[0].unit, 0);
+  assert.deepStrictEqual(M.pinsFromCsv("Number,Name\n", s).rows, []);
+  const bad = M.pinsFromCsv("Number,Foo,Visible\n1,x,maybe\n", s);
+  assert.strictEqual(bad.rows.length, 1); assert.strictEqual(bad.rows[0].visible, false);
+  assert.deepStrictEqual(bad.errors, ["Unknown columns in data: Foo. These columns will be ignored.", "The value 'maybe' can't be converted to boolean correctly, it has been interpreted as 'False'"]);
 });
 test("anchor move shifts every item and field the other way", () => {
   const s = mk(1); const p = M.newPinInfo(2.54, 2.54, M.initialPinDefaults(), 1, 1); M.placePin(s, p, false);

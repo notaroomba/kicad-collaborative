@@ -752,11 +752,19 @@ const typeName = (t: string) => (PIN_TYPES.find((p) => p[0] === t) || [t, t])[1]
 const shapeName = (t: string) => (PIN_SHAPES.find((p) => p[0] === t) || [t, t])[1];
 const orientName = (a: number) => (PIN_ORIENTATIONS.find((p) => p[0] === a) || [a, "Right"])[1];
 const csvCell = (v: string) => (/[",\n\t]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
-/** The table as CSV (Export … To File / To Clipboard), every column but Count, sizes and positions in `f`'s units. */
+/** PIN_INFO_FORMATTER's Unit / Body Style cells: "ALL" on a single-unit (single body style) symbol or a common pin, else
+ *  GetUnitDisplayName( unit, true ) (the unit's name or "Unit A") and GetBodyStyleDescription( body, true ). */
+export function pinUnitLabel(sym: Node, unit: number): string { if (unitCount(sym) <= 1 || unit === 0) return "ALL"; return unitNames(sym).get(unit) || `Unit ${unitLetter(unit)}`; }
+export function pinBodyLabel(sym: Node, body: number): string {
+  const b = bodyStyles(sym); if (b.count <= 1 || body === 0) return "ALL";
+  if (b.demorgan) return body === 2 ? "Alternate" : body === 1 ? "Standard" : "?";
+  return b.names[body - 1] || "?";
+}
+/** The table as CSV (Export … To File / To Clipboard): OnExportButtonClick's columns (every one but Count) through
+ *  PIN_INFO_FORMATTER with BOOL_FORMAT::TRUE_FALSE, sizes and positions in `f`'s units. */
 export function pinsToCsv(rows: PinRow[], sym: Node, f: Fmt = (mm) => fmt(mm), sep = ","): string {
-  const unitLabel = (u: number) => (u === 0 ? "ALL" : unitLetter(u)); const bodyLabel = (b: number) => (b === 0 ? "ALL" : bodyStyleDescription(sym, b));
   const lines = [PIN_TABLE_COLUMNS.slice(1).join(sep)];
-  for (const r of rows) lines.push([r.number, r.name, typeName(r.type), shapeName(r.shape), orientName(r.orient), f(r.numSize), f(r.nameSize), f(r.length), f(r.x), f(r.y), r.visible ? "1" : "0", unitLabel(r.unit), bodyLabel(r.body)].map((v) => sep === "," ? csvCell(String(v)) : String(v)).join(sep));
+  for (const r of rows) lines.push([r.number, r.name, typeName(r.type), shapeName(r.shape), orientName(r.orient), f(r.numSize), f(r.nameSize), f(r.length), f(r.x), f(r.y), r.visible ? "True" : "False", pinUnitLabel(sym, r.unit), pinBodyLabel(sym, r.body)].map((v) => sep === "," ? csvCell(String(v)) : String(v)).join(sep));
   return lines.join("\n") + "\n";
 }
 function splitCsv(line: string, sep: string): string[] {
@@ -764,25 +772,57 @@ function splitCsv(line: string, sep: string): string[] {
   for (let i = 0; i < line.length; i++) { const c = line[i]; if (inQ) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') inQ = false; else cur += c; } else if (c === '"') inQ = true; else if (c === sep) { out.push(cur); cur = ""; } else cur += c; }
   out.push(cur); return out;
 }
-/** Import (From File / From Clipboard): CSV or TSV with the export's header; `parseLen` reads a length in the user's units. */
-export function pinsFromCsv(src: string, sym: Node, parseLen: (s: string) => number = (s) => Number(s)): PinRow[] {
-  const lines = src.split(/\r?\n/).filter((l) => l.trim()); if (!lines.length) return [];
+/** Import (From File / From Clipboard), OnImportButtonClick: CSV or TSV whose first row names the columns (unknown ones are
+ *  reported and ignored); each later row is a new pin updated cell by cell (PIN_INFO_FORMATTER::UpdatePin). `parseLen` reads
+ *  a length in the user's units. `errors` holds the reporter's messages (KiCad's Errors box, which can cancel the import). */
+export function pinsFromCsv(src: string, sym: Node, parseLen: (s: string) => number = (s) => Number(s)): { rows: PinRow[]; errors: string[] } {
+  const errors: string[] = [];
+  const lines = src.split(/\r?\n/).filter((l) => l.trim()); if (lines.length < 2) return { rows: [], errors };
   const sep = lines[0].includes("\t") ? "\t" : ",";
   const head = splitCsv(lines[0], sep).map((h) => h.trim());
-  const col = (name: string) => head.indexOf(name);
-  const back = <T>(list: [T, string][], v: string, d: T): T => { const hit = list.find((p) => p[1].toLowerCase() === v.trim().toLowerCase() || String(p[0]) === v.trim()); return hit ? hit[0] : d; };
-  const bodyNames = bodyStyles(sym).names;
+  const known = (n: string) => PIN_TABLE_COLUMNS.find((c) => c.toLowerCase() === n.toLowerCase()) || null;
+  const cols = head.map(known);
+  const unknown = head.filter((_, i) => !cols[i]);
+  if (unknown.length) errors.push(`Unknown columns in data: ${unknown.join(", ")}. These columns will be ignored.`);
+  const back = <T>(list: [T, string][], v: string, d: T): T => { const hit = list.find((p) => p[1].toLowerCase() === v.trim().toLowerCase()); return hit ? hit[0] : d; };
+  const nUnits = unitCount(sym), multiBody = bodyStyles(sym).count > 1;
   const rows: PinRow[] = [];
   for (const line of lines.slice(1)) {
-    const c = splitCsv(line, sep); const g = (n: string) => { const i = col(n); return i >= 0 ? (c[i] || "").trim() : ""; };
-    const unitS = g("Unit"), bodyS = g("Body Style");
-    const unit = !unitS || unitS.toUpperCase() === "ALL" ? 0 : /^\d+$/.test(unitS) ? +unitS : unitS.toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
-    const body = !bodyS || bodyS.toUpperCase() === "ALL" ? 0 : /^\d+$/.test(bodyS) ? +bodyS : Math.max(1, bodyNames.findIndex((n) => n.toLowerCase() === bodyS.toLowerCase()) + 1);
-    rows.push({ count: 1, number: g("Number"), name: g("Name"), type: back(PIN_TYPES, g("Electrical Type"), "unspecified"), shape: back(PIN_SHAPES, g("Graphic Style"), "line"),
-      orient: back(PIN_ORIENTATIONS, g("Orientation"), 0), numSize: parseLen(g("Number Text Size")) || 1.27, nameSize: parseLen(g("Name Text Size")) || 1.27,
-      length: parseLen(g("Length")) || 2.54, x: parseLen(g("X Position")) || 0, y: parseLen(g("Y Position")) || 0, visible: !/^(0|false|no)$/i.test(g("Visible")), unit, body, node: null });
+    const c = splitCsv(line, sep);
+    const r: PinRow = { count: 1, number: "", name: "", type: "unspecified", shape: "line", orient: 0, numSize: 1.27, nameSize: 1.27, length: 2.54, x: 0, y: 0, visible: true, unit: 0, body: 0, node: null };
+    for (let j = 0; j < Math.min(cols.length, c.length); j++) {
+      const v = c[j]; const col = cols[j]; if (!col || col === "Count") continue;
+      switch (col) {
+        case "Number": r.number = v; break;
+        case "Name": r.name = v; break;
+        case "Electrical Type": r.type = back(PIN_TYPES, v, r.type); break;
+        case "Graphic Style": r.shape = back(PIN_SHAPES, v, r.shape); break;
+        case "Orientation": r.orient = back(PIN_ORIENTATIONS, v, r.orient); break;
+        case "Number Text Size": r.numSize = parseLen(v) || 0; break;
+        case "Name Text Size": r.nameSize = parseLen(v) || 0; break;
+        case "Length": r.length = parseLen(v) || 0; break;
+        case "X Position": r.x = parseLen(v) || 0; break;
+        case "Y Position": r.y = parseLen(v) || 0; break;
+        case "Visible":
+          if (v === "1" || /^true$/i.test(v)) r.visible = true;
+          else if (v === "0" || /^false$/i.test(v)) r.visible = false;
+          else { r.visible = false; errors.push(`The value '${v}' can't be converted to boolean correctly, it has been interpreted as 'False'`); }
+          break;
+        case "Unit":
+          if (nUnits <= 1) break;
+          if (/^all$/i.test(v)) { r.unit = 0; break; }
+          for (let u = 1; u <= nUnits; u++) if (v === pinUnitLabel(sym, u) || v === (unitNames(sym).get(u) || unitLetter(u))) { r.unit = u; break; }
+          break;
+        case "Body Style":
+          if (!multiBody) break;
+          if (/^all$/i.test(v)) { r.body = 0; break; }
+          for (let b = 1; b <= bodyStyles(sym).count; b++) if (v === pinBodyLabel(sym, b)) { r.body = b; break; }
+          break;
+      }
+    }
+    rows.push(r);
   }
-  return rows;
+  return { rows, errors };
 }
 /** The summary line of the pin table: a range summary of the numbers, the count and the duplicates. */
 export function pinNumberSummary(rows: PinRow[]): { numbers: string; count: number; duplicates: string } {

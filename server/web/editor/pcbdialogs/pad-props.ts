@@ -130,8 +130,14 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const holeX = lenField(m.hx, { ro, key: "holeX" }), holeY = lenField(m.holeOblong ? m.hy : m.hx, { ro: ro || !m.holeOblong, key: "holeY" });
       const dieOn = checkField(m.dieOn, "Specify pad to die length", { ro, key: "dieOn", onChange: (v) => { m.dieOn = v; die.input.disabled = ro || !v; } });
       const die = lenField(m.die, { ro: ro || !m.dieOn, key: "dieLength" });
-      const delayOn = checkField(m.dieDelayOn, "Specify pad to die delay", { ro, key: "dieDelayOn", onChange: (v) => { m.dieDelayOn = v; delay.disabled = ro || !v; } });
-      const delay = h("input", { type: "text", value: f6(m.dieDelay), disabled: ro || !m.dieDelayOn, "data-k": "dieDelay", style: "width:110px" });
+      // rows whose token is newer than the file's (version) stay read-only: writing them would need a format bump
+      const fileVersion = (doc as unknown as { version?: number }).version || 0;
+      const newer = (v: number): boolean => fileVersion < v;
+      const tooNew = "This file's format version predates this setting; it is kept as stored.";
+      const delayRo = ro || newer(PM().DIE_DELAY_VERSION);
+      const delayOn = checkField(m.dieDelayOn, "Specify pad to die delay", { ro: delayRo, key: "dieDelayOn", onChange: (v) => { m.dieDelayOn = v; delay.disabled = delayRo || !v; } });
+      const delay = h("input", { type: "text", value: f6(m.dieDelay), disabled: delayRo || !m.dieDelayOn, "data-k": "dieDelay", style: "width:110px" });
+      if (delayRo && !ro) delayOn.el.title = delay.title = tooNew;
       const xy = (a: Field<number>, b: Field<number>): HTMLElement => h("span", { class: "pd-xy" }, a.el, h("span", { class: "unit" }, unitName()), h("label", null, "Y:"), b.el);
       const left = h("div", { class: "pp-col" },
         form([["Pad type:", type.el], ["Pad number:", number.el], ["Net name:", net.el], ["Position X:", xy(px, py), unitLabel()]], true),
@@ -153,7 +159,9 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const techChecks = PM().TECH.map(([label, l]) => checkField(!!m.tech[l], label, { ro, key: "layer-" + l, onChange: (v) => { m.tech[l] = v; redraw(); } }));
       const prop = selectField<string>(m.property, PM().PROPS, { ro, key: "fabProperty", onChange: (v) => { m.property = v; } });
       prop.input.title = "Optional property to specify a special purpose or constraint in fabrication files:\nBGA attribute is for pads in BGA footprints\nFiducial local is a fiducial for the parent footprint\nFiducial global is a fiducial for the whole board\nTest Point specifies an electrical test point\nHeatsink specifies a thermal pad\nCastellated specifies a through hole pad on a board edge\nMechanical specifies a through-hole pad that is used for mechanical support";
-      const sim = selectField<string>(m.simType === "source" || m.simType === "sink" ? m.simType : "", [["", "None"], ["source", "Source"], ["sink", "Sink"]], { ro, key: "simType", onChange: (v) => { m.simType = v; } });
+      const simRo = ro || newer(PM().SIM_ELECTRICAL_TYPE_VERSION);
+      const sim = selectField<string>(m.simType === "source" || m.simType === "sink" ? m.simType : "", [["", "None"], ["source", "Source"], ["sink", "Sink"]], { ro: simRo, key: "simType", onChange: (v) => { m.simType = v; } });
+      if (simRo && !ro) sim.el.title = tooNew;
       const middle = h("div", { class: "pp-col" },
         h("div", { class: "pd-box" },
           flipped ? h("div", { class: "pd-info" }, "Parent footprint on board is flipped.\nLayers will be reversed.") : null,
@@ -178,8 +186,12 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const tdOn = checkField(td.enabled, "Add teardrops on pad's track connections", { ro: tdRo, key: "tdEnabled", onChange: (v) => { td.enabled = v; } });
       const tdZone = checkField(td.preferZone, "Prefer zone connection", { ro: tdRo, key: "tdPreferZone", tip: "Do not create teardrops on tracks connected to pads that are also connected to a copper zone.", onChange: (v) => { td.preferZone = v; } });
       const tdTwo = checkField(td.twoSegments, "Allow teardrops to span 2 track segments", { ro: tdRo, key: "tdTwoSegments", tip: "Allows a teardrop to spread over 2 tracks if the first track segment is too short", onChange: (v) => { td.twoSegments = v; } });
-      const pctIn = (v: number, key: string): HTMLInputElement => h("input", { type: "text", value: f6(v * 100), disabled: tdRo, "data-k": key, style: "width:70px" });
+      // wxSpinCtrlDouble ranges (dialog_pad_properties_base.cpp): track width limit 0-100, best length 20-200, best width 60-100
+      const PCT: Record<string, [number, number]> = { tdFilterRatio: [0, 100], tdLenRatio: [20, 200], tdWidthRatio: [60, 100] };
+      const clampPct = (key: string, v: number): number => Math.max(PCT[key][0], Math.min(PCT[key][1], v));
+      const pctIn = (v: number, key: string): HTMLInputElement => h("input", { type: "text", value: f6(clampPct(key, v * 100)), disabled: tdRo, "data-k": key, style: "width:70px" });
       const tdHD = pctIn(td.filterRatio, "tdFilterRatio"), tdLen = pctIn(td.lenRatio, "tdLenRatio"), tdWid = pctIn(td.widthRatio, "tdWidthRatio");
+      const pct0 = new Map([tdHD, tdLen, tdWid].map((i) => [i, i.value] as [HTMLInputElement, string]));
       tdHD.title = "Tracks which are similar in size to the pad do not need teardrops.";
       const tdMaxLen = lenField(td.maxLen, { ro: tdRo, key: "tdMaxLen" }), tdMaxWid = lenField(td.maxWidth, { ro: tdRo, key: "tdMaxWidth" });
       const tdCurved = checkField(td.curved, "Curved edges", { ro: tdRo, key: "tdCurved", onChange: (v) => { td.curved = v; } });
@@ -247,7 +259,8 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
         const c = Number(cratio.value.replace(",", ".")); if (!isNaN(c)) m.cratio = Math.max(0, Math.min(50, c)) / 100;
         m.ox = offX.get(); m.oy = offY.get(); m.hx = holeX.get(); m.hy = m.holeOblong ? holeY.get() : m.hx; m.die = die.get();
         const dd = Number(String(delay.value).replace(",", ".")); if (!isNaN(dd)) m.dieDelay = dd;
-        const pctOf = (i: HTMLInputElement, cur: number): number => { const v = Number(i.value.replace(",", ".")); return isNaN(v) ? cur : v / 100; };
+        // an untouched box keeps the stored ratio; an edited one is clamped to the spin range
+        const pctOf = (i: HTMLInputElement, cur: number): number => { if (i.value === pct0.get(i)) return cur; const v = Number(i.value.replace(",", ".")); return isNaN(v) ? cur : clampPct(i.dataset.k || "", v) / 100; };
         td.filterRatio = pctOf(tdHD, td.filterRatio); td.lenRatio = pctOf(tdLen, td.lenRatio); td.widthRatio = pctOf(tdWid, td.widthRatio);
         td.maxLen = tdMaxLen.get(); td.maxWidth = tdMaxWid.get();
         m.gap = gap.get(); m.spoke = spoke.get(); const sa = Number(spokeAngle.value.replace(",", ".")); if (!isNaN(sa)) m.spokeAngle = sa;
