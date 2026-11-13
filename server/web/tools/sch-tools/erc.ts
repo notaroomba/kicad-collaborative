@@ -25,8 +25,8 @@ export const ptKey = (p: Pt) => r4(p[0]) + "," + r4(p[1]);
 export interface ErcTerm { item: KItem; p: Pt; net: string; key?: string; pin?: SymPin; power?: boolean; sheetPin?: string; attached?: boolean }
 /** An ERC net: its terminals and the ids of the items they belong to. */
 export interface ErcNet { terms: ErcTerm[]; ids: Set<string> }
-/** ercCheck's options: the project's Pin Conflicts Map, the sub-sheet docs, the parent sheet's pin names. */
-export interface ErcOpts { pinMap?: number[][]; sheetDocs?: SheetDocs | null; parentPins?: Iterable<string> | null }
+/** ercCheck's options: the project's Pin Conflicts Map, the sub-sheet docs, the parent sheet's pin names, and the ERC dialog's 'Show all errors' (ERC_TESTER's m_showAllErrors). */
+export interface ErcOpts { pinMap?: number[][]; sheetDocs?: SheetDocs | null; parentPins?: Iterable<string> | null; showAllErrors?: boolean }
 /** ctx.sheetDocs: Sheetfile (or docId / path) -> parsed doc or its text. */
 export type SheetDocs = NonNullable<SchCtx["sheetDocs"]>;
 // Every terminal on the sheet joined into nets (the rules of netItems, evaluated once with union-find).
@@ -117,11 +117,11 @@ export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
         mark("no_connect_connected", "warning", t.p, `A pin with a "no connection" flag is connected: ${pinLabel(t)}`, [t.item.id], [pinItemRef(t)]);
     }
     const visible = pins.filter((t) => !t.pin.hidden || t.power);
-    let hasDriver = false, isPower = visible.some((t) => t.pin.type === "power_in"), needs: (typeof pins)[number] | null = null, worst: { e: number; a: (typeof pins)[number]; b: (typeof pins)[number] } | null = null;
+    let hasDriver = false, isPower = visible.some((t) => t.pin.type === "power_in"), needs: (typeof pins)[number] | null = null, needAll: (typeof pins)[number][] = [], worst: { e: number; a: (typeof pins)[number]; b: (typeof pins)[number] } | null = null;
     for (let i = 0; i < visible.length; i++) {
       const a = visible[i];
       if (isPower ? a.pin.type === "power_out" : DRIVING.has(a.pin.type)) hasDriver = true;
-      if (DRIVEN.has(a.pin.type) && (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in"))) needs = a;
+      if (DRIVEN.has(a.pin.type)) { needAll.push(a); if (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in")) needs = a; }
       for (let j = i + 1; j < visible.length; j++) {
         const b = visible[j]; if (a.item === b.item && a.pin.number === b.pin.number) continue;
         const e = (opts.pinMap || PIN_MATRIX)[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];   // the project's Pin Conflicts Map when given
@@ -131,8 +131,12 @@ export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
     if (worst) mark("pin_to_pin", worst.e === 2 ? "error" : "warning", worst.a.p, `Pins of type ${PIN_TYPE_TEXT[worst.a.pin.type]} and ${PIN_TYPE_TEXT[worst.b.pin.type]} are connected: ${pinLabel(worst.a)} and ${pinLabel(worst.b)}`, [worst.a.item.id, worst.b.item.id], [pinItemRef(worst.a), pinItemRef(worst.b)]);
     if (needs && !hasDriver && visible.length > 1 && !net.terms.some((t) => t.pin && noConnectAt(doc, t.p))) {
       const leavesSheet = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label");
-      if (!leavesSheet) mark(isPower ? "power_pin_not_driven" : "pin_not_driven", leaves ? "warning" : "error", needs.p,
-        (isPower ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(needs) + (leaves ? " (no driver on this sheet)" : ""), [needs.item.id], [pinItemRef(needs)]);
+      // TestPinToPin: one marker on the chosen pin, or with Show all errors one on every pin that needs a driver
+      // (the power inputs on a power net, else the pins not on power symbols, else all of them)
+      const powerIns = needAll.filter((t) => t.pin.type === "power_in"), nonPower = needAll.filter((t) => !t.power);
+      const flagged = !opts.showAllErrors ? [needs] : isPower && powerIns.length ? powerIns : nonPower.length ? nonPower : needAll;
+      if (!leavesSheet) for (const t of flagged) mark(isPower ? "power_pin_not_driven" : "pin_not_driven", leaves ? "warning" : "error", t.p,
+        (isPower ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(t) + (leaves ? " (no driver on this sheet)" : ""), [t.item.id], [pinItemRef(t)]);
     }
     for (const t of labels) {
       if (t.item.kind === "netclass_flag" || t.item.kind === "directive_label") continue;

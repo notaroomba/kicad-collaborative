@@ -1265,6 +1265,11 @@ test("ERC pin conflicts: KiCad's pin matrix (two outputs, output to power output
   const pi = place(c, "T:PWRI", [101.6, 152.4], "U7"); place(c, "T:PAS", [127, 152.4], "J1"); K.createItem(d, _.lineNode("wire", [101.6, 152.4], [127, 152.4]));
   ms = sch.ercCheck(d); m = ms.find((x) => x.code === "power_pin_not_driven");
   assert.ok(m && m.severity === "error" && /Input Power pin not driven by any Output Power pins: U7 pin 1/.test(m.text) && m.ids.includes(pi.id), texts(ms));
+  // Show all errors (ERC_TESTER m_showAllErrors): a marker on every power input of the undriven net, not only the first
+  const pi3 = place(c, "T:PWRI", [101.6, 139.7], "U9"); K.createItem(d, _.lineNode("wire", [101.6, 139.7], [101.6, 152.4]));
+  assert.equal(sch.ercCheck(d).filter((x) => x.code === "power_pin_not_driven").length, 1);
+  const all = sch.ercCheck(d, { showAllErrors: true }).filter((x) => x.code === "power_pin_not_driven");
+  assert.ok(all.length === 2 && all.some((x) => x.ids.includes(pi.id)) && all.some((x) => x.ids.includes(pi3.id)), JSON.stringify(all.map((x) => x.text)));
   place(c, "power:PWR_FLAG", [114.3, 152.4], "#FLG1"); ms = sch.ercCheck(d); assert.ok(!ms.some((x) => x.code === "power_pin_not_driven"), "PWR_FLAG drives it");
   // a power symbol's net without a power output: only a warning here, the flag may live on another sheet
   const pi2 = place(c, "T:PWRI", [101.6, 165.1], "U8"); place(c, "power:VCC", [127, 165.1], "#PWR1"); K.createItem(d, _.lineNode("wire", [101.6, 165.1], [127, 165.1]));
