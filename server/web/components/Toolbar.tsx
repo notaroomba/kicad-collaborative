@@ -23,8 +23,13 @@ function useEditor(): Editor | null { return useApp((s) => s.document.editor); }
 // ---------------------------------------------------------------- the look (Tailwind utilities)
 /* `kb`, `on`, `desk`, `kmain`, `glyph`, `ktb`, `ktb-v`, `karrow`, … stay as hook classes (this file and
    sch-tools query them); the styling is entirely the utilities that follow them. */
-const KB = "kb relative w-7.5 h-7.5 p-0.5 border border-transparent rounded-sm bg-transparent text-ink inline-flex items-center justify-center flex-none"
-  + " hover:bg-paper hover:border-line on:bg-on on:border-on-line on:shadow-[inset_0_1px_2px] on:shadow-black/[13.3%] desk:opacity-[.38] desk:hover:opacity-70 active:translate-y-px";
+/* WX_AUI_TOOLBAR_ART::DrawButton: square, a 1px accent rectangle over an accent-tinted fill when hovered or
+   checked (lighter when both), darker while pressed; nothing moves.  A disabled button draws no rectangle and
+   shows its KiDisabledBitmap (the icon greyed). */
+const KB = "kb relative w-7.5 h-7.5 p-0.5 border border-transparent rounded-none bg-transparent text-ink inline-flex items-center justify-center flex-none"
+  + " hover:bg-tb-hover hover:border-accent on:bg-tb-hover on:border-accent on:hover:bg-tb-on-hover active:bg-tb-press active:border-accent"
+  + " desk:hover:bg-transparent desk:hover:border-transparent desk:active:bg-transparent desk:active:border-transparent desk:[&>*]:grayscale desk:[&>*]:opacity-45"
+  + " desk:on:bg-transparent desk:on:border-transparent";
 /* No KiCad toolbar ever wraps: wxAuiToolBar keeps its one row (or column) and hides the tools that do
    not fit behind an overflow chevron that pops them up as a menu — ACTION_TOOLBAR's
    `SetOverflowVisible( !GetToolBarFits() )` (common/tool/action_toolbar.cpp:259-266).  OverflowBar
@@ -78,44 +83,52 @@ function ActionButton({ item, a, main }: { item: ActionItem; a: Avail; main?: bo
 }
 function rectOf(el: Element) { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; }
 
-/** KiCad's line-mode actions share one friendly name; when a group's labels collide, show the tooltips. */
-function paletteLabel(it: ActionItem, group: GroupItem): string {
-  const labels = group.items.map((x) => (actionMeta(x.id) || x).label || x.id);
-  const m = actionMeta(it.id) || it;
-  return new Set(labels).size < labels.length && m.tip ? m.tip : (m.label || it.id);
+/* ACTION_TOOLBAR_PALETTE: a strip of the group's buttons, each the size of the toolbar button that opened it, with a
+   4px border around them and 1px between; a column under a top toolbar, a row beside a left or right one.  Each
+   button has its action's tooltip; pressing one makes it the group's button and runs it.  Escape dismisses it. */
+const PALETTE_BORDER = 4;
+const PALETTE_OPEN_DELAY = 500;   // ACTION_TOOLBAR's long press, in ms
+/** Where the palette goes for a button rect: ACTION_TOOLBAR::popupPalette's per-dock offsets. */
+export function palettePlace(r: { left: number; top: number; right: number; bottom: number }, dock: "top" | "left" | "right", w: number, pad = 2): { left: number; top: number; vertical: boolean } {
+  if (dock === "left") return { left: r.right + pad + PALETTE_BORDER, top: r.top, vertical: false };
+  if (dock === "right") return { left: r.left - (w + pad + PALETTE_BORDER), top: r.top, vertical: false };
+  return { left: r.left - PALETTE_BORDER, top: r.bottom + pad, vertical: true };
 }
 
-function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElement; a: Avail; onClose: () => void }) {
+function Palette({ group, wrap, a, onClose, armed }: { group: GroupItem; wrap: HTMLElement; a: Avail; onClose: () => void; armed: { current: boolean } }) {
   const ref = useRef<HTMLDivElement>(null);
-  const groupCurrent = useApp((s) => s.groupCurrent);
   const viewOnly = useApp((s) => s.viewOnly);
-  const cur = groupCurrent[group.group] || group.items[0].id;
+  const dock: "top" | "left" | "right" = wrap.closest("#tbRight") ? "right" : wrap.closest(".ktb-v") ? "left" : "top";
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
   useLayoutEffect(() => {
-    const r = wrap.getBoundingClientRect(); const vertical = !!wrap.closest(".ktb-v"); const onRight = !!wrap.closest("#tbRight");
-    const { w, h } = ref.current ? menuSize(ref.current) : { w: 200, h: 0 }, vp = menuViewport();
-    const left = vertical ? (onRight ? r.left - w - 4 : r.right + 4) : r.left;
-    const top = Math.max(4, Math.min(vertical ? r.top : r.bottom + 2, vp.h - h - 4));
-    setStyle({ left: Math.max(4, Math.min(left, vp.w - w - 4)) + "px", top: top + "px", maxHeight: vp.h - 4 - top + "px", overflowY: "auto" });
-    if (ref.current) menuScroller(ref.current);
-  }, [wrap]);
+    // menufit: kept inside the window; a column longer than the window is cut to it and scrolls with the menus' arrow strips
+    const r = wrap.getBoundingClientRect();
+    const { w, h } = ref.current ? menuSize(ref.current) : { w: 40, h: 40 }, vp = menuViewport();
+    const p = palettePlace(r, dock, w);
+    const top = Math.max(4, Math.min(p.top, vp.h - h - 4));
+    setStyle({ left: Math.max(4, Math.min(p.left, vp.w - w - 4)) + "px", top: top + "px", maxHeight: vp.h - 4 - top + "px", overflowY: dock === "top" ? "auto" : undefined });
+    if (ref.current && dock === "top") menuScroller(ref.current);
+  }, [wrap, dock]);
   useEffect(() => {
     const down = (ev: PointerEvent) => { if (ref.current && !ref.current.contains(ev.target as Node)) onClose(); };
+    const key = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.stopPropagation(); ev.preventDefault(); onClose(); } };
     const t = setTimeout(() => document.addEventListener("pointerdown", down, true), 0);
-    return () => { clearTimeout(t); document.removeEventListener("pointerdown", down, true); };
+    document.addEventListener("keydown", key, true);
+    return () => { clearTimeout(t); document.removeEventListener("pointerdown", down, true); document.removeEventListener("keydown", key, true); };
   }, [onClose]);
+  const pick = (id: string, el: HTMLElement) => { onClose(); dispatch({ type: "setGroupCurrent", group: group.group, id }); runUiAction(a, id, el); };
   return createPortal(
-    <div className="kpalette fixed z-70 bg-panel border border-line rounded-md shadow-panel p-1 min-w-50" ref={ref} style={style}>
+    <div className={cx("kpalette fixed z-70 bg-bench border border-line shadow-panel flex gap-0", dock === "top" ? "flex-col" : "flex-row")}
+      style={{ ...style, padding: PALETTE_BORDER - 1 + "px" }} ref={ref} data-group={group.group}>
       {group.items.map((it) => {
-        const ro = viewOnlyWhy(viewOnly, it.id); const why = unavailable(a, it.id) || ro; const k = keyFor(a, it.id);
+        const ro = viewOnlyWhy(viewOnly, it.id); const why = unavailable(a, it.id) || ro;
         return (
-          <button type="button" key={it.id} title={titleFor(a, it.id)} data-uiact={it.id}
-            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-on-accent cur:shadow-[inset_2px_0_0_var(--color-blue)] desk:opacity-[.45]",
-              why && "desk", cur === it.id && "cur")}
-            onClick={(ev) => { onClose(); if (ro) return; dispatch({ type: "setGroupCurrent", group: group.group, id: it.id }); runUiAction(a, it.id, ev.currentTarget); }}>
+          <button type="button" key={it.id} title={titleFor(a, it.id)} data-uiact={it.id} aria-disabled={why ? true : undefined}
+            className={cx(KB, dock === "top" ? "my-px" : "mx-px", why && "desk")}
+            onClick={(ev) => { if (!why) pick(it.id, ev.currentTarget); }}
+            // BITMAP_BUTTON::AcceptDragInAsClick: a press that began on the toolbar and is released here is a click
+            onPointerUp={(ev) => { if (armed.current && !why) { armed.current = false; pick(it.id, ev.currentTarget); } }}>
             <KIcon name={(actionMeta(it.id) || it).icon || "options_generic"} />
-            <span className="flex-1">{paletteLabel(it, group)}</span>
-            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{menuKey(k)}</kbd> : null}
           </button>
         );
       })}
@@ -128,19 +141,36 @@ function GroupButton({ group, a }: { group: GroupItem; a: Avail }) {
   const view = useApp((s) => s.view);
   const [open, setOpen] = useState(false);
   const hold = useRef<number>(0);
+  const press = useRef<[number, number] | null>(null);
+  const armed = useRef(false);       // the press that opened the palette is still down
+  const swallow = useRef(false);     // its release must not click the toolbar button
   useEffect(() => { if (view !== "editor") setOpen(false); }, [view]);
+  useEffect(() => {
+    const up = () => { press.current = null; clearTimeout(hold.current); setTimeout(() => { armed.current = false; }, 0); };
+    window.addEventListener("pointerup", up); return () => window.removeEventListener("pointerup", up);
+  }, []);
   const cur = groupCurrent[group.group] || group.items[0].id;
   const item = group.items.find((i) => i.id === cur) || group.items[0];
-  const openPalette = () => setOpen(true);
+  const popup = () => { clearTimeout(hold.current); if (press.current) { armed.current = true; swallow.current = true; } setOpen(true); };
+  const close = useCallback(() => setOpen(false), []);
   return (
     <div className="kgroup relative flex-none" data-group={group.group} ref={wrap}
-      onPointerDown={(ev) => { if ((ev.target as Element).closest(".karrow")) return; hold.current = window.setTimeout(openPalette, 450); }}
-      onPointerUp={() => clearTimeout(hold.current)} onPointerLeave={() => clearTimeout(hold.current)}>
+      onPointerDown={(ev) => {
+        if (ev.button !== 0) return;
+        if ((ev.target as Element).closest(".karrow")) return;
+        press.current = [ev.clientX, ev.clientY]; swallow.current = false;
+        hold.current = window.setTimeout(popup, PALETTE_OPEN_DELAY);
+      }}
+      // wxEVT_AUITOOLBAR_BEGIN_DRAG: dragging off a group's button opens its palette at once
+      onPointerMove={(ev) => { const p = press.current; if (p && (ev.buttons & 1) && !open && Math.hypot(ev.clientX - p[0], ev.clientY - p[1]) > 4) popup(); }}
+      onClickCapture={(ev) => { if (swallow.current) { swallow.current = false; ev.stopPropagation(); ev.preventDefault(); } }}>
       <ActionButton item={item} a={a} main />
-      <button type="button" className="karrow absolute right-0 bottom-0 w-2.5 h-2.5 p-0 border-0 bg-transparent text-ink-2 d-grid place-items-center" title={group.group} onClick={(ev) => { ev.stopPropagation(); setOpen((o) => !o); }}>
-        <svg className="w-[7px] h-[7px]" viewBox="0 0 8 8"><path d="M1 2.5h6L4 6z" fill="currentColor" /></svg>
+      {/* ACTION_TOOLBAR::OnCustomRender: the corner triangle, 1/5 of the button high, marks a group */}
+      <button type="button" className="karrow absolute right-px bottom-px w-1.5 h-1.5 p-0 border-0 bg-transparent text-ink [.kgroup:has(>.desk)>&]:text-ink-3" title={group.group}
+        tabIndex={-1} aria-label={group.group} onClick={(ev) => { ev.stopPropagation(); setOpen((o) => !o); }}>
+        <svg className="block w-full h-full" viewBox="0 0 6 6"><path d="M6 0V6H0z" fill="currentColor" /></svg>
       </button>
-      {open && wrap.current ? <Palette group={group} wrap={wrap.current} a={a} onClose={() => setOpen(false)} /> : null}
+      {open && wrap.current ? <Palette group={group} wrap={wrap.current} a={a} onClose={close} armed={armed} /> : null}
     </div>
   );
 }

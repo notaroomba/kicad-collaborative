@@ -75,6 +75,9 @@
           mixes with transparent in oklab and renders differently) ---- */
   --color-on: var(--on);                                                   /* .kb.on fill          → bg-on         */
   --color-on-line: var(--on-line);                                         /* .kb.on border        → border-on-line */
+  --color-tb-hover: var(--tb-hover);                                       /* toolbar button hover / checked */
+  --color-tb-on-hover: var(--tb-on-hover);                                 /* checked button hovered */
+  --color-tb-press: var(--tb-press);                                       /* toolbar button pressed */
   --color-sel: var(--sel);                                                 /* selected row / node  → bg-sel        */
   --color-sel-soft: var(--sel-soft);                                       /* table row hover      → bg-sel-soft   */
   --color-line-soft: color-mix(in srgb, var(--line) 50%, transparent);     /* table cell rule      → border-line-soft */

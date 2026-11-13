@@ -95,6 +95,11 @@
   --on-line: color-mix(in srgb, var(--blue) 60%, var(--line));    /* its border */
   --sel: color-mix(in srgb, var(--blue) 25%, var(--paper));       /* selected row */
   --sel-soft: color-mix(in srgb, var(--blue) 12%, var(--paper));  /* hovered row */
+  /* toolbar buttons (WX_AUI_TOOLBAR_ART::DrawButton): a 1px accent rectangle filled with the accent
+     lightened (ChangeLightness 170 hover/checked, 180 checked+hover, 150 pressed; dark 40, 50, 20) */
+  --tb-hover: color-mix(in srgb, var(--accent) 30%, #FFFFFF);
+  --tb-on-hover: color-mix(in srgb, var(--accent) 20%, #FFFFFF);
+  --tb-press: color-mix(in srgb, var(--accent) 50%, #FFFFFF);
 
   /* ---- older names still used by inline styles; do not use in new code ---- */
   --bg: var(--bench); --panel-2: var(--paper); --text: var(--ink); --muted: var(--ink-2);
@@ -108,6 +113,9 @@
     --copper: #E05555; --copper-2: #C83434; --teal: #4FBDBD; --wire: #45C245;
     --warn: #E5A800; --err: #F0464A; --err-2: #D2383C;
     --shadow: 0 6px 20px #00000080; --shadow-dialog: 0 18px 48px #000000A6; --scrim: #00000080;
+    --tb-hover: color-mix(in srgb, var(--accent) 40%, #000000);
+    --tb-on-hover: color-mix(in srgb, var(--accent) 50%, #000000);
+    --tb-press: color-mix(in srgb, var(--accent) 20%, #000000);
   }
 }
 :root[data-theme="dark"] {
@@ -117,6 +125,9 @@
   --copper: #E05555; --copper-2: #C83434; --teal: #4FBDBD; --wire: #45C245;
   --warn: #E5A800; --err: #F0464A; --err-2: #D2383C;
   --shadow: 0 6px 20px #00000080; --shadow-dialog: 0 18px 48px #000000A6; --scrim: #00000080;
+  --tb-hover: color-mix(in srgb, var(--accent) 40%, #000000);
+  --tb-on-hover: color-mix(in srgb, var(--accent) 50%, #000000);
+  --tb-press: color-mix(in srgb, var(--accent) 20%, #000000);
 }
 /* the mark (static/icon.svg) follows the system scheme on its own; these make an inlined copy follow
    an explicit theme choice too */
