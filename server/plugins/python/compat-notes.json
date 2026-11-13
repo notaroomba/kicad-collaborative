@@ -192,6 +192,22 @@
     "com.github.asukiaaa.gerber-to-order": {
       "status": "works",
       "note": "Driven end to end: the five archives are opened and their Gerbers and drill files checked against the board. Written for KiCad 6; boards with more than six copper layers are beyond the plugin itself."
+    },
+    "com.github.aislerhq.PushForKiCad": {
+      "status": "partly",
+      "note": "Gerbers, drill files, the netlist and the component list are made, but the upload must also hold an ODB++ archive, which the web editor cannot write yet, so the push stops there."
+    },
+    "com.github.sparkfun.SparkFunKiCadCAMmer": {
+      "status": "works",
+      "note": "Driven end to end: the zip is opened and its Gerbers and drill file checked against the board."
+    },
+    "com.github.Murali8051.Lioncircuits-PCB-Toolkit": {
+      "status": "works",
+      "note": "Driven end to end on a two-layer board: Gerbers, drill files, both BOMs, the position file, the BOM page and the netlist are checked against the board. On boards with inner layers the plugin picks the wrong inner copper layers, in KiCad 9 and later too."
+    },
+    "vn.thanhduongvs.component-position": {
+      "status": "works",
+      "note": "Driven end to end: both CSV files are opened; every part is listed at its own place and counted once."
     }
   }
 }

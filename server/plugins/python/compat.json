@@ -64,7 +64,8 @@
   "note": "Runs here. Select two pads of one footprint; they trade nets on the board, and the two labels at the symbol's pins trade places in the schematic. The editor shows the schematic change and asks before it is applied."
  },
  "com.github.Murali8051.Lioncircuits-PCB-Toolkit": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end on a two-layer board: Gerbers, drill files, both BOMs, the position file, the BOM page and the netlist are checked against the board. On boards with inner layers the plugin picks the wrong inner copper layers, in KiCad 9 and later too."
  },
  "com.github.SK-Electronics-Consulting.kicad-coil-generators": {
   "status": "works"
@@ -105,7 +106,8 @@
   "status": "works"
  },
  "com.github.aislerhq.PushForKiCad": {
-  "status": "works"
+  "status": "partly",
+  "note": "Gerbers, drill files, the netlist and the component list are made, but the upload must also hold an ODB++ archive, which the web editor cannot write yet, so the push stops there."
  },
  "com.github.aivon-pcba.Aivon-Fabrication-Toolkit-for-KiCad": {
   "status": "works",
@@ -271,7 +273,8 @@
   "status": "works"
  },
  "com.github.sparkfun.SparkFunKiCadCAMmer": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: the zip is opened and its Gerbers and drill file checked against the board."
  },
  "com.github.sparkfun.SparkFunKiCadPanelizer": {
   "status": "works"
@@ -355,7 +358,8 @@
   "note": "Runs here. What it sends was checked against a stand-in for Sierra Circuits' service built from the plugin's own code, not against the live service: as a guest it fills the quote from the board (size, layers, hole count), uploads the board file, shows the prices answered and opens the order page for the price chosen. Needs network access granted."
  },
  "vn.thanhduongvs.component-position": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: both CSV files are opened; every part is listed at its own place and counted once."
  },
  "vn.thanhduongvs.fanout-tool": {
   "status": "works"

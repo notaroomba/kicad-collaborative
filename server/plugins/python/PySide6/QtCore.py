@@ -1359,9 +1359,9 @@ class Qt:
 # Qt 5 style access: Qt.AlignCenter beside Qt.AlignmentFlag.AlignCenter
 for _name, _group in list(vars(Qt).items()):
     if isinstance(_group, type) and issubclass(_group, enum.Enum):
-        for _member in _group:
-            if not hasattr(Qt, _member.name):
-                setattr(Qt, _member.name, _member)
+        for _mname, _member in _group.__members__.items():      # __members__ also has what iteration leaves out: aliases and combined flags (AlignCenter)
+            if not hasattr(Qt, _mname):
+                setattr(Qt, _mname, _member)
 Qt.Alignment = Qt.AlignmentFlag
 Qt.ItemFlags = Qt.ItemFlag
 Qt.WindowFlags = Qt.WindowType
