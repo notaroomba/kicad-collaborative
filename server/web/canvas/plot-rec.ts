@@ -287,7 +287,7 @@ export function plotItems(doc: Doc, o: DocPlotOptions = {}, renderFn?: (doc: Doc
     const K = (root as unknown as { KiCadCanvas: { textMode?: string } }).KiCadCanvas;
     const keep = K ? K.textMode : undefined; if (K) K.textMode = "stroke";
     try {
-      R(d, rec as unknown as Ctx2D, view, Object.assign({ grid: 0, background: false, selected: null, highlight: null, markers: null, ratsnest: null, showHiddenPins: false, showHiddenText: false,
+      R(d, rec as unknown as Ctx2D, view, Object.assign({ grid: 0, background: false, selected: null, highlight: null, markers: null, ratsnest: null, showHiddenPins: false, showHiddenText: false, showHiddenFields: false,
         frame: o.frame !== false, zoneOutline: false }, o.render || {}));
     } finally { if (K) K.textMode = keep; }
     return rec.items;

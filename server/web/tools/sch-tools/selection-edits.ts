@@ -7,7 +7,7 @@ import { pickAny } from "./hit";
 import { switchTool } from "./junction";
 import { anchorOf, cloneNode, mirrorNode, rotateNode, shiftNode } from "./orient";
 import { LINE_KINDS, S, ptsOf } from "./state";
-import { rotationCentre, transformNode, transformSelected } from "./transforms";
+import { loneLinePivot, rotationCentre, transformNode, transformSelected } from "./transforms";
 import { deep, ghost, modChange, removeChange } from "./util";
 
 // ---------------------------------------------------------------- edits on the current selection
@@ -24,7 +24,13 @@ export function orientSelected(ctx: SchCtx, op: string) {
   if (ctx.viewOnly) return false;
   const node = deep(it.node);
   const ok = op === "x" || op === "y" ? mirrorNode(it.kind, node, op) : rotateNode(it.kind, node, op === "cw");
-  if (ok === false) { if (!DRAG_KINDS.has(it.kind)) return false; return transformSelected(ctx, op, [it], rotationCentre([it])); }
+  if (ok === false) {
+    if (!DRAG_KINDS.has(it.kind)) return false;
+    // SCH_EDIT_TOOL::Rotate's lone SCH_BITMAP_T case calls head->Rotate( rotPoint, clockwise ), not !clockwise as
+    // every other item does: a lone reference image turns the other way
+    const lop = it.kind === "image" && (op === "ccw" || op === "cw") ? (op === "ccw" ? "cw" : "ccw") : op;
+    return transformSelected(ctx, lop, [it], loneLinePivot(it, op) || rotationCentre([it]));
+  }
   ctx.commit([modChange(ctx.doc, it, node)], op === "x" || op === "y" ? "mirror" : "rotate");
   return true;
 }

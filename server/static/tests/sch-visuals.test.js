@@ -110,14 +110,14 @@ test("sheet: DNP cross and dimmed pins, sim exclusion at half alpha", () => {
   assert(!it.geom.some((g) => g.color === K.SCH.sheetLabel), "pins dimmed");
   assert(it.geom.some((g) => g.simMarker && /,0\.5\)$/.test(g.color)), "marker at alpha 0.5");
 });
-test("hidden fields: kept aside in LAYER_HIDDEN, drawn under showHiddenText", () => {
+test("hidden fields: kept aside in LAYER_HIDDEN, drawn under showHiddenFields (not the board's showHiddenText)", () => {
   const doc = K.parseDoc(HEAD + LIB + SYM("r1", 20, 20) + ")");
   const it = doc.items.get("r1");
   assert(!it.geom.some((g) => g.field === "Footprint")); const h = (it.hiddenGeom || []).filter((g) => g.field === "Footprint");
   assert(h.length && h.every((g) => g.color === K.SCH.hidden && g.hiddenText));
   K.textMode = "native";
   const shown = (opts) => { const c = recCtx(800, 600); K.render(doc, c, view, opts); return c.ops.filter((o) => o.op === "fillText" && o.args[0] === "R_0603"); };
-  assert.strictEqual(shown({}).length, 0); const s = shown({ showHiddenText: true }); assert.strictEqual(s.length, 1); assert.strictEqual(s[0].alpha, 1);
+  assert.strictEqual(shown({}).length, 0); assert.strictEqual(shown({ showHiddenText: true }).length, 0, "pcbnew's hidden text is a separate setting"); const s = shown({ showHiddenFields: true }); assert.strictEqual(s.length, 1); assert.strictEqual(s[0].alpha, 1);
   K.textMode = undefined;
 });
 test("ERC markers: warnings and errors shown by default, exclusions hidden, each one toggled", () => {

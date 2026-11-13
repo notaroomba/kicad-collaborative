@@ -62,7 +62,7 @@ const sch = {
   id: "sch", tools: TOOLS.map((t) => ({ id: t.id, label: t.label, key: t.key, icon: t.icon, cursor: t.cursor })),
   onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged, ghostSegs, vetoTool,
   // for tests and the props panel
-  state: S, select(id: string | null) { if (S.sel !== (id || null)) S.selEnds = null; S.sel = id || null; }, selEndKeys, putSelEnd, boxLineFlags, setPrompt(fn: PromptFn) { setPromptImpl(fn); }, setNetHighlighter(h: NetHighlighter | null) { S.netHL = h || null; }, setImagePicker(fn: ImagePickerFn) { setImagePickerImpl(fn); },
+  state: S, select(id: string | null) { if (!id || S.sel !== id) S.selEnds = null; S.sel = id || null; }, selEndKeys, putSelEnd, boxLineFlags, setPrompt(fn: PromptFn) { setPromptImpl(fn); }, setNetHighlighter(h: NetHighlighter | null) { S.netHL = h || null; }, setImagePicker(fn: ImagePickerFn) { setImagePickerImpl(fn); },
   // connected drag engine, shared with app.js's select tool (symbols and sheets; an array drags a multi-selection)
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   // REMOVED changes (plus junction cleanup) for one item or a multi-selection; the net of an item on this sheet

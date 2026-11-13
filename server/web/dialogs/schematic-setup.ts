@@ -8,7 +8,7 @@
 import { E, toast } from "./editor";
 import { KD, checkbox, h, select, textInput, type GridApi } from "./dom";
 import { DEFAULT_PIN_MAP, ERC_RULES, PIN_TYPE_NAMES, defaultSeverity, type Severity } from "./erc-rules";
-import { str } from "./logic";
+import { schParamInRange, str } from "./logic";
 import { loadProject, obj, proDoc, saveProject, sub, type Json, type JsonObj } from "./project";
 
 const MIL = 0.0254;
@@ -31,13 +31,12 @@ export function schRenderSettings(pro: JsonObj): SchRenderSettings {
   const s = obj(pro.schematic), d = obj(s.drawing), classes = obj(pro.net_settings).classes;
   const dflt = Array.isArray(classes) ? (classes as JsonObj[]).find((c) => c && c.name === "Default") : undefined;
   const wire = numOf(dflt ? dflt.wire_width : undefined, numOf(d.default_wire_thickness, 6));
-  const choice = Math.max(0, Math.min(5, Math.round(numOf(d.junction_size_choice, 3))));
-  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));   // the PARAM ranges
+  const choice = schParamInRange(d.junction_size_choice, 3, 0, 5, true);
   return { junctionDiameter: +(wire * JUNCTION_MULT[choice] * MIL).toFixed(4), dash: numOf(d.dashed_lines_dash_length_ratio, 12), gap: numOf(d.dashed_lines_gap_length_ratio, 3),
-    textOffsetRatio: clamp(numOf(d.text_offset_ratio, 0.15), 0, 2), labelSizeRatio: clamp(numOf(d.label_size_ratio, 0.375), 0, 2),
-    pinSymbolSize: +(clamp(numOf(d.pin_symbol_size, 25), 0, 1000) * MIL).toFixed(6), lineWidth: +(clamp(numOf(d.default_line_thickness, 6), 5, 1000) * MIL).toFixed(6),
+    textOffsetRatio: schParamInRange(d.text_offset_ratio, 0.15, 0, 2), labelSizeRatio: schParamInRange(d.label_size_ratio, 0.375, 0, 2),
+    pinSymbolSize: +(schParamInRange(d.pin_symbol_size, 25, 0, 1000) * MIL).toFixed(6), lineWidth: +(schParamInRange(d.default_line_thickness, 6, 5, 1000) * MIL).toFixed(6),
     showDnpMarkers: d.show_dnp_markers !== false, overbarHeight: numOf(d.overbar_offset_ratio, 1.23) > 0 ? numOf(d.overbar_offset_ratio, 1.23) : 1.23,
-    hopOverChoice: Math.max(0, Math.min(5, Math.round(numOf(d.hop_over_size_choice, 0)))) };
+    hopOverChoice: schParamInRange(d.hop_over_size_choice, 0, 0, 5, true) };
 }
 
 interface FieldTpl { name: string; visible: boolean; url: boolean }

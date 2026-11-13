@@ -211,7 +211,7 @@ export interface RenderOpts {
   hidden?: Set<string>; grid?: number; gridStyle?: string; gridMinSpacing?: number; gridOrigin?: number[] | null; gridColor?: string;
   gridAxes?: boolean; gridAxesColor?: string; frame?: boolean;
   selected?: Set<string> | null; highlight?: Set<string> | null; lockedIds?: Set<string> | null;
-  showHiddenPins?: boolean; showHiddenText?: boolean; zoneOutline?: boolean; padNumbers?: boolean;
+  showHiddenPins?: boolean; showHiddenText?: boolean; /** eeschema's View > Show Hidden Fields (not pcbnew's hidden text) */ showHiddenFields?: boolean; zoneOutline?: boolean; padNumbers?: boolean;
   outlinePads?: boolean; outlineTracks?: boolean; outlineVias?: boolean;
   highContrast?: boolean; activeLayer?: string | null; inactiveHide?: boolean;
   ids?: Set<string> | string[] | null; skip?: Set<string> | null;

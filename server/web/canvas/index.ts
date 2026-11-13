@@ -32,7 +32,8 @@ import { hatchLines } from "./geom-pcb";
 import { ORIENT, resolveLib, schDisplay, schFormat, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, geomTouchesRect, itemTouchesRect, itemVisible, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
-import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawMarkers, drawPad, drawSelectionHalo, SCH_SELECTION_SHADOW, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
+import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawMarkers, drawPad, drawSelectionHalo, SCH_SELECTION_SHADOW, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, busConnectedLabels, busPinTint, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
+import { isBusLabel } from "./busname";
 import { boardSetup } from "./board-setup";
 import { PlotRecorder, blackAndWhite, dashRuns, itemsBox, luminance, plotItems, plotRecorder, sheetPlotItems } from "./plot-rec";
 import { plotParams } from "./plot-params";
@@ -93,7 +94,7 @@ export const api = {
   // exposed for tests and tools
   symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf,
   // display-option helpers (see render()): ratsnest / marker / net-name / zone-preview / flip constants and look-ups
-  bboxOf, padAt, padGeomHit, markerAt, markerPolygon, markerScale, drawMarkers, zoomFactor, flipX, unflipX, flipCentre, dashPattern, trackNameColor,
+  bboxOf, padAt, padGeomHit, markerAt, markerPolygon, markerScale, busConnectedLabels, busPinTint, isBusLabel, drawMarkers, zoomFactor, flipX, unflipX, flipCentre, dashPattern, trackNameColor,
   MARKER_CORNERS, MARKER_SCALE, MARKER_COLORS, RATSNEST_COLOR, ZONE_OPACITY, HIDDEN_TEXT_ALPHA, PX_PER_MM_ZOOM1, VIA_NETNAME_COLOR,
   // export: SVG / PNG of the whole document or a subset; createCanvas is the offscreen-canvas factory (replaceable for tests / workers)
   renderSvg, renderPng, SvgPath, createCanvas: defaultCreateCanvas, pointInPoly,

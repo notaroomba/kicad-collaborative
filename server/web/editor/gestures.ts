@@ -38,7 +38,7 @@ const canvas = canvasRaw as HTMLCanvasElement, dragG = dragGRaw as SVGGElement;
 export const DRAG_THRESHOLD_PX = 5;
 
 interface PcbState { sel: Set<string>; move?: { sticky?: boolean } | null; drag?: { bySelect?: boolean } | null; pending?: unknown; route?: unknown; draw?: { shape: string; pts?: unknown[] } | null }
-interface SchState { sel: string | null; hover?: string | null; drag?: { byPointer?: boolean; moved?: boolean } | null; pending?: unknown; wire?: unknown; draw?: { shape: string; pts: unknown[]; await?: boolean } | null; carry?: unknown; highlight?: unknown }
+interface SchState { sel: string | null; hover?: string | null; drag?: { byPointer?: boolean; moved?: boolean } | null; pending?: unknown; wire?: unknown; draw?: { shape: string; pts: unknown[]; await?: boolean } | null; carry?: unknown; highlight?: unknown; selEnds?: Map<string, number> | null }
 interface PcbToolsApi { hitTestItem(doc: KDoc, x: number, y: number, slop: number): KItem | null; HIT_MM?: number }
 
 export const schState = (): SchState | null => (CollabTools.sch ? (CollabTools.sch.state as unknown as SchState) : null);
@@ -65,7 +65,7 @@ export function selectionChanged(): void { drawSelection(); renderProps(); rende
 export function clearAllSelection(publish = true): void {
   clearSelection();
   const p = pcbState(); if (p && p.sel && p.sel.size) p.sel.clear();
-  const s = schState(); if (s) { s.sel = null; s.hover = null; }
+  const s = schState(); if (s) { s.sel = null; s.hover = null; s.selEnds = null; }
   E.hoverId = null;
   if (publish) selectionChanged();
 }

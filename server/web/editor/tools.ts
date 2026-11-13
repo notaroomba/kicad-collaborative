@@ -271,6 +271,9 @@ export function deleteAction() {
 
 export function selectAll() {
   if (!E.kdoc) return; E.selection.clear();
+  // SCH_SELECTION_TOOL::SelectAll sets STARTPOINT | ENDPOINT on every line: no wire stays selected by one end
+  const schSt = isSch() && CollabTools.sch ? (CollabTools.sch.state as unknown as { selEnds?: Map<string, number> | null }) : null;
+  if (schSt) schSt.selEnds = null;
   for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind, it)) E.selection.add(it.id);
   E.selected = E.items.find((f: ItemSummary) => E.selection.has(f.id)) || null;
   drawSelection(); renderProps(); renderObjects(); setStatusBar({ message: `${E.selection.size} items selected` });

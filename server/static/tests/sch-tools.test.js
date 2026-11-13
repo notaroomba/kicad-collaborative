@@ -1602,6 +1602,13 @@ test("drag net collision (SCH_DRAG_NET_COLLISION_MONITOR): a junction joining tw
   m = _.collisionMarkers(d, sch.state.drag.collision, _.dragJunctions(d, sch.state.drag));
   assert.deepStrictEqual(m.junctions.map((j) => j.p), [[177.8, 50.8]], "the moved wire's end lands on another net's wire");
   assert.ok(Math.abs(m.junctions[0].r - 0.9144 * 1.5) < 1e-9);
+  d.schSettings = { junctionDiameter: 1.524 };                      // Schematic Setup: a bigger junction dot
+  m = _.collisionMarkers(d, sch.state.drag.collision, _.dragJunctions(d, sch.state.drag));
+  assert.ok(Math.abs(m.junctions[0].r - 1.524 * 1.5) < 1e-9, "the preview junction's GetEffectiveDiameter() * 1.5");
+  d.schSettings = { junctionDiameter: 0 };                          // "None": GetJunctionSize's 1 IU, then the 800 IU floor
+  m = _.collisionMarkers(d, sch.state.drag.collision, _.dragJunctions(d, sch.state.drag));
+  assert.ok(Math.abs(m.junctions[0].r - 0.08) < 1e-9);
+  delete d.schSettings;
   _.endDrag(c, false);
   ({ d, c } = fresh());
   const g = K.createItem(d, _.rectangleNode([150, 150], [160, 160]));

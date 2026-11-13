@@ -59,7 +59,11 @@ export function collisionInit(doc: KDoc, d: SchDrag, fresh: boolean): NetCollisi
 /** Update: the markers for this step's preview junctions and the broken connections. */
 export function collisionMarkers(doc: KDoc, nc: NetCollision, junctions: Pt[]): CollisionMarkers {
   const out: CollisionMarkers = { junctions: [], breaks: [] };
-  const jr = Math.max(0.9144 * 1.5, MIN_R);                // GetEffectiveDiameter() * 1.5
+  // GetEffectiveDiameter() * 1.5 of the preview junction (no diameter of its own): SCHEMATIC_SETTINGS::GetJunctionSize,
+  // the project's Schematic Setup > Formatting junction dot size, at least 1 IU
+  const ss = (doc as KDoc & { schSettings?: { junctionDiameter?: number } | null }).schSettings;
+  const jd = ss && typeof ss.junctionDiameter === "number" ? Math.max(ss.junctionDiameter, IU) : 0.9144;
+  const jr = Math.max(jd * 1.5, MIN_R);
   for (const p of junctions) {
     let first: number | undefined, diff = false, movedNet = false;
     for (const it of doc.items.values()) {

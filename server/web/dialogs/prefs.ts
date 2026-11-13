@@ -167,8 +167,8 @@ export function applyPrefs(full = true): void {
     E.renderOpts.gridAxes = !!g.axes;
     if (!full) { /* grids and colours only */ }
     else if (isSch()) {
-      E.renderOpts.showHiddenPins = p.schDisplay.showHiddenPins; E.renderOpts.showHiddenText = p.schDisplay.showHiddenFields; E.renderOpts.pageLimits = p.schDisplay.showPageLimits;
-      setToggles({ toggleHiddenPins: p.schDisplay.showHiddenPins, showHiddenText: p.schDisplay.showHiddenFields });
+      E.renderOpts.showHiddenPins = p.schDisplay.showHiddenPins; E.renderOpts.showHiddenFields = p.schDisplay.showHiddenFields; E.renderOpts.pageLimits = p.schDisplay.showPageLimits;
+      setToggles({ toggleHiddenPins: p.schDisplay.showHiddenPins, toggleHiddenFields: p.schDisplay.showHiddenFields });
       const sch = CollabTools.sch;
       if (sch) { try { const ctx = toolCtx(); sch.setLineMode(ctx, p.schEditing.lineMode); sch.setDragMode(ctx, p.schEditing.mouseDragIsDrag ? "drag" : "move"); sch.state.annotateAuto = p.schEditing.autoAnnotate; syncSchModes(); } catch (e) { console.warn(e); } }
     } else {

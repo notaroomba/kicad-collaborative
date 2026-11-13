@@ -1,7 +1,8 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, SCH_DEFAULT, SCH_Z, parseColor, pcbColor, pcbZ, rgba } from "./colors";
-import { atOf, flipH, pointInPoly, ptsOf, splitLines } from "./sexpr";
+import { atOf, flipH, kids, pointInPoly, ptsOf, splitLines, str } from "./sexpr";
+import { isBusLabel } from "./busname";
 import { ensureSchTheme } from "./geom";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
@@ -283,8 +284,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   setOverbarHeight(isPcb ? 1.23 : schFormat.overbarHeight);   // the board's KIFONT::METRICS are the defaults
   const hops = isPcb ? null : hopShapes(doc);                  // Formatting > Hop-over size
   const showHiddenPins = !!opts.showHiddenPins && doc.type === "sch", zoneOutline = isPcb && !!opts.zoneOutline;
-  // hidden fields: pcbnew's hidden texts, eeschema's show_hidden_fields (LAYER_HIDDEN)
-  const showHiddenText = !!opts.showHiddenText, padNumbers = opts.padNumbers !== false;
+  // hidden fields: pcbnew's hidden texts (showHiddenText), eeschema's own appearance.show_hidden_fields (LAYER_HIDDEN,
+  // showHiddenFields) — two separate settings, as in KiCad
+  const showHiddenText = isPcb ? !!opts.showHiddenText : !!opts.showHiddenFields, padNumbers = opts.padNumbers !== false;
   // eeschema's View-menu options: mark_sim_exclusions and show_directive_labels (both on by default)
   const noSimMarks = !isPcb && opts.markSimExclusions === false, noDirectives = !isPcb && opts.showDirectiveLabels === false;
   const sketchPads = isPcb && !!opts.outlinePads, sketchTracks = isPcb && !!opts.outlineTracks, sketchVias = isPcb && !!opts.outlineVias;
@@ -484,7 +486,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
         if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes") continue;   // inactive layers: Hide
       }
       if (noSimMarks && g.simMarker) continue;
-      if (busTint && g.layer === "Labels") (schTint || (schTint = new Map())).set(g, SCH.bus);
+      if (busTint && busPinTint(it, g)) (schTint || (schTint = new Map())).set(g, SCH.bus);
       if (objHide) {
         const oc = objectClass(g);
         if (oc && objHide.has(oc)) continue;
@@ -659,34 +661,32 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
 }
 
 /**
- * The labels attached to a bus: a local, global or hierarchical label whose connection point lies on a bus segment
- * (SCH_LABEL_BASE::HasBusConnection, the label then drives the bus's subgraph).  Cached while the bus and label
- * geometry is unchanged.
+ * The labels SCH_PAINTER draws in the bus colour: aText->HasBusConnection(), and a label's SCH_CONNECTION is built
+ * from its own name (CONNECTION_GRAPH: ConfigureFromLabel( GetNameForDriver )), so a local, global or hierarchical
+ * label whose text is a bus vector or group (SCH_CONNECTION::IsBusLabel), wherever it sits, and a sheet holding a pin
+ * with a bus name (its pin geometry is tinted, see busPinTint).  Cached while the label and sheet geometry is
+ * unchanged.
  */
 const BUS_LABELS = new WeakMap<object, { key: unknown[]; ids: Set<string> }>();
 export function busConnectedLabels(doc: Doc): Set<string> | null {
-  const buses: Item[] = [], labels: Item[] = [];
-  for (const it of doc.items.values()) {
-    if (it.kind === "bus") buses.push(it);
-    else if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") labels.push(it);
-  }
-  if (!buses.length || !labels.length) return null;
-  const key: unknown[] = []; for (const it of buses) key.push(it.geom); for (const it of labels) key.push(it.geom);
+  const labels: Item[] = [];
+  for (const it of doc.items.values()) if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label" || it.kind === "sheet") labels.push(it);
+  if (!labels.length) return null;
+  const key: unknown[] = []; for (const it of labels) key.push(it.geom);
   const hit = BUS_LABELS.get(doc);
   if (hit && hit.key.length === key.length && hit.key.every((k, i) => k === key[i])) return hit.ids;
   const ids = new Set<string>();
-  const segs: number[][] = [];
-  for (const b of buses) { const pts = ptsOf(b.node); for (let i = 1; i < pts.length; i++) segs.push([pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]]); }
   for (const lb of labels) {
-    const a = atOf(lb.node), x = a[0], y = a[1];
-    for (const [x1, y1, x2, y2] of segs) {
-      const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
-      const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / l2)) : 0;
-      if (Math.hypot(x1 + t * dx - x, y1 + t * dy - y) <= 1e-4) { ids.add(lb.id); break; }
-    }
+    if (lb.kind === "sheet") { if (kids(lb.node, "pin").some((pin) => isBusLabel(str(pin[1])))) ids.add(lb.id); }
+    else if (isBusLabel(str(lb.node[1]))) ids.add(lb.id);
   }
   BUS_LABELS.set(doc, { key, ids });
   return ids;
+}
+/** Is this geometry of a bus-tinted item drawn in the bus colour: a label's own shape and text, or a bus-named sheet pin. */
+export function busPinTint(it: Item, g: Geom): boolean {
+  if (it.kind === "sheet") return typeof g.pinNo === "string" && g.layer === "Sheets" && isBusLabel(g.pinNo);
+  return g.layer === "Labels";
 }
 
 /** A layer colour as PCB_RENDER_SETTINGS::LoadColors draws it: an alpha below 0.2 is raised to 0.2. */

@@ -10,6 +10,7 @@ import { PIN_SIDE, SHEET_FILE_OFF, SHEET_NAME_OFF, corners, flagFieldAt, fontNod
 import { SCREEN_OP, anchorOf, mirrorNode, orientSymbol, setTextRot, shiftAt, shiftNode, symOrient } from "./orient";
 import { mmPerPx } from "./snap";
 import { K, LINE_KINDS, POINT_KINDS, S, TEXT_KINDS, atOf, kid, kids, num, ptsOf, setAt, setPts, str } from "./state";
+import { selEndOf } from "./line-ends";
 import { addNode, deep, dropKid, modChange, r4, removeChange, replaceKid, same } from "./util";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
@@ -25,6 +26,17 @@ export function rotationCentre(items: KItem[]) {
   if (items[0].kind === "table") return tableCentre(items[0].node);
   const it = items[0], own = it.kind === "symbol" || LABEL_KINDS.has(it.kind) || POINT_KINDS.has(it.kind) || TEXT_KINDS.has(it.kind);
   return own ? anchorOf(it.kind, it.node) : selectionCentre(items);
+}
+/**
+ * The pivot of a lone SCH_LINE (two points): SCH_EDIT_TOOL::Rotate turns it about its end point when STARTPOINT is
+ * set (a whole line has both flags) and about its start when only ENDPOINT is; SCH_EDIT_TOOL::Mirror's single-item
+ * default mirrors about GetPosition(), the start.  null for anything else.
+ */
+export function loneLinePivot(it: KItem, op: string): Pt | null {
+  if (!LINE_KINDS.has(it.kind)) return null;
+  const p = ptsOf(it.node); if (p.length !== 2) return null;
+  if (op === "x" || op === "y") return [p[0][0], p[0][1]];
+  return selEndOf(it.id) === 1 ? [p[0][0], p[0][1]] : [p[1][0], p[1][1]];
 }
 /** SCH_TABLE::GetCenter: the centre of the box of its cells' starts and ends. */
 export function tableRawCentre(node: SNode): Pt {
@@ -45,7 +57,7 @@ export function sideOfEdge(p: Pt, box: Box) { const d: [string, number][] = [["l
  * Rotate / mirror one item about C.  `lone`: the item is the selection's only principal item (SCH_EDIT_TOOL::Rotate's
  * principalItemCount == 1), which a table turns about its own centre instead of C.
  */
-export function transformNode(kind: string, node: SNode, op: string, C: Pt, lone = false) {
+export function transformNode(kind: string, node: SNode, op: string, C: Pt, lone = false, end: 0 | 1 | null = null) {
   const rot = op === "ccw" || op === "cw";
   const mapAt = (n: SNode) => { const a = kid(n, "at"); if (!a) return; const q = mapPoint(op, C, [num(a[1]), num(a[2])]); a[1] = q[0]; a[2] = q[1]; };
   const mapPts = (n: SNode) => setPts(n, ptsOf(n).map((p) => mapPoint(op, C, p)));
@@ -62,9 +74,26 @@ export function transformNode(kind: string, node: SNode, op: string, C: Pt, lone
     if (rot) setFlagRot(node, r0 + (op === "cw" ? 270 : 90)); else { const flip: Record<number, number> = op === "y" ? { 0: 180, 180: 0 } : { 90: 270, 270: 90 }; if (flip[r0] !== undefined) setFlagRot(node, flip[r0]); }
     moveTo(p0); return true;
   }
-  case "junction": case "no_connect": case "image": mapAt(node); return true;
+  case "junction": case "no_connect": mapAt(node); return true;
+  case "image": {
+    // SCH_BITMAP::Rotate -> REFERENCE_IMAGE::Rotate: the centre turns about C and the orientation gains the angle
+    // (ANGLE_90 counter-clockwise on screen); a mirror moves the centre only here (KiCad also mirrors the raster)
+    mapAt(node);
+    if (rot) {
+      const r = kid(node, "rotate"), a = ((((r ? num(r[1], 0) : 0) + (op === "ccw" ? 90 : 270)) % 360) + 360) % 360, v = r4(a);
+      if (!v) { if (r) node.splice(node.indexOf(r), 1); }
+      else if (r) r[1] = v;
+      else { const at = kid(node, "at"); node.splice(at ? node.indexOf(at) + 1 : 1, 0, ["rotate", v]); }
+    }
+    return true;
+  }
   case "bus_entry": { mapAt(node); const s = kid(node, "size"); if (s) { const [dx, dy] = SCREEN_OP[op](num(s[1]), num(s[2])); s[1] = r4(dx); s[2] = r4(dy); } return true; }
-  case "wire": case "bus": case "polyline": case "bezier": mapPts(node); return true;
+  case "wire": case "bus": case "polyline": case "bezier": {
+    // SCH_LINE::Rotate / MirrorHorizontally / MirrorVertically move only the flagged end of a line selected by one end
+    const pts = ptsOf(node);
+    if (end !== null && kind !== "bezier" && pts.length === 2) { const q = mapPoint(op, C, pts[end]); pts[end] = [q[0], q[1]]; setPts(node, pts); return true; }
+    mapPts(node); return true;
+  }
   case "rule_area": for (const pl of kids(node, "polyline")) mapPts(pl); return true;
   case "rectangle": { const a = kid(node, "start")!, b = kid(node, "end")!; const [x0, y0, x1, y1] = corners(mapPoint(op, C, [num(a[1]), num(a[2])]), mapPoint(op, C, [num(b[1]), num(b[2])])); a[1] = x0; a[2] = y0; b[1] = x1; b[2] = y1; return true; }
   case "circle": { const c = kid(node, "center")!; const p = mapPoint(op, C, [num(c[1]), num(c[2])]); c[1] = p[0]; c[2] = p[1]; return true; }
@@ -140,7 +169,8 @@ export function transformChanges(ctx: SchCtx, items: KItem[], op: string, C: Pt,
   for (const it of items) {
     if (!DRAG_KINDS.has(it.kind)) continue;
     const n = deep(it.node); let ok = true;
-    for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C, items.length === 1) !== false;
+    const end = selEndOf(it.id);
+    for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C, items.length === 1, end) !== false;
     if (!ok) continue;
     for (const p of connPoints(doc, it)) touched.push(p);
     for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);

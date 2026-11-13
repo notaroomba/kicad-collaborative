@@ -302,3 +302,13 @@ export function gridPitchFor(cls: GridClass, o: GridOverrides, current: number):
   const on = o[cls], mm = o[(cls + "Mm") as "connectedMm"];
   return on && mm > 0 ? mm : current;
 }
+
+/**
+ * PARAM / PARAM_SCALED::Load with a range: a value outside [lo, hi] is replaced by the default, not clamped; a missing
+ * or non-numeric one is the default too.  `int`: PARAM<int> reads the number as an integer (truncated).
+ */
+export function schParamInRange(v: unknown, dflt: number, lo: number, hi: number, int = false): number {
+  if (typeof v !== "number" || !isFinite(v)) return dflt;
+  const x = int ? Math.trunc(v) : v;
+  return x > hi || x < lo ? dflt : x;
+}

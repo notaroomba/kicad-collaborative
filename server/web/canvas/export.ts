@@ -203,7 +203,7 @@ export function renderSvg(doc: Doc, opts?: ExportOpts | null): string {
       if (hidden.has(g.layer) || (opts.zoneOutline && g.zoneFill) || (opts.padNumbers === false && g.padNum)) continue;
       take(g);
     }
-    if (it.hiddenGeom) for (const g of it.hiddenGeom) { if (hidden.has(g.layer) || (g.hiddenText ? !opts.showHiddenText : !opts.showHiddenPins)) continue; take(g); }
+    if (it.hiddenGeom) for (const g of it.hiddenGeom) { if (hidden.has(g.layer) || (g.hiddenText ? !(isPcb ? opts.showHiddenText : opts.showHiddenFields) : !opts.showHiddenPins)) continue; take(g); }
   }
   const zs = Array.from(buckets.keys()).sort((a, b) => a - b);
   const hops = isPcb ? null : hopShapes(doc);   // Formatting > Hop-over size: plotted as drawn (m_plotHopOver)

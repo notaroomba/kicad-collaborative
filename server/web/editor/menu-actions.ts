@@ -207,8 +207,9 @@ export const MENU_HANDLERS: Record<string, ActionHandler> = {
   resetLocalCoords,
   // the menu entry is a checkbox: a second click goes back to the small crosshairs
   cursorFullCrosshairs: () => (E.crosshairMode === "full" ? setCrosshair("small", "cursorSmallCrosshairs") : setCrosshair("full", "cursorFullCrosshairs")),
-  toggleHiddenFields: () => { toggleRenderOpt("showHiddenText", "toggleHiddenFields"); setToggle("showHiddenText", !!E.renderOpts.showHiddenText); },
-  showHiddenText: () => { toggleRenderOpt("showHiddenText", "showHiddenText"); setToggle("toggleHiddenFields", !!E.renderOpts.showHiddenText); },
+  // eeschema's Show Hidden Fields and pcbnew's Show Hidden Text are separate settings
+  toggleHiddenFields: () => toggleRenderOpt("showHiddenFields", "toggleHiddenFields"),
+  showHiddenText: () => toggleRenderOpt("showHiddenText", "showHiddenText"),
   // eeschema's View options (EESCHEMA_SETTINGS appearance), each a render option of the schematic painter
   toggleDirectiveLabels: () => schView("showDirectiveLabels", "toggleDirectiveLabels"),
   markSimExclusions: () => schView("markSimExclusions", "markSimExclusions"),
