@@ -7,6 +7,7 @@
 
 import { footprintModels } from "../viewer3d/models";
 import { modelNames } from "./library";
+import { silkBoxes } from "./silkscreen";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const W = window as any;
@@ -220,7 +221,7 @@ export async function listNets(input: { doc?: string; filter?: string }): Promis
  * harness): each part with its pins or pads as rows, and on a sheet the wire segments, labels and junctions.
  * Rows are arrays to keep the answer small: pins [number, name, type, x, y, side, net], pads [number, x, y, net].
  */
-export async function geometry(input: { doc?: string }): Promise<unknown> {
+export async function geometry(input: { doc?: string; silk?: boolean }): Promise<unknown> {
   const { doc, path } = await resolveDoc(input.doc); const k = K();
   if (doc.type === "sch") {
     const s = SCH(); if (!s) throw new ToolError("The schematic tools are not loaded.");
@@ -248,7 +249,7 @@ export async function geometry(input: { doc?: string }): Promise<unknown> {
     parts.push({ ref: it.ref || "", id: it.id, value: it.value || "", footprint: it.lib || "", x: r3(it.x), y: r3(it.y), rotation: it.rot || 0, side: it.layer === "B.Cu" ? "back" : "front", box: it.bbox ? it.bbox.map(r3) : undefined, courtyard: cb,
       pads: P.padsOf(it).map((p: any) => [p.number, r3(p.x), r3(p.y), NT.key(p.net) || ""]) });
   }
-  return { document: path, type: "board", outline: isFinite(x0) ? [r3(x0), r3(y0), r3(x1), r3(y1)] : null, copper_layers: doc.copper.slice(), parts };
+  return { document: path, type: "board", outline: isFinite(x0) ? [r3(x0), r3(y0), r3(x1), r3(y1)] : null, copper_layers: doc.copper.slice(), parts, silk: input.silk ? silkBoxes(doc) : undefined };
 }
 
 export async function runChecks(input: { doc?: string }): Promise<unknown> {

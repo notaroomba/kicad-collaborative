@@ -515,7 +515,7 @@ export async function reviewBoard(doc: any, path: string): Promise<any> {
         for (const o of fps) { if (o.side !== f.side) continue; if (o === f) continue; const p = o.pads.find((q: any) => Math.abs(q.x - tx) < q.w / 2 + Math.min(tw, 0.3) && Math.abs(q.y - ty) < q.h / 2 + th * 0.5); if (p && g) { over.push(`${f.ref} is printed over pad ${o.ref}.${p.number}`); break; } }
       }
     }
-    if (over.length) add("silk.refs", "warning", "Reference designators must not sit on pads: the fab cuts them off and they cannot be read. Move them into the clear.", over);
+    if (over.length) add("silk.refs", "warning", "Reference designators must not sit on pads: the fab cuts them off and they cannot be read. board.silkscreen() (or the silkscreen edit) moves, shrinks or turns every reference into the clear.", over);
     const all = silk.map((t) => t.text).join("\n");
     const lacks: string[] = [];
     if (!silk.length) lacks.push("any text"); else { if (!/\b(v|rev|r)\.?\s*\d|\bV\d/i.test(all)) lacks.push("a version"); if (!/\b(19|20)\d\d\b|\$\{(ISSUE_)?DATE\}/.test(all)) lacks.push("a date"); if (!/[A-Za-z]{3,}/.test(all.replace(/\b(rev|ver|version)\b/gi, ""))) lacks.push("the board's name"); }

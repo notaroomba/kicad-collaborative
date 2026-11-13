@@ -229,6 +229,38 @@ class Blinker(unittest.TestCase):
         self.assertEqual(board.check()["errors"], before)
         self.assertEqual(board.info()["track_length_mm"], tracks)
 
+    def test_the_silkscreen_pass_leaves_every_reference_readable_and_on_nothing(self):
+        sch, built = self._sheet()
+        board = self.project.board()
+        board.outline(100, 100, 130, 124)
+        board.sync()
+        board.autoplace(outline=(100, 100, 130, 124))
+        board.route(time_s=15)
+        silk = lambda: {k: v for k, v in board.check(warnings=True)["warnings_by_kind"].items() if k.startswith("silk") or k.startswith("text")}
+        self.assertGreater(sum(silk().values()), 0)                 # as placed, references lie on pads and on each other
+        done = board.silkscreen(rev="v1")
+        self.assertEqual(done["references"], 8)
+        self.assertEqual(done["hidden"], [])
+        self.assertEqual(done["pin_labels"], {"J1": ["1 +5V", "2 GND"]})
+        self.assertIn("v1", done["mark"]["text"])
+        self.assertEqual(silk(), {})
+        self.assertEqual(board.check()["errors"], 0)
+        again = board.silkscreen()                                   # a second pass finds nothing to do, and prints no second name
+        self.assertEqual(again.get("moved", 0), 0)
+        self.assertNotIn("mark", again)
+        self.assertEqual(again["pin_labels"], done["pin_labels"])
+        self.assertEqual(len([it for it in board._call("get_items", kinds=["gr_text"])["items"] if "SilkS" in it["sexpr"]]), 1)
+        self.project.save()
+        with open(os.path.join(self.dir, "blinky.kicad_pcb"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(text.count('(fp_text user "+5V"'), 1)       # the pin names are part of the connector, printed once
+        # on a board with no room the references shrink to the board's own minimum before any is hidden
+        board.rules(min_text_height=0.6)
+        small = board.silkscreen(size=3.0, pin_labels=False, name=False)
+        self.assertEqual(small["min_size"], 0.6)
+        self.assertTrue(small.get("resized"), small)
+        self.assertEqual(silk(), {})
+
     def test_fit_page_picks_the_smallest_paper_and_moves_the_drawing_onto_it(self):
         sch, built = self._sheet()
         nets = sch.nets()

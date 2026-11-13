@@ -1680,7 +1680,7 @@ class Board(_Doc):
         self.add_item(f'(gr_rect (start {_r(x0)} {_r(y0)}) (end {_r(x1)} {_r(y1)}) (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "{_uuid.uuid4()}"))')
 
     def rules(self, **rules) -> None:
-        """Set design rules in mm: clearance, track_width, via_diameter, via_drill, min_track_width, min_clearance, edge_clearance, hole_clearance (copper to a hole of something else), net_class."""
+        """Set design rules in mm: clearance, track_width, via_diameter, via_drill, min_track_width, min_clearance, edge_clearance, hole_clearance (copper to a hole of something else), min_text_height (the smallest silkscreen text the rules check accepts, 0.8 unless set), net_class."""
         self._edit(dict({"op": "set_rules"}, **rules))
         self.flush()
 
@@ -3595,6 +3595,8 @@ def _mark(self, name: str | None = None, rev: str | None = None, date: str | Non
     def emit(lines, pos, lay, sz):
         mirror = " mirror" if lay.startswith("B.") else ""
         text = "\\\\n".join(lines)
+        if mirror:      # mirrored text runs toward smaller x from where it starts: start it at the right end of its room
+            pos = (pos[0] + max(len(x) for x in lines) * sz * 0.9, pos[1])
         self.add_item(f'(gr_text "{text}" (at {_r(pos[0])} {_r(pos[1])}) (layer "{lay}") (uuid "{_uuid.uuid4()}") '
                       f'(effects (font (size {sz} {sz}) (thickness {_r(sz * 0.15)})) (justify left top{mirror})))')
         self.flush()
@@ -3605,9 +3607,13 @@ def _mark(self, name: str | None = None, rev: str | None = None, date: str | Non
     if not o:
         raise HarnessError("The board has no outline yet; draw it first with board.outline(x0, y0, x1, y1), or give at=(x, y).")
     other = "B.SilkS" if layer.startswith("F.") else "F.SilkS"
+    try:
+        printed = self._call("get_geometry", silk=True).get("silk") or []
+    except HarnessError:
+        printed = []
     for lay in (layer, other):
         side = "back" if lay.startswith("B.") else "front"
-        boxes = []
+        boxes = [b[:4] for b in printed if b[4] == lay]      # what is printed there already: references, pin names, outlines
         for p in g["parts"]:
             b = p.get("courtyard") or p.get("box")
             if b and (p.get("side", "front") == side or len(p.get("pads", [])) > 0 and re.match(r"(J|P|H|MH|TP)\\d", p["ref"])):
@@ -3629,6 +3635,53 @@ def _mark(self, name: str | None = None, rev: str | None = None, date: str | Non
                         x = max(x + 0.5, hit[2] + 0.3)
                     y -= 0.5
     raise HarnessError(f"There is no room for \\"{shapes[0][0]}\\" on the silkscreen of either side, even at 0.6 mm in three lines; give at=(x, y).")
+
+
+def _silkscreen(self, name: str | bool | None = None, rev: str | None = None, date: str | None = None, org: str | None = None,
+                size: float = 1.0, min_size: float | None = None, pin_labels: bool | list = True, refs: list | None = None, unhide: bool = False) -> dict:
+    """The last pass of a layout, as a careful person does it by hand.  Call it when placement and routing are final.
+
+    - Every reference designator goes beside its part where it lies on nothing: not a pad, not other silkscreen, not
+      another part, not the board edge, and nearer to its own part than to any other.  One that does not fit at
+      \`size\` is made smaller, turned on its side, or moved a little further out; it is hidden only when none of that
+      finds a place.  \`min_size\` is the smallest it may get: by default the board's own rule (0.8 mm unless
+      board.rules(min_text_height=...) says otherwise); 0.6 mm with a 0.1 mm pen is what most board houses still
+      print, so on a crowded board set board.rules(min_text_height=0.6) first.  \`refs\` limits the pass to those parts, \`unhide=True\` also brings
+      back references that are hidden now.
+    - \`pin_labels\`: each connector pin's net name is printed beside it (True for every connector J/P/CN/X/BT, or a list
+      of references; False for none).
+    - The board's name, version and date are printed in free space (board.mark()) when the board has no such text yet;
+      \`name=False\` leaves that out, and name / rev / date / org are passed on.
+
+    Returns what it did: {"references", "moved", "resized": {ref: size}, "turned", "hidden", "pin_labels", "mark"}."""
+    self.flush()
+    out = {}
+    if pin_labels:      # fixed by where the pins are, so they go first; then the name block, which needs the most room
+        self._edit({"op": "silkscreen", "references": False, "pin_labels": True if pin_labels is True else list(pin_labels), "size": size, **({"min_size": min_size} if min_size else {})})
+        res = self.flush() or {}
+        d = next((x["silkscreen"] for x in res.get("details") or [] if "silkscreen" in x), {})
+        out["pin_labels"] = d.get("pin_labels", {})
+        if d.get("pin_labels_skipped"):
+            out["pin_labels_skipped"] = d["pin_labels_skipped"]
+    if name is not False:
+        have = [it for it in self._call("get_items", kinds=["gr_text"]).get("items", []) if "SilkS" in it.get("sexpr", "")]
+        if not have:
+            try:
+                out["mark"] = self.mark(name=name or None, rev=rev, date=date, org=org)
+            except HarnessError as e:
+                out["mark"] = {"problem": str(e)}
+    e = {"op": "silkscreen", "size": size, "unhide": bool(unhide), **({"min_size": min_size} if min_size else {})}
+    if refs:
+        e["refs"] = list(refs)
+    self._edit(e)
+    res = self.flush() or {}
+    d = next((x["silkscreen"] for x in res.get("details") or [] if "silkscreen" in x), {})
+    for key in ("references", "moved", "resized", "turned", "hidden", "shown", "smallest", "min_size"):
+        if d.get(key) not in (None, [], {}):
+            out[key] = d[key]
+    out.setdefault("references", 0)
+    out.setdefault("hidden", [])
+    return out
 
 
 def _stitch(self, spacing: float = 10.0, net: str = "GND", margin: float = 1.5, size: float | None = None, drill: float | None = None) -> dict:
@@ -3754,6 +3807,7 @@ def install(Project, Schematic, Board) -> None:
     Board.mark = _mark
     Board.stitch = _stitch
     Board.fence = _fence
+    Board.silkscreen = _silkscreen
 `;var b=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
 
     from kicad_harness import parts

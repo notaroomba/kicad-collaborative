@@ -246,6 +246,15 @@ result = {"layers": board.info()["copper_layers"], "left": routed["left"], "agai
   const b = (big.data && big.data.result) || {};
   check('a four layer board with a ground plane routes clean, by the schematic\'s net names', !big.isError && big.data.ok === true && (b.layers || []).join() === 'F.Cu,In1.Cu,In2.Cu,B.Cu' && Object.keys(b.left || { x: 1 }).length === 0 && b.open.length === 0 && b.errors === 0, big.text.slice(0, 700));
   check('routing a net that is already routed is a result, not an error', b.again === 0, JSON.stringify(b));
+  const silk = await call('run_python', { project: N2, live: false, timeout_s: 60, code: `
+board = project.board()
+warn = lambda: {k: v for k, v in board.check(warnings=True)["warnings_by_kind"].items() if k.startswith("silk") or k.startswith("text")}
+before = warn()
+done = board.silkscreen(rev="v1")
+result = {"before": before, "after": warn(), "done": done, "again": board.silkscreen().get("moved", 0), "errors": board.check()["errors"]}
+` });
+  const sk = (silk.data && silk.data.result) || {};
+  check('the silkscreen pass: every reference beside its part and on nothing, pin names and the board name printed', !silk.isError && silk.data.ok === true && sk.done && sk.done.references === 8 && sk.done.hidden.length === 0 && Object.keys(sk.after).length === 0 && Object.keys(sk.before).length > 0 && sk.again === 0 && sk.errors === 0 && /v1/.test((sk.done.mark || {}).text || ''), silk.text.slice(0, 900));
 }
 
 // ------------------------------------------------------------------ scripts kept with the project

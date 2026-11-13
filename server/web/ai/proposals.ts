@@ -13,6 +13,7 @@ import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } f
 import { projectDocs, resolveDoc } from "./design";
 import { footprintNode, kicadFootprint, kicadSymbol, vendorPart, vendorSymbol } from "./library";
 import { fieldShifts, inlineFieldShifts, snugFieldShifts, itemsWithin } from "./layout";
+import { planSilk } from "./silkscreen";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -651,6 +652,19 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           lines.push({ kind: "modify", text: `Move the fields of ${ids.length} symbol${ids.length === 1 ? "" : "s"} clear of what they were drawn over`, ids });
           break;
         }
+        case "silkscreen": {
+          // the last pass of a layout: every reference readable beside its part and on nothing, net names beside connector pins
+          pcbOnly(e.op);
+          const plan = planSilk(doc, { size: typeof e.size === "number" ? e.size : undefined, minSize: typeof e.min_size === "number" ? e.min_size : undefined,
+            refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, unhide: e.unhide === true, keepRefs: e.references === false,
+            pinLabels: e.pin_labels === true ? true : Array.isArray(e.pin_labels) ? e.pin_labels.map(String) : false });
+          const ids: string[] = [];
+          for (const [id, node] of plan.nodes) { const it = doc.items.get(id); if (!it || touched.has(id)) continue; touch(it, e.op); changes.push(modified(doc, it, node)); ids.push(id); }
+          const rp = plan.report; const nl = Object.values(rp.pin_labels).reduce((n, l) => n + l.length, 0);
+          lines.push({ kind: "modify", text: `Silkscreen: ${rp.references} reference${rp.references === 1 ? "" : "s"} placed clear of pads, other silkscreen, other parts and the edge (${Object.keys(rp.resized).length} made smaller, ${rp.turned.length} turned, ${rp.hidden.length} hidden)${nl ? `, ${nl} pin name${nl === 1 ? "" : "s"} printed` : ""}`, ids });
+          details.push({ silkscreen: rp });
+          break;
+        }
         case "move_region": {
           // everything wholly inside a box moves together, so a finished block keeps its wiring
           schOnly(e.op); const s = SCH(); const box = [num(e.x0, "x0"), num(e.y0, "y0"), num(e.x1, "x1"), num(e.y1, "y1")]; const dx = num(e.dx, "dx"), dy = num(e.dy, "dy");
@@ -767,7 +781,7 @@ export function staleReason(p: Proposal): string | null {
 }
 
 const RULE_KEYS: [string, string][] = [["clearance", "clearance"], ["track_width", "track width"], ["via_diameter", "via diameter"], ["via_drill", "via drill"],
-  ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"], ["hole_clearance", "copper to hole clearance"]];
+  ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"], ["hole_clearance", "copper to hole clearance"], ["min_text_height", "minimum silkscreen text height"]];
 /** The rules of a set_rules edit written into a .kicad_pro: the net class's own values, and the board-wide minimums. */
 export function writeRules(pro: any, r: Record<string, number | string>): void {
   const ns = pro.net_settings = pro.net_settings || { classes: [], meta: { version: 0 } }; if (!Array.isArray(ns.classes)) ns.classes = [];
@@ -780,6 +794,7 @@ export function writeRules(pro: any, r: Record<string, number | string>): void {
   if (typeof r.min_clearance === "number") rules.min_clearance = r.min_clearance;
   if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
   if (typeof r.hole_clearance === "number") rules.min_hole_clearance = r.hole_clearance;
+  if (typeof r.min_text_height === "number") rules.min_text_height = r.min_text_height;
 }
 
 /** Apply an accepted proposal through the editor's own commit path: local apply, op to the server, one undo step. */

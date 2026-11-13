@@ -70,7 +70,10 @@ More for the board and for later scripts: `board.fence(path, spacing, net, offse
 choose; `board.sync()` after a redrawn sheet keeps the routing (a net the sheet renamed carries its tracks, vias and
 zones to the new name, listed under `nets_renamed`); a net wired without a label can still be named in a later script
 by the name `build` was given (kept in a hidden "Net names" field of one of its parts); `sch.pin_names("Lib:Name")`
-gives a library part's pins as {number: name}. On the site, `run_python` keeps scripts with the project: `script:
+gives a library part's pins as {number: name}. `board.silkscreen(rev="V1")` is the
+last pass of a layout: every reference beside its own part and on nothing (made smaller, turned or moved where it
+does not fit, hidden only as a last resort), each connector pin's net name beside it, and the board's name, version
+and date in free room; `board.rules(min_text_height=0.6)` first lets it print smaller on a crowded board. On the site, `run_python` keeps scripts with the project: `script:
 "name"` with `code` stores one, the name alone runs it again, `edits: [{old, new}]` changes it.
 
 3D models: a footprint from KiCad's library or from a vendor names its model, and the web 3D view loads it by
