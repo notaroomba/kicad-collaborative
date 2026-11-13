@@ -316,7 +316,13 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       body = b;
       const ta = h("textarea", { id: "kd-txt-text", rows: 5, style: "width:100%;font-family:var(--mono, monospace)", disabled: ro }) as HTMLTextAreaElement; ta.value = L.str(staged[1]); els.text = ta;
       b.append(h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, h("label", { style: "padding-top:4px" }, "Text:"), ta));
-      b.append(h("div", { style: "text-align:right" }, h("span", { class: "kd-note" }, `${keyName("Ctrl+Enter")} or Shift+Enter: OK`)));
+      // row 1: Exclude from simulation on the left, the Syntax help link on the right (SCH_TEXT::ShowSyntaxHelp);
+      // the symbol editor hides both, and the hyperlink row (m_isSymbolEditor)
+      if (!opts.symbolEditor) {
+        const ex = checkbox("Exclude from simulation", exclude, undefined, { id: "kd-txt-exsim" }); els.exsim = ex.querySelector("input") as HTMLInputElement;
+        const help = h("a", { href: "#", "data-k": "syntax-help", title: "Show syntax help window", onclick: (ev: Event) => { ev.preventDefault(); syntaxHelp(false); } }, "Syntax help");
+        b.append(h("div", { style: "display:flex;align-items:center;margin:4px 0 6px" }, ex, h("span", { style: "flex:1" }), help));
+      }
       const g = h("div", { class: "kd-fmt", style: "margin-top:6px" });
       const fontSel = fontPicker(doc, fx.font, { id: "kd-txt-font", style: "width:200px", disabled: ro }); els.font = fontSel;
       const bold = toggle("B", "Bold", fx.bold, "kd-txt-bold", "font-weight:700"), ital = toggle("I", "Italic", fx.italic, "kd-txt-italic", "font-style:italic"); els.bold = bold; els.italic = ital;
@@ -327,9 +333,8 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       const bar = h("span", { style: "display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap" }, bold, ital, h("span", { class: "kd-sep" }), ...hb, h("span", { class: "kd-sep" }), ...vb, h("span", { class: "kd-sep" }), hz, vt);
       g.append(h("label", null, "Font:"), h("span", { style: "display:flex;gap:6px;align-items:center;flex-wrap:wrap" }, fontSel, bar), h("span"));
       const size = lenBox(fx.size, "kd-txt-size"); els.size = size;
-      g.append(h("label", null, "Text size:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, size, units()), h("span"));
       tcol = swatch(fx.color, "kd-txt-color", undefined, ro);
-      g.append(h("label", null, "Text color:"), tcol.el, h("span"));
+      g.append(h("label", null, "Text size:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, size, units(), h("label", { style: "margin-left:15px" }, "Color:"), tcol.el), h("span"));
       if (box) {
         const bw = lenBox(stroke.width, "kd-txt-bwidth"); els.bwidth = bw; bcol = swatch(stroke.color, "kd-txt-bcolor", undefined, ro);
         const bst = select(L.LINE_STYLES, stroke.style, undefined, { id: "kd-txt-bstyle", disabled: ro }); els.bstyle = bst;
@@ -352,8 +357,6 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         g.append(h("label", null, "Link:"), href, h("span"));
         const hyper = checkbox("Make this text item a clickable hyperlink", !!fx.href, (on) => { if (!on) (href as HTMLInputElement).value = ""; }, { id: "kd-txt-hyper" });
         g.append(h("span"), hyper, h("span"));
-        const ex = checkbox("Exclude from simulation", exclude, undefined, { id: "kd-txt-exsim" }); els.exsim = ex.querySelector("input") as HTMLInputElement;
-        g.append(h("span"), ex, h("span"));
       }
       b.append(g);
       initialFocus(ta);
@@ -383,7 +386,7 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       if (opts.symbolEditor) { opts.symbolEditor.apply(n, { private: (els.private as HTMLInputElement).checked, allUnits: (els.allUnits as HTMLInputElement).checked, allBodies: (els.allBodies as HTMLInputElement).checked }); return undefined; }
       const S = CollabTools.sch ? CollabTools.sch.state as Record<string, unknown> : {};
       if (opts.onCreate) { S.lastTextBold = isOn(els.bold); S.lastTextItalic = isOn(els.italic); S.lastTextH = hv; S.lastTextV = vv; S.lastTextVertical = vert; return opts.onCreate(n) as boolean | undefined; }
-      commitItem(ctx, item, n, box ? "Edit Text Box" : "Edit Text");
+      commitItem(ctx, item, n, "Edit Text Properties");
       return undefined;
     },
   });
@@ -569,13 +572,15 @@ function junctionDialog(ctx: Ctx, items: KItem[]): void {
   let dia: HTMLInputElement, col: Swatch | null = null, colTouched = false;
   KD().open({
     title: "Junction Properties", width: 400, readOnly: ro,
+    // SetupStandardButtons( { { wxID_APPLY, _( "Default" ) } } ): resetDefaults puts 0 and no colour back
+    extra: ro ? undefined : [{ label: "Default", fn: () => { dia.value = fmtLen(0); if (col) col.set(null); colTouched = true; } }],
     build(b) {
       const g = h("div", { class: "kd-fmt" });
       dia = lenBox(d, "kd-jn-diameter"); if (d === undefined) dia.value = INDETERMINATE_ACTION;
       g.append(h("label", null, "Diameter:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, dia, units()), h("span"));
       col = swatch(c === undefined ? null : c, "kd-jn-color", () => { colTouched = true; }, ro);
       g.append(h("label", null, "Color:"), col.el, h("span"));
-      b.append(g, h("p", { class: "kd-note", style: "margin-top:8px" }, "Set diameter to 0 to use schematic's junction dot size."));
+      b.append(g, h("p", { class: "kd-note", style: "margin:8px 0 0" }, "Set diameter to 0 to use schematic's junction dot size."), h("p", { class: "kd-note", style: "margin:2px 0 0" }, "Clear color to use Schematic Editor colors."));
     },
     ok() {
       if (ro) return;
@@ -584,7 +589,7 @@ function junctionDialog(ctx: Ctx, items: KItem[]): void {
         const n = L.clone(it.node); L.writeJunction(n, { diameter: nd, color: colTouched && col ? col.get() : undefined });
         if (JSON.stringify(n) !== JSON.stringify(it.node)) changes.push(KiCadCanvas.replaceChange(ctx.doc, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem));
       }
-      if (changes.length) ctx.commit(changes, "Edit Junction Properties");
+      if (changes.length) ctx.commit(changes, items.length === 1 ? "Edit Junction" : "Edit Junctions");
       return undefined;
     },
   });
