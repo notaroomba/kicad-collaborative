@@ -47,6 +47,7 @@ import os
 import zipfile
 import pcbnew
 import wx
+import wx.dataview
 
 
 def footprint(board, ref):
@@ -103,6 +104,14 @@ class Ask(wx.Dialog):
         self.page = wx.html.HtmlWindow(self, size=(260, 70))
         self.page.SetPage("<h1 id='r'>Report</h1><p>two <b>vias</b></p><script>document.getElementById('r').textContent = 'script ran'</script>")
         box.Add(self.page, 0, wx.EXPAND | wx.ALL, 8)
+        self.tree = wx.dataview.TreeListCtrl(self, style=wx.dataview.TL_CHECKBOX | wx.dataview.TL_3STATE, size=(260, 80))
+        self.tree.AppendColumn("Rooms")
+        top = self.tree.AppendItem(self.tree.GetRootItem(), "amp.kicad_pcb")
+        self.tree.AppendItem(top, "left")
+        self.tree.AppendItem(top, "right")
+        self.tree.Expand(top)
+        self.tree.Bind(wx.dataview.EVT_TREELIST_ITEM_CHECKED, lambda e: self.tree.CheckItemRecursively(e.GetItem(), self.tree.GetCheckedState(e.GetItem())))
+        box.Add(self.tree, 0, wx.EXPAND | wx.ALL, 8)
         box.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(box)
         self.SetDropTarget(Dropped(self))
@@ -943,7 +952,7 @@ await a.waitForFunction(() => { const f = document.querySelector('#pluginFrames 
 const dlg = inner(a);
 await dlg.waitForSelector('input[type="text"]');
 check('ShowModal opens the dialog as a KiCad dialog over the editor', (await a.locator('#pluginWindow .kd-title').innerText()).includes('Py tool') && (await a.locator('#pluginWindow .plg-from').innerText()).includes('Py Tool'));
-check('its widgets are there with their values', (await dlg.locator('input[type="text"]').inputValue()) === 'from python' && (await dlg.locator('select option').count()) === 2 && (await dlg.locator('input[type="checkbox"]').count()) === 1 && (await dlg.locator('button').count()) === 2);
+check('its widgets are there with their values', (await dlg.locator('input[type="text"]').inputValue()) === 'from python' && (await dlg.locator('select option').count()) === 2 && (await dlg.locator('input[type="checkbox"]:not(.wx-tree-chk)').count()) === 1 && (await dlg.locator('button').count()) === 2);
 // a page of HTML (wx.html.HtmlWindow, wx.html2.WebView): shown, never run
 const pageEl = await dlg.locator('iframe.wx-html').evaluate((el) => ({ sandbox: el.getAttribute('sandbox'), srcdoc: el.srcdoc, w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height })).catch((e) => ({ error: String(e) }));
 const pageFrame = a.frames().find((f) => f.parentFrame() === dlg);
@@ -951,11 +960,17 @@ const pageText = pageFrame ? await pageFrame.locator('h1').innerText({ timeout: 
 check('a plugin\'s HTML page is shown in its window', pageEl.sandbox === '' && /<h1 id='r'>Report<\/h1>/.test(pageEl.srcdoc || '') && pageEl.w > 100 && pageEl.h > 40 && !!pageFrame, JSON.stringify({ ...pageEl, srcdoc: (pageEl.srcdoc || '').length }));
 check('and its scripts do not run', pageText === 'Report' || /unreadable/.test(pageText), pageText);
 console.log('    html page text: ' + pageText);
+// a tree with tick boxes (wx.dataview.TreeListCtrl): rows under an unseen root, ticking tells the plugin
+const boxes = dlg.locator('input.wx-tree-chk');
+const rowsBefore = await dlg.locator('.wx-tree tr td').allInnerTexts();
+await boxes.first().click();
+const ticked = await boxes.evaluateAll((els) => els.map((el) => el.checked));
+check('a tree list shows its items with tick boxes, and ticking one reaches the plugin', rowsBefore.join('|').replace(/[▾▸\s]/g, '') === 'amp.kicad_pcb|left|right' && ticked.length === 3 && ticked.every(Boolean), JSON.stringify({ rowsBefore, ticked }));
 await a.waitForTimeout(300);
 await shot(a, 'py-04-dialog');
 await dlg.fill('input[type="text"]', 'PY-LABEL');
 await dlg.selectOption('select', { label: 'B.SilkS' });
-await dlg.check('input[type="checkbox"]');
+await dlg.check('input[type="checkbox"]:not(.wx-tree-chk)');
 await dlg.locator('button', { hasText: /^OK$/ }).click();
 await a.waitForSelector('#pluginPrompt', { timeout: 30000 });
 check('the dialog closes on OK', (await a.locator('#pluginWindow').count()) === 0);

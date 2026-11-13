@@ -188,7 +188,13 @@ class TreeCtrl(Window):
     def InsertItem(self, parent, previous, text="", image=-1, selImage=-1, data=None, *a, **k):
         p = _node_of(parent)
         if p is None:
-            return TreeItemId()
+            # no parent given: with a hidden root wx hangs the item off its own unseen root (plugins that never call
+            # AddRoot rely on it); otherwise the first such item becomes the root
+            if self._root is None and not self._wx_style & TR_HIDE_ROOT:
+                return self.AddRoot(text, data=k.get("data", data))
+            if self._root is None:
+                self._root = self._wx_node(None, [""], None)
+            p = self._root
         node = self._wx_node(p, [str(text)], k.get("data", data))
         if isinstance(previous, int):
             index = max(0, min(previous, len(p["children"])))
@@ -203,7 +209,7 @@ class TreeCtrl(Window):
 
     def AppendItem(self, parent, text="", image=-1, selImage=-1, data=None, *a, **k):
         p = _node_of(parent)
-        return self.InsertItem(parent, len(p["children"]) if p else 0, text, data=k.get("data", data))
+        return self.InsertItem(parent, len(p["children"]) if p else 1 << 30, text, data=k.get("data", data))
 
     def PrependItem(self, parent, text="", image=-1, selImage=-1, data=None, *a, **k):
         return self.InsertItem(parent, 0, text, data=k.get("data", data))
@@ -749,3 +755,213 @@ TreeListCtrl = HyperTreeList
 CustomTreeCtrl = TreeCtrl
 GenericTreeCtrl = TreeCtrl
 TreeItemData = lambda data=None: data
+
+
+# ---- wx.dataview.TreeListCtrl: a tree with columns, an unseen root of its own, and optionally a tick box on every item
+
+TL_SINGLE, TL_MULTIPLE, TL_CHECKBOX, TL_3STATE, TL_USER_3STATE, TL_NO_HEADER, TL_DEFAULT_STYLE = 0x0000, 0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0000
+TLI_FIRST, TLI_LAST = "first", "last"
+EVT_TREELIST_SELECTION_CHANGED = _binder("EVT_TREELIST_SELECTION_CHANGED")
+EVT_TREELIST_ITEM_ACTIVATED = _binder("EVT_TREELIST_ITEM_ACTIVATED")
+EVT_TREELIST_ITEM_CHECKED = _binder("EVT_TREELIST_ITEM_CHECKED")
+EVT_TREELIST_ITEM_EXPANDING = _binder("EVT_TREELIST_ITEM_EXPANDING")
+EVT_TREELIST_ITEM_EXPANDED = _binder("EVT_TREELIST_ITEM_EXPANDED")
+EVT_TREELIST_ITEM_CONTEXT_MENU = _binder("EVT_TREELIST_ITEM_CONTEXT_MENU")
+EVT_TREELIST_COLUMN_SORTED = _binder("EVT_TREELIST_COLUMN_SORTED")
+_TREELIST_AS = {"EVT_TREE_SEL_CHANGED": EVT_TREELIST_SELECTION_CHANGED, "EVT_TREE_ITEM_ACTIVATED": EVT_TREELIST_ITEM_ACTIVATED,
+                "EVT_TREE_ITEM_EXPANDING": EVT_TREELIST_ITEM_EXPANDING, "EVT_TREE_ITEM_EXPANDED": EVT_TREELIST_ITEM_EXPANDED,
+                "EVT_TREE_ITEM_RIGHT_CLICK": EVT_TREELIST_ITEM_CONTEXT_MENU}
+
+
+class TreeListEvent(TreeEvent):
+    def __init__(self, source=None, binder=None, item=None, old_state=0, column=-1):
+        TreeEvent.__init__(self, source, binder, item)
+        self._old_state, self._column = old_state, column
+
+    GetOldCheckedState = lambda self: self._old_state
+    GetColumn = lambda self: self._column
+
+
+class DataViewTreeListCtrl(HyperTreeList):
+    """wx.dataview.TreeListCtrl.  Items hang off a root that is never shown; with TL_CHECKBOX every item has a tick box,
+    which the person can tick and clear (and, with TL_USER_3STATE, leave undetermined)."""
+
+    def __init__(self, parent=None, id=-1, pos=(-1, -1), size=(-1, -1), style=TL_DEFAULT_STYLE, *more, **kw):
+        self.__dict__["_tl_style"] = int(style)
+        agw = TR_HIDE_ROOT | (TR_MULTIPLE if style & TL_MULTIPLE else 0) | (TR_NO_HEADER if style & TL_NO_HEADER else 0)
+        HyperTreeList.__init__(self, parent, id, pos, size, agwStyle=agw, *more, **kw)
+        self._root = self._wx_node(None, [""], None)
+
+    def _wx_node(self, parent, texts, data=None):
+        node = HyperTreeList._wx_node(self, parent, texts, data)
+        node["check"] = _wx.CHK_UNCHECKED
+        return node
+
+    def _wx_cells(self, node):
+        HyperTreeList._wx_cells(self, node)
+        if not self._tl_style & TL_CHECKBOX or node.get("exp") is None:
+            return
+        box = node.get("box")
+        if box is None:
+            box = node["box"] = _el("input", "wx-tree-chk")
+            box.type = "checkbox"
+            _listen(box, "click", lambda e=None, nd=node: self._wx_ticked(nd, e))
+            node["tds"][self._main_col].insertBefore(box, node["label"])
+        box.checked = node["check"] == _wx.CHK_CHECKED
+        box.indeterminate = node["check"] == _wx.CHK_UNDETERMINED
+
+    def _wx_ticked(self, node, e=None):
+        """The person pressed the tick box: unchecked -> checked -> (undetermined, when the person may set it) -> unchecked."""
+        try:
+            e.stopPropagation()
+        except Exception:
+            pass
+        old = node["check"]
+        if old == _wx.CHK_UNCHECKED:
+            new = _wx.CHK_CHECKED
+        elif old == _wx.CHK_CHECKED and self._tl_style & TL_USER_3STATE:
+            new = _wx.CHK_UNDETERMINED
+        else:
+            new = _wx.CHK_UNCHECKED
+        node["check"] = new
+        self._wx_cells(node)
+        self._wx_fire(EVT_TREELIST_ITEM_CHECKED, TreeListEvent(self, EVT_TREELIST_ITEM_CHECKED, TreeItemId(node), old))
+
+    def _wx_fire(self, binder, event=None):
+        # the tree's own events reach handlers bound to the tree list's names for them
+        mine = _TREELIST_AS.get(getattr(binder, "_name", None) or getattr(binder, "name", None) or "")
+        if mine is not None and event is not None:
+            return HyperTreeList._wx_fire(self, mine, TreeListEvent(self, mine, event.GetItem()))
+        return HyperTreeList._wx_fire(self, binder, event)
+
+    # ---- items
+
+    def AppendItem(self, parent, text="", imageClosed=-1, imageOpened=-1, data=None, *a, **k):
+        return HyperTreeList.AppendItem(self, parent if _node_of(parent) is not None else TreeItemId(self._root), text, data=data)
+
+    def PrependItem(self, parent, text="", imageClosed=-1, imageOpened=-1, data=None, *a, **k):
+        return HyperTreeList.InsertItem(self, parent if _node_of(parent) is not None else TreeItemId(self._root), 0, text, data=data)
+
+    def InsertItem(self, parent, previous, text="", imageClosed=-1, imageOpened=-1, data=None, *a, **k):
+        parent = parent if _node_of(parent) is not None else TreeItemId(self._root)
+        if previous == TLI_FIRST:
+            previous = 0
+        elif previous == TLI_LAST:
+            previous = 1 << 30
+        return HyperTreeList.InsertItem(self, parent, previous, text, data=data)
+
+    def DeleteItem(self, item):
+        if _node_of(item) is not self._root:
+            self.Delete(item)
+
+    def DeleteAllItems(self):
+        for c in list(self._root["children"]):
+            self._wx_forget(c)
+        self._root["children"] = []
+        self._wx_rows()
+
+    def GetFirstItem(self):
+        return TreeItemId(self._root["children"][0]) if self._root["children"] else TreeItemId()
+
+    def GetFirstChild(self, item):
+        node = _node_of(item)
+        return TreeItemId(node["children"][0]) if node and node["children"] else TreeItemId()
+
+    def GetNextItem(self, item):
+        """The next item in tree order: its first child, else its next sibling, else an ancestor's next sibling."""
+        node = _node_of(item)
+        if node is None:
+            return TreeItemId()
+        if node["children"]:
+            return TreeItemId(node["children"][0])
+        while node is not None and node["parent"] is not None:
+            kin = node["parent"]["children"]
+            at = kin.index(node)
+            if at + 1 < len(kin):
+                return TreeItemId(kin[at + 1])
+            node = node["parent"]
+        return TreeItemId()
+
+    def GetItemParent(self, item):
+        node = _node_of(item)
+        return TreeItemId(node["parent"]) if node and node["parent"] is not None else TreeItemId()
+
+    def SetItemText(self, item, col, text=None):
+        if text is None:
+            col, text = 0, col
+        return HyperTreeList.SetItemText(self, item, str(text), int(col))
+
+    def GetItemText(self, item, col=0):
+        return HyperTreeList.GetItemText(self, item, int(col))
+
+    def SetItemImage(self, *a, **k):
+        pass
+
+    SetImageList = AssignImageList = SetItemImage
+
+    def SetSortColumn(self, *a, **k):
+        pass
+
+    def GetSortColumn(self):
+        return (False, 0, True)
+
+    def SetItemComparator(self, *a, **k):
+        pass
+
+    def GetView(self):
+        return self
+
+    GetDataView = GetView
+
+    # ---- selection, in the tree list's own words
+
+    def Select(self, item):
+        self.SelectItem(item, True)
+
+    def SelectAll(self):
+        def visit(node):
+            for c in node["children"]:
+                self._wx_select(c, True, tell=False, keep=True)
+                visit(c)
+        visit(self._root)
+
+    def GetSelections(self, *_):
+        return [TreeItemId(n) for n in self._wx_selected()]
+
+    # ---- tick boxes
+
+    def CheckItem(self, item, state=None):
+        node = _node_of(item)
+        if node is None:
+            return
+        node["check"] = _wx.CHK_CHECKED if state is None else int(state)
+        if node.get("exp") is not None:
+            self._wx_cells(node)
+
+    def UncheckItem(self, item):
+        self.CheckItem(item, _wx.CHK_UNCHECKED)
+
+    def CheckItemRecursively(self, item, state=None):
+        node = _node_of(item)
+        if node is None:
+            return
+        self.CheckItem(item, state)
+        for c in node["children"]:
+            self.CheckItemRecursively(TreeItemId(c), state)
+
+    def GetCheckedState(self, item):
+        node = _node_of(item)
+        return node["check"] if node is not None else _wx.CHK_UNCHECKED
+
+    def AreAllChildrenInState(self, item, state):
+        node = _node_of(item)
+        return bool(node) and all(c["check"] == int(state) for c in node["children"])
+
+    def UpdateItemParentStateRecursively(self, item):
+        node = _node_of(item)
+        p = node["parent"] if node is not None else None
+        while p is not None and p is not self._root:
+            states = {c["check"] for c in p["children"]}
+            self.CheckItem(TreeItemId(p), states.pop() if len(states) == 1 else _wx.CHK_UNDETERMINED)
+            p = p["parent"]
+

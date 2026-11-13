@@ -171,8 +171,8 @@
   "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
  },
  "com.github.gauravmm.hierarchicalpcb": {
-  "status": "opens",
-  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+  "status": "works",
+  "note": "Runs here. Checked on a board that uses one sheet twice, with a sub-board layout for that sheet in the project: both sheets' footprints took the sub-board's arrangement around their anchor, its tracks and via were copied, and each sheet's items were grouped."
  },
  "com.github.gauravmm.kleplacement": {
   "status": "works"
@@ -230,8 +230,8 @@
   "note": "Runs here. Place artwork puts the label on the board as a footprint that follows the cursor until you click; with an artwork selected the window opens on it and Update artwork replaces it in place."
  },
  "com.github.officialdyray.projectinstances": {
-  "status": "opens",
-  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+  "status": "works",
+  "note": "Runs here. Checked on a project whose root schematic places one sheet twice, with a sub-board layout for that sheet in the project: ticking the sub-board ticked both instances, their footprints took the sub-board's arrangement around the anchor with their fields, its tracks and via were copied, and each instance's items were grouped."
  },
  "com.github.ozzysv.holefinder": {
   "status": "works"

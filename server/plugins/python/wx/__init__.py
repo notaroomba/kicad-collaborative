@@ -1931,6 +1931,7 @@ _CSS = """
 .wx-table th{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:2px 6px;font-weight:600;text-align:left;white-space:nowrap}
 .wx-tree-exp{display:inline-block;width:14px;cursor:pointer;color:var(--ink2,inherit)}
 .wx-tree td{cursor:default}
+.wx-table td input.wx-tree-chk{width:auto;margin:0 5px 0 0;vertical-align:middle}
 .wx-table td{border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding:1px 6px;white-space:nowrap}
 .wx-grid-table td{border-right:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding:0 2px}
 .wx-grid-table td select{width:100%;border:0;background:none}

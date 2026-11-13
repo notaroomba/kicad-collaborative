@@ -2215,6 +2215,9 @@ class PCB_FIELD(PCB_TEXT):
     def GetCanonicalName(self):
         return self.GetName()
 
+    def CloneField(self):
+        return self.Duplicate()
+
     def IsReference(self):
         return self.GetName() == "Reference"
 
@@ -3879,6 +3882,7 @@ class FOOTPRINT(BOARD_ITEM):
             self._touch()
 
     Delete = Remove
+    AddNative, RemoveNative = Add, Remove
 
     def _local_box(self, include_text=False):
         """Bounding box in board coordinates of the pads and drawn shapes."""
