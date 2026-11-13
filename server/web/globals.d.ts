@@ -194,6 +194,8 @@ interface ToolModule {
   selectedPadKeys?(): string[];
   /** Board: the items the board tools brighten (EDA_ITEM::SetBrightened: the interactive delete tool's target). */
   brightenedIds?(): string[];
+  /** Board: where the GAL cursor is drawn, the point the active tool snapped to (null: the grid point under the mouse). */
+  toolCursorPoint?(): number[] | null;
   padProperties?(ctx: ToolCtx, item: KItem, index: number): boolean;
   /** Board: with a length tuner active, PCB_ACTIONS::properties opens Tuning Pattern Properties (false otherwise). */
   tunerProperties?(ctx: ToolCtx): boolean;

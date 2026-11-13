@@ -305,6 +305,12 @@ const smodeOf = (ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) 
 function selModifier(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): "add" | "toggle" | "remove" | null {
   const c = ev.ctrlKey || ev.metaKey; return c && ev.shiftKey ? "remove" : c ? "toggle" : ev.shiftKey ? "add" : null;
 }
+/** PCB_SELECTION_TOOL::selectMultiple re-reads the modifiers on every event: Shift / Ctrl pressed or let go mid-drag change the mode. */
+function boxSelModifiers(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): void {
+  const b = E.boxSel as { add?: boolean; mode?: string | null } | null; if (!b) return;
+  const m = selModifier(ev); b.mode = m; b.add = !!m;
+}
+for (const t of ["keydown", "keyup"]) window.addEventListener(t, (ev) => { const k = (ev as KeyboardEvent).key; if (E.boxSel && (k === "Shift" || k === "Control" || k === "Meta")) { boxSelModifiers(ev as KeyboardEvent); drawBoxSel(); } });
 /** DRAG_SELECTED on an item that was not selected: the press picked it (the board module's own pick), a drag draws a box. */
 function startModuleBox(ev: PointerEvent, x: number, y: number): void {
   if (E.tool !== "select" || !E.kdoc) return;
@@ -317,11 +323,11 @@ stage.addEventListener("pointermove", (ev) => {
   E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY]; store.slice("viewport", { cursor: mm });
   placeCrosshair(mm);
   if (E.zoomRect) { drawZoomRect(ev); return; }
-  if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); drawBoxSel(); return; }
+  if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); boxSelModifiers(ev); drawBoxSel(); return; }
   if (E.measure && E.measure.set) { measureMove(snapMm(mm), ev.shiftKey); }
   if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
   const modM = activeModule();
-  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, liveGhost(modM)); return; }
+  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } placeCrosshair(mm); sendPresence(mm, liveGhost(modM)); return; }
   if (E.fdrag) {
     if (!E.fdrag.moved && Math.hypot(mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]) > 0.4) E.fdrag.moved = true;
     if (E.fdrag.moved) {

@@ -6,7 +6,7 @@ export interface LayerPickerOpts { layers: string[]; current: string; disallow: 
 /** The layer picker: done(layer) with the picked layer, or done(null) on Cancel. */
 export type LayerPicker = (opts: LayerPickerOpts, done: (layer: string | null) => void) => void;
 import { runAction } from "./actions";
-import { connectedWidth, netNameOf, sizesOf } from "./app-state";
+import { connectedWidth, netNameOf, otherCopperLayers, sizesOf } from "./app-state";
 import { branchChanges, routeCtx, routeDoc, updateHead } from "./branch";
 import { addedChange } from "./changes";
 import { padAt } from "./convert";
@@ -64,10 +64,29 @@ export function undoRouteLeg(ctx: PcbCtx) {
 }
 /** The segment on `layer` under (x, y) with the point projected onto its centre line: where a route started on a track begins. */
 export function trackUnder(doc: BoardDoc, x: number, y: number, layer: string) {
-  const it = hitTestItem(doc, x, y, HIT_MM); if (!it || it.kind !== "segment" || layerOf(it.node) !== layer) return null;
+  const it = hitTestItem(doc, x, y, HIT_MM, (c) => c.kind === "segment" && layerOf(c.node) === layer); if (!it || it.kind !== "segment" || layerOf(it.node) !== layer) return null;
   const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) return null;
   const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; const k = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
   return { item: it, point: [r6(a[0] + k * dx), r6(a[1] + k * dy)] };
+}
+/**
+ * ROUTER_TOOL::getStartLayer: the layer a route starting at the hover begins on.  The active layer when the start item is
+ * on it (or there is none); else the item's own layer: a track end / body on another shown copper layer, or a pad or
+ * via that does not reach the active layer.
+ */
+export function startLayerOf(ctx: PcbCtx, hv: Hover, mm: Pt | null): string | null {
+  const snap = hv.snap as SnapHit | null;
+  if (snap && snap.kind !== "anchor") {
+    if (snap.kind === "pad" || snap.kind === "via") {
+      if (snap.onLayer) return snap.onLayer;
+      return null;
+    }
+    return snap.onLayer || null;
+  }
+  const q = mm || [hv.x, hv.y];
+  if (trackUnder(ctx.doc, q[0], q[1], S.layer)) return S.layer;
+  for (const l of otherCopperLayers(ctx, S.layer)) if (trackUnder(ctx.doc, q[0], q[1], l)) return l;
+  return null;
 }
 /** The obstacles in violation, shown as KiCad's router does (pure green over a clearance halo) until the cursor moves on. */
 export function showViolations(obs: Obstacle[], at: Pt) { S.violations = obs.length ? { obs, at: at.slice() } : null; }
@@ -99,6 +118,9 @@ export function routeClick(ctx: PcbCtx, hv: Hover, mm: Pt, opts?: { enter?: bool
   if (!S.route) {
     let net = (hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, S.layer)) as NetRef;   // a grid snap carries none: undefined, as before
     let split: RouteSplit | null = null, startIds: string[] = [], startKind = hv.snap ? hv.snap.kind : null;
+    // ROUTER_TOOL::getStartLayer: a start item that is not on the active layer moves the route (and the active layer) to its layer
+    const startOn = startLayerOf(ctx, hv, mm);
+    if (startOn && startOn !== S.layer) setLayer(ctx, startOn);
     if (!hv.snap) { const on = trackUnder(ctx.doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, S.layer); if (on) { p = on.point; net = netOf(on.item.node); split = { id: on.item.id, point: p.slice(), node: clone(on.item.node) }; startIds.push(on.item.id); startKind = "track"; } }   // started on a track: its centre line and its net
     else if (hv.snap.kind !== "pad") { const it = hitTestItem(ctx.doc, hv.x, hv.y, HIT_MM); if (it) startIds.push(it.id); }
     const R = sizesOf(ctx); const connected = connectedWidth(ctx.doc, p, S.layer, mm || p);

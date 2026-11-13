@@ -1,4 +1,4 @@
-// crosshair.ts — KiCad's canvas cursor, drawn over the canvas at the snapped cursor position.
+// crosshair.ts — KiCad's canvas cursor, drawn on its own canvas over the board at the tool's cursor position.
 //
 // GAL::DrawCursor: the cursor sits on the grid point the tools will use (not under the mouse), in the
 // colour theme's cursor colour, as one of the three View > Crosshair modes:
@@ -11,35 +11,50 @@
 import { snapMm } from "./doc";
 import { $ } from "./dom";
 import { E } from "./state";
+import { activeModule } from "./tools";
 import { applyView, mmH, mmW, mmX0, mmY0, stage, world } from "./view";
 
 const SMALL = 40;   // half of GAL's 80 px cursor
 
 let shown = false;
+let drawnMode = "";
 
-function lines(): SVGLineElement[] { return ["#chH", "#chV", "#chD1", "#chD2"].map((s) => $(s) as unknown as SVGLineElement); }
-function set(l: SVGLineElement, x1: number, y1: number, x2: number, y2: number): void {
-  l.setAttribute("x1", String(x1)); l.setAttribute("y1", String(y1)); l.setAttribute("x2", String(x2)); l.setAttribute("y2", String(y2));
+/**
+ * Where the cursor is drawn: the point the active tool snapped to (VIEW_CONTROLS::ForceCursorPosition from
+ * GRID_HELPER::BestSnapAnchor, the router's snap), else the grid point under the mouse.
+ */
+function cursorPoint(mm: number[]): number[] {
+  const m = activeModule() as { toolCursorPoint?: () => number[] | null } | null;
+  if (m && m.toolCursorPoint) { try { const p = m.toolCursorPoint(); if (p && isFinite(p[0]) && isFinite(p[1])) return p; } catch (e) { /* fall back to the grid */ } }
+  return snapMm(mm);
 }
 
-/** Draw the cursor at document position `mm` (snapped here), or hide it (null: the pointer left the canvas). */
+/**
+ * Draw the cursor at document position `mm`, or hide it (null: the pointer left the canvas).  OPENGL_GAL::blitCursor:
+ * on the canvas (LAYER_CURSOR, a canvas over the board), one pixel wide, at the tool's cursor position.
+ */
 export function placeCrosshair(mm: number[] | null): void {
-  const svg = $("#crosshair") as unknown as SVGSVGElement | null;
-  if (!svg) return;
-  if (!mm || !E.kdoc) { if (shown) { svg.classList.remove("live"); shown = false; } return; }
+  const cv = $("#crosshair") as unknown as HTMLCanvasElement | null;
+  if (!cv || typeof cv.getContext !== "function") return;
+  if (!mm || !E.kdoc) { if (shown) { cv.classList.remove("live"); shown = false; } return; }
   // SCH_TOOL_BASE::InteractiveDelete: the picker runs with SetSnapping( false ), so its cursor sits on the pointer
-  const p = E.kdoc.type === "sch" && E.tool === "delete" ? mm : snapMm(mm), wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  const p = E.kdoc.type === "sch" && E.tool === "delete" ? mm : cursorPoint(mm), wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
   if (!(wr.width > 0) || !(wr.height > 0)) return;
-  const x = Math.round(wr.left - sr.left + ((p[0] - mmX0()) / mmW()) * wr.width) + 0.5;
-  const y = Math.round(wr.top - sr.top + ((p[1] - mmY0()) / mmH()) * wr.height) + 0.5;
-  const W = sr.width, H = sr.height, L = W + H;
-  const [h, v, d1, d2] = lines();
+  const dpr = window.devicePixelRatio || 1, W = Math.round(sr.width * dpr), H = Math.round(sr.height * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const lw = Math.max(1, Math.round(dpr)), half = lw % 2 ? 0.5 : 0;
+  const x = Math.round((wr.left - sr.left + ((p[0] - mmX0()) / mmW()) * wr.width) * dpr) + half;
+  const y = Math.round((wr.top - sr.top + ((p[1] - mmY0()) / mmH()) * wr.height) * dpr) + half;
+  const L = W + H, S = SMALL * dpr;
   const mode = E.crosshairMode === "full" || E.crosshairMode === "45" ? E.crosshairMode : "small";
-  if (svg.dataset.mode !== mode) svg.dataset.mode = mode;
-  if (mode === "45") { set(d1, x - L, y - L, x + L, y + L); set(d2, x - L, y + L, x + L, y - L); }
-  else if (mode === "full") { set(h, 0, y, W, y); set(v, x, 0, x, H); }
-  else { set(h, x - SMALL, y, x + SMALL, y); set(v, x, y - SMALL, x, y + SMALL); }
-  if (!shown) { svg.classList.add("live"); shown = true; }
+  if (drawnMode !== mode) { cv.dataset.mode = mode; drawnMode = mode; }
+  const c = cv.getContext("2d")!; c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, W, H);
+  c.strokeStyle = getComputedStyle(cv).color || "#FFFFFF"; c.lineWidth = lw; c.lineCap = "butt"; c.beginPath();
+  if (mode === "45") { c.moveTo(x - L, y - L); c.lineTo(x + L, y + L); c.moveTo(x - L, y + L); c.lineTo(x + L, y - L); }
+  else if (mode === "full") { c.moveTo(0, y); c.lineTo(W, y); c.moveTo(x, 0); c.lineTo(x, H); }
+  else { c.moveTo(x - S, y); c.lineTo(x + S, y); c.moveTo(x, y - S); c.lineTo(x, y + S); }
+  c.stroke();
+  if (!shown) { cv.classList.add("live"); shown = true; }
 }
 
 /** Redraw at the last cursor position (after a pan / zoom or a mode change), if the cursor is on the canvas. */

@@ -543,19 +543,18 @@ test("render options: outlinePads / outlineTracks / outlineVias stroke instead o
   assert.deepEqual(b.calls, a.calls, "board options are ignored on a schematic");
 });
 
-test("render options: highContrast dims everything off the active layer, holes stay", () => {
+test("render options: highContrast mixes everything off the active layer with the background, holes stay", () => {
+  // PCB_RENDER_SETTINGS::GetColor: color.Mix( background, m_hiContrastFactor ), opaque (no alpha)
   const doc = K.parseDoc(ZONED, "kicad_pcb");
   const plain = renderWith(doc, {});
-  assert.ok(!plain.alphas.has(0.2), "nothing dimmed by default");
   const hc = renderWith(doc, { highContrast: true, activeLayer: "B.Cu" });
-  assert.ok(hc.alphas.has(0.2) && hc.alphas.has(1), "inactive layers at 0.2 alpha, B.Cu at full");
+  assert.ok(!hc.alphas.has(0.2), "no alpha dimming");
   assert.equal(hc.calls.fill, plain.calls.fill, "dimming does not drop anything");
   const only = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (2 "B.Cu" signal)) (via (at 100 50) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 0) (uuid "v")))', "kicad_pcb");
-  const alphas = []; const c = stubCtx(800, 600); Object.defineProperty(c, "globalAlpha", { set: (v) => alphas.push(+v.toFixed(3)), get: () => 1 });
+  const fills = []; const c = stubCtx(800, 600); let f = ""; Object.defineProperty(c, "fillStyle", { set: (v) => { f = v; }, get: () => f }); const fill0 = c.fill; c.fill = (...a) => { fills.push(f); return fill0 && fill0(...a); };
   K.render(only, c, VIEW, { highContrast: true, activeLayer: "F.Cu" });
-  assert.deepEqual(alphas.filter((v) => v !== 1).length, 1, "only the B.Cu ring is dimmed: the F.Cu ring and the hole are drawn at full alpha");
-  const off = renderWith(doc, { highContrast: true });
-  assert.ok(!off.alphas.has(0.2), "no active layer: nothing to contrast against");
+  const dimB = K.mixColor(K.pcbColor("B.Cu"), K.PCB_BG, 0.2);
+  assert.ok(fills.includes(dimB) && fills.includes(K.pcbColor("F.Cu")), "only the B.Cu ring is mixed: the F.Cu ring and the hole keep their colours " + JSON.stringify(fills));
 });
 
 test("sample board: rotate/flip invariants hold for every footprint, tracks snap and chain", { skip: !fs.existsSync(SAMPLE) && "sample board not present" }, () => {

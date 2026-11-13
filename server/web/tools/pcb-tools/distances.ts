@@ -31,8 +31,13 @@ export function polySegDist(P: Pt[], a: Pt, b: Pt) {
 }
 /** Do two closed polygons share interior area (touching along an edge or at a corner does not count)? */
 export function polysOverlap(P: Pt[], Q: Pt[]) {
-  const strictInside = (R: Pt[], p: Pt) => pointInPoly(R, p[0], p[1]) && polyPointDist(R, p) > 1e-6;
+  // inside and off every edge (polyPointDist is 0 for any point inside, so the edges are measured here)
+  const edgeDist = (R: Pt[], p: Pt) => { let d = Infinity; for (let i = 0; i < R.length; i++) d = Math.min(d, dPS(p, R[i], R[(i + 1) % R.length])); return d; };
+  const strictInside = (R: Pt[], p: Pt) => pointInPoly(R, p[0], p[1]) && edgeDist(R, p) > 1e-6;
   if (P.some((p: Pt) => strictInside(Q, p)) || Q.some((p: Pt) => strictInside(P, p))) return true;
+  // equal-width boxes side by side meet only at corners on each other's edges: an edge's middle shows the overlap
+  const mid = (R: Pt[], i: number): Pt => { const a = R[i], b = R[(i + 1) % R.length]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; };
+  if (P.some((_p: Pt, i: number) => strictInside(Q, mid(P, i))) || Q.some((_q: Pt, i: number) => strictInside(P, mid(Q, i)))) return true;
   const o = (a: Pt, b: Pt, c: Pt) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
   for (let i = 0; i < P.length; i++) { const a = P[i], b = P[(i + 1) % P.length]; for (let j = 0; j < Q.length; j++) { const c = Q[j], d = Q[(j + 1) % Q.length]; if (o(a, b, c) * o(a, b, d) < -1e-12 && o(c, d, a) * o(c, d, b) < -1e-12) return true; } }
   return false;

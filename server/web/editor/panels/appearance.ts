@@ -67,6 +67,7 @@ const OBJECTS: ObjectDef[] = [
   { id: "zones", label: "Zones", tip: "Show copper zones", opacity: true, defaultOpacity: 0.6 },   // "board.opacity.zones" 0.6
   { id: "filledShapes", label: "Filled Shapes", tip: "Opacity of filled shapes", opacity: true, canHide: false },
   { id: "images", label: "Images", tip: "Show user images", opacity: true, defaultOpacity: 0.6 },   // "board.opacity.images" 0.6
+  { id: "outsideGroup", label: "Outside Group", tip: "Opacity of items outside the entered group", opacity: true, canHide: false, defaultOpacity: 0.2 },   // "board.opacity.outside_group" 0.2
   { id: "sp1", label: "", tip: "", spacer: true },
   { id: "fpFront", label: "Footprints Front", tip: "Show footprints that are on board's front" },
   { id: "fpBack", label: "Footprints Back", tip: "Show footprints that are on board's back" },
@@ -80,7 +81,13 @@ const OBJECTS: ObjectDef[] = [
   { id: "drcErrors", label: "DRC Errors", tip: "DRC violations with an Error severity" },
   { id: "drcExclusions", label: "DRC Exclusions", tip: "DRC violations which have been individually excluded", defaultHidden: true },
   { id: "anchors", label: "Anchors", tip: "Show footprint and text origins as a cross" },
+  { id: "points", label: "Points", tip: "Show explicit snap points as crosses" },
+  { id: "subgrids", label: "Grids", tip: "Show custom routing/placement grids" },
+  { id: "viaStitching", label: "Via Stitching", tip: "Show via stitching generator outlines" },
   { id: "lockedShadow", label: "Locked Item Shadow", tip: "Show a shadow on locked items" },
+  { id: "conflicts", label: "Colliding Courtyards", tip: "Show colliding footprint courtyards" },
+  { id: "constraintShadow", label: "Constrained Item Shadow", tip: "Show a shadow on constrained items" },
+  { id: "boardArea", label: "Board Area Shadow", tip: "Show board area shadow", defaultHidden: true },   // LAYER_BOARD_OUTLINE_AREA: hidden by default (lset.cpp)
   { id: "drawingSheet", label: "Drawing Sheet", tip: "Show drawing sheet borders and title block" },
   { id: "grid", label: "Grid", tip: "Show the (x,y) grid dots" },
 ];
@@ -109,7 +116,7 @@ function builtinPresets(all: string[]): Preset[] {
 }
 
 // ---------------------------------------------------------------- persisted state
-interface UserPrefs { colors: Record<string, string>; objHidden: string[]; objOpacity: Record<string, number>; netColorMode: NetColorMode; ratsnestMode: RatsnestMode; opacityAbs?: boolean }
+interface UserPrefs { colors: Record<string, string>; objHidden: string[]; objOpacity: Record<string, number>; netColorMode: NetColorMode; ratsnestMode: RatsnestMode; opacityAbs?: boolean; rowsV2?: boolean }
 interface Viewport { name: string; rect: [number, number, number, number] }
 interface ProjectPrefs { hidden: string[] | null; netColors: Record<string, string>; classColors: Record<string, string>; hiddenNets: string[]; hiddenClasses: string[]; presets: Preset[]; viewports: Viewport[]; viewport: string | null; contrastMode?: InactiveMode }
 
@@ -117,6 +124,8 @@ const USER_KEY = "kui.appearance";
 const projKey = () => "kui.appearance." + (projectId() || "x");
 let user: UserPrefs = Object.assign({ colors: {}, objHidden: OBJECTS.filter((o) => o.defaultHidden).map((o) => o.id), objOpacity: {}, netColorMode: "ratsnest" as NetColorMode, ratsnestMode: "all" as RatsnestMode },
   loadJson<Partial<UserPrefs>>(USER_KEY, {}));
+// rows added after a user's prefs were saved start as KiCad has them (Board Area Shadow hidden)
+if (!user.rowsV2) { if (!user.objHidden.includes("boardArea")) user.objHidden.push("boardArea"); user.rowsV2 = true; }
 // the Zones slider used to scale the fixed 0.6 zone opacity; it is the opacity itself now (as KiCad's): keep the look
 if (!user.opacityAbs) { if (typeof user.objOpacity.zones === "number") user.objOpacity.zones = Math.round(user.objOpacity.zones * 60) / 100; user.opacityAbs = true; }
 let proj: ProjectPrefs = emptyProj(); let projFor = "";
@@ -215,8 +224,8 @@ export function applyAppearance(): void {
   const ro = E.renderOpts as Record<string, unknown>;
   const colors = new Map(Object.entries(user.colors));
   ro.layerColors = colors.size ? colors : undefined;
-  const hide = new Set(user.objHidden.filter((id) => !["grid", "ratsnest", "anchors", "lockedShadow", "drawingSheet", "drcWarnings", "drcErrors", "drcExclusions"].includes(id)));
-  const show = new Set<string>(); for (const id of ["anchors", "lockedShadow"]) if (!user.objHidden.includes(id)) show.add(id);
+  const hide = new Set(user.objHidden.filter((id) => !["grid", "ratsnest", "anchors", "lockedShadow", "drawingSheet", "drcWarnings", "drcErrors", "drcExclusions", "conflicts", "boardArea", "subgrids", "viaStitching", "constraintShadow"].includes(id)));
+  const show = new Set<string>(); for (const id of ["anchors", "lockedShadow", "boardArea"]) if (!user.objHidden.includes(id)) show.add(id);
   // every opacity row goes to the renderer: zones and images default to 0.6, which is not the renderer's own default
   const opacity: Record<string, number> = {}; for (const o of OBJECTS) if (o.opacity) opacity[o.id] = objOpacity(o);
   ro.objects = { hide, show, opacity };
@@ -224,6 +233,10 @@ export function applyAppearance(): void {
   if (show.has("lockedShadow") && P) { const ids = new Set<string>(); for (const it of doc.items.values()) { try { if (P.isLocked(it.node)) ids.add(it.id); } catch (e) { /* not lockable */ } } ro.lockedIds = ids; }
   else ro.lockedIds = undefined;
   ro.frame = user.objHidden.includes("drawingSheet") ? false : undefined;
+  // LAYER_BOARD_OUTLINE_AREA: the board outline filled under everything (PCB_PAINTER::draw( PCB_BOARD_OUTLINE ))
+  if (show.has("boardArea") && P && (P as unknown as { boardOutline?: (d: KDoc) => { outline: number[][] | null } }).boardOutline) {
+    try { const o = (P as unknown as { boardOutline: (d: KDoc) => { outline: number[][] | null } }).boardOutline(doc).outline; ro.boardArea = o && o.length > 2 ? [o] : undefined; } catch (e) { ro.boardArea = undefined; }
+  } else ro.boardArea = undefined;
   // net colours: a net's own colour wins over its class colour (NET_GRID_TABLE / netclass colours)
   const n = nets(); const byName = new Map<string, string>(), byCode = new Map<number, string>();
   for (const x of n.nets) { const c = proj.netColors[x.name] || proj.classColors[x.netclass]; if (c) { byName.set(x.name, c); if (x.code > 0) byCode.set(x.code, c); } }
@@ -245,6 +258,8 @@ export function applyAppearance(): void {
     for (const x of n.nets) if (proj.hiddenClasses.includes(x.netclass)) hiddenNets.add(x.name);
     s.hiddenNets = hiddenNets;
     s.ratsnestColors = user.netColorMode !== "off" && byName.size ? byName : null;
+    s.netColorMode = user.netColorMode;
+    s.showCourtyardConflicts = !user.objHidden.includes("conflicts");   // LAYER_CONFLICTS_SHADOW   // the router preview takes net colours only in the "all" mode (ROUTER_PREVIEW_ITEM::getLayerColor)
     const sev = new Set<string>(); for (const [id, name] of Object.entries(SEVERITY)) if (user.objHidden.includes(id)) sev.add(name);
     s.hiddenSeverities = sev.size ? sev : null;
   }

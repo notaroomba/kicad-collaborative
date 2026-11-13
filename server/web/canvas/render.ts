@@ -293,6 +293,14 @@ export function scratchCanvas(w: number, h: number): AnyCanvas | null {
 
 export const TOP_Z = 100000, TOP_CACHE = new Map<string, number>();
    // draw-order offset of the layers brought to the top with the active layer
+/** A copper layer's depth in the stack: F.Cu 0, In1.Cu 1 …, B.Cu last. */
+const cuDepth = (l: string) => l === "F.Cu" ? 0 : l === "B.Cu" ? 1e6 : (+(/^In(\d+)\.Cu$/.exec(l) || [0, NaN])[1]);
+/** Whether a via drilled between `pair` (its two outer copper layers) reaches copper layer `cu`. */
+export function viaSpans(pair: string[], cu: string) {
+  const a = cuDepth(pair[0]), b = cuDepth(pair[pair.length - 1]), c = cuDepth(cu);
+  if (isNaN(a) || isNaN(b) || isNaN(c)) return true;
+  return c >= Math.min(a, b) && c <= Math.max(a, b);
+}
 export const BUCKETS = new Map<number, Geom[]>(), NAME_BUCKETS = new Map<number, Geom[]>(), SEL_BUCKETS = new Map<number, Geom[]>();
    // z → geometry, reused frame to frame (cleared, never reallocated)
 export const ZS: number[] = [];
@@ -342,6 +350,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const layerColors = isPcb && opts.layerColors && opts.layerColors.size ? opts.layerColors : null;
   const obj = isPcb && opts.objects ? opts.objects : null, objHide = obj && obj.hide && obj.hide.size ? obj.hide : null, objAlpha = obj && obj.opacity ? obj.opacity : null;
   const hcHide = !!opts.inactiveHide;
+  const hcCu = hcLayer ? (/\.Cu$/.test(hcLayer) ? hcLayer : /^F\./.test(hcLayer) ? "F.Cu" : /^B\./.test(hcLayer) ? "B.Cu" : null) : null;
   // PCB_RENDER_SETTINGS::m_hiContrastFactor = 1 − hicontrast_dimming_factor: an inactive layer's colour is mixed with the
   // background at that factor (Edge.Cuts at 0.3 at least, and still drawn in the Hide mode)
   const hcF = typeof opts.hcDimming === "number" && opts.hcDimming >= 0 && opts.hcDimming <= 1 ? 1 - opts.hcDimming : HC_DIM;
@@ -440,6 +449,12 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     drawDrawingSheet(ctx, doc, s, Math.max(1, dpr) / s);
     if (flip) ctx.setTransform(A, 0, 0, s, E, ty);
   }
+  // LAYER_BOARD_OUTLINE_AREA (Board Area Shadow, off by default): the board outline filled, under the board items
+  if (isPcb && opts.boardArea && opts.boardArea.length) {
+    ctx.save(); ctx.globalAlpha = 1; ctx.fillStyle = BOARD_AREA_COLOR; ctx.beginPath();
+    for (const loop of opts.boardArea) { if (loop.length < 3) continue; ctx.moveTo(loop[0][0], loop[0][1]); for (let i = 1; i < loop.length; i++) ctx.lineTo(loop[i][0], loop[i][1]); ctx.closePath(); }
+    ctx.fill("evenodd"); ctx.restore();
+  }
   // collect visible geometry into the z buckets (arrays reused across frames)
   for (const arr of BUCKETS.values()) arr.length = 0;
   for (const arr of NAME_BUCKETS.values()) arr.length = 0;
@@ -495,6 +510,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     if (isFp && objHide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
     // an item that only partly shows (a long connector, a zone's hatch, a big footprint when zoomed in) is
     // culled geometry by geometry; the boxes are cached on the geometry records (rebuilt with the item)
+    // PCB_VIA::ViewGetLOD: in high contrast a blind / buried / micro via whose drill does not span the active copper
+    // layer (a front / back technical layer standing for F.Cu / B.Cu) is not drawn at all
+    if (hcCu && it.kind === "via" && it.geom.length && it.geom[0].viaLayers && it.geom[0].viaType !== "through" && !viaSpans(it.geom[0].viaLayers, hcCu)) continue;
     const partial = !zoneFill && b && it.geom.length > 6 && (b[0] < cx0 || b[2] > cx1 || b[1] < cy0 || b[3] > cy1);
     for (const g of it.geom) {
       if (partial && g.t !== "image") {
@@ -751,10 +769,10 @@ export function minLayerAlpha(c: string): string {
 
 /** Which Appearance ▸ Objects row a geometry belongs to (null: governed by its layer alone). */
 export function objectClass(g: Geom): string | null {
-  return g.track ? "tracks" : g.via ? "vias" : g.pad ? "pads" : (g.zoneFill || g.zoneOutline || g.zoneUnfilled) ? "zones" : g.t === "image" ? "images" : null;
+  return g.track ? "tracks" : g.via ? "vias" : g.pad ? "pads" : (g.zoneFill || g.zoneOutline || g.zoneUnfilled) ? "zones" : g.t === "image" ? "images" : (g as { point?: boolean }).point ? "points" : null;
 }
 
-export const ANCHOR_COLOR = "#FF26E2", LOCKED_SHADOW_COLOR = "rgba(255,38,226,0.5)";
+export const ANCHOR_COLOR = "#FF26E2", LOCKED_SHADOW_COLOR = "rgba(255,38,226,0.5)", BOARD_AREA_COLOR = "rgba(100,100,100,0.35)";
    // LAYER_ANCHOR, LAYER_LOCKED_ITEM_SHADOW (builtin_color_themes.h)
 /** The overlay object layers: the locked-item shadow (under the anchors) and the footprint anchors — PCB_PAINTER::draw(FOOTPRINT, LAYER_ANCHOR): a 5 px cross, 1 px pen. */
 export function drawObjectOverlays(ctx: Ctx2D, doc: Doc, obj: ObjectsOpt, opts: RenderOpts, s: number, dpr: number, hidden: Set<string> | null, vr: number[]): void {

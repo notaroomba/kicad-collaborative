@@ -35,10 +35,11 @@ export function geomDist(g: PcbGeom, x: number, y: number) {
   return Infinity;
 }
 /** Nearest track / via / graphic / text within slop mm of (x, y); footprints are app.js's business. */
-export function hitTestItem(doc: BoardDoc, x: number, y: number, slop: number) {
+export function hitTestItem(doc: BoardDoc, x: number, y: number, slop: number, only?: ((it: KItem) => boolean) | null) {
   let best: KItem | null = null, bd = slop;
   for (const it of doc.items.values()) {
     if (it.kind === "footprint" || it.kind === "group" || it.kind === "generated" || !it.bbox) continue;
+    if (only && !only(it)) continue;
     const b = it.bbox; if (x < b[0] - slop || x > b[2] + slop || y < b[1] - slop || y > b[3] + slop) continue;
     let d = Infinity;
     if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") d = (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) ? slop * 0.5 : Infinity;   // precise copper hits win over a text box

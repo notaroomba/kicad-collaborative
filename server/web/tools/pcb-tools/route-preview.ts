@@ -9,9 +9,21 @@ import { netClearance } from "./drc";
 import { viaNow } from "./edit-commands";
 import { drawShape, line, polyline, ring } from "./overlay";
 import { connLines } from "./select-move";
-import { HALO_COLOR, K, RATSNEST_LEAD, S, saturated } from "./state";
+import { CLEARANCE_MODE, HALO_COLOR, HALO_FILL_ALPHA, HALO_STROKE_ALPHA, K, RATSNEST, S, saturated } from "./state";
+import { adjustColor, alphaOf } from "./overlay";
 import { color, layerOf, pt, widthOf } from "./util";
 
+/** ROUTER_PREVIEW_ITEM::getLayerColor: the layer colour, or the net's colour on copper when net colours apply to everything. */
+export function previewColor(layer: string, netKey?: string | null) {
+  if (netKey && S.netColorMode === "all" && S.ratsnestColors && /\.Cu$/.test(layer)) { const c = S.ratsnestColors.get(netKey); if (c) return c; }
+  return color(layer);
+}
+/** PNS_KICAD_IFACE::DisplayRatline: the ratsnest colour (the net's when net colours are on) Brightened( 0.5 ), alpha + 0.4. */
+export function ratlineColor(netKey?: string | null) {
+  const base = (netKey && S.netColorMode && S.netColorMode !== "off" && S.ratsnestColors && S.ratsnestColors.get(netKey)) || RATSNEST;
+  return adjustColor(base, 0.5, alphaOf(base) + 0.4);
+}
+const mode = () => (typeof S.trackClearance === "number" ? S.trackClearance : CLEARANCE_MODE.ROUTING_VIA);
 /** The drag in progress: the lines and via where they would go, obstacles in violation green, and KiCad's status note. */
 export function drawDragPreview(c: CanvasRenderingContext2D, ctx: PcbCtx, view: KView, px: number) {
   const m = S.move;
@@ -28,8 +40,9 @@ export function drawDragPreview(c: CanvasRenderingContext2D, ctx: PcbCtx, view: 
     if (bad) for (const ob of d.hits!) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
     for (const { l, pts } of d.sol!.lines) {
       if (pts.length < 2) continue;
-      if (bad) { c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = l.width + 2 * Math.max(netClearance(s, l.netKey), s.minClearance || 0); polyline(c, pts, false); }
-      c.globalAlpha = 0.8; c.strokeStyle = color(l.layer); c.lineWidth = l.width; polyline(c, pts, false);   // ROUTER_PREVIEW_ITEM: the layer colour at alpha 0.8
+      // a colliding line always shows its halo; otherwise SHOW_WITH_VIA_WHILE_ROUTING_OR_DRAGGING / ALWAYS show it while dragging
+      if (bad || mode() >= CLEARANCE_MODE.ROUTING_EDITING) { c.globalAlpha = HALO_STROKE_ALPHA; c.strokeStyle = HALO_COLOR; c.lineWidth = l.width + 2 * Math.max(netClearance(s, l.netKey), s.minClearance || 0); polyline(c, pts, false); }
+      c.globalAlpha = 0.8; c.strokeStyle = previewColor(l.layer, l.netKey); c.lineWidth = l.width; polyline(c, pts, false);   // ROUTER_PREVIEW_ITEM: the layer colour at alpha 0.8
     }
     if (d.via) {
       const at = d.sol!.viaAt || d.viaAt, v = viaNow(d.via.node);
@@ -58,27 +71,28 @@ export function drawRoute(c: CanvasRenderingContext2D, ctx: PcbCtx, px: number) 
   for (const st of rt!.stages) for (const op of st.ops) {
     const node = op.add || (op.set && op.node); if (!node) continue; const pv = previewOfNode(node); if (!pv) continue;
     if (pv.via) { drawViaPreview(c, pv.via.at, pv.via.size, pv.via.drill, px, 0.8); continue; }
-    c.globalAlpha = 0.8; c.strokeStyle = color(pv.layer); c.lineWidth = pv.width; for (const e of pv.els) strokeElem(c, e);
+    c.globalAlpha = 0.8; c.strokeStyle = previewColor(pv.layer, rt!.netKey); c.lineWidth = pv.width; for (const e of pv.els) strokeElem(c, e);
   }
   if (rt!.dp) { drawDpRoute(c, ctx, px); return; }
   if (rt!.shove) {
-    for (const L of rt!.shove.preview.lines) { if (L.pts.length < 2) continue; c.globalAlpha = 0.8; c.strokeStyle = color(L.layer!); c.lineWidth = L.w; polyline(c, L.pts, false); }
+    for (const L of rt!.shove.preview.lines) { if (L.pts.length < 2) continue; c.globalAlpha = 0.8; c.strokeStyle = previewColor(L.layer!, (L as { netKey?: string }).netKey); c.lineWidth = L.w; polyline(c, L.pts, false); }
     for (const v of rt!.shove.preview.vias) drawViaPreview(c, v.at, v.size, v.drill, px, 0.8);
   }
   const marks = (rt!.collisions || []).concat(rt!.viaBad || []);
-  for (const ob of marks) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }   // ROUTER::markViolations
+  for (const ob of marks) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, HALO_FILL_ALPHA); drawShape(c, ob.shape, 0, "#00FF00", 1); }   // ROUTER::markViolations
   const els = rt!.els && rt!.els.length ? rt!.els : (rt!.head && rt!.head.length > 1 ? rt!.head.slice(0, -1).map((p: Pt, i: number) => ({ t: "seg" as const, a: p, b: rt!.head[i + 1] })) : []);
   if (els.length) {
-    c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = rt!.width + 2 * routeHaloClearance(ctx, rt!); for (const e of els) strokeElem(c, e);   // track_clearance_mode SHOW_WITH_VIA_WHILE_ROUTING
-    c.globalAlpha = 0.8; c.strokeStyle = saturated(color(rt!.layer)); c.lineWidth = rt!.width; for (const e of els) strokeElem(c, e);                      // PNS_HEAD_TRACE: the layer colour saturated, alpha 0.8
+    // the head is a PNS::LINE, a line chain: its DM_SHADOW halo is stroked at 0.9 (track_clearance_mode: any routing mode)
+    if (mode() >= CLEARANCE_MODE.ROUTING) { c.globalAlpha = HALO_STROKE_ALPHA; c.strokeStyle = HALO_COLOR; c.lineWidth = rt!.width + 2 * routeHaloClearance(ctx, rt!); for (const e of els) strokeElem(c, e); }
+    c.globalAlpha = 0.8; c.strokeStyle = saturated(previewColor(rt!.layer, rt!.netKey)); c.lineWidth = rt!.width; for (const e of els) strokeElem(c, e);   // PNS_HEAD_TRACE: the layer (or net) colour saturated, alpha 0.8
   }
   const via = headVia(ctx, rt!);
   if (via) {
     const at = rt!.target || rt!.last; const clr = routeHaloClearance(ctx, rt!);
-    c.globalAlpha = 0.7; c.fillStyle = HALO_COLOR; c.beginPath(); c.arc(at[0], at[1], via.diameter / 2 + clr, 0, 2 * Math.PI); c.fill();
+    if (mode() >= CLEARANCE_MODE.ROUTING_VIA) { c.globalAlpha = HALO_FILL_ALPHA; c.fillStyle = HALO_COLOR; c.beginPath(); c.arc(at[0], at[1], via.diameter / 2 + clr, 0, 2 * Math.PI); c.fill(); }
     drawViaPreview(c, at, via.diameter, via.drill, px, 0.8);
   }
-  if (rt!.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; line(c, (rt!.ratline as Ratline)[0], (rt!.ratline as Ratline)[1]); }
+  if (rt!.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = ratlineColor(rt!.netKey); c.lineWidth = 1 * px; line(c, (rt!.ratline as Ratline)[0], (rt!.ratline as Ratline)[1]); }
 }
 /** What the board render leaves out while the route shows it elsewhere: items rewritten or removed on its branch, and those the shove pushed. */
 export function routeHiddenIds() {

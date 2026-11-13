@@ -1,5 +1,5 @@
 // pcb-tools/grid-helper.ts — select-tool drags and PCB_GRID_HELPER's drag origin and magnetic snapping.
-import type { BoardDoc, Mods, PcbCtx, Pt, SelectMove } from "./types";
+import type { BoardDoc, Mods, PcbCtx, Pt, SelectMove, SnapAnchor, SnapType } from "./types";
 import { LOCKED_WARNING, overrideLocks } from "./actions";
 import { isLocked } from "./groups";
 import { padCovers, padsOf } from "./route-geom";
@@ -31,30 +31,36 @@ export const SNAP_SCREEN_RADIUS = 25;   // libs/snap snap_resolver.h: the magnet
  * (MAGNETIC_OPTIONS::CAPTURE_CURSOR_IN_TRACK_TOOL), graphics always (editing.magnetic_graphics): their ends, corners,
  * centres and middles.  Text snaps by its position.
  */
-export function itemAnchors(it: KItem, from: boolean, mouse: Pt | null, gridPitch: number) {
-  const out: Pt[] = []; const n = it.node, k = it.kind;
-  const add = (p: Pt | null) => { if (p) out.push(p); };
+export function itemAnchors(it: KItem, from: boolean, mouse: Pt | null, gridPitch: number): SnapAnchor[] {
+  // each anchor carries its POINT_TYPE (PCB_GRID_HELPER::computeAnchors' addAnchor), shown by the snap indicator
+  const out: SnapAnchor[] = []; const n = it.node, k = it.kind;
+  const add = (p: Pt | null, t: SnapType) => { if (p) { const a = p.slice() as SnapAnchor; a.t = t; out.push(a); } };
   if (k === "footprint") {
-    if (from && mouse) for (const p of padsOf(it)) if (padCovers(p, mouse[0], mouse[1])) add([p.x, p.y]);
-    const pos = anchorOf(it); add(pos);
-    if (it.bbox) { const c = [(it.bbox[0] + it.bbox[2]) / 2, (it.bbox[1] + it.bbox[3]) / 2]; const g = gridPitch || 0; if (Math.hypot(c[0] - pos[0], c[1] - pos[1]) > Math.hypot(g, g)) add(c); }
+    if (from && mouse) for (const p of padsOf(it)) if (padCovers(p, mouse[0], mouse[1])) add([p.x, p.y], "center");
+    const pos = anchorOf(it); add(pos, "center");
+    if (it.bbox) { const c = [(it.bbox[0] + it.bbox[2]) / 2, (it.bbox[1] + it.bbox[3]) / 2]; const g = gridPitch || 0; if (Math.hypot(c[0] - pos[0], c[1] - pos[1]) > Math.hypot(g, g)) add(c, "center"); }
     return out;
   }
   if ((k === "segment" || k === "arc" || k === "via") && !from) return out;
-  if (k === "via" || k === "gr_text" || k === "target" || k === "image") { add(K.atOf(n).slice(0, 2)); return out; }
+  if (k === "via" || k === "gr_text" || k === "target" || k === "image") { add(K.atOf(n).slice(0, 2), "center"); return out; }
   if (k === "segment" || k === "arc" || k === "gr_line" || k === "gr_arc") {
-    const a = pt(n, "start"), b = pt(n, "end"); add(a); add(b);
-    if (k === "gr_line" && a && b) add([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-    if (k === "gr_arc" || k === "arc") add(pt(n, "mid"));
+    const a = pt(n, "start"), b = pt(n, "end"); add(a, "end"); add(b, "end");
+    if (k === "gr_line" && a && b) add([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], "mid");
+    if (k === "gr_arc" || k === "arc") add(pt(n, "mid"), "mid");
     return out;
   }
-  if (k === "gr_circle") { const c = pt(n, "center"), e = pt(n, "end"); add(c); if (c && e) { const r = Math.hypot(e[0] - c[0], e[1] - c[1]); for (const [dx, dy] of [[r, 0], [0, r], [-r, 0], [0, -r]]) add([c[0] + dx, c[1] + dy]); } return out; }
-  if (k === "gr_rect" || k === "gr_text_box") { const a = pt(n, "start"), b = pt(n, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); for (const p of [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [(x0 + x1) / 2, (y0 + y1) / 2]]) add(p); } return out; }
+  if (k === "gr_circle") { const c = pt(n, "center"), e = pt(n, "end"); add(c, "center"); if (c && e) { const r = Math.hypot(e[0] - c[0], e[1] - c[1]); for (const [dx, dy] of [[r, 0], [0, r], [-r, 0], [0, -r]]) add([c[0] + dx, c[1] + dy], "quadrant"); } return out; }
+  if (k === "gr_rect" || k === "gr_text_box") {
+    // the box: its centre, each corner and the middle of each side
+    const a = pt(n, "start"), b = pt(n, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+      add([mx, my], "center"); for (const p of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) add(p, "corner"); for (const p of [[mx, y0], [x1, my], [mx, y1], [x0, my]]) add(p, "mid"); }
+    return out;
+  }
   if (k === "gr_poly" || k === "zone" || k === "gr_curve") {
-    const P = K.kid(k === "zone" ? (K.kid(n, "polygon") || n) : n, "pts"); if (P) for (const xy of P.slice(1)) if (isList(xy) && xy[0] === "xy") add([K.num(xy[1]), K.num(xy[2])]);
+    const P = K.kid(k === "zone" ? (K.kid(n, "polygon") || n) : n, "pts"); if (P) for (const xy of P.slice(1)) if (isList(xy) && xy[0] === "xy") add([K.num(xy[1]), K.num(xy[2])], "corner");
     return out;
   }
-  if (k === "dimension") { const P = K.kid(n, "pts"); if (P) for (const xy of P.slice(1)) if (isList(xy) && xy[0] === "xy") add([K.num(xy[1]), K.num(xy[2])]); return out; }
+  if (k === "dimension") { const P = K.kid(n, "pts"); if (P) for (const xy of P.slice(1)) if (isList(xy) && xy[0] === "xy") add([K.num(xy[1]), K.num(xy[2])], "none"); return out; }
   return out;
 }
 /**
@@ -72,13 +78,13 @@ export function bestDragOrigin(doc: BoardDoc, ids: Iterable<string>, mouse: Pt, 
  * held turns object snapping off (grid.SetSnap( !MD_SHIFT )), Ctrl the grid (TOOL_EVENT::DisableGridSnapping is MD_CTRL).  Returns
  * { p, anchor } where anchor is the snapped-to point or null.
  */
-export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?: Mods | null): { p: Pt; anchor: Pt | null } {
+export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?: Mods | null): { p: Pt; anchor: SnapAnchor | null } {
   mods = mods || {};
   const gridOn = !!(ctx.snapOn && ctx.snap) && !(mods.ctrlKey || mods.metaKey);
   const g = gridOn ? ctx.snap(mm.slice()) : mm.slice();
   if (mods.shiftKey || !ctx.doc) return { p: g, anchor: null };
   const scale = SNAP_SCREEN_RADIUS / Math.max(1e-6, ctx.pxPerMm || 4); const range = gridOn && ctx.gridPitch ? Math.min(scale, ctx.gridPitch) : scale;
-  let best: Pt | null = null, bd = range;
+  let best: SnapAnchor | null = null, bd = range;
   for (const it of ctx.doc.items.values()) {
     if (skip && skip.has(it.id)) continue; const b = it.bbox;
     if (b && (mm[0] < b[0] - range || mm[0] > b[2] + range || mm[1] < b[1] - range || mm[1] > b[3] + range)) continue;

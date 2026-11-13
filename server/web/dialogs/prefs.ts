@@ -24,7 +24,11 @@ export interface Prefs {
   /** the schematic canvas colours (Preferences > Schematic Editor > Colors): a theme, and whether a dark UI swaps in the dark sheet */
   schColors: { theme: SchThemeId; followDark: boolean };
   /** the inactive layer mode is not here: it is the project's ("board.high_contrast_mode", Appearance panel) */
-  pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean };
+  pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean;
+    /** pcb_display.track_clearance_mode: 0 do not show, 1 while routing, 2 with via while routing (default), 3 while routing and editing, 4 always */
+    trackClearance: number };
+  /** COMMON_SETTINGS appearance.hicontrast_dimming_factor (0.8) */
+  common: { hcDimming: number };
   /** PCB Editor > Editing Options (PCBNEW_SETTINGS): m_AutoRefillZones */
   pcbEditing: { autoRefillZones: boolean };
   grids: Record<EditorId, GridPrefs>;
@@ -39,7 +43,8 @@ export const DEFAULT_PREFS: Prefs = {
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
   schColors: { theme: "default", followDark: false },
-  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true },
+  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, trackClearance: 2 },
+  common: { hcDimming: 0.8 },
   pcbEditing: { autoRefillZones: false },
   grids: {
     // APP_SETTINGS_BASE::DefaultGridSizeList and addParamsForWindow's defaultGridIdx (common/settings/app_settings.cpp):
@@ -173,6 +178,8 @@ export function applyPrefs(full = true): void {
       if (sch) { try { const ctx = toolCtx(); sch.setLineMode(ctx, p.schEditing.lineMode); sch.setDragMode(ctx, p.schEditing.mouseDragIsDrag ? "drag" : "move"); sch.state.annotateAuto = p.schEditing.autoAnnotate; syncSchModes(); } catch (e) { console.warn(e); } }
     } else {
       E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
+      (E.renderOpts as { hcDimming?: number }).hcDimming = p.common.hcDimming;
+      const pcbS = CollabTools.pcb && (CollabTools.pcb.state as { trackClearance?: number }); if (pcbS) pcbS.trackClearance = p.pcbDisplay.trackClearance;
       setToggles({ showPadNumbers: p.pcbDisplay.showPadNumbers, showNetNames: p.pcbDisplay.showNetNames });
     }
     if (full) store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) });

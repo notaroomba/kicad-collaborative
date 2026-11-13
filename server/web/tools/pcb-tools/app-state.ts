@@ -62,16 +62,30 @@ export function gfxLayers(doc: BoardDoc) {
 export function hoverPoint(ctx: PcbCtx, mm: Pt, magnetic: boolean, mods?: Mods | null): Hover {
   // the drawing tools resolve the cursor through the grid helper too (DRAWING_TOOL: grid.SetSnap( !Shift ), Ctrl = no grid: TOOL_EVENT::DisableGridSnapping)
   const sn = magnetic ? { p: ctx.snap(mm), anchor: null } : snapCursor(ctx, mm, null, mods);
-  const g = sn.p; const out: Hover = { x: g[0], y: g[1], snap: sn.anchor ? { x: g[0], y: g[1], kind: "anchor" } : null };
+  const g = sn.p; const out: Hover = { x: g[0], y: g[1], snap: sn.anchor ? { x: g[0], y: g[1], kind: "anchor", type: sn.anchor.t || "none" } : null };
   if (magnetic && ctx.doc) {
     const rt = S.route;
     // TOOL_BASE::updateEndItem: while routing only the routed net's items are end candidates (a route without a net has none)
     // (Highlight collisions connects to net-less items too, and a net-less route to anything: FixRoute adopts the net)
     const near = (a: SnapHit | null, b: SnapHit | null) => (!a ? b : !b ? a : Math.hypot(a.x - mm[0], a.y - mm[1]) <= Math.hypot(b.x - mm[0], b.y - mm[1]) ? a : b);
     const s = rt && rt.dp ? near(snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true), snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.netN!, true)) : rt ? (S.rs.mode === RM_MARK ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.netKey ? rt.net : null, false) : rt.netKey ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true) : null) : snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.layer, null);
-    if (s) { out.x = s.x; out.y = s.y; out.snap = s; }
+    // before a route starts PNS picks the start item on every visible copper layer, the active one first
+    // (ROUTER_TOOL::getStartLayer then routes on the item's layer)
+    const s2 = s || (rt ? null : otherLayerSnap(ctx, mm, S.layer));
+    if (s2) { out.x = s2.x; out.y = s2.y; out.snap = s2; }
   }
   return out;
+}
+/** The copper layers that are shown, the active one excluded: where a route may start off the active layer. */
+export function otherCopperLayers(ctx: PcbCtx, active: string): string[] {
+  const hidden = appGlobal(() => editorState()!.hiddenLayers as Set<string> | null, null);
+  return copperOf(ctx.doc).filter((l) => l !== active && !(hidden && hidden.has(l)));
+}
+/** A magnetic target on another shown copper layer (its pad, via or track end), nearest first. */
+export function otherLayerSnap(ctx: PcbCtx, mm: Pt, active: string): SnapHit | null {
+  let best: SnapHit | null = null, bd = Infinity;
+  for (const l of otherCopperLayers(ctx, active)) { const s = snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, l, null) as SnapHit | null; if (!s) continue; const d = Math.hypot(s.x - mm[0], s.y - mm[1]); if (d < bd) { bd = d; best = s; } }
+  return best;
 }
 /** The board's netlist, rebuilt after a document change and kept until the next one. */
 export function netlistCached(doc: BoardDoc) {

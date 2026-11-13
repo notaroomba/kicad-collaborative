@@ -93,5 +93,18 @@ test("markers: a selected marker is LAYER_DRC_HIGHLIGHTED", () => {
   assert(fills.includes(K.MARKER_COLORS.pcb.error) && fills.includes("#FF00FF"), JSON.stringify(fills));
 });
 
+test("high contrast: a blind via that does not reach the active copper layer is not drawn (PCB_VIA::ViewGetLOD)", () => {
+  assert(K.viaSpans(["F.Cu", "In2.Cu"], "In1.Cu") && K.viaSpans(["F.Cu", "In2.Cu"], "F.Cu") && !K.viaSpans(["F.Cu", "In2.Cu"], "B.Cu") && !K.viaSpans(["In2.Cu", "B.Cu"], "In1.Cu"));
+  const d = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal) (37 "F.SilkS" user)) (net 0 "")'
+    + ' (via blind (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "In1.Cu") (net 0) (uuid "v1"))'
+    + ' (via (at 5 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 0) (uuid "v2")))');
+  const rings = (ops) => ops.filter((o) => o.op === "fill" && o.fill === K.pcbColor("F.Cu")).length;
+  const on = (layer) => draw({ highContrast: true, activeLayer: layer }, d);
+  const offB = draw({ highContrast: true, activeLayer: "B.Cu" }, d).filter((o) => o.op === "fill").length;
+  const onF = draw({ highContrast: true, activeLayer: "F.Cu" }, d).filter((o) => o.op === "fill").length;
+  assert(onF > offB, "the blind via drawn on F.Cu, hidden on B.Cu (" + onF + " vs " + offB + ")");
+  assert(rings(on("F.SilkS")) >= 1, "a front technical layer counts as F.Cu");
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

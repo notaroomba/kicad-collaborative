@@ -127,6 +127,11 @@ export function openPreferences(page?: string): void {
             ui.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "Appearance:"),
               select([["light", "Light"], ["dark", "Dark"], ["system", "System"]], uiMode, (v) => { uiMode = v as ThemeMode; }, { id: "kd-pref-uitheme", style: "width:160px" })),
               h("p", { class: "kd-note", style: "margin:8px 0 0" }, "System follows the light or dark setting of your computer.  Also in Preferences > Appearance."));
+            // panel_common_settings' Appearance box: m_highContrastCtrl (0..1, step 0.1)
+            const ap = KD().staticBox(pg, "Appearance");
+            const dim = h("input", { type: "number", min: "0", max: "1", step: "0.1", value: String(p.common.hcDimming), id: "kd-pref-hcdim", style: "width:80px" }) as HTMLInputElement;
+            dim.addEventListener("change", () => { const v = Math.max(0, Math.min(1, +dim.value)); if (isFinite(v)) { p.common.hcDimming = v; dim.value = String(v); } });
+            ap.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "High-contrast mode dimming factor:"), dim));
           } },
           { label: "Mouse and Touchpad", build(pg) {
             const pz = KD().staticBox(pg, "Pan and Zoom");
@@ -189,6 +194,10 @@ export function openPreferences(page?: string): void {
             const ap = KD().staticBox(pg, "Annotations");
             ap.append(checkbox("Show pad numbers", p.pcbDisplay.showPadNumbers, (on) => { p.pcbDisplay.showPadNumbers = on; }, { id: "kd-pref-padnumbers" }), checkbox("Show net names", p.pcbDisplay.showNetNames, (on) => { p.pcbDisplay.showNetNames = on; }, { id: "kd-pref-netnames" }),
               checkbox("High-contrast display mode", contrast !== "normal", (on) => { contrast = on ? (contrast === "normal" ? "dim" : contrast) : "normal"; }, { id: "kd-pref-contrast" }));
+            // panel_display_options: Clearance Outlines ▸ Tracks (clearanceModeMap: the choice index is the mode)
+            const cl = KD().staticBox(pg, "Clearance Outlines");
+            cl.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "Tracks:"),
+              select([["0", "Do not show clearances"], ["1", "Show when routing"], ["2", "Show when routing w/ via clearance at end"], ["3", "Show when routing and editing"], ["4", "Show always"]], String(p.pcbDisplay.trackClearance), (v) => { p.pcbDisplay.trackClearance = +v; }, { id: "kd-pref-trackclearance", style: "width:320px" })));
           } },
           { label: "Grids", build: gridsPage("pcb") },
           { label: "Editing Options", build(pg) {

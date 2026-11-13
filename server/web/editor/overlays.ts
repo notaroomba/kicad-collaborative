@@ -21,8 +21,8 @@ const IU = 1e6;   // the ruler works in pcbIUScale nanometres
 
 /** SELECTION_AREA's two colour schemes (dark / bright background). */
 const SCHEMES = [
-  { normal: "rgba(77,77,179,0.3)", additive: "rgba(77,179,77,0.3)", subtract: "rgba(179,77,77,0.3)", l2r: "rgb(255,255,102)", r2l: "rgb(102,102,255)" },
-  { normal: "rgba(128,77,255,0.5)", additive: "rgba(128,255,128,0.5)", subtract: "rgba(255,128,128,0.5)", l2r: "rgb(179,179,0)", r2l: "rgb(26,26,255)" },
+  { normal: "rgba(77,77,179,0.3)", additive: "rgba(77,179,77,0.3)", subtract: "rgba(179,77,77,0.3)", exclusiveOr: "rgba(179,77,77,0.3)", l2r: "rgb(255,255,102)", r2l: "rgb(102,102,255)" },
+  { normal: "rgba(128,77,255,0.5)", additive: "rgba(128,255,128,0.5)", subtract: "rgba(255,128,128,0.5)", exclusiveOr: "rgba(255,128,128,0.5)", l2r: "rgb(179,179,0)", r2l: "rgb(26,26,255)" },
 ];
 
 /** SHAPE_LINE_CHAIN::Area( false ) of the closed lasso: > 0 when it is drawn clockwise on screen. */
@@ -32,7 +32,7 @@ export function lassoArea(pts: Pt[]): number {
 }
 
 /** SELECTION_AREA::ViewDraw: a one-pixel outline, then the translucent fill. */
-function drawSelectionArea(ctx: CanvasRenderingContext2D, px: number, dark: boolean, area: { rect?: [Pt, Pt]; poly?: Pt[]; inside: boolean; additive?: boolean; subtractive?: boolean }): void {
+function drawSelectionArea(ctx: CanvasRenderingContext2D, px: number, dark: boolean, area: { rect?: [Pt, Pt]; poly?: Pt[]; inside: boolean; additive?: boolean; subtractive?: boolean; exclusiveOr?: boolean }): void {
   const sc = SCHEMES[dark ? 0 : 1];
   const shape = (): boolean => {
     ctx.beginPath();
@@ -42,7 +42,7 @@ function drawSelectionArea(ctx: CanvasRenderingContext2D, px: number, dark: bool
   };
   if (!shape()) return;
   ctx.strokeStyle = area.inside ? sc.l2r : sc.r2l; ctx.lineWidth = px; ctx.setLineDash([]); ctx.stroke();
-  ctx.fillStyle = area.additive ? sc.additive : area.subtractive ? sc.subtract : sc.normal; ctx.fill();
+  ctx.fillStyle = area.additive ? sc.additive : area.subtractive ? sc.subtract : area.exclusiveOr ? sc.exclusiveOr : sc.normal; ctx.fill();
 }
 
 function drawRuler(ctx: CanvasRenderingContext2D, view: OverlayView, sch: boolean, origin: Pt, end: Pt): void {
@@ -85,9 +85,9 @@ export function drawAppOverlays(ctx: CanvasRenderingContext2D, view: OverlayView
   if (ms && ms.b) drawRuler(ctx, view, sch, ms.a, ms.b);
   const bs = E.boxSel as { start: Pt; cur: Pt; pts: Pt[]; lasso: boolean; mode?: string } | null;
   if (bs) {
-    const additive = bs.mode === "add", subtractive = bs.mode === "remove";
-    if (bs.lasso) drawSelectionArea(ctx, px, dark, { poly: bs.pts, inside: lassoArea(bs.pts) > 0, additive, subtractive });
-    else drawSelectionArea(ctx, px, dark, { rect: [bs.start, bs.cur], inside: bs.cur[0] >= bs.start[0], additive, subtractive });
+    const additive = bs.mode === "add", subtractive = bs.mode === "remove", exclusiveOr = bs.mode === "toggle";   // SELECTION_AREA's exclusiveOr fill: Ctrl without Shift
+    if (bs.lasso) drawSelectionArea(ctx, px, dark, { poly: bs.pts, inside: lassoArea(bs.pts) > 0, additive, subtractive, exclusiveOr });
+    else drawSelectionArea(ctx, px, dark, { rect: [bs.start, bs.cur], inside: bs.cur[0] >= bs.start[0], additive, subtractive, exclusiveOr });
   }
   const zr = E.zoomRect as { a?: Pt; b?: Pt } | null;
   if (zr && zr.a && zr.b) drawSelectionArea(ctx, px, dark, { rect: [zr.a, zr.b], inside: true });

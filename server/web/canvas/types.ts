@@ -220,6 +220,10 @@ export interface RenderOpts {
   brightened?: Set<string> | null;
   /** board: F.SilkS default line width (mm): the locked item shadow margin is 4× it */
   silkLineWidth?: number;
+  /** board: the board outline loops filled in LAYER_BOARD_OUTLINE_AREA (Appearance ▸ Board Area Shadow) */
+  boardArea?: number[][][] | null;
+  /** board: the entered group's member ids; everything else is drawn at outsideGroupOpacity */
+  enteredGroup?: Set<string> | null; outsideGroupOpacity?: number;
   ids?: Set<string> | string[] | null; skip?: Set<string> | null;
   netColors?: Map<number, string> | null; netNames?: boolean; zoneFill?: boolean; flip?: boolean;
   ratsnest?: RatsLine[] | null; ratsnestNets?: Set<number> | null; markers?: Marker[] | null;

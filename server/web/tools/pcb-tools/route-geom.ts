@@ -40,7 +40,7 @@ export function snapTarget(doc: BoardDoc, x: number, y: number, tol: number, lay
     const d = Math.hypot(px - x, py - y); if (!inside && d > tol) return;
     if (hasNet(net) && hasNet(n) && !sameNet(n, net)) return;   // never pull a routed net onto another net
     if (strict && !sameNet(n, net) && !(kind === "pad" && inside)) return;   // pickSingleItem: the routed net only; a free pad when the cursor is inside it
-    if (d < bd) { bd = d; best = Object.assign({ x: px, y: py, net: n, kind }, extra); }
+    if (d < bd) { bd = d; best = Object.assign({ x: px, y: py, net: n, kind, onLayer: layer }, extra); }
   };
   const mids: { it: KItem; a: Pt; b: Pt }[] = [];
   for (const it of doc.items.values()) {

@@ -1,11 +1,12 @@
 // pcb-tools/overlay.ts — the overlay: what the tools draw over the board.
-import type { BoardDoc, CopperShape, DrawState, GeomPrim, PcbCtx, Pt, RatsnestLine } from "./types";
-import { editorState, netNameOf, netlistCached, sizesOf } from "./app-state";
+import type { BoardDoc, CopperShape, DrawState, GeomPrim, PcbCtx, Pt, RatsnestLine, SnapType } from "./types";
+import { appGlobal, editorState, netNameOf, netlistCached, sizesOf } from "./app-state";
 import { drawArcPreview } from "./arcs";
 import { drawStatusPopup, drawTwoPointAssistant } from "./assistants";
 import { DIM_TYPE, dimensionNode, snap45 } from "./dimensions";
 import type { DimSpec } from "./dimensions";
-import { rectCore, shapeOffset } from "./distances";
+import { polysOverlap, rectCore, shapeOffset } from "./distances";
+import { courtyards } from "./drc";
 import { POLY_TOOLS, RULE_AREA_LAYERS, drawWidth } from "./draw-modes";
 import { selectionIds } from "./groups";
 import { netTable, ratsnest } from "./netlist";
@@ -15,13 +16,58 @@ import { drawEditPoints } from "./point-editor";
 import { padsOf } from "./route-geom";
 import { PAD_TOOLS, masterPad } from "./pad-tool";
 import { drawDragPreview, drawRoute } from "./route-preview";
-import { DEL, HALO_COLOR, HL, K, RATSNEST, RATSNEST_BRIGHT, S, VIA, bind } from "./state";
+import { HALO_COLOR, HL, K, RATSNEST, S, VIA, bind } from "./state";
 import { drawTune } from "./tuning-patterns";
 import { drawGenEditPreview, drawTuningSelection } from "./tuning-edit";
 import { isTuneTool } from "./tuning-tool";
 import { color, pt, samePt, vadd, vsub } from "./util";
 
 // ---------------------------------------------------------------- overlay
+export const CONFLICTS_SHADOW = "rgba(255, 0, 5, 0.5)";   // LAYER_CONFLICTS_SHADOW (builtin_color_themes.h)
+/**
+ * DRC_INTERACTIVE_COURTYARD_CLEARANCE while footprints move (EDIT_TOOL::doMoveSelection, m_ShowCourtyardCollisions):
+ * the moving footprints' courtyards against every other footprint's, front against front and back against back.
+ * Returns each colliding footprint (moving or not) with its courtyard polygons on the colliding side(s).
+ */
+export function courtyardConflicts(doc: BoardDoc, moving: Set<string>): Map<string, Pt[][]> {
+  const out = new Map<string, Pt[][]>();
+  const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint" && it.bbox);
+  const mov = fps.filter((f) => moving.has(f.id)); if (!mov.length) return out;
+  const cache = new Map<string, Record<string, Pt[][]>>(); const cyOf = (f: KItem) => { let c = cache.get(f.id); if (!c) cache.set(f.id, c = courtyards(f)); return c; };
+  const mark = (f: KItem, polys: Pt[][]) => { const a = out.get(f.id) || []; for (const p of polys) if (!a.includes(p)) a.push(p); out.set(f.id, a); };
+  for (const a of mov) {
+    const ca = cyOf(a); if (!ca["F.CrtYd"].length && !ca["B.CrtYd"].length) continue;
+    for (const b of fps) {
+      if (b === a || (moving.has(b.id) && b.id < a.id)) continue;
+      const A = a.bbox!, B = b.bbox!; if (A[2] < B[0] || B[2] < A[0] || A[3] < B[1] || B[3] < A[1]) continue;
+      const cb = cyOf(b);
+      for (const layer of ["F.CrtYd", "B.CrtYd"]) for (const P of ca[layer]) for (const Q of cb[layer]) if (polysOverlap(P, Q)) { mark(a, ca[layer]); mark(b, cb[layer]); }
+    }
+  }
+  return out;
+}
+/** The tools whose cursor the router snaps (no snap indicator). */
+export const ROUTER_TOOLS = new Set(["route", "routediff", "tunesingle", "tunediff", "tuneskew", "drag"]);
+/** PCB_CONTROL's grid origin marker colour: the grid colour Brightened( 0.25 ), Darkened on a light background. */
+export function gridOriginColor() {
+  const gc = appGlobal(() => (editorState() as unknown as { renderOpts: { gridColor?: string } }).renderOpts.gridColor, null) || "#848484";   // LAYER_GRID
+  return adjustColor(gc, 0.25, alphaOf(gc), brightness(K.PCB_BG) >= 0.5);
+}
+/** A css colour's channels 0..255 and alpha 0..1. */
+export function rgbaOf(col: string): [number, number, number, number] {
+  const m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(col);
+  if (m) { const v = parseInt(m[1], 16); return [v >> 16, (v >> 8) & 255, v & 255, m[2] ? parseInt(m[2], 16) / 255 : 1]; }
+  const q = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/i.exec(col);
+  return q ? [+q[1], +q[2], +q[3], q[4] === undefined ? 1 : +q[4]] : [255, 255, 255, 1];
+}
+export const alphaOf = (col: string) => rgbaOf(col)[3];
+/** COLOR4D::GetBrightness (0..1). */
+export function brightness(col: string) { const [r, g, b] = rgbaOf(col); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; }
+/** RATSNEST_VIEW_ITEM's adjustColor: Brightened( delta ) on a dark background, Darkened( delta ) on a light one, WithAlpha( min( a, 1 ) ). */
+export function adjustColor(col: string, delta: number, alpha: number, lightBg = false) {
+  const [r, g, b] = rgbaOf(col); const k = (v: number) => Math.round(lightBg ? v * (1 - delta) : v * (1 - delta) + 255 * delta);
+  return `rgba(${k(r)}, ${k(g)}, ${k(b)}, ${+Math.min(alpha, 1).toFixed(4)})`;
+}
 /** The board's ratsnest, rebuilt after a document change and kept until the next one. */
 export function ratsnestLines(doc: BoardDoc) {
   if (!S.rats || S.rats.doc !== doc || S.ratsDirty) { S.rats = { doc, lines: ratsnest(doc, netlistCached(doc)) }; S.ratsDirty = false; }
@@ -77,6 +123,41 @@ export function drawShape(c: CanvasRenderingContext2D, sh: CopperShape, grow: nu
   if (off > 0) { c.lineWidth = 2 * off; c.lineJoin = "round"; c.lineCap = "round"; polyline(c, pts, closed); }
 }
 export function ring(c: CanvasRenderingContext2D, p: Pt, r: number) { c.beginPath(); c.arc(p[0], p[1], r, 0, Math.PI * 2); c.stroke(); }
+export const SNAP_INDICATOR_COLOR = "#FFFFFF", SNAP_INDICATOR_SIZE = 16;   // SNAP_INDICATOR( COLOR4D::WHITE, 16 )
+/**
+ * SNAP_INDICATOR::ViewDraw at `p`: the ORIGIN_VIEWITEM CIRCLE_CROSS (a circle of `size` px and a cross with `size` px
+ * arms, one pixel wide), and the icon of the snap's POINT_TYPE, `size` px wide, 24 px right of and 10 px below the point.
+ * `cpx` is one screen (css) pixel in document units.
+ */
+export function drawSnapIndicator(c: CanvasRenderingContext2D, p: Pt, type: SnapType | null | undefined, cpx: number, color = SNAP_INDICATOR_COLOR) {
+  const r = SNAP_INDICATOR_SIZE * cpx;
+  c.save(); c.globalAlpha = 1; c.setLineDash([]); c.lineCap = "butt"; c.lineJoin = "miter"; c.strokeStyle = color; c.fillStyle = color; c.lineWidth = cpx;
+  ring(c, p, r); line(c, [p[0] - r, p[1]], [p[0] + r, p[1]]); line(c, [p[0], p[1] - r], [p[0], p[1] + r]);
+  const at: Pt = [p[0] + 24 * cpx, p[1] + 10 * cpx], size = SNAP_INDICATOR_SIZE * cpx, node = size / 8;
+  const dot = (q: Pt) => { c.beginPath(); c.arc(q[0], q[1], node, 0, Math.PI * 2); c.fill(); };
+  switch (type) {
+    case "corner": { const k: Pt = [at[0] - size / 2 + node, at[1] - size / 2 + node]; line(c, k, [k[0] + size - node, k[1]]); line(c, k, [k[0], k[1] + size - node]); dot(k); break; }
+    case "end": { const s0: Pt = [at[0] - (size / 2 - node), at[1]]; dot(s0); line(c, s0, [s0[0] + size - node, s0[1]]); break; }
+    case "mid": dot(at); line(c, [at[0] - size / 2, at[1]], [at[0] + size / 2, at[1]]); break;
+    case "center": ring(c, at, size / 4); line(c, [at[0] - size / 2, at[1]], [at[0] + size / 2, at[1]]); line(c, [at[0], at[1] - size / 2], [at[0], at[1] + size / 2]); break;
+    case "quadrant": {
+      const q: Pt = [at[0], at[1] - (size / 2 - node)], ar = size - node * 2; dot(q);
+      // most of the top half of a circle through the node: EDA_ANGLE -160 … 140 sweep in GAL's (y-down) frame
+      const a0 = -160 * Math.PI / 180; c.beginPath(); c.arc(q[0], q[1] + ar, ar, a0, a0 + 140 * Math.PI / 180); c.stroke();
+      break;
+    }
+    case "intersection": { dot(at); const lx = size / 2, ly = size / 3; line(c, [at[0] - lx, at[1] - ly], [at[0] + lx, at[1] + ly]); line(c, [at[0] - lx, at[1] + ly], [at[0] + lx, at[1] - ly]); break; }
+    case "onElement": dot([at[0] + size / 4, at[1]]); line(c, [at[0] - size / 2, at[1]], [at[0] + size / 2, at[1]]); break;
+    default: break;
+  }
+  c.restore();
+}
+/** The POINT_TYPE a router / via snap target stands for: a pad or via centre, a track end, a point on a track. */
+export function snapTypeOf(snap: { kind: string; type?: SnapType } | null | undefined): SnapType {
+  if (!snap) return "none";
+  if (snap.kind === "anchor") return snap.type || "none";
+  return snap.kind === "pad" || snap.kind === "via" ? "center" : snap.kind === "track" ? "end" : snap.kind === "trackMid" ? "onElement" : "none";
+}
 export function polyline(c: CanvasRenderingContext2D, pts: Pt[], close: boolean) { if (pts.length < 2) return; c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); if (close) c.closePath(); c.stroke(); }
 /** A dimension in progress, drawn from the same geometry the node gets. */
 /** The dimension being drawn, as the item it will be (the preview VIEW_GROUP shows the PCB_DIMENSION itself). */
@@ -104,33 +185,53 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
   // ratsnest (KiCad's default colour), the whole board or only the lines reaching the selected footprints
   if (S.showRatsnest) {
     const lines = ratsnestLines(doc); const sel = S.localRatsnest ? selectionIds(ctx) : null;
-    c.globalAlpha = 1; c.strokeStyle = RATSNEST; c.lineWidth = 1 * px; c.beginPath();
+    c.globalAlpha = 1; c.lineWidth = 1 * px;
     const curved = K.pcbSizes.state.curvedRatsnest;   // RATSNEST_VIEW_ITEM: a Bezier whose two control points sit 10% off the midpoint
     const trace = (l: { a: Pt; b: Pt }) => {
       c.moveTo(l.a[0], l.a[1]);
       if (curved) { const dx = l.b[0] - l.a[0], dy = l.b[1] - l.a[1], mx = l.a[0] + 0.5 * dx - 0.1 * dy, my = l.a[1] + 0.5 * dy + 0.1 * dx; c.bezierCurveTo(mx, my, mx, my, l.b[0], l.b[1]); }
       else c.lineTo(l.b[0], l.b[1]);
     };
-    const tinted: RatsnestLine[] | null = S.ratsnestColors && S.ratsnestColors.size ? [] : null;   // net name -> colour, set by the Appearance pane's Nets tab
-    const hlNet = S.route && S.route.netKey ? S.route.netKey : null, bright: RatsnestLine[] | null = hlNet ? [] : null;   // while routing: the rest at half alpha, the routed net brightened 0.8, alpha + 0.4
-    if (hlNet) c.globalAlpha = 0.5;
-    const moving = movingIds();   // RATSNEST_VIEW_ITEM: the static lines of moving items give way to the dynamic ones
-    for (const l of lines) { if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id: string) => sel.has(id))) continue; if (moving.size && l.ids.some((id: string) => moving.has(id))) continue; if (bright && l.net === hlNet) { bright.push(l); continue; } if (tinted && S.ratsnestColors!.has(l.net)) { tinted.push(l); continue; } trace(l); }
-    c.stroke();
-    if (tinted) for (const l of tinted) { c.strokeStyle = S.ratsnestColors!.get(l.net)!; c.beginPath(); trace(l); c.stroke(); }
-    if (bright && bright.length) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_BRIGHT; c.beginPath(); for (const l of bright) trace(l); c.stroke(); }
-    if (moving.size) { c.globalAlpha = 1; c.strokeStyle = RATSNEST; c.beginPath(); for (const l of dynamicRatsnest(doc, moving)) { if (!S.hiddenNets.has(l.net)) trace(l); } c.stroke(); }
+    // RATSNEST_VIEW_ITEM::ViewDraw: while anything moves or a net is highlighted every static line is drawn at half its
+    // alpha; the lines of highlighted nets (a ` highlight, the routed net) are adjustColor( c, 0.8, a + 0.4 ), and the
+    // dynamic lines of what is moving adjustColor( c, 0.5, a + 0.3 )
+    const moving = movingIds();   // the static lines of moving items give way to the dynamic ones
+    const hlNets = new Set<string>(); if (S.route && S.route.netKey) hlNets.add(S.route.netKey); if (S.route && S.route.netKeyN) hlNets.add(S.route.netKeyN); if (S.highlightNet) hlNets.add(S.highlightNet);
+    if (S.drag) for (const d of S.drag.subs) if (d.netKey) hlNets.add(d.netKey);
+    const dimStatic = moving.size > 0 || hlNets.size > 0;
+    const lightBg = brightness(K.PCB_BG) >= 0.5;
+    const baseOf = (net: string) => (S.ratsnestColors && S.ratsnestColors.get(net)) || RATSNEST;
+    const byColor = new Map<string, RatsnestLine[]>();
+    for (const l of lines) {
+      if (S.hiddenNets.has(l.net)) continue; if (sel && !l.ids.some((id: string) => sel.has(id))) continue; if (moving.size && l.ids.some((id: string) => moving.has(id))) continue;
+      let col = baseOf(l.net), a = alphaOf(col);
+      if (dimStatic) { a = a / 2; col = adjustColor(col, 0, a, lightBg); }
+      if (hlNets.has(l.net)) col = adjustColor(col, 0.8, a + 0.4, lightBg);
+      let arr = byColor.get(col); if (!arr) byColor.set(col, arr = []); arr.push(l);
+    }
+    for (const [col, arr] of byColor) { c.strokeStyle = col; c.beginPath(); for (const l of arr) trace(l); c.stroke(); }
+    if (moving.size) {
+      const dyn = new Map<string, { a: Pt; b: Pt }[]>();
+      for (const l of dynamicRatsnest(doc, moving)) { if (S.hiddenNets.has(l.net)) continue; const b = baseOf(l.net); const col = adjustColor(b, 0.5, alphaOf(b) + 0.3, lightBg); let arr = dyn.get(col); if (!arr) dyn.set(col, arr = []); arr.push(l); }
+      for (const [col, arr] of dyn) { c.strokeStyle = col; c.beginPath(); for (const l of arr) trace(l); c.stroke(); }
+    }
   }
   // the grid origin (circle + X) and the drill / place file origin (circle + cross, red): ORIGIN_VIEWITEM, 16 px, hidden at 0,0
   { const R = K.pcbSizes.state; const r = 16 * px; c.globalAlpha = 1; c.lineWidth = 1 * px;
     const g = S.modTool === "gridorigin" && S.hover ? [S.hover.x, S.hover.y] : R.gridOrigin, d = S.modTool === "drillorigin" && S.hover ? [S.hover.x, S.hover.y] : R.auxOrigin;
-    if (g[0] || g[1]) { c.strokeStyle = "#C2C2C2"; ring(c, g, r); line(c, [g[0] - r, g[1] - r], [g[0] + r, g[1] + r]); line(c, [g[0] - r, g[1] + r], [g[0] + r, g[1] - r]); }
+    if (g[0] || g[1]) { c.strokeStyle = gridOriginColor(); ring(c, g, r); line(c, [g[0] - r, g[1] - r], [g[0] + r, g[1] + r]); line(c, [g[0] - r, g[1] + r], [g[0] + r, g[1] - r]); }
     if (d[0] || d[1]) { c.strokeStyle = "#CC0000"; ring(c, d, r); line(c, [d[0] - r, d[1]], [d[0] + r, d[1]]); line(c, [d[0], d[1] - r], [d[0], d[1] + r]); } }
   // DRC markers: PCB_PAINTER::draw(PCB_MARKER) -- MARKER_BASE's pin polygon scaled by 1/sqrt(zoom), filled in
   // LAYER_DRC_ERROR / LAYER_DRC_WARNING over the LAYER_MARKER_SHADOWS outline
   if (S.markers.length && K.drawMarkers) {
     const shown = S.hiddenSeverities && S.hiddenSeverities.size ? S.markers.filter((m) => !S.hiddenSeverities!.has(m.severity)) : S.markers;
     if (shown.length) K.drawMarkers(c, shown, "pcb", K.markerScale("pcb", view), K.PCB_BG);
+  }
+  // PCB_PAINTER::draw(FOOTPRINT) on LAYER_CONFLICTS_SHADOW: the courtyards of footprints flagged COURTYARD_CONFLICT
+  if (S.move && S.move.moved && S.showCourtyardConflicts !== false) {
+    const m = S.move, key = m.last[0] + "," + m.last[1] + (m.xformed ? "x" : "");
+    if (!m.conflicts || m.conflicts.key !== key) m.conflicts = { key, fps: courtyardConflicts(doc, new Set(m.ids)) };
+    if (m.conflicts.fps.size) { c.globalAlpha = 1; c.fillStyle = CONFLICTS_SHADOW; c.beginPath(); for (const polys of m.conflicts.fps.values()) for (const P of polys) { c.moveTo(P[0][0], P[0][1]); for (let i = 1; i < P.length; i++) c.lineTo(P[i][0], P[i][1]); c.closePath(); } c.fill("nonzero"); }
   }
   // drag in progress (ROUTER::moveDragging): the rebuilt lines over the hidden originals
   drawDragPreview(c, ctx, view, px);
@@ -164,13 +265,20 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
     } else if (POLY_TOOLS.has(d.shape)) {
       if (d.pending) { /* the properties dialog is open: nothing drawn yet */ }
       else {
-        polyline(c, d.pts.concat((d.leader || [null, d.cur]).slice(1) as Pt[]), false);
-        const loop = d.loop && d.loop.length > 1 ? d.loop : [d.cur, d.pts[0]];
-        if (d.pts.length > 1) { c.setLineDash([2 * px, 2 * px]); polyline(c, loop, false); c.setLineDash([]); }
+        // ZONE_CREATE_HELPER's POLYGON_ITEM: the locked-in chain 1 px in WHITE, the leader in LAYER_AUX_ITEMS (white), and
+        // the polygon they make with the closing loop filled in the layer colour at alpha 0.2 (no outline for the loop)
+        const leader = (d.leader && d.leader.length > 1 ? d.leader : [d.pts[d.pts.length - 1], d.cur]) as Pt[];
+        const loop = (d.loop && d.loop.length > 1 ? d.loop : [d.cur, d.pts[0]]) as Pt[];
+        const fill = d.pts.concat(leader, loop);
+        if (fill.length > 2) { const [r, g, b] = rgbaOf(color(layer)); c.globalAlpha = 1; c.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`; c.beginPath(); c.moveTo(fill[0][0], fill[0][1]); for (let i = 1; i < fill.length; i++) c.lineTo(fill[i][0], fill[i][1]); c.closePath(); c.fill(); }
+        c.globalAlpha = 1; c.strokeStyle = "#FFFFFF"; c.lineWidth = px * (view.dpr || 1); c.lineJoin = "miter"; c.lineCap = "butt";
+        if (d.pts.length >= 2) polyline(c, d.pts, false);
+        polyline(c, leader, false);
+        c.lineJoin = "round"; c.lineCap = "round";
       }
     } else if (DIM_TYPE[d.shape]) drawDimPreview(c, d, px);
     else ring(c, d.start, Math.hypot(d.cur[0] - d.start[0], d.cur[1] - d.start[1]));
-    if (d.pts) { c.fillStyle = HL; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
+    if (d.pts && !POLY_TOOLS.has(d.shape)) { c.fillStyle = HL; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
     drawTwoPointAssistant(c, d, px, color(layer));
   }
   // the picked reference image, centred on the cursor
@@ -187,13 +295,15 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
   }
   drawStatusPopup(c, px * (view.dpr || 1));
   // delete tool: what the click would remove is brightened by the document pass (brightenedIds), as KiCad does
-  // a move's magnetic snap (the anchor the cursor was pulled onto)
-  if (S.move && S.move.snapAt) { c.globalAlpha = 1; c.strokeStyle = HL; c.lineWidth = 1.5 * px; ring(c, S.move.snapAt, 5 * px); }
+  // a move's magnetic snap (the anchor the cursor was pulled onto): GRID_HELPER's SNAP_INDICATOR
+  const cpx = px * (view.dpr || 1);
+  if (S.move && S.move.snapAt) drawSnapIndicator(c, S.move.snapAt, S.move.snapAt.t, cpx);
   // cursor: the via about to be placed, and the magnetic snap marker
   const hv = S.hover;
   if (hv && S.modTool) {
     if (S.modTool === "via" && !S.route) { const v = sizesOf(ctx).routeVia(netNameOf(ctx, hv.snap ? hv.snap.net : null)); c.globalAlpha = 0.6; c.strokeStyle = VIA; c.lineWidth = (v.diameter - v.drill) / 2; ring(c, [hv.x, hv.y], (v.diameter + v.drill) / 4); }
-    if (hv.snap) { c.globalAlpha = 1; c.strokeStyle = HL; c.lineWidth = 1.5 * px; ring(c, [hv.x, hv.y], 5 * px); }
+    // GRID_HELPER::BestSnapAnchor shows the snap indicator; the router snaps through TOOL_BASE::snapToItem, which shows none
+    if (hv.snap && !ROUTER_TOOLS.has(S.modTool) && !S.route) drawSnapIndicator(c, [hv.x, hv.y], snapTypeOf(hv.snap as { kind: string; type?: SnapType }), cpx);
   }
   c.globalAlpha = 1;
 }

@@ -26,10 +26,10 @@ import { viaNode } from "./nodes";
 import { drawShape, line, polyline } from "./overlay";
 import { leadingRatline, routeHighlight, trackOps } from "./route-fix";
 import { padsOf } from "./route-geom";
-import { drawViaPreview } from "./route-preview";
+import { drawViaPreview, previewColor, ratlineColor } from "./route-preview";
 import { endRoute, showViolations, trackUnder, viaPlan, viaSpan } from "./route-tool";
 import { RM_MARK } from "./router-settings";
-import { DBL_MS, HALO_COLOR, K, RATSNEST_LEAD, S, saturated } from "./state";
+import { DBL_MS, HALO_COLOR, K, S, saturated } from "./state";
 import { newTracer, tracerPosture, trailAdd } from "./tracer";
 import { color, layerOf, pt, r6, samePt, vadd, vmul, vsub, vunit, widthOf } from "./util";
 import { DIRS8, dir8, dirAngle, indexObstacles, isDiagDir, legPts, pathHits, routeObstacles, simplifyPts, walkHead } from "./walkaround";
@@ -370,12 +370,13 @@ export function drawDpRoute(c: CanvasRenderingContext2D, ctx: PcbCtx, px: number
   const marks = rt!.collisions || [];
   for (const ob of marks) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
   if (L) {
-    c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = w + 2 * clr; polyline(c, L.P, false); polyline(c, L.N, false);
-    c.globalAlpha = 0.8; c.strokeStyle = saturated(color(rt!.layer)); c.lineWidth = w; polyline(c, L.P, false); polyline(c, L.N, false);
+    const tc = typeof S.trackClearance === "number" ? S.trackClearance : 2;
+    if (tc >= 1) { c.globalAlpha = 0.9; c.strokeStyle = HALO_COLOR; c.lineWidth = w + 2 * clr; polyline(c, L.P, false); polyline(c, L.N, false); }   // line chains: DM_SHADOW stroke 0.9
+    c.globalAlpha = 0.8; c.lineWidth = w; c.strokeStyle = saturated(previewColor(rt!.layer, rt!.netKey)); polyline(c, L.P, false); c.strokeStyle = saturated(previewColor(rt!.layer, rt!.netKeyN)); polyline(c, L.N, false);
     if (L.vias && rt!.placingVia) for (const at of [L.vias.P, L.vias.N]) {
-      c.globalAlpha = 0.7; c.fillStyle = HALO_COLOR; c.beginPath(); c.arc(at[0], at[1], rt!.placingVia.diameter / 2 + clr, 0, 2 * Math.PI); c.fill();
+      if (tc >= 2) { c.globalAlpha = 0.7; c.fillStyle = HALO_COLOR; c.beginPath(); c.arc(at[0], at[1], rt!.placingVia.diameter / 2 + clr, 0, 2 * Math.PI); c.fill(); }
       drawViaPreview(c, at, rt!.placingVia.diameter, rt!.placingVia.drill, px, 0.8);
     }
   }
-  if (rt!.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; for (const r of rt!.ratline as Ratline[]) line(c, r[0], r[1]); }
+  if (rt!.ratline && S.showRatsnest) { c.globalAlpha = 1; c.lineWidth = 1 * px; (rt!.ratline as Ratline[]).forEach((r, i) => { c.strokeStyle = ratlineColor(i ? rt!.netKeyN : rt!.netKey); line(c, r[0], r[1]); }); }
 }

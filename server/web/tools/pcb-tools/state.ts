@@ -9,7 +9,11 @@ export const HL = "#FFB43A", VIA = "#ECECEC", DEL = "#FF5C5C";
 export const RATSNEST = "rgba(0, 248, 255, 0.35)";   // LAYER_RATSNEST (builtin_color_themes.h)
 // the router's preview colours: the ratsnest Brightened(0.8) with alpha + 0.4 for the routed net, Brightened(0.5) for
 // the leading line from the head (DisplayRatline), and DARKDARKGRAY clearance halos
-export const RATSNEST_BRIGHT = "rgba(204, 250, 255, 0.95)", RATSNEST_LEAD = "rgba(128, 252, 255, 0.95)", HALO_COLOR = "rgb(72, 72, 72)";
+export const RATSNEST_BRIGHT = "rgba(204, 250, 255, 0.575)", RATSNEST_LEAD = "rgba(128, 252, 255, 0.75)", HALO_COLOR = "rgb(72, 72, 72)";
+// ROUTER_PREVIEW_ITEM DM_SHADOW: DARKDARKGRAY stroked at 0.9 (line chains: the head), filled at 0.7 (segments, vias, obstacles)
+export const HALO_STROKE_ALPHA = 0.9, HALO_FILL_ALPHA = 0.7;
+/** pcb_display.track_clearance_mode values (TRACK_CLEARANCE_MODE). */
+export const CLEARANCE_MODE = { NONE: 0, ROUTING: 1, ROUTING_VIA: 2, ROUTING_EDITING: 3, ALWAYS: 4 };
 /** COLOR4D::Saturate(1.0): the same hue and value at full saturation (the head trace colour). */
 export function saturated(col: string) {
   let r, g, b; const m = /^#([0-9a-f]{6})/i.exec(col), q = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(col);
@@ -33,6 +37,7 @@ export const S = {
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open
   markers: [],                            // the last DRC run's markers [{ x, y, severity, text, ids, code }]
+  trackClearance: 2,                      // pcb_display.track_clearance_mode (Preferences ▸ PCB Editor ▸ Display Options), SHOW_WITH_VIA_WHILE_ROUTING
   showRatsnest: true, localRatsnest: false, hiddenNets: new Set(), rats: null, ratsDirty: true,   // ratsnest display (KiCad shows it by default)
   settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
   docVer: 0, rworld: null, nlc: null, violations: null,   // the router's caches (per document change) and the obstacles shown in violation

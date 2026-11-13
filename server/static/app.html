@@ -57,10 +57,8 @@
   @media (prefers-reduced-motion: reduce) { .kinfobar, .kinfobar.show { transition: none; } }
   .ktip { position: fixed; left: 0; top: 0; z-index: 1000; max-width: 360px; padding: 4px 7px; border: 1px solid var(--line-2, var(--line)); border-radius: 3px; background: var(--panel); color: var(--ink); font-size: 12px; line-height: 1.35; white-space: pre-line; pointer-events: none; box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 18%, transparent); opacity: 0; visibility: hidden; transition: opacity .08s linear, visibility 0s linear .08s; }
   .ktip.on { opacity: 1; visibility: visible; transition: opacity .08s linear; }
-  #crosshair { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; color: var(--cursor-pcb); stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+  #crosshair { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; color: var(--cursor-pcb); }
   #crosshair.live { display: block; } body[data-editor="sch"] #crosshair { color: var(--cursor-sch); }
-  #crosshair[data-mode="small"] #chD1, #crosshair[data-mode="small"] #chD2, #crosshair[data-mode="full"] #chD1, #crosshair[data-mode="full"] #chD2, #crosshair[data-mode="45"] #chH, #crosshair[data-mode="45"] #chV { display: none; }
-  #crosshair[data-mode="45"] { shape-rendering: auto; }
   #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); padding: 10px 14px; display: none; box-shadow: var(--shadow); }
   .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center; }
   .kv label { color: var(--ink-2); }
@@ -90,7 +88,7 @@
           <svg id="base" xmlns="http://www.w3.org/2000/svg"></svg>
           <svg id="overlay" xmlns="http://www.w3.org/2000/svg"><g id="ovRoot"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></g></svg>
         </div>
-        <svg id="crosshair" data-mode="small"><line id="chH"/><line id="chV"/><line id="chD1"/><line id="chD2"/></svg>
+        <canvas id="crosshair" data-mode="small"></canvas>
         <div id="cmtPanel"></div>
       </div>
       <div id="ui-tbRight"></div>
