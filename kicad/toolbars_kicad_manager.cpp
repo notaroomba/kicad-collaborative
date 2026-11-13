@@ -48,6 +48,9 @@ std::optional<TOOLBAR_CONFIGURATION> KICAD_MANAGER_TOOLBAR_SETTINGS::DefaultTool
         config.AppendSeparator()
               .AppendAction( KICAD_MANAGER_ACTIONS::openProjectDirectory );
 
+        config.AppendSeparator()
+              .AppendAction( KICAD_MANAGER_ACTIONS::onlineProjects );
+
         break;
     }
 

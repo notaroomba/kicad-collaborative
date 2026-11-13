@@ -33,6 +33,7 @@ class PLUGIN_CONTENT_MANAGER;
 class PROJECT_TREE;
 class PROJECT_TREE_PANE;
 class LOCAL_HISTORY_PANE;
+class ONLINE_PROJECTS_PANE;
 class GIT_COMMIT_PANE;
 class UPDATE_MANAGER;
 
@@ -56,8 +57,8 @@ public:
     void UnarchiveFiles();
 
     /// Join a collaborative project from a share link / invite token, or from
-    /// a kicad-collab:// deep link.  Empty prompts for the link.  Opens the
-    /// Online Projects dialog to carry out the join.
+    /// a kicad-collab:// deep link.  Empty prompts for the link.  The Online
+    /// Projects pane carries out the join.
     void HandleCollabJoinLink( const wxString& aLinkOrToken );
 
     /// Start (or, when already signed in, offer to end) the collaboration
@@ -82,6 +83,13 @@ public:
     void RestoreLocalHistory();
     void RestoreCommitFromHistory( const wxString& aHash );
     void ToggleLocalHistory();
+
+    /// Show or hide the Online Projects pane docked beside the editors.
+    void ToggleOnlineProjectsPane();
+    bool OnlineProjectsPaneShown();
+
+    /// Show the Online Projects pane (if hidden) and put the keyboard in its filter.
+    void ShowOnlineProjectsPane();
     bool HistoryPanelShown();
 
     void ToggleGitCommitPane();
@@ -309,6 +317,8 @@ private:
 
     PROJECT_TREE_PANE*    m_projectTreePane;
     LOCAL_HISTORY_PANE*   m_historyPane;
+    ONLINE_PROJECTS_PANE* m_onlinePane;
+    bool                  m_showOnlinePanel;
     GIT_COMMIT_PANE*      m_gitCommitPane;
     wxAuiNotebook*        m_notebook;
     PANEL_KICAD_LAUNCHER* m_launcher;

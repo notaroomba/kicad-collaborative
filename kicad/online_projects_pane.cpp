@@ -17,8 +17,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "dialog_online_projects.h"
-#include "dialog_share_project.h"
+#include "online_projects_pane.h"
+#include "dialogs/dialog_share_project.h"
 
 #include <algorithm>
 #include <iterator>
@@ -30,7 +30,11 @@
 #include <collab/collab_session.h>
 #include <kicad_manager_frame.h>
 #include <paths.h>
+#include <bitmaps.h>
+#include <dialog_shim.h>
 #include <project.h>
+#include <widgets/bitmap_button.h>
+#include <widgets/ui_common.h>
 
 #include <wx/app.h>
 #include <wx/button.h>
@@ -43,7 +47,9 @@
 #include <wx/filename.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
+#include <wx/settings.h>
 #include <wx/sizer.h>
+#include <wx/statline.h>
 #include <wx/srchctrl.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
@@ -78,12 +84,12 @@ enum ONLINE_PROJECT_COLUMN
 {
     COL_STAR = 0,
     COL_NAME,
+    COL_LOCAL_COPY,
     COL_OWNER,
     COL_ROLE,
     COL_VISIBILITY,
-    COL_LOCAL_COPY,
-    COL_DOCUMENTS,
     COL_EDITED,
+    COL_DOCUMENTS,
     COL_DESCRIPTION
 };
 
@@ -104,7 +110,7 @@ static bool s_sortLoaded = false;
 
 static wxString sortOrderFile()
 {
-    return wxFileName( PATHS::GetUserSettingsPath(), wxS( "collab_online_projects.json" ) )
+    return wxFileName( PATHS::GetUserSettingsPath(), wxS( "collab_online_projects_pane.json" ) )
             .GetFullPath();
 }
 
@@ -562,12 +568,58 @@ private:
 };
 
 
-DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
-        DIALOG_SHIM( aParent, wxID_ANY, _( "Online Projects" ), wxDefaultPosition,
-                     wxSize( 940, 520 ), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER ),
+/// Grey, for what explains rather than what is.
+static wxColour secondaryText()
+{
+    return wxSystemSettings::GetColour( wxSYS_COLOUR_GRAYTEXT );
+}
+
+
+/// The server's address without the scheme, which is all a person needs to recognise it.
+static wxString serverHost()
+{
+    wxString url = COLLAB_SESSION::ServerUrl();
+    wxString host = url;
+
+    for( const wxString& scheme : { wxString( wxS( "https://" ) ), wxString( wxS( "http://" ) ) } )
+    {
+        if( url.StartsWith( scheme ) )
+            host = url.Mid( scheme.length() );
+    }
+
+    while( host.EndsWith( wxS( "/" ) ) )
+        host.RemoveLast();
+
+    return host;
+}
+
+
+/// A hairline between the sections of the pane.
+static wxWindow* hairline( wxWindow* aParent )
+{
+    return new wxStaticLine( aParent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                             wxLI_HORIZONTAL );
+}
+
+
+/// A small grey section heading, the way KiCad heads the groups of a docked pane.
+static wxStaticText* sectionHeading( wxWindow* aParent, const wxString& aText )
+{
+    wxStaticText* heading = new wxStaticText( aParent, wxID_ANY, aText );
+    heading->SetFont( KIUI::GetSmallInfoFont( aParent ).Bold() );
+    heading->SetForegroundColour( secondaryText() );
+    return heading;
+}
+
+
+ONLINE_PROJECTS_PANE::ONLINE_PROJECTS_PANE( KICAD_MANAGER_FRAME* aParent ) :
+        wxPanel( aParent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                 wxTAB_TRAVERSAL | wxNO_BORDER ),
         m_frame( aParent ),
         m_alive( std::make_shared<bool>( true ) ),
         m_auth( std::make_unique<COLLAB_AUTH>() ),
+        m_liveTimer( this ),
+        m_lastRefresh( 0 ),
         m_store( nullptr ),
         m_myUserId( -1 ),
         m_signedIn( false ),
@@ -581,37 +633,102 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
         m_publishing( false ),
         m_refreshGeneration( 0 )
 {
+    const int margin = FromDIP( 8 );
+    const int gap = FromDIP( 4 );
+
     wxBoxSizer* mainSizer = new wxBoxSizer( wxVERTICAL );
 
-    // -- Sign-in row --------------------------------------------------------
-    wxBoxSizer* authSizer = new wxBoxSizer( wxHORIZONTAL );
+    // -- Account --------------------------------------------------------------
+    // Two lines rather than one, so that a long login or server address is cut short
+    // instead of running under the buttons beside it.
+    wxBoxSizer* accountSizer = new wxBoxSizer( wxHORIZONTAL );
+    wxBoxSizer* whoSizer = new wxBoxSizer( wxVERTICAL );
 
-    m_signedInLabel = new wxStaticText( this, wxID_ANY, _( "Not signed in" ) );
-    m_joinButton = new wxButton( this, wxID_ANY, _( "Join from Link..." ) );
-    m_newButton = new wxButton( this, wxID_ANY, _( "New Online Project" ) );
-    m_trashButton = new wxButton( this, wxID_ANY, _( "Show Trash" ) );
-    m_refreshButton = new wxButton( this, wxID_ANY, _( "Refresh" ) );
+    m_signedInLabel = new wxStaticText( this, wxID_ANY, _( "Not signed in" ), wxDefaultPosition,
+                                        wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END );
+    m_signedInLabel->SetFont( GetFont().Bold() );
+
+    m_serverLabel = new wxStaticText( this, wxID_ANY, serverHost(), wxDefaultPosition,
+                                      wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_MIDDLE );
+    m_serverLabel->SetFont( KIUI::GetSmallInfoFont( this ) );
+    m_serverLabel->SetForegroundColour( secondaryText() );
+    m_serverLabel->SetToolTip( COLLAB_SESSION::ServerUrl() );
+
+    whoSizer->Add( m_signedInLabel, 0, wxEXPAND );
+    whoSizer->Add( m_serverLabel, 0, wxEXPAND | wxTOP, FromDIP( 1 ) );
+
     m_signInButton = new wxButton( this, wxID_ANY, _( "Sign In..." ) );
 
+    accountSizer->Add( whoSizer, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, margin );
+    accountSizer->Add( m_signInButton, 0, wxALIGN_CENTER_VERTICAL );
+
+    mainSizer->Add( accountSizer, 0, wxEXPAND | wxALL, margin );
+    mainSizer->Add( hairline( this ), 0, wxEXPAND );
+
+    // -- This project ---------------------------------------------------------
+    m_projectCard = new wxPanel( this );
+
+    wxBoxSizer* cardSizer = new wxBoxSizer( wxVERTICAL );
+
+    m_projectName = new wxStaticText( m_projectCard, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                      wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END );
+    m_projectName->SetFont( m_projectCard->GetFont().Bold() );
+
+    m_projectState = new wxStaticText( m_projectCard, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                       wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END );
+    m_projectState->SetForegroundColour( secondaryText() );
+
+    wxBoxSizer* cardButtons = new wxBoxSizer( wxHORIZONTAL );
+
+    m_projectAction = new wxButton( m_projectCard, wxID_ANY, _( "Publish Online..." ) );
+    m_projectShare = new wxButton( m_projectCard, wxID_ANY, _( "Share..." ) );
+
+    cardButtons->Add( m_projectAction, 0, wxRIGHT, gap );
+    cardButtons->Add( m_projectShare, 0 );
+
+    cardSizer->Add( sectionHeading( m_projectCard, _( "THIS PROJECT" ) ), 0, wxBOTTOM, gap );
+    cardSizer->Add( m_projectName, 0, wxEXPAND );
+    cardSizer->Add( m_projectState, 0, wxEXPAND | wxTOP, FromDIP( 1 ) );
+    cardSizer->Add( cardButtons, 0, wxTOP, margin );
+
+    m_projectCard->SetSizer( cardSizer );
+
+    mainSizer->Add( m_projectCard, 0, wxEXPAND | wxALL, margin );
+    mainSizer->Add( hairline( this ), 0, wxEXPAND );
+
+    // -- Online projects ------------------------------------------------------
+    wxBoxSizer* listHeader = new wxBoxSizer( wxHORIZONTAL );
+
+    m_newButton = new wxButton( this, wxID_ANY, _( "New" ) + wxS( " ▾" ) );
+    m_joinButton = new wxButton( this, wxID_ANY, _( "Join from Link..." ) );
+
+    m_refreshButton = new BITMAP_BUTTON( this, wxID_ANY );
+    m_refreshButton->SetBitmap( KiBitmapBundle( BITMAPS::small_refresh ) );
+    m_refreshButton->SetPadding( 3 );
     m_refreshButton->SetToolTip( _( "Reload the list from the server (F5)" ) );
 
-    authSizer->Add( m_signedInLabel, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, 5 );
-    authSizer->Add( m_joinButton, 0, wxRIGHT, 5 );
-    authSizer->Add( m_newButton, 0, wxRIGHT, 15 );
-    authSizer->Add( m_trashButton, 0, wxRIGHT, 5 );
-    authSizer->Add( m_refreshButton, 0, wxRIGHT, 5 );
-    authSizer->Add( m_signInButton, 0, wxRIGHT, 5 );
+    m_trashButton = new BITMAP_BUTTON( this, wxID_ANY );
+    m_trashButton->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
+    m_trashButton->SetPadding( 3 );
+    m_trashButton->SetIsCheckButton();
 
-    mainSizer->Add( authSizer, 0, wxEXPAND | wxALL, 5 );
+    listHeader->Add( m_newButton, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap );
+    listHeader->Add( m_joinButton, 0, wxALIGN_CENTER_VERTICAL );
+    listHeader->AddStretchSpacer();
+    listHeader->Add( m_refreshButton, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, gap );
+    listHeader->Add( m_trashButton, 0, wxALIGN_CENTER_VERTICAL );
 
-    // -- Filter -------------------------------------------------------------
+    m_listHeading = sectionHeading( this, _( "ONLINE PROJECTS" ) );
+
+    mainSizer->Add( m_listHeading, 0, wxLEFT | wxRIGHT | wxTOP, margin );
+    mainSizer->Add( listHeader, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, margin );
+
     m_search = new wxSearchCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition,
                                  wxDefaultSize );
     m_search->ShowCancelButton( true );
 
-    mainSizer->Add( m_search, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10 );
+    mainSizer->Add( m_search, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, margin );
 
-    // -- Project list -------------------------------------------------------
     m_list = new wxDataViewListCtrl( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                      wxDV_ROW_LINES | wxDV_SINGLE );
 
@@ -622,56 +739,63 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
 
     const int sortable = wxDATAVIEW_COL_RESIZABLE | wxDATAVIEW_COL_SORTABLE;
 
-    // In the order of ONLINE_PROJECT_COLUMN.
-    m_list->AppendTextColumn( starMark(), wxDATAVIEW_CELL_INERT, 30, wxALIGN_CENTER, 0 );
-    m_list->AppendTextColumn( _( "Name" ), wxDATAVIEW_CELL_INERT, 220, wxALIGN_NOT, sortable );
-    m_list->AppendTextColumn( _( "Owner" ), wxDATAVIEW_CELL_INERT, 110, wxALIGN_NOT, sortable );
-    m_list->AppendTextColumn( _( "Your Role" ), wxDATAVIEW_CELL_INERT, 80 );
-    m_list->AppendTextColumn( _( "Visibility" ), wxDATAVIEW_CELL_INERT, 80 );
-    m_list->AppendTextColumn( _( "Local Copy" ), wxDATAVIEW_CELL_INERT, 130, wxALIGN_NOT,
+    // In the order of ONLINE_PROJECT_COLUMN: what fits a docked pane first, the rest a
+    // scroll (or a wider pane) away.
+    m_list->AppendTextColumn( starMark(), wxDATAVIEW_CELL_INERT, FromDIP( 24 ), wxALIGN_CENTER,
+                              0 );
+    m_list->AppendTextColumn( _( "Name" ), wxDATAVIEW_CELL_INERT, FromDIP( 170 ), wxALIGN_NOT,
                               sortable );
-    m_list->AppendTextColumn( _( "Documents" ), wxDATAVIEW_CELL_INERT, 80 );
-    m_list->AppendTextColumn( _( "Last Edited" ), wxDATAVIEW_CELL_INERT, 130, wxALIGN_NOT,
+    m_list->AppendTextColumn( _( "Local Copy" ), wxDATAVIEW_CELL_INERT, FromDIP( 90 ),
+                              wxALIGN_NOT, sortable );
+    m_list->AppendTextColumn( _( "Owner" ), wxDATAVIEW_CELL_INERT, FromDIP( 90 ), wxALIGN_NOT,
                               sortable );
-    m_list->AppendTextColumn( _( "Description" ), wxDATAVIEW_CELL_INERT, 240 );
+    m_list->AppendTextColumn( _( "Your Role" ), wxDATAVIEW_CELL_INERT, FromDIP( 70 ) );
+    m_list->AppendTextColumn( _( "Visibility" ), wxDATAVIEW_CELL_INERT, FromDIP( 70 ) );
+    m_list->AppendTextColumn( _( "Last Edited" ), wxDATAVIEW_CELL_INERT, FromDIP( 120 ),
+                              wxALIGN_NOT, sortable );
+    m_list->AppendTextColumn( _( "Documents" ), wxDATAVIEW_CELL_INERT, FromDIP( 70 ) );
+    m_list->AppendTextColumn( _( "Description" ), wxDATAVIEW_CELL_INERT, FromDIP( 240 ) );
 
     loadSortOrder();
 
     if( s_sortColumn >= 0 && s_sortColumn < (int) m_list->GetColumnCount() )
         m_list->GetColumn( s_sortColumn )->SetSortOrder( s_sortAscending );
 
-    mainSizer->Add( m_list, 1, wxEXPAND | wxLEFT | wxRIGHT, 10 );
+    mainSizer->Add( m_list, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, margin );
 
-    // -- Action buttons -----------------------------------------------------
+    // What the columns that did not fit would have said about the selected project.
+    m_detailLabel = new wxStaticText( this, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                      wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END );
+    m_detailLabel->SetFont( KIUI::GetSmallInfoFont( this ) );
+    m_detailLabel->SetForegroundColour( secondaryText() );
+
+    mainSizer->Add( m_detailLabel, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, margin );
+
+    // -- What to do with the selected project --------------------------------
     wxBoxSizer* buttonSizer = new wxBoxSizer( wxHORIZONTAL );
 
     m_openButton = new wxButton( this, wxID_ANY, _( "Open" ) );
-    m_openInButton = new wxButton( this, wxID_ANY, _( "Open in Folder..." ) );
     m_shareButton = new wxButton( this, wxID_ANY, _( "Share..." ) );
-    m_detailsButton = new wxButton( this, wxID_ANY, _( "Project Details..." ) );
-    m_publicButton = new wxButton( this, wxID_ANY, _( "Make Public" ) );
-    m_deleteButton = new wxButton( this, wxID_ANY, _( "Move to Trash..." ) );
+    m_moreButton = new wxButton( this, wxID_ANY, _( "More" ) + wxS( " ▾" ) );
 
-    m_openInButton->SetToolTip( _( "Choose where the local working copy is stored, then "
-                                   "open the project" ) );
-    m_detailsButton->SetToolTip( _( "Change the name and the description of the project "
-                                    "(F2 renames it)" ) );
+    m_moreButton->SetToolTip( _( "Open in a folder or the web browser, copy the web link, "
+                                 "star, rename, change visibility, make a copy, or move to "
+                                 "the Trash" ) );
 
-    buttonSizer->Add( m_openButton, 0, wxRIGHT, 5 );
-    buttonSizer->Add( m_openInButton, 0, wxRIGHT, 15 );
-    buttonSizer->Add( m_shareButton, 0, wxRIGHT, 5 );
-    buttonSizer->Add( m_detailsButton, 0, wxRIGHT, 5 );
-    buttonSizer->Add( m_publicButton, 0, wxRIGHT, 5 );
+    buttonSizer->Add( m_openButton, 0, wxRIGHT, gap );
+    buttonSizer->Add( m_shareButton, 0, wxRIGHT, gap );
     buttonSizer->AddStretchSpacer();
-    buttonSizer->Add( m_deleteButton, 0, wxRIGHT, 5 );
+    buttonSizer->Add( m_moreButton, 0 );
 
-    mainSizer->Add( buttonSizer, 0, wxEXPAND | wxALL, 10 );
+    mainSizer->Add( buttonSizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, margin );
 
     // -- Status line --------------------------------------------------------
     wxBoxSizer* statusSizer = new wxBoxSizer( wxHORIZONTAL );
 
     m_statusLabel = new wxStaticText( this, wxID_ANY, wxEmptyString, wxDefaultPosition,
                                       wxDefaultSize, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END );
+    m_statusLabel->SetFont( KIUI::GetSmallInfoFont( this ) );
+    m_statusLabel->SetForegroundColour( secondaryText() );
 
     // Only there while the notice on show is about something that can be undone.
     m_undoButton = new wxButton( this, wxID_ANY, _( "Undo" ), wxDefaultPosition, wxDefaultSize,
@@ -679,70 +803,75 @@ DIALOG_ONLINE_PROJECTS::DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent ) :
     m_undoButton->Hide();
 
     statusSizer->Add( m_statusLabel, 1, wxALIGN_CENTER_VERTICAL );
-    statusSizer->Add( m_undoButton, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 10 );
+    statusSizer->Add( m_undoButton, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, margin );
 
-    mainSizer->Add( statusSizer, 0, wxEXPAND | wxLEFT | wxRIGHT, 10 );
-
-    mainSizer->Add( CreateStdDialogButtonSizer( wxCLOSE ), 0, wxEXPAND | wxALL, 5 );
+    mainSizer->Add( statusSizer, 0, wxEXPAND | wxALL, margin );
 
     SetSizer( mainSizer );
 
-    m_signInButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onSignInOut, this );
-    m_refreshButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onRefresh, this );
-    m_trashButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onToggleTrash, this );
-    m_openButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onOpen, this );
-    m_openInButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onOpenInFolder, this );
-    m_shareButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onShare, this );
-    m_detailsButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onDetails, this );
-    m_publicButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onTogglePublic, this );
-    m_deleteButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onDelete, this );
-    m_newButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onNewProject, this );
-    m_joinButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onJoinLink, this );
-    m_undoButton->Bind( wxEVT_BUTTON, &DIALOG_ONLINE_PROJECTS::onUndo, this );
-    m_search->Bind( wxEVT_TEXT, &DIALOG_ONLINE_PROJECTS::onSearchText, this );
+    m_signInButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onSignInOut, this );
+    m_refreshButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onRefresh, this );
+    m_trashButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onToggleTrash, this );
+    m_openButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onOpen, this );
+    m_shareButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onShare, this );
+    m_moreButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onMore, this );
+    m_newButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onNewProject, this );
+    m_joinButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onJoinLink, this );
+    m_undoButton->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onUndo, this );
+    m_projectAction->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onProjectCardAction, this );
+    m_projectShare->Bind( wxEVT_BUTTON, &ONLINE_PROJECTS_PANE::onProjectCardShare, this );
+    m_search->Bind( wxEVT_TEXT, &ONLINE_PROJECTS_PANE::onSearchText, this );
     m_search->Bind( wxEVT_SEARCHCTRL_CANCEL_BTN,
                     [this]( wxCommandEvent& )
                     {
                         clearFilter();
                     } );
-    m_list->Bind( wxEVT_DATAVIEW_ITEM_ACTIVATED, &DIALOG_ONLINE_PROJECTS::onItemActivated, this );
-    m_list->Bind( wxEVT_DATAVIEW_SELECTION_CHANGED, &DIALOG_ONLINE_PROJECTS::onSelectionChanged,
+    m_list->Bind( wxEVT_DATAVIEW_ITEM_ACTIVATED, &ONLINE_PROJECTS_PANE::onItemActivated, this );
+    m_list->Bind( wxEVT_DATAVIEW_SELECTION_CHANGED, &ONLINE_PROJECTS_PANE::onSelectionChanged,
                   this );
-    m_list->Bind( wxEVT_DATAVIEW_ITEM_CONTEXT_MENU, &DIALOG_ONLINE_PROJECTS::onContextMenu,
+    m_list->Bind( wxEVT_DATAVIEW_ITEM_CONTEXT_MENU, &ONLINE_PROJECTS_PANE::onContextMenu,
                   this );
 
-    // Bound after DIALOG_SHIM's own handler, so this one is asked first.
-    Bind( wxEVT_CLOSE_WINDOW, &DIALOG_ONLINE_PROJECTS::onClose, this );
+    Bind( wxEVT_CHAR_HOOK, &ONLINE_PROJECTS_PANE::onCharHook, this );
 
-    // A deep link / menu can pre-load a share link to join as soon as we show.
-    Bind( wxEVT_SHOW,
-          [this]( wxShowEvent& aEvt )
+    m_list->Bind( wxEVT_SIZE,
+                  [this]( wxSizeEvent& aEvt )
+                  {
+                      aEvt.Skip();
+                      CallAfter( [this]() { fitColumns(); } );
+                  } );
+
+    // The editors run their live session in this process: the card shows how it is
+    // doing without anyone having to ask.
+    Bind( wxEVT_TIMER,
+          [this]( wxTimerEvent& )
           {
-              aEvt.Skip();
+              updateProjectCard( false );
+          },
+          m_liveTimer.GetId() );
 
-              if( aEvt.IsShown() && !m_pendingJoinLink.IsEmpty() )
-              {
-                  wxString link = m_pendingJoinLink;
-                  m_pendingJoinLink.Clear();
-                  CallAfter( [this, link]() { JoinWithLink( link, /* aOpenWithoutAsking */ true ); } );
-              }
-          } );
-
-    SetInitialFocus( m_list );
+    m_liveTimer.Start( 2000 );
 
     updatePublishable();
     applyViewMode();
+    updateProjectCard();
 
-    finishDialogSettings();
-
-    refresh();
+    // Nothing is fetched until the frame is up: a slow server must not hold up the
+    // project manager's first paint.
+    CallAfter(
+            [this]()
+            {
+                refresh();
+            } );
 }
 
 
-DIALOG_ONLINE_PROJECTS::~DIALOG_ONLINE_PROJECTS()
+ONLINE_PROJECTS_PANE::~ONLINE_PROJECTS_PANE()
 {
     if( m_alive )
         *m_alive = false;
+
+    m_liveTimer.Stop();
 
     wxDataViewColumn* sorting = m_list->GetSortingColumn();
 
@@ -758,7 +887,352 @@ DIALOG_ONLINE_PROJECTS::~DIALOG_ONLINE_PROJECTS()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::updateSignInState()
+void ONLINE_PROJECTS_PANE::fitColumns()
+{
+    // Widths in DIP, in the order columns give way to the name when the pane is narrow.
+    struct FIT
+    {
+        int column;
+        int width;
+    };
+
+    static const FIT fits[] = { { COL_LOCAL_COPY, 84 }, { COL_OWNER, 90 }, { COL_EDITED, 118 },
+                                { COL_ROLE, 70 },       { COL_VISIBILITY, 70 },
+                                { COL_DOCUMENTS, 76 },  { COL_DESCRIPTION, 220 } };
+
+    // The Trash keeps its own set: see applyViewMode().
+    auto trashHides = [this]( int aColumn )
+    {
+        return m_showTrash
+               && ( aColumn == COL_STAR || aColumn == COL_LOCAL_COPY || aColumn == COL_OWNER
+                    || aColumn == COL_ROLE || aColumn == COL_VISIBILITY );
+    };
+
+    const int minName = FromDIP( 150 );
+    int       room = m_list->GetClientSize().x - FromDIP( 4 );
+
+    if( room <= 0 )
+        return;
+
+    if( !trashHides( COL_STAR ) )
+        room -= m_list->GetColumn( COL_STAR )->GetWidth();
+
+    for( const FIT& fit : fits )
+    {
+        wxDataViewColumn* column = m_list->GetColumn( fit.column );
+
+        if( trashHides( fit.column ) )
+            continue;
+
+        int  width = FromDIP( fit.width );
+        bool show = room - width >= minName;
+
+        if( column->IsHidden() == show )
+            column->SetHidden( !show );
+
+        if( show )
+        {
+            if( column->GetWidth() != width )
+                column->SetWidth( width );
+
+            room -= width;
+        }
+    }
+
+    wxDataViewColumn* name = m_list->GetColumn( COL_NAME );
+    int               nameWidth = std::max( minName, room );
+
+    if( name->GetWidth() != nameWidth )
+        name->SetWidth( nameWidth );
+
+    updateDetails();
+}
+
+
+void ONLINE_PROJECTS_PANE::updateDetails()
+{
+    const nlohmann::json* project = selectedProject();
+    wxString              text;
+
+    if( project )
+    {
+        wxArrayString parts;
+        bool          mine = m_myUserId >= 0 && jsonInt( *project, "ownerId", -1LL ) == m_myUserId;
+
+        if( m_showTrash )
+        {
+            parts.Add( wxString::Format( _( "Deleted %s" ),
+                                         prettyTimestamp( jsonStr( *project, "deletedAt" ) ) ) );
+            parts.Add( wxString::Format( _( "gone for good on %s" ),
+                                         jsonStr( *project, "purgeAt" ).Left( 10 ) ) );
+        }
+        else
+        {
+            parts.Add( mine ? _( "Yours" )
+                            : wxString::Format( _( "Owned by %s" ),
+                                                jsonStr( *project, "ownerLogin" ) ) );
+
+            if( !mine )
+            {
+                parts.Add( wxString::Format( _( "you are %s" ),
+                                             DIALOG_SHARE_PROJECT::RoleLabel(
+                                                     jsonStr( *project, "role" ) ) ) );
+            }
+
+            parts.Add( jsonBool( *project, "public" ) ? _( "public" ) : _( "private" ) );
+
+            long long docs = jsonInt( *project, "docCount", 0LL );
+            parts.Add( wxString::Format( docs == 1 ? _( "%lld document" ) : _( "%lld documents" ),
+                                         docs ) );
+
+            wxString edited = prettyTimestamp( jsonStr( *project, "updatedAt" ) );
+
+            if( !edited.IsEmpty() )
+                parts.Add( wxString::Format( _( "edited %s" ), edited ) );
+        }
+
+        // \u00B7 is a middle dot.
+        text = wxJoin( parts, 0 );
+        text.clear();
+
+        for( size_t i = 0; i < parts.size(); i++ )
+            text += ( i ? wxString( wxS( " \u00B7 " ) ) : wxString() ) + parts[i];
+
+        wxString description = jsonStr( *project, "description" );
+
+        if( !m_showTrash && !description.IsEmpty() )
+            m_detailLabel->SetToolTip( description );
+        else
+            m_detailLabel->UnsetToolTip();
+    }
+
+    if( m_detailLabel->GetLabelText() != text )
+        m_detailLabel->SetLabelText( text );
+}
+
+
+void ONLINE_PROJECTS_PANE::OnProjectChanged()
+{
+    updatePublishable();
+    updateProjectCard();
+
+    // "Open now" moves to the project just opened.
+    if( m_loaded )
+        applyFilter();
+}
+
+
+void ONLINE_PROJECTS_PANE::RefreshList()
+{
+    if( m_busy > 0 || m_signingIn )
+        return;
+
+    updatePublishable();
+    refresh();
+}
+
+
+void ONLINE_PROJECTS_PANE::RefreshIfStale()
+{
+    if( m_busy > 0 || m_signingIn || !IsShownOnScreen() )
+        return;
+
+    if( wxGetLocalTimeMillis() - m_lastRefresh > 60000 )
+        refresh();
+}
+
+
+void ONLINE_PROJECTS_PANE::FocusSearch()
+{
+    m_search->SetFocus();
+    m_search->SelectAll();
+}
+
+
+void ONLINE_PROJECTS_PANE::openLocalCopy( const wxString& aProFile )
+{
+    // The project manager loads it once this handler is through; reopening the project
+    // that is open already would only close and reopen its editors.
+    KICAD_MANAGER_FRAME* frame = m_frame;
+    wxString             proFile = aProFile;
+
+    if( wxFileName( proFile ).GetFullPath() == wxFileName( frame->Prj().GetProjectFullName() )
+                                                       .GetFullPath() )
+    {
+        setNotice( _( "That project is the one open here." ) );
+        return;
+    }
+
+    frame->CallAfter(
+            [frame, proFile]()
+            {
+                frame->LoadProject( wxFileName( proFile ) );
+            } );
+}
+
+
+const nlohmann::json* ONLINE_PROJECTS_PANE::currentProjectRow() const
+{
+    if( m_cardProjectId.IsEmpty() || m_showTrash )
+        return nullptr;
+
+    for( const nlohmann::json& project : m_allProjects )
+    {
+        if( jsonStr( project, "projectId" ) == m_cardProjectId )
+            return &project;
+    }
+
+    return nullptr;
+}
+
+
+void ONLINE_PROJECTS_PANE::updateProjectCard( bool aReadLink )
+{
+    PROJECT& project = m_frame->Prj();
+
+    if( project.IsNullProject() )
+    {
+        if( m_projectCard->IsShown() )
+        {
+            m_projectCard->Hide();
+            m_cardProjectId.clear();
+            m_cardProjectFile.clear();
+            Layout();
+        }
+
+        return;
+    }
+
+    if( aReadLink || m_cardProjectFile != project.GetProjectFullName() )
+    {
+        wxString server;
+
+        m_cardProjectId = COLLAB_PROJECT::ReadLocalLink( project.GetProjectPath(),
+                                                         project.GetProjectName(), server );
+        m_cardProjectFile = project.GetProjectFullName();
+    }
+
+    wxString projectId = m_cardProjectId;
+
+    wxString name = project.GetProjectName();
+    wxString state;
+    wxString action;
+    wxString actionTip;
+    bool     canShare = false;
+
+    if( projectId.IsEmpty() )
+    {
+        state = _( "Only on this computer" );
+        action = _( "Publish Online..." );
+        actionTip = _( "Upload this project and keep it synced, so others can open it on the "
+                       "web or in the desktop app" );
+    }
+    else
+    {
+        const nlohmann::json* row = currentProjectRow();
+
+        wxString onlineName = row ? jsonStr( *row, "name" ) : wxString();
+        wxString live;
+
+        if( COLLAB_SESSION::Exists() )
+        {
+            switch( COLLAB_SESSION::Get().GetState() )
+            {
+            case COLLAB_SESSION::STATE::LIVE:       live = _( "Live" );         break;
+            case COLLAB_SESSION::STATE::CONNECTING: live = _( "Connecting..." ); break;
+            default:                                                            break;
+            }
+        }
+
+        if( live.IsEmpty() )
+        {
+            live = m_signedIn ? _( "Synced online" )
+                              : _( "Synced online, sign in to collaborate" );
+        }
+
+        // · is a middle dot.
+        if( !onlineName.IsEmpty() && onlineName != name )
+            state = wxString::Format( wxS( "%s · %s" ), live, onlineName );
+        else
+            state = live;
+
+        action = _( "Sync Settings..." );
+        actionTip = _( "Keep syncing, make the project local only, or delete the local or "
+                       "online copy" );
+        canShare = row != nullptr;
+    }
+
+    bool relayout = !m_projectCard->IsShown();
+
+    // As text: a project called "R&D" must not lose its '&' to a mnemonic.
+    if( m_projectName->GetLabelText() != name )
+        m_projectName->SetLabelText( name );
+
+    if( m_projectState->GetLabelText() != state )
+    {
+        m_projectState->SetLabelText( state );
+        m_projectState->SetToolTip( state );
+    }
+
+    if( m_projectAction->GetLabel() != action )
+    {
+        m_projectAction->SetLabel( action );
+        relayout = true;
+    }
+
+    m_projectAction->SetToolTip( actionTip );
+    m_projectAction->Enable( m_busy == 0 && !m_signingIn );
+
+    if( m_projectShare->IsShown() != !projectId.IsEmpty() )
+    {
+        m_projectShare->Show( !projectId.IsEmpty() );
+        relayout = true;
+    }
+
+    m_projectShare->Enable( canShare && m_busy == 0 );
+
+    m_projectCard->Show();
+
+    if( relayout )
+        Layout();
+}
+
+
+void ONLINE_PROJECTS_PANE::onProjectCardAction( wxCommandEvent& )
+{
+    if( m_busy > 0 || m_signingIn )
+        return;
+
+    if( m_cardProjectId.IsEmpty() )
+    {
+        publishCurrentProject();
+        return;
+    }
+
+    // The frame tells this pane what came of it.
+    m_frame->ShowCollabSyncDialog();
+}
+
+
+void ONLINE_PROJECTS_PANE::onProjectCardShare( wxCommandEvent& )
+{
+    if( const nlohmann::json* row = currentProjectRow() )
+    {
+        nlohmann::json copy = *row;
+        bool           owner = m_myUserId >= 0 && jsonInt( copy, "ownerId", -1LL ) == m_myUserId;
+
+        shareProject( copy, owner );
+    }
+}
+
+
+void ONLINE_PROJECTS_PANE::onMore( wxCommandEvent& )
+{
+    showProjectMenu( m_moreButton );
+}
+
+
+void ONLINE_PROJECTS_PANE::updateSignInState()
 {
     wxString label;
     wxString button = _( "Sign Out" );
@@ -766,7 +1240,7 @@ void DIALOG_ONLINE_PROJECTS::updateSignInState()
     if( m_signingIn )
     {
         label = _( "Signing in..." );
-        button = _( "Cancel Sign-In" );
+        button = _( "Cancel" );
     }
     else if( !m_signedIn )
     {
@@ -775,29 +1249,31 @@ void DIALOG_ONLINE_PROJECTS::updateSignInState()
     }
     else if( m_myLogin.IsEmpty() )
     {
-        label = wxString::Format( _( "Signed in  —  %s" ), COLLAB_SESSION::ServerUrl() );
+        label = _( "Signed in" );
     }
     else
     {
-        label = wxString::Format( _( "Signed in as %s  —  %s" ), m_myLogin,
-                                  COLLAB_SESSION::ServerUrl() );
+        label = m_myLogin;
     }
 
-    m_signedInLabel->SetLabel( label );
+    if( m_signedInLabel->GetLabelText() != label )
+        m_signedInLabel->SetLabelText( label );
 
     if( m_signInButton->GetLabel() != button )
     {
         m_signInButton->SetLabel( button );
         Layout();
     }
+
+    updateProjectCard();
 }
 
 
-void DIALOG_ONLINE_PROJECTS::applyViewMode()
+void ONLINE_PROJECTS_PANE::applyViewMode()
 {
     // The Trash only ever holds the user's own projects, and nothing in it has a role,
-    // a star or an audience.
-    for( int column : { COL_STAR, COL_OWNER, COL_ROLE, COL_VISIBILITY } )
+    // a star, an audience or a local copy.
+    for( int column : { COL_STAR, COL_LOCAL_COPY, COL_OWNER, COL_ROLE, COL_VISIBILITY } )
         m_list->GetColumn( column )->SetHidden( m_showTrash );
 
     m_list->GetColumn( COL_EDITED )->SetTitle( m_showTrash ? _( "Deleted" )
@@ -805,10 +1281,12 @@ void DIALOG_ONLINE_PROJECTS::applyViewMode()
     m_list->GetColumn( COL_DESCRIPTION )->SetTitle( m_showTrash ? _( "Deleted Permanently On" )
                                                                 : _( "Description" ) );
 
-    m_search->SetDescriptiveText( m_showTrash ? _( "Filter by name" )
+    m_search->SetDescriptiveText( m_showTrash ? _( "Filter the Trash" )
                                               : _( "Filter by name, owner or description" ) );
 
-    m_trashButton->SetLabel( m_showTrash ? _( "Show Projects" ) : _( "Show Trash" ) );
+    m_listHeading->SetLabel( m_showTrash ? _( "TRASH" ) : _( "ONLINE PROJECTS" ) );
+
+    m_trashButton->Check( m_showTrash );
     m_trashButton->SetToolTip( m_showTrash ? _( "Go back to your online projects" )
                                            : _( "Show the projects you deleted in the last 30 "
                                                 "days, to restore them or delete them for "
@@ -820,15 +1298,17 @@ void DIALOG_ONLINE_PROJECTS::applyViewMode()
                                           : _( "Open the project, downloading a local working "
                                                "copy the first time" ) );
 
-    for( wxButton* button : { m_openInButton, m_shareButton, m_detailsButton, m_publicButton } )
-        button->Show( !m_showTrash );
+    m_shareButton->Show( !m_showTrash );
+
+    for( wxWindow* window : { (wxWindow*) m_newButton, (wxWindow*) m_joinButton } )
+        window->Show( !m_showTrash );
 
     updateControls();
     Layout();
 }
 
 
-void DIALOG_ONLINE_PROJECTS::showTrash( bool aShowTrash )
+void ONLINE_PROJECTS_PANE::showTrash( bool aShowTrash )
 {
     if( m_showTrash == aShowTrash )
         return;
@@ -847,7 +1327,7 @@ void DIALOG_ONLINE_PROJECTS::showTrash( bool aShowTrash )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::updatePublishable()
+void ONLINE_PROJECTS_PANE::updatePublishable()
 {
     PROJECT& project = m_frame->Prj();
     wxString linkedServer;
@@ -871,8 +1351,8 @@ void DIALOG_ONLINE_PROJECTS::updatePublishable()
     // menu can.
     if( m_publishBlocked.IsEmpty() )
     {
-        m_newButton->SetToolTip( _( "Publish the project open in the project manager or "
-                                    "one from a folder, or start a blank online project" ) );
+        m_newButton->SetToolTip( _( "Publish the project open here or one from a folder, "
+                                    "or start a blank online project" ) );
     }
     else
     {
@@ -885,22 +1365,14 @@ void DIALOG_ONLINE_PROJECTS::updatePublishable()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::updateControls()
+void ONLINE_PROJECTS_PANE::updateControls()
 {
     const nlohmann::json* project = selectedProject();
     bool                  idle = m_busy == 0;
-    bool                  owner = ownsSelected();
-
-    // Without /api/me there is no telling owner from member, so neither Delete
-    // nor Leave can be offered honestly.
-    bool                  knowMe = m_myUserId >= 0;
 
     m_openButton->Enable( idle && project );
-    m_openInButton->Enable( idle && project );
     m_shareButton->Enable( idle && project );
-    m_detailsButton->Enable( idle && owner );
-    m_publicButton->Enable( idle && owner );
-    m_deleteButton->Enable( idle && project && ( knowMe || m_showTrash ) );
+    m_moreButton->Enable( idle && project );
 
     // Nothing that prompts may be started during a browser sign-in: its completion
     // (and what was waiting for it) would then run underneath that prompt.  The sign-in
@@ -911,36 +1383,12 @@ void DIALOG_ONLINE_PROJECTS::updateControls()
     m_refreshButton->Enable( idle );
     m_signInButton->Enable( idle || m_signingIn );
 
-    // The copy being written must not be abandoned half-way.
-    for( int closeId : { wxID_CLOSE, wxID_CANCEL } )
-    {
-        if( wxWindow* closeButton = FindWindow( closeId ) )
-            closeButton->Enable( !m_downloading && !m_publishing );
-    }
-
-    wxString publicLabel = project && jsonBool( *project, "public" ) ? _( "Make Private" )
-                                                                     : _( "Make Public" );
-
-    if( m_publicButton->GetLabel() != publicLabel )
-        m_publicButton->SetLabel( publicLabel );
-
-    // Only the owner can delete; everyone else can walk away from the project.
-    wxString deleteLabel = _( "Move to Trash..." );
-
-    if( m_showTrash )
-        deleteLabel = _( "Delete Permanently..." );
-    else if( project && knowMe && !owner )
-        deleteLabel = _( "Leave..." );
-
-    if( m_deleteButton->GetLabel() != deleteLabel )
-    {
-        m_deleteButton->SetLabel( deleteLabel );
-        Layout();
-    }
+    m_projectAction->Enable( idle && !m_signingIn );
+    m_projectShare->Enable( idle && currentProjectRow() != nullptr );
 }
 
 
-void DIALOG_ONLINE_PROJECTS::updateStatus()
+void ONLINE_PROJECTS_PANE::updateStatus()
 {
     wxString text;
     wxString filter = m_search->GetValue();
@@ -954,8 +1402,7 @@ void DIALOG_ONLINE_PROJECTS::updateStatus()
     }
     else if( m_signingIn )
     {
-        text = _( "Finish signing in in your web browser, or choose Cancel Sign-In to start "
-                  "over." );
+        text = _( "Finish signing in in your web browser, or choose Cancel to start over." );
     }
     else if( !m_notice.IsEmpty() )
     {
@@ -991,7 +1438,7 @@ void DIALOG_ONLINE_PROJECTS::updateStatus()
     else if( m_myUserId < 0 && !m_showTrash )
     {
         text = wxString::Format( _( "Could not load your account details from %s.  Projects "
-                                    "can be opened, but press Refresh before managing them." ),
+                                    "can be opened; refresh before managing them." ),
                                  COLLAB_SESSION::ServerUrl() );
     }
     else if( m_allProjects.empty() )
@@ -999,14 +1446,13 @@ void DIALOG_ONLINE_PROJECTS::updateStatus()
         // Only suggest what can be done right now.
         if( m_publishBlocked.IsEmpty() )
         {
-            text = _( "No online projects yet.  Choose New Online Project to publish the "
-                      "current project or start a blank one, or join one from a share link." );
+            text = _( "No online projects yet.  Publish this project, start a blank one with "
+                      "New, or join one from a share link." );
         }
         else
         {
-            text = _( "No online projects yet.  Choose New Online Project to start a blank "
-                      "one, or join one from a share link.  To publish a project of yours, "
-                      "open it first." );
+            text = _( "No online projects yet.  Start a blank one with New, or join one "
+                      "from a share link.  To publish a project of yours, open it first." );
         }
     }
     else if( m_projects.empty() )
@@ -1023,13 +1469,12 @@ void DIALOG_ONLINE_PROJECTS::updateStatus()
     }
     else if( m_projects.size() != m_allProjects.size() )
     {
-        text = wxString::Format( _( "Showing %d of %d projects.  Double-click a project to "
-                                    "open it." ),
+        text = wxString::Format( _( "Showing %d of %d projects." ),
                                  (int) m_projects.size(), (int) m_allProjects.size() );
     }
     else
     {
-        text = wxString::Format( _( "Projects: %d.  Double-click a project to open it." ),
+        text = wxString::Format( _( "%d projects.  Double-click one to open it." ),
                                  (int) m_projects.size() );
     }
 
@@ -1046,7 +1491,7 @@ void DIALOG_ONLINE_PROJECTS::updateStatus()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::clearNotice()
+void ONLINE_PROJECTS_PANE::clearNotice()
 {
     m_notice.clear();
     m_undoProjectId.clear();
@@ -1054,7 +1499,7 @@ void DIALOG_ONLINE_PROJECTS::clearNotice()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::showFailure( const wxString& aWhat, const wxString& aTitle,
+void ONLINE_PROJECTS_PANE::showFailure( const wxString& aWhat, const wxString& aTitle,
                                           const COLLAB_REST::ERROR_INFO& aError )
 {
     wxMessageBox( aWhat + wxS( "\n\n" ) + COLLAB_REST::DescribeError( aError ), aTitle,
@@ -1062,7 +1507,7 @@ void DIALOG_ONLINE_PROJECTS::showFailure( const wxString& aWhat, const wxString&
 }
 
 
-void DIALOG_ONLINE_PROJECTS::setNotice( const wxString& aNotice, const wxString& aUndoProjectId,
+void ONLINE_PROJECTS_PANE::setNotice( const wxString& aNotice, const wxString& aUndoProjectId,
                                         const wxString& aUndoProjectName )
 {
     m_notice = aNotice;
@@ -1072,7 +1517,7 @@ void DIALOG_ONLINE_PROJECTS::setNotice( const wxString& aNotice, const wxString&
 }
 
 
-void DIALOG_ONLINE_PROJECTS::beginBusy( const wxString& aStatus )
+void ONLINE_PROJECTS_PANE::beginBusy( const wxString& aStatus )
 {
     m_busy++;
     m_busyText = aStatus;
@@ -1082,7 +1527,7 @@ void DIALOG_ONLINE_PROJECTS::beginBusy( const wxString& aStatus )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::endBusy()
+void ONLINE_PROJECTS_PANE::endBusy()
 {
     if( m_busy > 0 )
         m_busy--;
@@ -1092,7 +1537,7 @@ void DIALOG_ONLINE_PROJECTS::endBusy()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::runAsync( const wxString& aStatus, ASYNC_WORK aWork,
+void ONLINE_PROJECTS_PANE::runAsync( const wxString& aStatus, ASYNC_WORK aWork,
                                        ASYNC_DONE aDone )
 {
     wxString server = COLLAB_SESSION::ServerUrl();
@@ -1143,13 +1588,15 @@ void DIALOG_ONLINE_PROJECTS::runAsync( const wxString& aStatus, ASYNC_WORK aWork
 }
 
 
-void DIALOG_ONLINE_PROJECTS::refresh()
+void ONLINE_PROJECTS_PANE::refresh()
 {
     wxString server = COLLAB_SESSION::ServerUrl();
     wxString token = COLLAB_AUTH::StoredToken( server );
 
     // Anything still in flight from an earlier refresh is stale now.
     int generation = ++m_refreshGeneration;
+
+    m_lastRefresh = wxGetLocalTimeMillis();
 
     m_signedIn = !token.IsEmpty();
 
@@ -1251,7 +1698,7 @@ void DIALOG_ONLINE_PROJECTS::refresh()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::populate( const nlohmann::json& aMe, bool aMeOk,
+void ONLINE_PROJECTS_PANE::populate( const nlohmann::json& aMe, bool aMeOk,
                                        const nlohmann::json& aListing, bool aListingOk,
                                        const COLLAB_REST::ERROR_INFO& aListingError )
 {
@@ -1307,7 +1754,7 @@ void DIALOG_ONLINE_PROJECTS::populate( const nlohmann::json& aMe, bool aMeOk,
 }
 
 
-void DIALOG_ONLINE_PROJECTS::applyFilter( const wxString& aSelectProjectId )
+void ONLINE_PROJECTS_PANE::applyFilter( const wxString& aSelectProjectId )
 {
     wxString keepId = aSelectProjectId.IsEmpty() ? selectedProjectId() : aSelectProjectId;
     int      previousRow = m_list->GetSelectedRow();
@@ -1357,6 +1804,14 @@ void DIALOG_ONLINE_PROJECTS::applyFilter( const wxString& aSelectProjectId )
         wxVector<wxVariant> row;
         row.push_back( wxVariant( starred ? starMark() : wxString() ) );
         row.push_back( wxVariant( name ) );
+
+        // Where the project is on this computer: the one open here, a copy that opens
+        // without a download, or nothing yet.
+        if( !m_showTrash && projectId == m_cardProjectId && !m_cardProjectId.IsEmpty() )
+            row.push_back( wxVariant( _( "Open now" ) ) );
+        else
+            row.push_back( wxVariant( localCopy ? _( "Downloaded" ) : wxString() ) );
+
         row.push_back( wxVariant( owner ) );
 
         // The listing reports the owner's role as "editor"; the share sheet calls that
@@ -1366,10 +1821,9 @@ void DIALOG_ONLINE_PROJECTS::applyFilter( const wxString& aSelectProjectId )
                                                  jsonStr( project, "role" ) ) ) );
         row.push_back( wxVariant( jsonBool( project, "public" ) ? _( "public" )
                                                                 : _( "private" ) ) );
-        row.push_back( wxVariant( localCopy ? _( "On this computer" ) : wxString() ) );
+        row.push_back( wxVariant( prettyTimestamp( edited ) ) );
         row.push_back( wxVariant( wxString::Format( wxS( "%lld" ),
                                                     jsonInt( project, "docCount", 0LL ) ) ) );
-        row.push_back( wxVariant( prettyTimestamp( edited ) ) );
         row.push_back( wxVariant( description ) );
 
         ONLINE_PROJECT_STORE::SORT_KEY key;
@@ -1418,7 +1872,7 @@ void DIALOG_ONLINE_PROJECTS::applyFilter( const wxString& aSelectProjectId )
 }
 
 
-const nlohmann::json* DIALOG_ONLINE_PROJECTS::selectedProject() const
+const nlohmann::json* ONLINE_PROJECTS_PANE::selectedProject() const
 {
     int row = m_list->GetSelectedRow();
 
@@ -1429,7 +1883,7 @@ const nlohmann::json* DIALOG_ONLINE_PROJECTS::selectedProject() const
 }
 
 
-wxString DIALOG_ONLINE_PROJECTS::selectedProjectId() const
+wxString ONLINE_PROJECTS_PANE::selectedProjectId() const
 {
     const nlohmann::json* project = selectedProject();
 
@@ -1437,7 +1891,7 @@ wxString DIALOG_ONLINE_PROJECTS::selectedProjectId() const
 }
 
 
-bool DIALOG_ONLINE_PROJECTS::ownsSelected() const
+bool ONLINE_PROJECTS_PANE::ownsSelected() const
 {
     const nlohmann::json* project = selectedProject();
 
@@ -1445,7 +1899,7 @@ bool DIALOG_ONLINE_PROJECTS::ownsSelected() const
 }
 
 
-void DIALOG_ONLINE_PROJECTS::clearFilter()
+void ONLINE_PROJECTS_PANE::clearFilter()
 {
     m_search->ChangeValue( wxEmptyString );
     clearNotice();
@@ -1453,7 +1907,7 @@ void DIALOG_ONLINE_PROJECTS::clearFilter()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::OnCharHook( wxKeyEvent& aEvt )
+void ONLINE_PROJECTS_PANE::onCharHook( wxKeyEvent& aEvt )
 {
     int       key = aEvt.GetKeyCode();
     bool      plain = aEvt.GetModifiers() == wxMOD_NONE;
@@ -1463,12 +1917,8 @@ void DIALOG_ONLINE_PROJECTS::OnCharHook( wxKeyEvent& aEvt )
 
     wxCommandEvent dummy;
 
-    // Escape would close the dialog under the copy being written, or the upload.
-    if( key == WXK_ESCAPE && ( m_downloading || m_publishing ) )
-        return;
-
-    // The first Escape takes a filter away, wherever the focus is (the status line says
-    // so when nothing matches); only the next one closes the dialog.
+    // Escape takes a filter away, wherever the focus is in the pane (the status line says
+    // so when nothing matches).
     if( key == WXK_ESCAPE && plain && !m_search->GetValue().IsEmpty() )
     {
         clearFilter();
@@ -1529,28 +1979,11 @@ void DIALOG_ONLINE_PROJECTS::OnCharHook( wxKeyEvent& aEvt )
         return;
     }
 
-    DIALOG_SHIM::OnCharHook( aEvt );
+    aEvt.Skip();
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onClose( wxCloseEvent& aEvent )
-{
-    // Closing mid-download would leave a folder nothing knows to be a copy of
-    // the project; the next Open would then fetch a second one beside it.
-    //
-    // Closing mid-publish would leave the project online with nothing here knowing
-    // that this folder is its copy: it could then be published a second time.
-    if( ( m_downloading || m_publishing ) && aEvent.CanVeto() )
-    {
-        aEvent.Veto();
-        return;
-    }
-
-    aEvent.Skip();
-}
-
-
-void DIALOG_ONLINE_PROJECTS::startSignIn( std::function<void()> aThen )
+void ONLINE_PROJECTS_PANE::startSignIn( std::function<void()> aThen )
 {
     // One browser sign-in at a time.  Everything that would ask for another is
     // unavailable until the pending one is through or cancelled.
@@ -1576,6 +2009,7 @@ void DIALOG_ONLINE_PROJECTS::startSignIn( std::function<void()> aThen )
 
                 if( aSuccess )
                 {
+                    m_frame->RefreshCollabIdentity();
                     refresh();
 
                     if( then )
@@ -1604,7 +2038,7 @@ void DIALOG_ONLINE_PROJECTS::startSignIn( std::function<void()> aThen )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::cancelSignIn()
+void ONLINE_PROJECTS_PANE::cancelSignIn()
 {
     if( !m_signingIn )
         return;
@@ -1624,7 +2058,7 @@ void DIALOG_ONLINE_PROJECTS::cancelSignIn()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::whenSignedIn( std::function<void()> aThen )
+void ONLINE_PROJECTS_PANE::whenSignedIn( std::function<void()> aThen )
 {
     if( COLLAB_AUTH::StoredToken( COLLAB_SESSION::ServerUrl() ).IsEmpty() )
         startSignIn( aThen );
@@ -1633,7 +2067,7 @@ void DIALOG_ONLINE_PROJECTS::whenSignedIn( std::function<void()> aThen )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onSignInOut( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onSignInOut( wxCommandEvent& aEvent )
 {
     if( m_signingIn )
     {
@@ -1647,6 +2081,7 @@ void DIALOG_ONLINE_PROJECTS::onSignInOut( wxCommandEvent& aEvent )
     if( m_signedIn )
     {
         COLLAB_AUTH::ForgetToken( COLLAB_SESSION::ServerUrl() );
+        m_frame->RefreshCollabIdentity();
         setNotice( wxEmptyString );
         refresh();
         return;
@@ -1656,7 +2091,7 @@ void DIALOG_ONLINE_PROJECTS::onSignInOut( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onRefresh( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onRefresh( wxCommandEvent& aEvent )
 {
     if( m_busy > 0 )
         return;
@@ -1668,7 +2103,7 @@ void DIALOG_ONLINE_PROJECTS::onRefresh( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onToggleTrash( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onToggleTrash( wxCommandEvent& )
 {
     if( m_busy > 0 || !m_signedIn )
         return;
@@ -1678,14 +2113,14 @@ void DIALOG_ONLINE_PROJECTS::onToggleTrash( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onSearchText( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onSearchText( wxCommandEvent& aEvent )
 {
     clearNotice();
     applyFilter();
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onSelectionChanged( wxDataViewEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onSelectionChanged( wxDataViewEvent& aEvent )
 {
     // Some ports report the selection moving while applyFilter() rebuilds the rows; a
     // notice is only outlived by what the user selects.
@@ -1698,14 +2133,14 @@ void DIALOG_ONLINE_PROJECTS::onSelectionChanged( wxDataViewEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onItemActivated( wxDataViewEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onItemActivated( wxDataViewEvent& aEvent )
 {
     wxCommandEvent dummy;
     onOpen( dummy );
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onContextMenu( wxDataViewEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onContextMenu( wxDataViewEvent& aEvent )
 {
     // Act on the row under the pointer, like every file manager does.
     if( aEvent.GetItem().IsOk() )
@@ -1719,6 +2154,12 @@ void DIALOG_ONLINE_PROJECTS::onContextMenu( wxDataViewEvent& aEvent )
         }
     }
 
+    showProjectMenu( nullptr );
+}
+
+
+void ONLINE_PROJECTS_PANE::showProjectMenu( wxWindow* aBelow )
+{
     const nlohmann::json* project = selectedProject();
 
     if( !project || m_busy > 0 )
@@ -1763,7 +2204,9 @@ void DIALOG_ONLINE_PROJECTS::onContextMenu( wxDataViewEvent& aEvent )
     }
 
     // The selection is read again by each handler, so nothing here outlives the menu.
-    int command = GetPopupMenuSelectionFromUser( menu );
+    // Under the More button, or where the pointer is for a right-click.
+    int command = aBelow ? aBelow->GetPopupMenuSelectionFromUser( menu, 0, aBelow->GetSize().y )
+                         : GetPopupMenuSelectionFromUser( menu );
 
     wxCommandEvent dummy;
 
@@ -1786,7 +2229,7 @@ void DIALOG_ONLINE_PROJECTS::onContextMenu( wxDataViewEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onOpen( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onOpen( wxCommandEvent& aEvent )
 {
     if( m_busy > 0 )
         return;
@@ -1807,7 +2250,7 @@ void DIALOG_ONLINE_PROJECTS::onOpen( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onOpenInFolder( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onOpenInFolder( wxCommandEvent& aEvent )
 {
     if( m_busy > 0 || m_showTrash )
         return;
@@ -1820,7 +2263,7 @@ void DIALOG_ONLINE_PROJECTS::onOpenInFolder( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool aChooseFolder )
+void ONLINE_PROJECTS_PANE::openProject( const nlohmann::json& aProject, bool aChooseFolder )
 {
     wxString server = COLLAB_SESSION::ServerUrl();
     wxString token = COLLAB_AUTH::StoredToken( server );
@@ -1841,8 +2284,7 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool a
     {
         if( !aChooseFolder )
         {
-            m_projectToOpen = recorded;
-            EndModal( wxID_OK );
+            openLocalCopy( recorded );
             return;
         }
 
@@ -1856,8 +2298,7 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool a
 
         if( answer == wxNO )
         {
-            m_projectToOpen = recorded;
-            EndModal( wxID_OK );
+            openLocalCopy( recorded );
             return;
         }
 
@@ -1929,8 +2370,7 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool a
     if( !existingPro.IsEmpty() )
     {
         COLLAB_PROJECT::RecordLocalCopy( projectId, existingPro );
-        m_projectToOpen = existingPro;
-        EndModal( wxID_OK );
+        openLocalCopy( existingPro );
         return;
     }
 
@@ -1959,7 +2399,7 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool a
     std::string dirNameStd = dirName.ToStdString( wxConvUTF8 );
     std::string targetDirStd = targetDir.ToStdString( wxConvUTF8 );
 
-    // No closing the dialog while the copy is written: see onClose().
+    // No quitting while the copy is written: see CanClose().
     m_downloading = true;
 
     runAsync( wxString::Format( _( "Downloading '%s' to %s..." ), name, targetDir ),
@@ -2011,25 +2451,34 @@ void DIALOG_ONLINE_PROJECTS::openProject( const nlohmann::json& aProject, bool a
                 }
 
                 COLLAB_PROJECT::RecordLocalCopy( wxString::FromUTF8( projectIdStd ), proFile );
-                m_projectToOpen = proFile;
-                EndModal( wxID_OK );
+                openLocalCopy( proFile );
             } );
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onShare( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onShare( wxCommandEvent& aEvent )
 {
     const nlohmann::json* project = selectedProject();
 
     if( !project || m_busy > 0 || m_showTrash )
         return;
 
-    wxString projectId = jsonStr( *project, "projectId" );
+    nlohmann::json copy = *project;
+    shareProject( copy, ownsSelected() );
+}
+
+
+void ONLINE_PROJECTS_PANE::shareProject( const nlohmann::json& aProject, bool aOwner )
+{
+    if( m_busy > 0 )
+        return;
+
+    wxString projectId = jsonStr( aProject, "projectId" );
 
     // Members who are not the owner still get to see who has access; the
     // share sheet opens read-only for them.
-    DIALOG_SHARE_PROJECT dlg( this, projectId, jsonStr( *project, "name" ), ownsSelected(),
-                              jsonBool( *project, "public" ) );
+    DIALOG_SHARE_PROJECT dlg( this, projectId, jsonStr( aProject, "name" ), aOwner,
+                              jsonBool( aProject, "public" ) );
     dlg.ShowModal();
 
     // A new owner or a new visibility shows in this list as well.
@@ -2041,7 +2490,7 @@ void DIALOG_ONLINE_PROJECTS::onShare( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onCopyWebLink( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onCopyWebLink( wxCommandEvent& aEvent )
 {
     wxString projectId = selectedProjectId();
 
@@ -2057,7 +2506,7 @@ void DIALOG_ONLINE_PROJECTS::onCopyWebLink( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onOpenInBrowser( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onOpenInBrowser( wxCommandEvent& )
 {
     wxString projectId = selectedProjectId();
 
@@ -2073,7 +2522,7 @@ void DIALOG_ONLINE_PROJECTS::onOpenInBrowser( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onRename( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onRename( wxCommandEvent& aEvent )
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2123,7 +2572,7 @@ void DIALOG_ONLINE_PROJECTS::onRename( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onDetails( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onDetails( wxCommandEvent& )
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2174,7 +2623,7 @@ void DIALOG_ONLINE_PROJECTS::onDetails( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onToggleStar( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onToggleStar( wxCommandEvent& )
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2211,7 +2660,7 @@ void DIALOG_ONLINE_PROJECTS::onToggleStar( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onMakeCopy( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onMakeCopy( wxCommandEvent& )
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2256,7 +2705,7 @@ void DIALOG_ONLINE_PROJECTS::onMakeCopy( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onTogglePublic( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onTogglePublic( wxCommandEvent& aEvent )
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2305,7 +2754,7 @@ void DIALOG_ONLINE_PROJECTS::onTogglePublic( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onDelete( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onDelete( wxCommandEvent& aEvent )
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2378,7 +2827,7 @@ void DIALOG_ONLINE_PROJECTS::onDelete( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onUndo( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onUndo( wxCommandEvent& )
 {
     if( m_busy > 0 || m_undoProjectId.IsEmpty() )
         return;
@@ -2391,7 +2840,7 @@ void DIALOG_ONLINE_PROJECTS::onUndo( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::restoreProject( const wxString& aProjectId, const wxString& aName )
+void ONLINE_PROJECTS_PANE::restoreProject( const wxString& aProjectId, const wxString& aName )
 {
     if( m_busy > 0 || aProjectId.IsEmpty() )
         return;
@@ -2430,7 +2879,7 @@ void DIALOG_ONLINE_PROJECTS::restoreProject( const wxString& aProjectId, const w
 }
 
 
-void DIALOG_ONLINE_PROJECTS::purgeSelected()
+void ONLINE_PROJECTS_PANE::purgeSelected()
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2479,7 +2928,7 @@ void DIALOG_ONLINE_PROJECTS::purgeSelected()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::leaveSelected()
+void ONLINE_PROJECTS_PANE::leaveSelected()
 {
     const nlohmann::json* project = selectedProject();
 
@@ -2523,7 +2972,7 @@ void DIALOG_ONLINE_PROJECTS::leaveSelected()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onNewProject( wxCommandEvent& )
+void ONLINE_PROJECTS_PANE::onNewProject( wxCommandEvent& )
 {
     if( m_busy > 0 || m_signingIn )
         return;
@@ -2553,7 +3002,7 @@ void DIALOG_ONLINE_PROJECTS::onNewProject( wxCommandEvent& )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::publishCurrentProject()
+void ONLINE_PROJECTS_PANE::publishCurrentProject()
 {
     if( m_busy > 0 || m_signingIn || !m_publishBlocked.IsEmpty() )
         return;
@@ -2568,10 +3017,10 @@ void DIALOG_ONLINE_PROJECTS::publishCurrentProject()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::uploadCurrentProject()
+void ONLINE_PROJECTS_PANE::uploadCurrentProject()
 {
-    // The project manager sits disabled under this dialog, so the project is still the
-    // one the menu offered; make sure of it all the same.
+    // The sign-in may have taken a while, and the project manager may have opened another
+    // project meanwhile: check again that the one open now can be published.
     updatePublishable();
 
     if( m_busy > 0 || !m_publishBlocked.IsEmpty() )
@@ -2584,7 +3033,7 @@ void DIALOG_ONLINE_PROJECTS::uploadCurrentProject()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::publishFolder()
+void ONLINE_PROJECTS_PANE::publishFolder()
 {
     if( m_busy > 0 || m_signingIn )
         return;
@@ -2659,7 +3108,7 @@ void DIALOG_ONLINE_PROJECTS::publishFolder()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::uploadProject( const wxString& projectPath,
+void ONLINE_PROJECTS_PANE::uploadProject( const wxString& projectPath,
                                             const wxString& projectName,
                                             const wxString& proFile )
 {
@@ -2671,7 +3120,7 @@ void DIALOG_ONLINE_PROJECTS::uploadProject( const wxString& projectPath,
     std::string projectNameStd = projectName.ToStdString( wxConvUTF8 );
     std::string proFileStd = proFile.ToStdString( wxConvUTF8 );
 
-    // No closing the dialog while the upload runs: see onClose().
+    // No quitting while the upload runs: see CanClose().
     m_publishing = true;
 
     // Zipping and uploading take as long as the project is big: on the worker, like
@@ -2742,6 +3191,7 @@ void DIALOG_ONLINE_PROJECTS::uploadProject( const wxString& projectPath,
                 showTrash( false );
                 m_selectAfterRefresh = projectId;
                 updatePublishable();
+                updateProjectCard();
                 refresh();
 
                 setNotice( copied ? _( "Project published.  Share link copied to the "
@@ -2751,7 +3201,7 @@ void DIALOG_ONLINE_PROJECTS::uploadProject( const wxString& projectPath,
 }
 
 
-void DIALOG_ONLINE_PROJECTS::newBlankProject()
+void ONLINE_PROJECTS_PANE::newBlankProject()
 {
     if( m_busy > 0 || m_signingIn )
         return;
@@ -2780,7 +3230,7 @@ void DIALOG_ONLINE_PROJECTS::newBlankProject()
 }
 
 
-void DIALOG_ONLINE_PROJECTS::createBlankProject( const wxString& aName )
+void ONLINE_PROJECTS_PANE::createBlankProject( const wxString& aName )
 {
     std::shared_ptr<nlohmann::json> projectOut = std::make_shared<nlohmann::json>();
 
@@ -2824,7 +3274,7 @@ void DIALOG_ONLINE_PROJECTS::createBlankProject( const wxString& aName )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::onJoinLink( wxCommandEvent& aEvent )
+void ONLINE_PROJECTS_PANE::onJoinLink( wxCommandEvent& aEvent )
 {
     if( m_busy > 0 || m_signingIn )
         return;
@@ -2833,7 +3283,7 @@ void DIALOG_ONLINE_PROJECTS::onJoinLink( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken, bool aOpenWithoutAsking )
+void ONLINE_PROJECTS_PANE::JoinWithLink( const wxString& aLinkOrToken, bool aOpenWithoutAsking )
 {
     wxString provided = aLinkOrToken;
 
@@ -2867,7 +3317,7 @@ void DIALOG_ONLINE_PROJECTS::JoinWithLink( const wxString& aLinkOrToken, bool aO
 }
 
 
-void DIALOG_ONLINE_PROJECTS::claimLink( const wxString& aLinkToken, bool aOpenWithoutAsking )
+void ONLINE_PROJECTS_PANE::claimLink( const wxString& aLinkToken, bool aOpenWithoutAsking )
 {
     std::shared_ptr<nlohmann::json> projectOut = std::make_shared<nlohmann::json>();
     std::shared_ptr<std::string>    errorOut = std::make_shared<std::string>();

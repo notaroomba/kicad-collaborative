@@ -25,7 +25,7 @@
 #include "project_tree.h"
 #include "project_tree_pane.h"
 #include <collab/collab_product.h>
-#include "dialogs/dialog_online_projects.h"
+#include "online_projects_pane.h"
 #include "dialogs/dialog_collab_sync.h"
 #include <collab/collab_project.h>
 #include <collab/collab_rest.h>
@@ -163,6 +163,8 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
         m_showGitCommitPanel( true ),
         m_projectTreePane( nullptr ),
         m_historyPane( nullptr ),
+        m_onlinePane( nullptr ),
+        m_showOnlinePanel( true ),
         m_gitCommitPane( nullptr ),
         m_launcher( nullptr ),
         m_lastToolbarIconSize( 0 ),
@@ -290,7 +292,32 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
               // actually see. Showing the pane refreshes it, so the gate cannot leave it stale.
               if( aEvent.GetActive() && GitCommitPaneShown() )
                   m_gitCommitPane->RefreshFileList();
+
+              // Projects shared with us, renamed or deleted elsewhere show up when the
+              // user comes back, without a Refresh.
+              if( aEvent.GetActive() && m_onlinePane )
+                  m_onlinePane->RefreshIfStale();
           } );
+
+    // The cloud, docked beside the editors rather than behind a menu: the account, the
+    // project open here and whether it syncs, and every online project.
+    m_onlinePane = new ONLINE_PROJECTS_PANE( this );
+    m_auimgr.AddPane( m_onlinePane, EDA_PANE()
+                                            .Palette()
+                                            .Name( "OnlineProjects" )
+                                            .Right()
+                                            .Layer( 1 )
+                                            .Caption( _( "Online Projects" ) )
+                                            .PaneBorder( false )
+                                            .BestSize( FromDIP( wxSize( 380, -1 ) ) )
+                                            .MinSize( FromDIP( wxSize( 300, 200 ) ) )
+                                            .Floatable( false )
+                                            .Movable( false )
+                                            .CloseButton( true )
+                                            .Hide() );
+
+    if( m_showOnlinePanel )
+        m_auimgr.GetPane( m_onlinePane ).Show();
 
     wxSize client_size = GetClientSize();
     m_notebook = new wxAuiNotebook( this, wxID_ANY, wxPoint( client_size.x, client_size.y ),
@@ -559,6 +586,14 @@ void KICAD_MANAGER_FRAME::setupUIConditions()
 
     manager->SetConditions( ACTIONS::showGitCommitPane, ACTION_CONDITIONS().Check( gitCommitPaneCond ) );
 
+    auto onlinePaneCond = [this]( const SELECTION& )
+    {
+        return OnlineProjectsPaneShown();
+    };
+
+    manager->SetConditions( KICAD_MANAGER_ACTIONS::onlineProjects,
+                            ACTION_CONDITIONS().Check( onlinePaneCond ) );
+
     // These are just here for text boxes, search boxes, etc. in places such as the standard
     // file dialogs.
     manager->SetConditions( ACTIONS::cut,     ENABLE( SELECTION_CONDITIONS::ShowNever ) );
@@ -740,6 +775,17 @@ void KICAD_MANAGER_FRAME::DoWithAcceptedFiles()
 
 bool KICAD_MANAGER_FRAME::canCloseWindow( wxCloseEvent& aEvent )
 {
+    // Quitting mid-download would leave a folder nothing knows to be a copy of the
+    // project, and mid-publish a project online with nothing here knowing this folder is
+    // its copy.
+    if( m_onlinePane && !m_onlinePane->CanClose() )
+    {
+        wxMessageBox( _( "A project is being downloaded or published.  Wait for it to "
+                         "finish, then quit." ),
+                      _( "Online Projects" ), wxOK | wxICON_INFORMATION, this );
+        return false;
+    }
+
     KICAD_SETTINGS* settings = kicadSettings();
     settings->m_OpenProjects = GetSettingsManager()->GetOpenProjects();
 
@@ -925,6 +971,9 @@ bool KICAD_MANAGER_FRAME::CloseProject( bool aSave )
     m_projectTreePane->EmptyTreePrj();
     HideTabsIfNeeded();
 
+    if( m_onlinePane )
+        m_onlinePane->OnProjectChanged();
+
     return true;
 }
 
@@ -1063,6 +1112,9 @@ bool KICAD_MANAGER_FRAME::LoadProject( const wxFileName& aProjectFileName )
 
     if( GitCommitPaneShown() )
         m_gitCommitPane->RefreshFileList();
+
+    if( m_onlinePane )
+        m_onlinePane->OnProjectChanged();
 
     for( const wxString& jobset : Prj().GetLocalSettings().m_OpenJobSets )
     {
@@ -1394,6 +1446,7 @@ void KICAD_MANAGER_FRAME::LoadSettings( APP_SETTINGS_BASE* aCfg )
     m_leftWinWidth = settings->m_LeftWinWidth;
     m_showHistoryPanel = settings->m_ShowHistoryPanel;
     m_showGitCommitPanel = settings->m_ShowGitCommitPanel;
+    m_showOnlinePanel = settings->m_ShowOnlinePanel;
 }
 
 
@@ -1408,6 +1461,7 @@ void KICAD_MANAGER_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
     settings->m_LeftWinWidth = m_projectTreePane->GetSize().x;
     settings->m_ShowHistoryPanel = m_historyPane && m_auimgr.GetPane( m_historyPane ).IsShown();
     settings->m_ShowGitCommitPanel = GitCommitPaneShown();
+    settings->m_ShowOnlinePanel = OnlineProjectsPaneShown();
 
     if( !m_isClosing )
         settings->m_OpenProjects = GetSettingsManager()->GetOpenProjects();
@@ -1604,16 +1658,51 @@ void KICAD_MANAGER_FRAME::HandleCollabJoinLink( const wxString& aLinkOrToken )
 {
     Raise();
 
-    DIALOG_ONLINE_PROJECTS dlg( this );
+    if( !m_onlinePane )
+        return;
 
-    if( !aLinkOrToken.IsEmpty() )
-        dlg.SetPendingJoinLink( aLinkOrToken );
-
-    if( dlg.ShowModal() == wxID_OK && !dlg.GetProjectToOpen().IsEmpty() )
+    if( !OnlineProjectsPaneShown() )
     {
-        wxString proj = dlg.GetProjectToOpen();
-        CallAfter( [this, proj]() { LoadProject( wxFileName( proj ) ); } );
+        m_auimgr.GetPane( m_onlinePane ).Show();
+        m_auimgr.Update();
     }
+
+    // "Open in Junction" on the web already said what to do; a pasted link still asks.
+    m_onlinePane->JoinWithLink( aLinkOrToken, !aLinkOrToken.IsEmpty() );
+}
+
+
+void KICAD_MANAGER_FRAME::ToggleOnlineProjectsPane()
+{
+    if( !m_onlinePane )
+        return;
+
+    wxAuiPaneInfo& pane = m_auimgr.GetPane( m_onlinePane );
+    bool           show = !pane.IsShown();
+
+    pane.Show( show );
+    m_auimgr.Update();
+
+    if( show )
+    {
+        m_onlinePane->RefreshIfStale();
+        m_onlinePane->FocusSearch();
+    }
+}
+
+
+bool KICAD_MANAGER_FRAME::OnlineProjectsPaneShown()
+{
+    return m_onlinePane && m_auimgr.GetPane( m_onlinePane ).IsShown();
+}
+
+
+void KICAD_MANAGER_FRAME::ShowOnlineProjectsPane()
+{
+    if( !OnlineProjectsPaneShown() )
+        ToggleOnlineProjectsPane();
+    else if( m_onlinePane )
+        m_onlinePane->FocusSearch();
 }
 
 
@@ -1636,6 +1725,9 @@ void KICAD_MANAGER_FRAME::SignInToCollab()
             COLLAB_AUTH::ForgetToken( server );
             m_collabSignedIn = false;
             m_collabLogin.clear();
+
+            if( m_onlinePane )
+                m_onlinePane->RefreshList();
             wxMessageBox( _( "Signed out." ), _( "Collaboration Sign-In" ),
                           wxOK | wxICON_INFORMATION, this );
         }
@@ -1651,6 +1743,10 @@ void KICAD_MANAGER_FRAME::SignInToCollab()
                 if( aSuccess )
                 {
                     RefreshCollabIdentity();
+
+                    if( m_onlinePane )
+                        m_onlinePane->RefreshList();
+
                     wxMessageBox( _( "Signed in to the collaboration server." ),
                                   _( "Collaboration Sign-In" ), wxOK | wxICON_INFORMATION, this );
                 }
@@ -1686,7 +1782,8 @@ void KICAD_MANAGER_FRAME::PublishProjectOnline()
     if( !COLLAB_PROJECT::ReadLocalLink( projectPath, projectName, linkedServer ).IsEmpty() )
     {
         wxMessageBox( _( "This project is already synced with an online project.\n\n"
-                         "Use File > Online Sync to change that." ),
+                         "Use Sync Settings in the Online Projects pane to change "
+                         "that." ),
                       _( "Publish Project Online" ), wxOK | wxICON_INFORMATION, this );
         return;
     }
@@ -1721,6 +1818,12 @@ void KICAD_MANAGER_FRAME::PublishProjectOnline()
         wxString projectId = wxString::FromUTF8( project->value( "projectId", "" ) );
         COLLAB_PROJECT::WriteLocalLink( projectPath, projectName, server, projectId );
         COLLAB_PROJECT::RecordLocalCopy( projectId, proFile );
+
+        if( m_onlinePane )
+        {
+            m_onlinePane->OnProjectChanged();
+            m_onlinePane->RefreshList();
+        }
 
         if( wxTheClipboard->Open() )
         {
@@ -1922,7 +2025,7 @@ void KICAD_MANAGER_FRAME::ShowCollabSyncDialog()
         if( wxMessageBox( wxString::Format( _( "Delete the local copy?\n\n%s\n\nEverything in "
                                                "that folder is removed.  The online project "
                                                "stays and can be downloaded again from "
-                                               "File > Online Projects." ),
+                                               "the Online Projects pane." ),
                                             projectPath ),
                           _( "Delete Local Copy" ), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING,
                           this )
@@ -1950,6 +2053,13 @@ void KICAD_MANAGER_FRAME::ShowCollabSyncDialog()
 
         break;
     }
+    }
+
+    // The pane's "this project" card and its list follow whatever was chosen.
+    if( m_onlinePane )
+    {
+        m_onlinePane->OnProjectChanged();
+        m_onlinePane->RefreshList();
     }
 }
 

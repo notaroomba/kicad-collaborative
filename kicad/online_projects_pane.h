@@ -25,9 +25,11 @@
 
 #include <collab/collab_auth.h>
 #include <collab/collab_rest.h>
-#include <dialog_shim.h>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <wx/panel.h>
+#include <wx/longlong.h>
+#include <wx/timer.h>
 
 class KICAD_MANAGER_FRAME;
 class ONLINE_PROJECT_STORE;
@@ -37,21 +39,21 @@ class wxDataViewEvent;
 class wxDataViewListCtrl;
 class wxSearchCtrl;
 class wxStaticText;
+class wxKeyEvent;
+class BITMAP_BUTTON;
 
 /**
- * The "online files" home: every cloud project the signed-in user owns or was
- * invited to, with open / share / create / star / copy / delete, and the Trash
- * that deleted projects can be restored from.  Reached from the project
- * manager's File menu.
+ * The "online files" home, docked in the project manager next to the editors so the
+ * cloud is always one glance away: the account, the project open here and whether it
+ * syncs, and every online project the signed-in user owns or was invited to, with open /
+ * share / create / star / copy / delete, and the Trash that deleted projects can be
+ * restored from.
  */
-class DIALOG_ONLINE_PROJECTS : public DIALOG_SHIM
+class ONLINE_PROJECTS_PANE : public wxPanel
 {
 public:
-    DIALOG_ONLINE_PROJECTS( KICAD_MANAGER_FRAME* aParent );
-    ~DIALOG_ONLINE_PROJECTS() override;
-
-    /// The .kicad_pro the user chose to open, or empty.  Valid after ShowModal().
-    wxString GetProjectToOpen() const { return m_projectToOpen; }
+    ONLINE_PROJECTS_PANE( KICAD_MANAGER_FRAME* aParent );
+    ~ONLINE_PROJECTS_PANE() override;
 
     /// Run the join-from-link flow.  Empty prompts for the link; otherwise the
     /// given share link / token is used directly (deep link, menu, etc.).
@@ -60,13 +62,26 @@ public:
     /// it succeeds.
     void JoinWithLink( const wxString& aLinkOrToken, bool aOpenWithoutAsking = false );
 
-    /// Auto-run JoinWithLink once the dialog is shown (used by the deep link).
-    void SetPendingJoinLink( const wxString& aLink ) { m_pendingJoinLink = aLink; }
+    /// The project manager opened or closed a project: redo the "this project" card and
+    /// what New can publish.
+    void OnProjectChanged();
 
-protected:
-    ///< Enter opens, Delete deletes/leaves, F2 renames, F5 refreshes, Ctrl/Cmd+F focuses
-    ///< the search box and Escape clears a filter before it closes the dialog.
-    void OnCharHook( wxKeyEvent& aEvt ) override;
+    /// Reload the list and the sign-in state, unless something is running.  Used after the
+    /// File menu's own sign-in, publish and sync commands.
+    void RefreshList();
+
+    /// Reload when the list is older than a minute (the window came back to the front).
+    void RefreshIfStale();
+
+    /// Put the keyboard in the filter box.
+    void FocusSearch();
+
+    /// False while a local copy is being written or a project uploaded: quitting then
+    /// would leave a folder that nothing knows to be the project's copy.
+    bool CanClose() const { return !m_downloading && !m_publishing; }
+
+    /// Start the upload of the project open in the project manager (signing in first).
+    void PublishCurrentProject() { publishCurrentProject(); }
 
 private:
     ///< A blocking job for the worker thread; gets the server URL and bearer token, and
@@ -201,7 +216,39 @@ private:
     void onItemActivated( wxDataViewEvent& aEvent );
     void onSelectionChanged( wxDataViewEvent& aEvent );
     void onContextMenu( wxDataViewEvent& aEvent );
-    void onClose( wxCloseEvent& aEvent );
+    void onMore( wxCommandEvent& aEvent );
+    void onProjectCardAction( wxCommandEvent& aEvent );
+    void onProjectCardShare( wxCommandEvent& aEvent );
+
+    ///< Enter opens, Delete deletes/leaves, F2 renames, F5 refreshes, Ctrl/Cmd+F focuses
+    ///< the search box and Escape clears a filter.
+    void onCharHook( wxKeyEvent& aEvt );
+
+    ///< The menu of everything that can be done with the selected row, at the pointer
+    ///< (right-click) or under the More button.
+    void showProjectMenu( wxWindow* aBelow );
+
+    ///< Share sheet for one project.
+    void shareProject( const nlohmann::json& aProject, bool aOwner );
+
+    ///< Open a .kicad_pro that is on disk already, in the project manager.
+    void openLocalCopy( const wxString& aProFile );
+
+    ///< Redo the "this project" card: the project open in the project manager, whether it
+    ///< is online, and how its live session is doing.
+    ///< aReadLink reads the folder's link to the server again; the timer that keeps the
+    ///< session state fresh does without.
+    void updateProjectCard( bool aReadLink = true );
+
+    ///< Fit the columns to the pane's width: the name takes what is left over, and the
+    ///< columns that do not fit are hidden (the line under the list says what they would).
+    void fitColumns();
+
+    ///< The line under the list: owner, role, visibility and age of the selected row.
+    void updateDetails();
+
+    ///< The listing row of the project open in the project manager, or nullptr.
+    const nlohmann::json* currentProjectRow() const;
 
     ///< Give up our own membership of the selected (not owned) project.
     void leaveSelected();
@@ -224,21 +271,31 @@ private:
     ///< Replaced by a fresh one to abandon a pending sign-in.
     std::unique_ptr<COLLAB_AUTH> m_auth;
 
-    wxStaticText*         m_signedInLabel;
+    wxStaticText*         m_signedInLabel;   ///< the account, bold
+    wxStaticText*         m_serverLabel;     ///< the server it is on, grey
     wxButton*             m_signInButton;
-    wxButton*             m_refreshButton;
-    wxButton*             m_trashButton;
+    BITMAP_BUTTON*        m_refreshButton;
+    BITMAP_BUTTON*        m_trashButton;
+
+    wxPanel*              m_projectCard;     ///< the project open in the project manager
+    wxStaticText*         m_projectName;
+    wxStaticText*         m_projectState;
+    wxButton*             m_projectShare;
+    wxButton*             m_projectAction;   ///< Publish Online / Sync Settings
+    wxString              m_cardProjectId;   ///< online id of the open project, or empty
+    wxString              m_cardProjectFile; ///< the .kicad_pro m_cardProjectId was read for
+    wxTimer               m_liveTimer;       ///< keeps the session state on the card fresh
+    wxLongLong            m_lastRefresh;     ///< wall clock of the last listing, ms
+    wxStaticText*         m_listHeading;
     wxSearchCtrl*         m_search;
     wxDataViewListCtrl*   m_list;
     ONLINE_PROJECT_STORE* m_store;        ///< the model behind m_list; owned by it
     wxButton*             m_openButton;
-    wxButton*             m_openInButton;
     wxButton*             m_shareButton;
-    wxButton*             m_detailsButton;
-    wxButton*             m_publicButton;
-    wxButton*             m_deleteButton;
+    wxButton*             m_moreButton;
     wxButton*             m_newButton;
     wxButton*             m_joinButton;
+    wxStaticText*         m_detailLabel;
     wxStaticText*         m_statusLabel;
     wxButton*             m_undoButton;
 
@@ -247,8 +304,6 @@ private:
     std::map<wxString, wxString> m_localCopies; ///< projectId -> local .kicad_pro
     long long                   m_myUserId;
     wxString                    m_myLogin;
-    wxString                    m_projectToOpen;
-    wxString                    m_pendingJoinLink;
 
     ///< Why the project open in the project manager cannot be published, or empty.
     wxString                    m_publishBlocked;

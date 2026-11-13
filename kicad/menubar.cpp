@@ -129,7 +129,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     fileMenu->AppendSeparator();
     fileMenu->Add( KICAD_MANAGER_ACTIONS::collabSignIn );
     fileMenu->Add( KICAD_MANAGER_ACTIONS::joinSharedProject );
-    fileMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects );
+    fileMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects, ACTION_MENU::CHECK );
     fileMenu->Add( KICAD_MANAGER_ACTIONS::publishProject );
     fileMenu->Add( KICAD_MANAGER_ACTIONS::collabSync );
 
@@ -261,6 +261,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     panelsMenu->SetTitle( _( "Panels" ) );
     panelsMenu->Add( KICAD_MANAGER_ACTIONS::showLocalHistory, ACTION_MENU::CHECK );
     panelsMenu->Add( ACTIONS::showGitCommitPane, ACTION_MENU::CHECK );
+    panelsMenu->Add( KICAD_MANAGER_ACTIONS::onlineProjects, ACTION_MENU::CHECK );
     viewMenu->Add( panelsMenu );
 
     viewMenu->AppendSeparator();

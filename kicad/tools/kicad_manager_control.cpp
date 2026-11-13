@@ -38,7 +38,6 @@
 #include <kiplatform/secrets.h>
 #include <kiplatform/ui.h>
 #include <confirm.h>
-#include <dialogs/dialog_online_projects.h>
 #include <kidialog.h>
 #include <project/project_file.h>
 #include <project/project_local_settings.h>
@@ -695,15 +694,7 @@ int KICAD_MANAGER_CONTROL::CollabSync( const TOOL_EVENT& aEvent )
 
 int KICAD_MANAGER_CONTROL::ShowOnlineProjects( const TOOL_EVENT& aEvent )
 {
-    DIALOG_ONLINE_PROJECTS dlg( m_frame );
-
-    dlg.ShowModal();
-
-    wxString pro = dlg.GetProjectToOpen();
-
-    if( !pro.IsEmpty() )
-        m_frame->LoadProject( wxFileName( pro ) );
-
+    m_frame->ToggleOnlineProjectsPane();
     return 0;
 }
 

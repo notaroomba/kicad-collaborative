@@ -72,9 +72,10 @@ TOOL_ACTION KICAD_MANAGER_ACTIONS::openProject( TOOL_ACTION_ARGS()
 TOOL_ACTION KICAD_MANAGER_ACTIONS::onlineProjects( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.onlineProjects" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Online Projects..." ) )
-        .Tooltip( _( "Browse, open, create and share collaborative projects stored on the "
-                     "collaboration server" ) )
+        .FriendlyName( _( "Online Projects" ) )
+        .Tooltip( _( "Show or hide the Online Projects pane: your account, this project's "
+                     "sync state, and every project on the collaboration server" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::www ) );
 
 TOOL_ACTION KICAD_MANAGER_ACTIONS::collabSignIn( TOOL_ACTION_ARGS()

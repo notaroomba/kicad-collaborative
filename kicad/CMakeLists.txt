@@ -17,7 +17,7 @@ include_directories(
     )
 
 set( KICAD_SRCS
-    dialogs/dialog_online_projects.cpp
+    online_projects_pane.cpp
     dialogs/dialog_collab_sync.cpp
     dialogs/dialog_share_project.cpp
     dialogs/dialog_destination.cpp
