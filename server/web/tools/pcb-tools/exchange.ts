@@ -126,64 +126,354 @@ export function boardCopyFromEditor(editorFp: SNode, uuidMap: Record<string, str
 }
 
 const field = (fp: SNode, name: string) => K.kids(fp, "property").find((p) => str(p[1]) === name) || K.kids(fp, "fp_text").find((p) => str(p[1]) === name.toLowerCase()) || null;
-const isRefOrValue = (p: SNode) => (p[0] === "property" && (str(p[1]) === "Reference" || str(p[1]) === "Value")) || (p[0] === "fp_text" && (str(p[1]) === "reference" || str(p[1]) === "value"));
 const COPPER = /(^|\*|\.)Cu$|^\*\.Cu$|^F&B\.Cu$/;
+const MANDATORY = ["Reference", "Value", "Datasheet", "Description"];
+const SHAPES = /^fp_(line|rect|circle|arc|poly|curve)$/;
+/** The footprint's fields (property nodes, legacy reference / value fp_text) other than Reference and Value and the ki_ hidden ones. */
+const isField = (c: SNode) => c[0] === "property" || (c[0] === "fp_text" && (str(c[1]) === "reference" || str(c[1]) === "value"));
+const fieldName = (c: SNode) => (c[0] === "fp_text" ? (str(c[1]) === "reference" ? "Reference" : "Value") : str(c[1]));
+const isRefOrValue = (c: SNode) => isField(c) && (fieldName(c) === "Reference" || fieldName(c) === "Value");
+const extraFields = (fp: SNode) => (fp.filter((c) => isList(c) && isField(c as SNode) && !isRefOrValue(c as SNode) && !/^ki_/.test(fieldName(c as SNode))) as SNode[]);
+/** GraphicalItems(): footprint texts, text boxes, shapes, dimensions, images (fields, pads, zones and groups are kept apart). */
+const graphical = (fp: SNode) => (fp.filter((c) => isList(c) && ((c[0] === "fp_text" && !isField(c as SNode)) || c[0] === "fp_text_box" || SHAPES.test(String(c[0])) || c[0] === "dimension" || c[0] === "image" || c[0] === "table")) as SNode[]);
+/** KICAD_T of a footprint child: every fp_ shape is one PCB_SHAPE_T. */
+const typeOf = (c: SNode) => (SHAPES.test(String(c[0])) ? "shape" : String(c[0]));
+
+/** The text a text-like node shows: (fp_text user "x" …) / (property "Name" "x" …). */
+const textOf = (n: SNode) => str(n[2]);
+/** Levenshtein ratio EDA_TEXT::Levenshtein: 1 - distance / longer length. */
+export function levenshteinRatio(a: string, b: string): number {
+  const m = a.length, n = b.length; if (!m && !n) return 1;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) { const cur = [i]; for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+  return 1 - prev[n] / Math.max(m, n);
+}
+const atXY = (n: SNode): Pt2 => { const a = K.kid(n, "at"); return [K.num(a && a[1]), K.num(a && a[2])]; };
+const atAngle = (n: SNode) => { const a = K.kid(n, "at"); return K.num(a && a[3]); };
+/** EDA_TEXT::Similarity: attributes (effects and angle), position, then the Levenshtein ratio of the texts. */
+function textSimilarity(a: SNode, b: SNode): number {
+  let s = 1;
+  if (kidText(a, "effects") !== kidText(b, "effects") || atAngle(a) !== atAngle(b) || !!K.kid(a, "unlocked") !== !!K.kid(b, "unlocked")) s *= 0.9;
+  const pa = atXY(a), pb = atXY(b); if (Math.abs(pa[0] - pb[0]) > 1e-6 || Math.abs(pa[1] - pb[1]) > 1e-6) s *= 0.9;
+  return s * levenshteinRatio(textOf(a), textOf(b));
+}
+/** PCB_FIELD::Similarity: the same name is a match; a mandatory field only matches itself; otherwise the text's similarity. */
+function fieldSimilarity(a: SNode, b: SNode): number {
+  const na = fieldName(a), nb = fieldName(b);
+  if (MANDATORY.includes(na) || MANDATORY.includes(nb)) return na === nb ? 1 : 0;
+  return na === nb ? 1 : textSimilarity(a, b);
+}
+/** BOARD_ITEM::Similarity of the other footprint children: 0.9 for each property (direct child) that differs. */
+function itemSimilarity(a: SNode, b: SNode): number {
+  if (typeOf(a) !== typeOf(b)) return 0;
+  if (a[0] === "fp_text" || a[0] === "fp_text_box") return textSimilarity(a, b);
+  let s = a[0] === b[0] ? 1 : 0.9;
+  const keys = new Set<string>();
+  for (const n of [a, b]) for (const c of n) if (isList(c) && c[0] !== "uuid" && c[0] !== "tstamp") keys.add(String(c[0]));
+  for (const k of keys) if (kidText(a, k) !== kidText(b, k)) s *= 0.9;
+  return s;
+}
+/** matchItemsBySimilarity (board_exchange_footprint.cpp): every pair scored, taken greedily from the best down. */
+function matchBySimilarity(olds: SNode[], news: SNode[], score: (a: SNode, b: SNode) => number): [SNode, SNode][] {
+  const cand: { o: number; w: number; s: number }[] = [];
+  olds.forEach((a, o) => news.forEach((b, w) => { const s = score(a, b); if (s > 0) cand.push({ o, w, s }); }));
+  cand.sort((x, y) => y.s - x.s || x.o - y.o || x.w - y.w);
+  const uo = new Set<number>(), uw = new Set<number>(), out: [SNode, SNode][] = [];
+  for (const c of cand) { if (uo.has(c.o) || uw.has(c.w)) continue; uo.add(c.o); uw.add(c.w); out.push([olds[c.o], news[c.w]]); }
+  return out;
+}
+
+/** Replace (or add / drop) the direct child `key` of n with a copy of `from`'s, keeping its place. */
+function copyKid(n: SNode, from: SNode, key: string, before = "uuid"): void {
+  const src = K.kid(from, key), cur = K.kid(n, key);
+  if (cur && src) { n[n.indexOf(cur)] = K.cloneNode(src); return; }
+  if (cur) { n.splice(n.indexOf(cur), 1); return; }
+  if (src) { const at = K.kid(n, before); n.splice(at ? n.indexOf(at) : n.length, 0, K.cloneNode(src)); }
+}
+const layerName = (n: SNode) => str((K.kid(n, "layer") || [])[1]);
+const knockout = (n: SNode) => (K.kid(n, "layer") || []).slice(2).includes("knockout");
+function setKnockout(n: SNode, on: boolean): void { const l = K.kid(n, "layer"); if (!l) return; const i = l.indexOf("knockout"); if (on && i < 0) l.push("knockout"); else if (!on && i > 1) l.splice(i, 1); }
+function setLayerName(n: SNode, name: string): void { const l = K.kid(n, "layer"); if (l) l[1] = name; else { const at = K.kid(n, "uuid"); n.splice(at ? n.indexOf(at) : n.length, 0, ["layer", name]); } }
+/** Hidden: (hide yes) on a field (or a legacy bare hide / (effects … hide)). */
+function hidden(n: SNode): boolean {
+  const h = K.kid(n, "hide"); if (h) return str(h[1]) !== "no";
+  if (n.includes("hide")) return true;
+  const e = K.kid(n, "effects"); return !!e && (e.includes("hide") || str((K.kid(e, "hide") || ["", "no"])[1]) === "yes");
+}
+function setHidden(n: SNode, on: boolean): void {
+  for (let i = n.length - 1; i > 0; i--) { const c = n[i]; if (c === "hide" || (isList(c) && c[0] === "hide")) n.splice(i, 1); }
+  const e = K.kid(n, "effects"); if (e) for (let i = e.length - 1; i > 0; i--) { const c = e[i]; if (c === "hide" || (isList(c) && c[0] === "hide")) e.splice(i, 1); }
+  if (on) { const at = K.kid(n, "uuid") || K.kid(n, "effects"); n.splice(at ? n.indexOf(at) : n.length, 0, ["hide", "yes"]); }
+}
+const font = (n: SNode) => { const e = K.kid(n, "effects"); return e ? K.kid(e, "font") : null; };
+const justify = (n: SNode) => { const e = K.kid(n, "effects"); return e ? kidText(e, "justify") : ""; };
+function setAtXYA(n: SNode, x: number, y: number, a: number): void {
+  let at = K.kid(n, "at"); if (!at) { at = ["at", 0, 0]; const l = K.kid(n, "layer"); n.splice(l ? n.indexOf(l) : 3, 0, at); }
+  const had = at.length >= 4; at[1] = r6(x); at[2] = r6(y); if (a || had) at[3] = a; else at.length = 3;
+}
+const norm360 = (a: number) => ((a % 360) + 360) % 360;
+const isLockedText = (n: SNode) => { const l = K.kid(n, "locked"); return !!l && str(l[1]) !== "no"; };
+
+interface TextCtx { posShift: Pt2; angleShift: number; updated: boolean }
+/**
+ * processTextItem: what of the board text aSrc (the existing footprint's) survives on aDest (the library's) for the
+ * reset flags; a reset flag keeps the library's own value and only notes the difference in aUpdated.
+ */
+function processTextItem(src: SNode, dest: SNode, c: TextCtx, resetText: boolean, resetLayers: boolean, resetEffects: boolean, resetPositions: boolean): void {
+  if (resetText) c.updated = c.updated || textOf(src) !== textOf(dest);
+  else dest[2] = src[2];
+  if (resetLayers) c.updated = c.updated || layerName(src) !== layerName(dest) || hidden(src) !== hidden(dest);
+  else { setLayerName(dest, layerName(src)); setHidden(dest, hidden(src)); }
+  const origPos = atXY(dest);
+  if (resetEffects) {
+    const fs = font(src), fd = font(dest);
+    c.updated = c.updated || justify(src) !== justify(dest) || (fs ? kidText(fs, "size") : "") !== (fd ? kidText(fd, "size") : "")
+      || (fs ? kidText(fs, "thickness") : "") !== (fd ? kidText(fd, "thickness") : "") || knockout(src) !== knockout(dest);
+  } else {
+    // SetAttributes( aSrc ) keeps the text's own angle (a keep-upright text already turned 180 is turned back)
+    let origAngle = norm360(atAngle(dest));
+    copyKid(dest, src, "effects", "");
+    copyKid(dest, src, "unlocked", "layer");
+    if (origAngle >= 180 && !K.kid(dest, "unlocked")) origAngle -= 180;
+    setAtXYA(dest, origPos[0], origPos[1], origAngle);
+    setKnockout(dest, knockout(src));
+  }
+  if (resetPositions) {
+    const sp = atXY(src); c.updated = c.updated || Math.abs(sp[0] - origPos[0]) > 1e-6 || Math.abs(sp[1] - origPos[1]) > 1e-6 || atAngle(src) !== atAngle(dest);
+    setAtXYA(dest, origPos[0], origPos[1], atAngle(dest));
+  } else {
+    const sp = atXY(src); const p = rotator(-c.angleShift)(sp[0] - c.posShift[0], sp[1] - c.posShift[1]);
+    setAtXYA(dest, p[0], p[1], atAngle(src));
+  }
+  // SetLocked( aSrc.IsLocked() ), SetUuid( aSrc.m_Uuid )
+  for (let i = dest.length - 1; i > 0; i--) { const k = dest[i]; if (isList(k) && k[0] === "locked") dest.splice(i, 1); }
+  if (isLockedText(src)) { const at = K.kid(dest, "at"); dest.splice(at ? dest.indexOf(at) : 3, 0, ["locked", "yes"]); }
+  setUuidFrom(dest, src);
+}
+function setUuidFrom(dest: SNode, src: SNode): void { const su = ownUuid(src); if (!su) return; const du = ownUuid(dest); if (du) { du[0] = "uuid"; du[1] = su[1]; } else dest.push(["uuid", su[1]]); }
+function freshUuid(n: SNode): void { const u = ownUuid(n); if (u) u[1] = K.newUuid(); }
+/** A footprint's own transform scale onto n, writing (transform …) in place of (at …) when n has none. */
+function applyScale(n: SNode, sx: number, sy: number): void {
+  if (K.kid(n, "transform")) { setScale(n, sx, sy); return; }
+  if (sx === 1 && sy === 1) return;
+  const [x, y, a] = K.atOf(n); const at = K.kid(n, "at"); const i = at ? n.indexOf(at) : 3;
+  if (at) n.splice(i, 1);
+  n.splice(i, 0, ["transform", ["translate", x, y], ["rotate", a], ["scale", sx, sy]]);
+}
+/** The footprint's (attr …) flags, allow_soldermask_bridges apart (it is a clearance override). */
+const attrFlags = (n: SNode) => (K.kid(n, "attr") || []).slice(1).map(str).filter((f) => f !== "allow_soldermask_bridges").sort().join(" ");
+const maskBridges = (n: SNode) => (K.kid(n, "attr") || []).slice(1).map(str).includes("allow_soldermask_bridges");
+function setAttr(n: SNode, flags: string[]): void {
+  const cur = K.kid(n, "attr");
+  if (!flags.length) { if (cur) n.splice(n.indexOf(cur), 1); return; }
+  const node: SNode = ["attr", ...flags];
+  if (cur) { n[n.indexOf(cur)] = node; return; }
+  const before = n.findIndex((c, i) => i > 1 && isList(c) && ["fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_text", "fp_text_box", "pad", "zone", "group", "model", "embedded_files"].includes(String(c[0])));
+  n.splice(before > 0 ? before : n.length, 0, node);
+}
+const FP_CLEARANCE = ["clearance", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio", "zone_connect"];
+const PAD_CLEARANCE = ["clearance", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_gap"];
+const ITEM_KEYS = new Set(["fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_text", "fp_text_box", "pad", "zone", "group", "model", "embedded_files", "dimension", "image", "table", "point"]);
+/** Where a footprint-level kid goes: before the first item. */
+function insertFpKid(n: SNode, kid: SNode): void { const i = n.findIndex((c, j) => j > 1 && isList(c) && ITEM_KEYS.has(String(c[0]))); n.splice(i > 0 ? i : n.length, 0, kid); }
+function copyFpKid(n: SNode, from: SNode, key: string): void {
+  const src = K.kid(from, key), cur = K.kid(n, key);
+  if (cur && src) n[n.indexOf(cur)] = K.cloneNode(src); else if (cur) n.splice(n.indexOf(cur), 1); else if (src) insertFpKid(n, K.cloneNode(src));
+}
+/** A canonical form of a footprint for FootprintNeedsUpdate: its children's texts, order aside. */
+/** A child of a footprint as text with the order of its own properties aside (deeper lists, like points, keep theirs). */
+function canon(n: unknown, depth = 0): string {
+  if (!isList(n)) return JSON.stringify(n);
+  const l = n as SNode;
+  if (l[0] === "at" && l.length === 4 && K.num(l[3]) === 0) return canon(l.slice(0, 3), depth);
+  if (depth > 0) return K.serialize(l);
+  const atoms = l.filter((c) => !isList(c)).map((c) => canon(c)), lists = l.filter((c) => isList(c)).map((c) => canon(c, depth + 1)).sort();
+  return "(" + atoms.concat(lists).join(" ") + ")";
+}
+function canonical(n: SNode): string { return n.slice(2).filter((c) => !(isList(c) && (c[0] === "version" || c[0] === "generator" || c[0] === "generator_version"))).map((c) => canon(c)).sort().join("\n"); }
+
+export interface ExchangeOptions {
+  matchPadPositions?: boolean; deleteExtraTexts?: boolean; resetTextLayers?: boolean; resetTextEffects?: boolean; resetTextPositions?: boolean;
+  resetTextContent?: boolean; resetFabricationAttrs?: boolean; resetClearanceOverrides?: boolean; reset3DModels?: boolean; resetTransform?: boolean;
+}
+/** BOARD::ExchangeFootprint's default arguments (board.h). */
+export const EXCHANGE_DEFAULTS: Required<ExchangeOptions> = { matchPadPositions: true, deleteExtraTexts: true, resetTextLayers: true, resetTextEffects: true, resetTextPositions: true,
+  resetTextContent: true, resetFabricationAttrs: true, resetClearanceOverrides: true, reset3DModels: true, resetTransform: false };
 
 /**
- * BOARD::ExchangeFootprint( aExisting, aNew, commit, flipDirection, aMatchPadPositions = true ) with the default reset
- * flags: the new footprint takes the old one's place, orientation, side, lock, uuid, transform scale, Reference text and
- * the Reference / Value uuids; Value keeps the old text unless it only named the footprint; matched pads keep their
- * uuid, pin function, pin type and (on copper) net; everything else — texts, fields, attributes, clearances, models —
- * is the new footprint's.  Returns the board node to store under the existing footprint's uuid.
+ * BOARD::ExchangeFootprint( aExisting, aNew, commit, flipDirection, aMatchPadPositions, aDeleteExtraTexts,
+ * aResetTextLayers, aResetTextEffects, aResetTextPositions, aResetTextContent, aResetFabricationAttrs,
+ * aResetClearanceOverrides, aReset3DModels, aResetTransform, aUpdated, aShifted) (board_exchange_footprint.cpp:177).
+ * The new footprint takes the old one's place, orientation, side, lock, uuid, height, (unless reset) scale, the
+ * Reference / Value uuids; pads, drawings, zones, groups and fields matched by similarity keep their uuids; matched pads
+ * keep pin function, pin type, net (on copper) and, unless reset, their clearance overrides; texts and fields follow
+ * processTextItem for the reset flags; extra texts of the old footprint are dropped or kept; fabrication attributes,
+ * clearance overrides and 3D models are the library's or the old ones; path, sheet, filters, component class,
+ * variants and units are the old footprint's.  Returns the node to store under the existing footprint's uuid,
+ * `shifted` (moved / turned to match pad positions) and `updated` (the result differs from what was there).
  */
-export function exchangeFootprint(existing: SNode, aNew: SNode, opts: { matchPadPositions?: boolean } = {}): { node: SNode; shifted: boolean } {
+export function exchangeFootprint(existing: SNode, aNew: SNode, o: ExchangeOptions = {}): { node: SNode; shifted: boolean; updated: boolean } {
+  const opt = Object.assign({}, EXCHANGE_DEFAULTS, o);
   const n = K.cloneNode(aNew);
+  const tc: TextCtx = { posShift: [0, 0], angleShift: 0, updated: false };
   const [ex, ey, eo] = K.atOf(existing);
   // new footprint onto the existing one's side first: pads of opposite sides are mirror images in the library frame
-  if (str((K.kid(n, "layer") || [])[1]) !== str((K.kid(existing, "layer") || [])[1])) flipFootprintNode(n);
+  if (layerName(n) !== layerName(existing)) flipFootprintNode(n);
   let px = ex, py = ey, orient = eo, shifted = false;
-  if (opts.matchPadPositions !== false) {
+  if (opt.matchPadPositions) {
     const s = footprintShift(existing, n);
-    if (s) { px = r6(px + s.shift[0]); py = r6(py + s.shift[1]); orient += s.angle; shifted = !!(s.shift[0] || s.shift[1] || s.angle); }
+    if (s) { tc.posShift = s.shift; tc.angleShift = s.angle; px = r6(px + s.shift[0]); py = r6(py + s.shift[1]); orient += s.angle; shifted = !!(s.shift[0] || s.shift[1] || s.angle); }
   }
   const [, , no] = K.atOf(n);
   setFootprintAt(n, px, py, no);
   if (orient - no) rotateFootprintNode(n, orient - no);
-  const [sx, sy] = scaleOf(existing); setScale(n, sx, sy);
+  if (!opt.resetTransform) { const [sx, sy] = scaleOf(existing), [nx, ny] = scaleOf(n); if (sx !== nx || sy !== ny) applyScale(n, sx, sy); }
   setLocked(n, !!(K.kid(existing, "locked") || existing.includes("locked")) && str((K.kid(existing, "locked") || ["", "yes"])[1]) !== "no");
   const eu = ownUuid(existing), nu = ownUuid(n);
   if (eu) { if (nu) nu[1] = eu[1]; else n.push(["uuid", eu[1]]); }
-  // Reference and Value: their uuids are the existing ones; the reference text is always kept, the value only when it
-  // was not just the footprint's name
   const oldRef = field(existing, "Reference"), newRef = field(n, "Reference");
   const oldVal = field(existing, "Value"), newVal = field(n, "Value");
-  const keepUuid = (o: SNode | null, w: SNode | null) => { if (!o || !w) return; const ou = ownUuid(o), wu = ownUuid(w); if (ou && wu) wu[1] = ou[1]; else if (ou) w.push(["uuid", ou[1]]); };
-  keepUuid(oldRef, newRef); keepUuid(oldVal, newVal);
-  if (oldRef && newRef) newRef[2] = oldRef[2];
-  const libName = str(existing[1]).split(":").pop();
-  if (oldVal && newVal && str(oldVal[2]) !== libName) newVal[2] = oldVal[2];
-  // pads: matchItemsBySimilarity — every (old, new) pair scored by PAD::Similarity plus 2 for the same number, taken
-  // greedily from the best score down (so a pad keeps its number's net and pin function wherever it moved)
+  copyFpKid(n, existing, "height");
+
+  // pads: matchItemsBySimilarity, +2 for the same number
   const pairs = matchPads(K.kids(existing, "pad"), K.kids(n, "pad"), K.atOf(existing), K.atOf(n));
-  const newPads = K.kids(n, "pad");
+  const matched = new Set<SNode>();
   for (const [op, np] of pairs) {
-    const ou = ownUuid(op), wu = ownUuid(np); if (ou) { if (wu) wu[1] = ou[1]; else np.push(["uuid", ou[1]]); }
-    for (const key of ["pinfunction", "pintype"]) {
-      const o = K.kid(op, key), w = K.kid(np, key);
-      if (w) np.splice(np.indexOf(w), 1);
-      if (o) { const at = K.kid(np, "uuid"); np.splice(at ? np.indexOf(at) : np.length, 0, K.cloneNode(o)); }
-    }
+    matched.add(np);
+    setUuidFrom(np, op);
+    for (const key of ["pinfunction", "pintype"]) copyKid(np, op, key);
+    if (!opt.resetClearanceOverrides) for (const key of PAD_CLEARANCE) if (K.kid(op, key) || K.kid(np, key)) copyKid(np, op, key);
     stripNets(np);
     const onCopper = (K.kid(np, "layers") || []).slice(1).some((l) => COPPER.test(str(l)));
     const onet = K.kid(op, "net");
     if (onCopper && onet) { const pf = K.kid(np, "pinfunction") || K.kid(np, "pintype") || K.kid(np, "uuid"); np.splice(pf ? np.indexOf(pf) : np.length, 0, K.cloneNode(onet)); }
   }
-  // an unmatched pad keeps its own uuid unless a matched pad now carries it
-  const taken = new Set(pairs.map(([, np]) => str((ownUuid(np) || [])[1])));
-  for (const np of newPads) if (!pairs.some((pp) => pp[1] === np)) { stripNets(np); const u = ownUuid(np); if (u && taken.has(str(u[1]))) u[1] = K.newUuid(); }
-  // texts and fields other than Reference / Value: aDeleteExtraTexts and the reset flags — the new footprint's own
-  void isRefOrValue;
-  return { node: n, shifted };
+  for (const np of K.kids(n, "pad")) if (!matched.has(np)) { stripNets(np); freshUuid(np); }
+
+  // drawings, zones and groups: matched ones keep the old uuid, the others get fresh ones
+  const oldDraw = graphical(existing), newDraw = graphical(n);
+  const drawPairs = matchBySimilarity(oldDraw, newDraw, itemSimilarity);
+  const oldToNewText = new Map<SNode, SNode>();
+  for (const [a, b] of drawPairs) { setUuidFrom(b, a); if (a[0] === "fp_text" && b[0] === "fp_text") oldToNewText.set(a, b); }
+  for (const b of newDraw) if (!drawPairs.some((pp) => pp[1] === b)) freshUuid(b);
+  for (const key of ["zone", "group", "point"]) {
+    const prs = matchBySimilarity(K.kids(existing, key), K.kids(n, key), itemSimilarity);
+    for (const [a, b] of prs) setUuidFrom(b, a);
+    for (const b of K.kids(n, key)) if (!prs.some((pp) => pp[1] === b)) freshUuid(b);
+  }
+  // fields other than Reference / Value
+  const oldFields = extraFields(existing), newFields = extraFields(n);
+  const fieldPairs = matchBySimilarity(oldFields, newFields, fieldSimilarity);
+  const oldToNewField = new Map<SNode, SNode>();
+  for (const [a, b] of fieldPairs) { oldToNewField.set(a, b); setUuidFrom(b, a); }
+  for (const b of newFields) if (!fieldPairs.some((pp) => pp[1] === b)) freshUuid(b);
+
+  // texts: the matched ones per the reset flags, the extra ones dropped or carried over
+  const handled = new Set<SNode>();
+  const insertItem = (c: SNode) => { const i = n.findIndex((k, j) => j > 1 && isList(k) && (k[0] === "pad" || k[0] === "zone" || k[0] === "group" || k[0] === "model" || k[0] === "embedded_files")); n.splice(i > 0 ? i : n.length, 0, c); };
+  for (const ot of oldDraw) {
+    if (ot[0] !== "fp_text") continue;
+    const nt = oldToNewText.get(ot);
+    if (nt) { handled.add(nt); processTextItem(ot, nt, tc, opt.resetTextContent, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions); }
+    else if (opt.deleteExtraTexts) tc.updated = true;
+    else { const c = K.cloneNode(ot); handled.add(c); insertItem(c); }
+  }
+  if (graphical(n).some((c) => c[0] === "fp_text" && !handled.has(c))) tc.updated = true;
+  // Reference: the initial text is always kept; Value: reset only when it just named the footprint
+  if (oldRef && newRef) processTextItem(oldRef, newRef, tc, false, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions);
+  const libName = str(existing[1]).split(":").pop();
+  if (oldVal && newVal) processTextItem(oldVal, newVal, tc, textOf(oldVal) === libName, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions);
+  const handledFields = new Set<SNode>();
+  const insertField = (c: SNode) => { let last = -1; n.forEach((k, j) => { if (isList(k) && isField(k as SNode)) last = j; }); n.splice(last > 0 ? last + 1 : n.length, 0, c); };
+  for (const of of oldFields) {
+    const nf = oldToNewField.get(of);
+    if (nf) { handledFields.add(nf); processTextItem(of, nf, tc, opt.resetTextContent, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions); }
+    else if (opt.deleteExtraTexts) tc.updated = true;
+    else { const c = K.cloneNode(of); freshUuid(c); handledFields.add(c); insertField(c); }   // the old field stays on the board until the swap: a new uuid
+  }
+  if (extraFields(n).some((c) => !handledFields.has(c))) tc.updated = true;
+
+  // fabrication attributes
+  if (opt.resetFabricationAttrs) { if (attrFlags(n) !== attrFlags(existing)) tc.updated = true; }
+  else { const flags = (K.kid(existing, "attr") || []).slice(1).map(str).filter((f) => f !== "allow_soldermask_bridges"); if (maskBridges(n)) flags.push("allow_soldermask_bridges"); setAttr(n, flags); }
+  // clearance overrides
+  if (opt.resetClearanceOverrides) {
+    if (maskBridges(existing) !== maskBridges(n) || FP_CLEARANCE.some((k) => kidText(existing, k) !== kidText(n, k))) tc.updated = true;
+  } else {
+    for (const k of FP_CLEARANCE) copyFpKid(n, existing, k);
+    const flags = (K.kid(n, "attr") || []).slice(1).map(str).filter((f) => f !== "allow_soldermask_bridges"); if (maskBridges(existing)) flags.push("allow_soldermask_bridges"); setAttr(n, flags);
+  }
+  // 3D models (and extruded bodies, and the embedded model files)
+  const models = (fp: SNode) => K.kids(fp, "model");
+  if (opt.reset3DModels) {
+    const a = models(n).map((m) => K.serialize(m)), b = models(existing).map((m) => K.serialize(m));
+    if (a.length !== b.length || a.some((t, i) => t !== b[i])) tc.updated = true;
+  } else {
+    for (let i = n.length - 1; i > 1; i--) { const c = n[i]; if (isList(c) && c[0] === "model") n.splice(i, 1); }
+    for (const m of models(existing)) n.push(K.cloneNode(m));
+    const ee = K.kid(existing, "embedded_files");
+    if (ee) {
+      let ne = K.kid(n, "embedded_files"); if (!ne) { ne = ["embedded_files"]; n.push(ne); }
+      const fileName = (f: SNode) => str((K.kid(f, "name") || [])[1]);
+      const isModel = (f: SNode) => str((K.kid(f, "type") || [])[1]) === "model";
+      for (const f of K.kids(ee, "file")) { if (!isModel(f)) continue; const name = fileName(f); for (let i = ne.length - 1; i > 0; i--) { const c = ne[i]; if (isList(c) && c[0] === "file" && fileName(c) === name) ne.splice(i, 1); } ne.push(K.cloneNode(f)); }
+    }
+  }
+  // updating other parameters: path, sheet, filters, component class, variants, units
+  for (const key of ["path", "sheetname", "sheetfile", "component_classes", "variants", "units"]) copyFpKid(n, existing, key);
+  const filt = (fp: SNode) => K.kids(fp, "property").find((p) => str(p[1]) === "ki_fp_filters") || null;
+  const of = filt(existing), nf = filt(n);
+  if (nf && of) n[n.indexOf(nf)] = K.cloneNode(of); else if (nf) n.splice(n.indexOf(nf), 1); else if (of) insertField(K.cloneNode(of));
+  // FootprintNeedsUpdate: pads, graphics, zones … differ
+  const updated = tc.updated || canonical(n) !== canonical(existing);
+  return { node: n, shifted, updated };
+}
+
+export interface ExchangeJob {
+  /** Update Footprints (each footprint from its own library id) or Change Footprints (to newFpid) */
+  updateMode: boolean;
+  newFpid?: string;
+  /** isMatch for the chosen match mode */
+  match(fp: SNode, id: string): boolean;
+  opts: ExchangeOptions;
+  /** PCB_BASE_FRAME::LoadFootprint: the library footprint as a board footprint (fresh uuids, at the origin), null when not found */
+  library(fpid: string): SNode | null;
+}
+export interface ExchangeLine { severity: "error" | "warning" | "action" | "info"; text: string }
+/** LIB_ID::Parse + IsValid: "lib:name" or "name", a name required, no illegal characters. */
+export function validFpid(id: string): boolean {
+  const t = id.trim(); if (!t) return false;
+  const i = t.indexOf(":"); const name = i >= 0 ? t.slice(i + 1) : t;
+  return !!name.trim() && !/[\r\n\t]/.test(t);
+}
+/**
+ * DIALOG_EXCHANGE_FOOTPRINTS::processMatchingFootprints: every matching footprint, from the last, exchanged for its
+ * library footprint (update) or for newFpid (change), with KiCad's report line for each.
+ */
+export function planExchange(fps: { id: string; node: SNode }[], job: ExchangeJob): { modified: [string, SNode][]; report: ExchangeLine[]; ids: string[] } {
+  const out = { modified: [] as [string, SNode][], report: [] as ExchangeLine[], ids: [] as string[] };
+  if (!fps.length) return out;
+  if (!job.updateMode && !validFpid(job.newFpid || "")) return out;
+  for (const fp of fps.slice().reverse()) {
+    if (!job.match(fp.node, fp.id)) continue;
+    const oldId = str(fp.node[1]), newId = job.updateMode ? oldId : (job.newFpid || "").trim();
+    const refN = field(fp.node, "Reference"); const ref = refN ? textOf(refN) : "";
+    let msg = job.updateMode ? `Updated footprint ${ref} (${oldId}): ` : `Changed footprint ${ref} from '${oldId}' to '${newId}': `;
+    const lib = job.library(newId);
+    if (!lib) { out.report.push({ severity: "error", text: msg + "*** library footprint not found ***" }); continue; }
+    const r = exchangeFootprint(fp.node, lib, job.opts);
+    out.ids.push(fp.id);
+    if (canonical(r.node) !== canonical(fp.node)) out.modified.push([fp.id, r.node]);
+    if (job.updateMode && !r.updated) { msg += r.shifted ? ": (shifted/rotated to match pad positions)" : ": (no changes)"; out.report.push({ severity: "info", text: msg }); }
+    else { msg += ": OK"; out.report.push({ severity: "action", text: msg }); }
+  }
+  return out;
+}
+
+/** WildCompareString( pattern, string, case-insensitive ): * and ? wildcards. */
+export function wildCompare(pattern: string, text: string): boolean {
+  const re = new RegExp("^" + pattern.toLowerCase().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "s");
+  return re.test(text.toLowerCase());
 }
 
 const kidText = (n: SNode, key: string) => { const k = K.kid(n, key); return k ? K.serialize(k) : ""; };
@@ -228,4 +518,4 @@ export function matchPads(oldPads: SNode[], newPads: SNode[], fOld: [number, num
 }
 
 /** The node tests reach these through PcbTools.exchange. */
-export const exchangeApi = { editableCopy, exchangeFootprint, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };
+export const exchangeApi = { editableCopy, exchangeFootprint, EXCHANGE_DEFAULTS, wildCompare, levenshteinRatio, planExchange, validFpid, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };

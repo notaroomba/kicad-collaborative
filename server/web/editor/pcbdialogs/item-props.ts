@@ -8,6 +8,7 @@
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { box, checkField, form, grid, h, coordField, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { E } from "../state";
+import { kicadActionAvailable, runKicadAction } from "../hotkeys";
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
 import { tableDialog } from "./table";
@@ -464,6 +465,29 @@ function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
 }
 
 // ---------------------------------------------------------------- Footprint Properties
+/**
+ * The General page's Update Footprint from Library… / Change Footprint… / Edit Footprint… / Edit Library Footprint…
+ * buttons: TransferDataFromWindow (the dialog's edits stored, as OK does), Close, then PCB_EDIT_FRAME::OnEditItemRequest
+ * runs the exchange dialog (FP_PROPS_UPDATE_FP / FP_PROPS_CHANGE_FP) or opens the Footprint Editor.
+ */
+function fpButtons(ctx: ToolCtx, item: KItem, body: HTMLElement): HTMLElement {
+  const go = (action: string): void => {
+    const dlg = body.parentElement as HTMLElement | null;
+    const btns = dlg ? Array.from(dlg.querySelectorAll<HTMLButtonElement>(".kd-foot > button")) : [];
+    const ok = btns[btns.length - 1];
+    if (ok) ok.click();
+    if (dlg && dlg.isConnected) return;                 // the edits did not validate: the dialog stays
+    setTimeout(() => {
+      const P = PT() as unknown as { applySelection?(c: ToolCtx, ids: string[]): void };
+      if (P.applySelection && ctx.doc && ctx.doc.items.has(item.id)) P.applySelection(ctx, [item.id]);
+      runKicadAction(action);
+    }, 0);
+  };
+  const b = (label: string, action: string): HTMLButtonElement => { const el = h("button", { type: "button", class: "btn", "data-k": action }, label) as HTMLButtonElement; el.disabled = (!!ctx.viewOnly && /^(update|change)/.test(action)) || !kicadActionAvailable(action); el.addEventListener("click", () => go(action)); return el; };
+  return h("div", { class: "pd-row", style: "margin-top:8px;justify-content:flex-end" },
+    b("Update Footprint from Library...", "updateFootprint"), b("Change Footprint...", "changeFootprint"),
+    b("Edit Footprint...", "editFpInFpEditor"), b("Edit Library Footprint...", "editLibFpInFpEditor_board"));
+}
 function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
   const doc = ctx.doc as KDoc;
   return itemDialog(ctx, item, "Footprint Properties", 900, (node, body, ro) => {
@@ -499,7 +523,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
       h("div", { class: "pd-cols2" },
         box("Position", form([["X:", x.el, unitLabel()], ["Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")], ["Side:", side.el]]), locked.el),
         box("Fabrication Attributes", form([["Footprint type:", type.el]], true), ...flags.map((f) => f.f.el))),
-      form([["Library link:", h("span", { class: "pd-value" }, String(node[1] ?? ""))]], true));
+      form([["Library link:", h("span", { class: "pd-value" }, String(node[1] ?? ""))]], true), fpButtons(ctx, item, body));
     const clearances = h("div", null, h("p", { class: "pd-note" }, "Leave values blank to use Board Setup values."),
       box("Clearances", form([["Pad clearance:", clr.el, unitLabel()], ["Solder mask expansion:", mask.el, unitLabel()], ["Solder paste clearance:", paste.el, unitLabel()]])),
       box("Pad Connections", form([["Pad connection to zones:", zone.el]], true)));

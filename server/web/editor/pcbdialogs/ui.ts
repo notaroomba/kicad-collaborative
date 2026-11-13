@@ -357,6 +357,7 @@ export const ICONS = {
   trash: svg('<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" stroke-width="1.5"/>'),
   up: svg('<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>'),
   down: svg('<path d="M8 3v10M3.5 8.5L8 13l4.5-4.5"/>'),
+  library: svg('<path d="M2.5 3v10M5 3v10M7.5 3.5l3 9.5M11 3l2.5 9.5" stroke-width="1.4"/>'),
 };
 export function iconButton(icon: keyof typeof ICONS, title: string, fn: () => void, disabled?: boolean): HTMLButtonElement {
   const b = h("button", { class: "pd-iconbtn", type: "button", title, disabled: !!disabled });

@@ -42,7 +42,7 @@ import { isSch, mmW, mmX0, mmY0, stage, worldMm } from "./view";
 import { chooserOpen, closeChooser, openChooser } from "../library/chooser";
 import type { ChooserOptions, Chosen } from "../library/chooser";
 import * as core from "../library/core";
-import { fetchItem, officialIndex, officialLibraries, registerSource, rememberRecent, unregisterSource } from "../library/sources";
+import { fetchItem, officialIndex, officialLibraries, projectLibraries, registerSource, rememberRecent, unregisterSource } from "../library/sources";
 import type { FetchedItem, LibItem, LibKind, LibrarySource, SourceContext } from "../library/sources";
 
 export interface PlaceSymbolRequest { libId: string; symbol: string; fields?: Record<string, string>; unit?: number; keep?: boolean; allUnits?: boolean }
@@ -263,8 +263,20 @@ function fetchOfficial(kind: LibKind, id: string): Promise<FetchedItem> {
   return fetchItem(kind, item, sourceCtx());
 }
 
+/**
+ * PCB_BASE_FRAME::LoadFootprint( aFootprintId ): the .kicad_mod text of "Lib:Name" from the library table — a library
+ * of the project (its own .pretty) before a global one of the same nickname; null when no library has it.
+ */
+export async function loadLibraryFootprint(fpid: string): Promise<string | null> {
+  const { lib, name } = core.parseLibId(fpid.trim()); if (!lib || !name) return null;
+  const ctx = sourceCtx();
+  const inProject = projectLibraries("footprint", ctx.docs).some((l) => l.name === lib);
+  try { const got = await fetchItem("footprint", { id: `${lib}:${name}`, name, library: lib, source: inProject ? "project" : "official" }, ctx); return got.footprint || null; }
+  catch { return null; }
+}
+
 export const KiCadLibrary = {
-  placeSymbol, placeFootprint, openChooser: chooser, chooseAndPlace, closeChooser,
+  placeSymbol, placeFootprint, openChooser: chooser, chooseAndPlace, closeChooser, loadFootprint: loadLibraryFootprint,
   registerSource: (source: LibrarySource) => registerSource(source), unregisterSource,
   libraries: (kind: LibKind) => officialLibraries(kind), index: (kind: LibKind, lib: string) => officialIndex(kind, lib), fetch: fetchOfficial,
   core,

@@ -11,6 +11,7 @@ import { newTextBoxDialog } from "./textbox";
 import { newTableDialog } from "./table";
 import { createArrayDialog } from "./array";
 import { padPropertiesDialog } from "./pad-props";
+import { openExchangeFootprints } from "./exchange";
 import { openUpdatePcb, projectNetlist, updatePcbFromSchematicEditor } from "./update-pcb";
 import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
 import { commitObservers, toolCtx } from "../tools";
@@ -35,6 +36,11 @@ export function installPcbDialogs(): void {
   action("createArray", "Create Array...", "", (ctx) => { createArrayDialog(ctx); });   // PCB_ACTIONS::createArray (ARRAY_TOOL)
   action("boardSetup", "Board Setup...", "", (ctx) => { void openBoardSetup(ctx); });
   action("updatePcbFromSchematic", "Update PCB from Schematic...", "F8", (ctx) => { void openUpdatePcb(ctx); });
+  // GLOBAL_EDIT_TOOL::ExchangeFootprints (DIALOG_EXCHANGE_FOOTPRINTS)
+  action("updateFootprint", "Update Footprint...", "", (ctx) => { openExchangeFootprints(ctx, "updateFootprint"); });
+  action("updateFootprints", "Update Footprints from Library...", "", (ctx) => { openExchangeFootprints(ctx, "updateFootprints"); });
+  action("changeFootprint", "Change Footprint...", "", (ctx) => { openExchangeFootprints(ctx, "changeFootprint"); });
+  action("changeFootprints", "Change Footprints...", "", (ctx) => { openExchangeFootprints(ctx, "changeFootprints"); });
   action("editFootprintFields", "Bulk Edit Footprint Fields...", "", openFootprintFields);
   action("runDRC", "Design Rules Checker", "", openDrc);
   action("clearMarkers", "Clear DRC Markers", "", clearDrcMarkers);
