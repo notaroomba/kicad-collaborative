@@ -163,7 +163,7 @@ function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
     const v0 = zoneValues(node);
     const panel = zoneSettingsPanel(v0, ro);
     const zm = h("button", { type: "button", class: "btn", "data-k": "openZoneManager" }, "Open Zone Manager...");
-    zm.addEventListener("click", () => { const dlg = zm.closest(".kd-overlay, .kd-dialog"); const esc = dlg && dlg.querySelector<HTMLButtonElement>(".kd-foot button"); if (esc) esc.click(); setTimeout(() => runKicadAction("zoneManager"), 0); });
+    zm.addEventListener("click", () => { const dlg = zm.closest(".kd-overlay, .kd-dialog"); const esc = dlg && dlg.querySelector<HTMLButtonElement>(".kd-foot button"); if (esc) esc.click(); setTimeout(() => runKicadAction("zonesManager"), 0); });
     body.append(h("div", { class: "pd-zone" },
       h("div", { class: "pd-zonelayers" }, h("div", { class: "pd-colhead" }, "Layers:"), h("div", { class: "pd-list", style: "padding:4px 8px;max-height:330px" }, ...layerChecks.map((l) => l.f.el)), h("div", { class: "pd-row", style: "margin-top:8px" }, zm)),
       h("div", null, form([["Zone name:", name.el, null, "A unique name for this zone, used to identify it in DRC rules"], ["Net name:", net.el]], true), locked.el, panel.el)));
