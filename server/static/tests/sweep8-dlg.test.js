@@ -124,5 +124,33 @@ test("track solder mask: (layers F.Cu F.Mask) and a margin on the outer layers o
   M.setTrackLayerAndMask(t, "F.Cu", false, null, parse); assert.equal(ser(t), ser(parse(T)));
 });
 
+const X = load(["dialogs", "erc-exclusions.ts"]);
+const MK = { code: "isolated_pin_label", severity: "warning", x: 209.55, y: 40.64, ids: ["aaaa-1"] };
+test("ERC exclusions at erc schema 0: KiCad's legacy [ \"code|x|y|main|aux\", comment ] entries", () => {
+  const erc = { erc_exclusions: [], meta: { version: 0 } };
+  X.setExcluded(erc, MK, true, "checked");
+  assert.deepEqual(erc.erc_exclusions, [["isolated_pin_label|2095500|406400|aaaa-1|00000000-0000-0000-0000-000000000000", "checked"]]);
+  assert.equal(erc.meta.version, 0);
+  const l = X.readExclusions(erc); assert.equal(l.length, 1); assert.equal(l[0].comment, "checked"); assert.ok(X.sameViolation(MK, l[0]));
+  X.setExcluded(erc, MK, true, "again"); assert.equal(erc.erc_exclusions.length, 1); assert.equal(erc.erc_exclusions[0][1], "again");
+  X.setExcluded(erc, MK, false); assert.deepEqual(erc.erc_exclusions, []);
+});
+test("ERC exclusions at erc schema 1: ERC_EXCLUSION's ProtoJSON", () => {
+  const erc = { erc_exclusions: [], meta: { version: 1 } };
+  X.setExcluded(erc, MK, true, "");
+  assert.deepEqual(erc.erc_exclusions, [{ marker: { error_type: "ERCET_LABEL_SINGLE_PIN", position: { x_nm: "209550000", y_nm: "40640000" }, items: [{ value: "aaaa-1" }] } }]);
+  assert.ok(X.findExclusion(MK, X.readExclusions(erc)));
+  assert.equal(X.protoErrorType("pin_to_pin", "error"), "ERCET_PIN_TO_PIN_ERROR");
+  assert.equal(X.protoErrorType("power_pin_not_driven", "error"), "ERCET_POWERPIN_NOT_DRIVEN");
+});
+test("ERC exclusions: an excluded marker shows as an exclusion and keeps its severity; Ignore drops the rule's entries", () => {
+  const erc = { erc_exclusions: [], meta: { version: 0 } };
+  X.setExcluded(erc, MK, true, "c");
+  const [m] = X.markExcluded([MK], X.readExclusions(erc));
+  assert.equal(m.severity, "exclusion"); assert.equal(m.base, "warning"); assert.equal(m.comment, "c");
+  const [back] = X.markExcluded([m], []); assert.equal(back.severity, "warning");
+  X.dropRule(erc, "isolated_pin_label"); assert.deepEqual(erc.erc_exclusions, []);
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

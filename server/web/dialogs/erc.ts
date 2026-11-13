@@ -7,16 +7,18 @@
 // ERC_REPORT::GetTextReport, the options button holds the three cross-probe options, "Delete Marker" / "Delete All
 // Markers" clear them and "Run ERC" (the default button) runs the checks with the project's rule severities.
 //
-// Exclusions live with the markers for this session: a re-run excludes the same violations again (the rule, the
-// position and the items match), as SCHEMATIC::ResolveERCExclusions does with the project's list.
+// Exclusions are kept in the project's erc_exclusions (ERC_SETTINGS::m_ErcExclusions) in the form its erc schema
+// already uses, so a re-run excludes the same violations again (SCHEMATIC::ResolveERCExclusions).
 import { E, applyView, centerOn, requestRender, toast, toolCtx } from "./editor";
 import { syntaxHelp } from "../editor/syntax-help";
-import { KD, checkbox, download, h, popupMenu, promptText, type DlgApi, type PopItem } from "./dom";
+import { KD, checkbox, download, h, popupMenu, type DlgApi, type PopItem } from "./dom";
 import { ERC_RULES, defaultSeverity, stepMarker } from "./erc-rules";
-import { obj, projectJson, saveProject } from "./project";
+import { dropRule, markExcluded, readExclusions, sameViolation, setExcluded } from "./erc-exclusions";
+import { obj, projectJson, saveProject, sub } from "./project";
 import { openSchematicSetup } from "./schematic-setup";
+import { textEntryBox } from "../editor/pcbdialogs/ui";
 
-export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; excluded?: boolean; comment?: string; sev0?: string; selected?: boolean }
+export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean }
 
 const RULE_TITLE = new Map<string, string>(ERC_RULES.filter((r): r is [string, string] => r.length === 2).map(([title, key]) => [key, title]));
 /** The rule title KiCad shows for a violation (ERC_ITEM::GetErrorText), falling back to the marker's own text. */
@@ -37,21 +39,21 @@ const severities = (): Record<string, unknown> => obj(obj(projectJson().erc).rul
 export function severityOf(code: string, sev: Record<string, unknown> = severities()): string { return typeof sev[code] === "string" ? String(sev[code]) : defaultSeverity(code); }
 
 // ---------------------------------------------------------------- exclusions (SCH_MARKER::SetExcluded)
-/** The identity of a violation for its exclusion: the rule, the position and the items (ERC_EXCLUSION's sort key). */
-export const exclusionKey = (m: Pick<ErcViolation, "code" | "x" | "y" | "ids">): string => `${m.code}|${fmt(m.x)}|${fmt(m.y)}|${m.ids.join(",")}`;
-const exclusions = new Map<string, string>();   // key -> comment
-/** Mark a marker excluded (or not): it is drawn and counted as an exclusion, its own severity kept for the way back. */
-export function setExcluded(m: ErcViolation, on: boolean, comment = ""): void {
-  if (on) { if (!m.excluded) m.sev0 = m.severity; m.excluded = true; m.comment = comment; m.severity = "exclusion"; exclusions.set(exclusionKey(m), comment); }
-  else { if (m.excluded) m.severity = m.sev0 || "error"; m.excluded = false; m.comment = ""; delete m.sev0; exclusions.delete(exclusionKey(m)); }
+/** An excluded marker shows as an exclusion, its rule's severity kept as base. */
+export const isExcluded = (m: Pick<ErcViolation, "severity">): boolean => m.severity === "exclusion";
+/** The rule's own severity of a marker (an exclusion keeps it as base). */
+export const sevOf = (m: Pick<ErcViolation, "severity" | "base">): string => (m.severity === "exclusion" ? m.base || "warning" : m.severity);
+/** Apply the project's exclusions to the marker list (SCHEMATIC::ResolveERCExclusions). */
+export function withExclusions<T extends ErcViolation>(list: T[]): T[] { return markExcluded(list, readExclusions(obj(projectJson().erc))) as T[]; }
+/** The same violation in another copy of the marker list (the rule, the position and the items). */
+const sameMarker = (a: ErcViolation, b: ErcViolation): boolean => sameViolation(a, { ...b, comment: "" }) && a.ids.join(",") === b.ids.join(",");
+/** SCH_MARKER::SetExcluded + RecordERCExclusions: add, re-comment or drop the violation's entry in the .kicad_pro, then re-resolve. */
+function storeExclusion(m: ErcViolation, on: boolean, comment = ""): Promise<void> {
+  if (E.viewOnly) { toast("View-only access"); return Promise.resolve(); }
+  return saveProject((pro) => { setExcluded(sub(pro, "erc") as never, { ...m, severity: sevOf(m) }, on, comment); }, on ? "ERC exclusion" : "remove ERC exclusion")
+    .then(() => { publishMarkers(withExclusions(markers())); })
+    .catch((e: Error) => toast(`Could not change the exclusion: ${e.message}`, 5000));
 }
-/** A fresh run's markers take this session's exclusions again (SCHEMATIC::ResolveERCExclusions). */
-export function applyExclusions<T extends ErcViolation>(list: T[]): T[] {
-  for (const m of list) { const c = exclusions.get(exclusionKey(m)); if (c !== undefined) { m.sev0 = m.severity; m.excluded = true; m.comment = c; m.severity = "exclusion"; } }
-  return list;
-}
-/** The severity a marker reports under (an excluded one keeps the rule's). */
-const baseSeverity = (m: ErcViolation): string => (m.excluded ? m.sev0 || "error" : m.severity);
 
 interface SchModule { actions?: Record<string, { run(ctx: unknown, opts?: unknown): unknown }>; state: { markers?: ErcViolation[] }; itemDescription?(d: KDoc, id: string, u: string): string }
 const sch = (): SchModule | null => ((window as unknown as { CollabTools?: { sch?: SchModule } }).CollabTools || {}).sch || null;
@@ -64,6 +66,8 @@ const describe = (id: string): string => { const s = sch(), d = E.kdoc as KDoc |
 /** The marker selected on the canvas (SCH_SELECTION_TOOL with a SCH_MARKER_T), or null. */
 export function selectedMarker(): ErcViolation | null { return markers().find((m) => m.selected) || null; }
 export function selectMarker(m: ErcViolation | null): void { for (const x of markers()) if (x.selected && x !== m) delete x.selected; if (m) m.selected = true; requestRender(); }
+/** The marker of the current list that is `m` (exclusions re-resolve the list into fresh copies). */
+const resolveMarker = (m: ErcViolation | null): ErcViolation | null => (m ? markers().find((x) => x === m) || markers().find((x) => sameMarker(x, m)) || null : null);
 
 // ---------------------------------------------------------------- DIALOG_ERC::OnERCItemRClick's Inspect / Fix entries
 type Handlers = Record<string, ((a?: unknown) => void) | undefined>;
@@ -112,7 +116,7 @@ export function ercNextMarker(): void { if (isLive()) live!.step(1); else { open
 export function ercExcludeMarker(): void {
   const m = selectedMarker();
   if (isLive()) { live!.exclude(m); return; }
-  if (m && !m.excluded) { setExcluded(m, true); publishMarkers(markers()); }
+  if (m && !isExcluded(m)) void storeExclusion(m, true);
 }
 /** SCH_INSPECTION_TOOL::CrossProbe( marker ): the dialog comes up (or forward) with the marker's row picked. */
 export function ercCrossProbe(m: ErcViolation, open: boolean): void {
@@ -121,7 +125,7 @@ export function ercCrossProbe(m: ErcViolation, open: boolean): void {
 }
 /** Find Next Marker (Ctrl+Shift+F3, SCH_FIND_REPLACE_TOOL with data.markersOnly): the next marker on the sheet, selected and centred. */
 export function findNextMarker(): boolean {
-  const all = markers().filter((m) => !m.excluded); if (!all.length) return false;
+  const all = markers().filter((m) => !isExcluded(m)); if (!all.length) return false;
   // nextMatch walks the screen's items in their sorted order: top to bottom, then left to right
   const order = all.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));
   const cur = selectedMarker(), i = cur ? order.indexOf(cur) : -1, m = order[(i + 1) % order.length];
@@ -154,9 +158,9 @@ export function ercTextReport(list: ErcViolation[], sev: Record<string, unknown>
   msg += `\n***** Sheet ${sheetPath}\n`;
   const sevName = (s: string) => (s === "error" ? "error" : s === "warning" ? "warning" : s === "ignore" ? "ignore" : "info");
   for (const m of list) {
-    const s = m.code === "pin_to_pin" ? baseSeverity(m) : severityOf(m.code, sev); total++;
+    const s = m.code === "pin_to_pin" ? sevOf(m) : severityOf(m.code, sev); total++;
     if (s === "error") err++; else if (s === "warning") warn++;
-    const head = `[${m.code}]: ${unescape(m.text)}\n    ; ${sevName(s)}${m.excluded ? " (excluded)" : ""}\n`;
+    const head = `[${m.code}]: ${unescape(m.text)}\n    ; ${sevName(s)}${isExcluded(m) ? " (excluded)" : ""}\n`;
     msg += head + m.ids.slice(0, 2).map((id) => `    @(${fmt(m.x)} mm, ${fmt(m.y)} mm): ${describe(id)}\n`).join("");
   }
   msg += `\n ** ERC messages: ${total}  Errors ${err}  Warnings ${warn}\n`;
@@ -169,27 +173,28 @@ export function ercTextReport(list: ErcViolation[], sev: Record<string, unknown>
 export function openErc(): void {
   let list: HTMLElement, vioTab: HTMLElement | null = null, ignTab: HTMLElement | null = null, ignHost: HTMLElement | null = null, current: ErcViolation | null = null;
   let nb: { select(i: number): void } | null = null;
-  const shown = (m: ErcViolation): boolean => (m.excluded ? show.exclusions : m.severity === "error" ? show.errors : show.warnings);
+  const shown = (m: ErcViolation): boolean => (isExcluded(m) ? show.exclusions : m.severity === "error" ? show.errors : show.warnings);
   const fillIgnored = () => {
     const ign = ignoredTests(severities());
     if (ignTab) ignTab.textContent = `Ignored Tests (${ign.length})`;
     if (ignHost) ignHost.replaceChildren(...(ign.length ? ign.map((t) => h("div", null, " • " + t)) : []));
   };
   const refresh = () => {
-    const all = markers(), errors = all.filter((m) => !m.excluded && m.severity === "error").length, excl = all.filter((m) => m.excluded).length, warnings = all.length - errors - excl;
+    const all = markers(), errors = all.filter((m) => m.severity === "error").length, excl = all.filter(isExcluded).length, warnings = all.length - errors - excl;
     if (vioTab) vioTab.textContent = `Violations (${all.filter(shown).length})`;
     const cnt = api && api.body.querySelectorAll<HTMLElement>("[data-erc-count]"); if (cnt) cnt.forEach((e) => { e.textContent = e.dataset.ercCount === "errors" ? String(errors) : e.dataset.ercCount === "warnings" ? String(warnings) : String(excl); });
     list.innerHTML = "";
+    current = resolveMarker(current);
     const rows = all.filter(shown);
     if (!rows.length) list.append(h("div", { class: "kd-note", style: "padding:6px" }, all.length ? "No violations of the shown severities." : "No violations. Run ERC to check the schematic."));
     for (const m of rows) {
       const i = all.indexOf(m), sel = m === current;
-      const sev = m.excluded ? "--ink-3" : m.severity === "error" ? "--err" : "--warn";
-      const row = h("div", { "data-erc-row": String(i), "data-excluded": m.excluded ? "1" : undefined, style: `padding:3px 6px;cursor:default;border-bottom:1px solid var(--line);${sel ? "background:var(--blue);color:var(--panel)" : m.excluded ? "color:var(--ink-3)" : ""}`,
+      const sev = isExcluded(m) ? "--ink-3" : m.severity === "error" ? "--err" : "--warn";
+      const row = h("div", { "data-erc-row": String(i), "data-excluded": isExcluded(m) ? "1" : undefined, style: `padding:3px 6px;cursor:default;border-bottom:1px solid var(--line);${sel ? "background:var(--blue);color:var(--panel)" : isExcluded(m) ? "color:var(--ink-3)" : ""}`,
         onclick: () => pick(m), oncontextmenu: (ev: Event) => { const me = ev as MouseEvent; me.preventDefault(); pick(m); rowMenu(m, me.clientX, me.clientY); } },
         h("div", { style: "display:flex;gap:6px;align-items:center" }, h("span", { style: `display:inline-block;width:8px;height:8px;border-radius:50%;background:var(${sev})` }), h("b", null, ruleTitle(m))),
         h("div", { style: "padding-left:14px;font-family:var(--mono);font-size:12px" }, itemLine(m)),
-        m.excluded && m.comment ? h("div", { style: "padding-left:14px;font-size:12px", "data-erc-comment": "1" }, m.comment) : null);
+        isExcluded(m) && m.comment ? h("div", { style: "padding-left:14px;font-size:12px;font-style:italic", "data-erc-comment": "1" }, m.comment) : null);
       list.append(row);
     }
     fillIgnored();
@@ -207,24 +212,27 @@ export function openErc(): void {
     const row = list.querySelector<HTMLElement>(`[data-erc-row="${markers().indexOf(m)}"]`); if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
   };
   const shownRows = () => markers().map((m, i) => [m, i] as const).filter(([m]) => shown(m)).map(([, i]) => i);
-  const exclude = (m: ErcViolation, on: boolean, comment = "") => { setExcluded(m, on, comment); publishMarkers(markers()); refresh(); };
-  // ERC_SETTINGS::SetSeverity into the .kicad_pro; ignored rules' markers go, the others take the new level
+  const exclude = (m: ErcViolation, on: boolean, comment = "") => { void storeExclusion(m, on, comment).then(refresh); };
+  // WX_TEXT_ENTRY_DIALOG( …, _( "Exclusion Comment" ), …, true ): a multi-line entry
+  const askComment = (initial: string, then: (text: string) => void): void => { textEntryBox("Exclusion Comment", "", initial, true, then); };
+  // ERC_SETTINGS::SetSeverity into the .kicad_pro; Ignore drops the rule's exclusions and its markers go (ScreenList.DeleteMarkers),
+  // the others take the new level (an exclusion keeps it as its base)
   const setSeverity = (code: string, sev: string) => {
     if (E.viewOnly) { toast("View-only access"); return; }
-    void saveProject((pro) => { const e = obj(pro.erc); pro.erc = e; e.rule_severities = Object.assign({}, obj(e.rule_severities), { [code]: sev }); }, "ERC severity").then(() => {
+    void saveProject((pro) => { const e = sub(pro, "erc"); sub(e, "rule_severities")[code] = sev; if (sev === "ignore") dropRule(e as never, code); }, "ERC severity").then(() => {
       let all = markers();
       if (sev === "ignore") { all = all.filter((m) => m.code !== code); if (current && current.code === code) current = null; }
-      else for (const m of all) if (m.code === code) { if (m.excluded) m.sev0 = sev; else m.severity = sev; }
+      else for (const m of all) if (m.code === code) { if (isExcluded(m)) m.base = sev; else m.severity = sev; }
       publishMarkers(all); refresh();
     }).catch((e: Error) => toast(`Could not change the severity: ${e.message}`, 5000));
   };
   const rowMenu = (m: ErcViolation, x: number, y: number) => {
     const sev = severityOf(m.code), et = ruleTitle(m);
-    const items: PopItem[] = m.excluded
+    const items: PopItem[] = isExcluded(m)
       ? [{ label: "Remove exclusion for this violation", run: () => exclude(m, false) },
-         { label: "Edit exclusion comment...", run: () => { void promptText("Exclusion Comment", "", m.comment || "").then((t) => { if (t !== null) exclude(m, true, t); }); } }]
+         { label: "Edit exclusion comment...", run: () => askComment(m.comment || "", (t) => exclude(m, true, t)) }]
       : [{ label: "Exclude this violation", run: () => exclude(m, true) },
-         { label: "Exclude with comment...", run: () => { void promptText("Exclusion Comment", "", "").then((t) => { if (t !== null) exclude(m, true, t); }); } }];
+         { label: "Exclude with comment...", run: () => askComment("", (t) => exclude(m, true, t)) }];
     items.push({ sep: true });
     // SCH_INSPECTION_TOOL::InspectERCErrorMenuText then SCH_EDIT_TOOL::FixERCErrorMenuText, a separator after them
     const fixes = fixEntries(m); if (fixes.length) items.push(...fixes, { sep: true });
@@ -240,17 +248,17 @@ export function openErc(): void {
   };
   live = {
     step(dir) {
-      const all = markers(), i = stepMarker(shownRows(), current ? all.indexOf(current) : -1, dir); const m = i === null ? null : all[i]; if (!m) return;
+      const all = markers(), cur = resolveMarker(current), i = stepMarker(shownRows(), cur ? all.indexOf(cur) : -1, dir); const m = i === null ? null : all[i]; if (!m) return;
       pick(m);
     },
     show(m) { if (nb) nb.select(0); pick(m, true); },
-    exclude(m) { const t = m || current; if (t && !t.excluded) exclude(t, true); },
+    exclude(m) { const t = resolveMarker(m || current); if (t && !isExcluded(t)) exclude(t, true); },
     refresh() { refresh(); },
   };
   const run = () => { const s = sch(); const a = s && s.actions && s.actions.runERC; if (!a) return; a.run(toolCtx(), { showAllErrors: opts.showAllErrors }); current = null; refresh(); };
   // DIALOG_ERC::OnDeleteOneClick / OnDeleteAllClick
-  const delOne = () => { if (!current) return; const c = current; current = null; if (c.excluded) exclusions.delete(exclusionKey(c)); publishMarkers(markers().filter((m) => m !== c)); refresh(); };
-  const delAll = () => { current = null; publishMarkers(markers().filter((m) => m.excluded)); refresh(); };
+  const delOne = () => { const c = resolveMarker(current); if (!c) return; current = null; publishMarkers(markers().filter((m) => m !== c)); refresh(); };
+  const delAll = () => { current = null; publishMarkers(markers().filter(isExcluded)); refresh(); };
   const save = () => download("ERC.rpt", ercTextReport(markers(), severities(), ((E.kdoc as KDoc & { sheetPath?: string } | null)?.sheetPath) || "/"), "text/plain;charset=utf-8");
   api = KD().open({
     title: "Electrical Rules Checker", width: 640, modeless: true,

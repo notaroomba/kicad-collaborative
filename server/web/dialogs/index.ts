@@ -10,7 +10,7 @@ import { installSchItemDialogs } from "./sch-items";
 import { installSimModel } from "./sim-model";
 import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
-import { applyExclusions, ercCrossProbe, ercExcludeMarker, ercNextMarker, ercPrevMarker, findNextMarker, openErc, selectMarker, type ErcViolation } from "./erc";
+import { ercCrossProbe, ercExcludeMarker, ercNextMarker, ercPrevMarker, findNextMarker, openErc, selectMarker, type ErcViolation, withExclusions } from "./erc";
 import { syntaxHelp } from "../editor/syntax-help";
 import { applySeverities } from "./erc-rules";
 import { openFieldsTable } from "./fields-table";
@@ -49,8 +49,8 @@ function wrapErc(): void {
   const run = a.run;
   a.run = (ctx, opts) => {
     const erc = obj(projectJson().erc), sev = obj(erc.rule_severities) as Record<string, unknown>;
-    const wrapped = Object.assign({}, ctx, { setMarkers(list: Marker[]) { const kept = applyExclusions(applySeverities(list, sev) as unknown as ErcViolation[]) as unknown as Marker[]; sch.state.markers = kept; (ctx as ToolCtx & { setMarkers(l: Marker[]): void }).setMarkers(kept); },
-      toast(msg: string, ms?: number) { const m = (sch.state.markers as Marker[] | undefined) || []; if (/^ERC: /.test(msg)) { const e = m.filter((x) => x.severity === "error").length, w = m.length - e; ctx.toast(m.length ? `ERC: ${e} error${e === 1 ? "" : "s"}, ${w} warning${w === 1 ? "" : "s"}` : "ERC: no problems found", ms); } else ctx.toast(msg, ms); } });
+    const wrapped = Object.assign({}, ctx, { setMarkers(list: Marker[]) { const kept = withExclusions(applySeverities(list, sev) as unknown as ErcViolation[]) as unknown as Marker[]; sch.state.markers = kept; (ctx as ToolCtx & { setMarkers(l: Marker[]): void }).setMarkers(kept); },
+      toast(msg: string, ms?: number) { const m = (sch.state.markers as Marker[] | undefined) || []; if (/^ERC: /.test(msg)) { const e = m.filter((x) => x.severity === "error").length, w = m.filter((x) => x.severity === "warning").length; ctx.toast(m.length ? `ERC: ${e} error${e === 1 ? "" : "s"}, ${w} warning${w === 1 ? "" : "s"}` : "ERC: no problems found", ms); } else ctx.toast(msg, ms); } });
     return run(wrapped as ToolCtx, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined }, opts || {}));
   };
 }

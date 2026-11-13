@@ -106,19 +106,19 @@ function updateSchMsgPanel(doc: KDoc): void {
   store.set({ msgPanel: { items } });
 }
 
-interface ErcMarkerSel { code: string; severity: string; text: string; ids: string[]; excluded?: boolean; comment?: string; sev0?: string; selected?: boolean }
+interface ErcMarkerSel { code: string; severity: string; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean }
 /** The ERC marker selected on the canvas (SCH_SELECTION_TOOL holds a SCH_MARKER_T), or null. */
 function selectedErcMarker(): ErcMarkerSel | null { return ((E.markers || []) as ErcMarkerSel[]).find((m) => m && m.selected) || null; }
 /** SCH_MARKER::GetMsgPanelInfo: Type / Violation / Severity, the main and aux items' descriptions, the exclusion comment. */
 function markerMsgPanel(doc: KDoc, m: ErcMarkerSel): MsgItem[] {
   const D = CollabTools.sch as unknown as { itemDescription?: (d: KDoc, id: string, u: string) => string } | undefined;
   const desc = (id: string | undefined): string => (id && D && D.itemDescription && doc.items.has(id) ? D.itemDescription(doc, id, E.units) : "");
-  const sev = m.excluded ? m.sev0 || "error" : m.severity;
+  const excluded = m.severity === "exclusion", sev = excluded ? m.base || "warning" : m.severity;
   const un = (KiCadCanvas as unknown as { unescapeText?: (s: string) => string }).unescapeText, text = un ? un(m.text) : m.text;
   const out: MsgItem[] = [{ title: "Type", value: "Marker" }, { title: "Violation", value: text }];
   if (sev === "warning") out.push({ title: "Severity", value: "Warning" }); else if (sev === "error") out.push({ title: "Severity", value: "Error" }); else if (sev === "ignore") out.push({ title: "Severity", value: "Ignore" });
   out.push({ title: desc(m.ids[0]), value: desc(m.ids[1]) });
-  if (m.excluded) out.push({ title: "Excluded", value: m.comment || "" });
+  if (excluded) out.push({ title: "Excluded", value: m.comment || "" });
   return out;
 }
 

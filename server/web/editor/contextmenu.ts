@@ -77,7 +77,7 @@ function menuCtx(): MenuCtx {
   const items = selectionItems(), s = schState(), p = pcbState(), sch = isSch();
   const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPins.length && !kinds.length) for (let i = 0; i < E.selPins.length; i++) kinds.push("pin");
   const cells = tableMenu.state(); if (cells) for (let i = 0; i < cells.n; i++) kinds.push("table_cell");   // PCB_TABLECELL_T / SCH_TABLECELL_T
-  if (sch && !kinds.length) { const mk = ((E.markers || []) as { selected?: boolean; excluded?: boolean }[]).find((m) => m && m.selected); if (mk) kinds.push(mk.excluded ? "marker_excluded" : "marker"); }   // SCH_MARKER_T
+  if (sch && !kinds.length) { const mk = ((E.markers || []) as { selected?: boolean; severity?: string }[]).find((m) => m && m.selected); if (mk) kinds.push(mk.severity === "exclusion" ? "marker_excluded" : "marker"); }   // SCH_MARKER_T
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
   const outline = !!draw && (sch ? draw.shape === "polygon" || draw.shape === "rulearea" : ["gpoly", "zone", "thievingzone", "rulearea"].includes(draw.shape));
