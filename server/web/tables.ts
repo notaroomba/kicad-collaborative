@@ -204,6 +204,7 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "regenerateAll", "regenerateSelected",
     "ACT_SwitchCornerModeToNext", "ACT_SwitchCornerMode45", "ACT_SwitchCornerModeArc45", "ACT_SwitchCornerMode90", "ACT_SwitchCornerModeArc90",
     "ACT_PlaceThroughVia", "ACT_PlaceBlindVia", "ACT_PlaceMicroVia", "ACT_SelLayerAndPlaceThroughVia", "ACT_SelLayerAndPlaceBlindVia", "ACT_SelLayerAndPlaceMicroVia",
+    "ACT_CustomTrackWidth",   // the router's Q and TRACK_WIDTH_MENU's Use Custom Values... (router_tool.cpp), in no menu bar
     // Line Modes live on the left toolbar's radio group and Shift+Space; Ctrl++ / Ctrl+- (incWidth / decWidth) are the drawing tools' context menu
     "lineModeFree", "lineModeNext", "incWidth", "decWidth",
     // the arc tool's modes: the Arc toolbar group and DRAWING_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
@@ -299,21 +300,22 @@ export const LINKS: Record<string, string> = {
 };
 
 /** Docked pane ids and the KiCad "show …" action that toggles each. */
-export const PANE_ACTION: Record<string, string> = { libtree: "showLibraryTree", props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showGitCommitPane", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator" };
-export const PANE_TITLES: Record<string, string> = { libtree: "Libraries", props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance", search: "Search", netnav: "Net Navigator" };
+export const PANE_ACTION: Record<string, string> = { libtree: "showLibraryTree", props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showGitCommitPane", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator", netinsp: "showNetInspector" };
+export const PANE_TITLES: Record<string, string> = { libtree: "Libraries", props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance", search: "Search", netnav: "Net Navigator", netinsp: "Net Inspector" };
 /**
  * Dock layout per editor, in KiCad's AUI order.  eeschema's left column (Layer 3) stacks Net Navigator (Position 0),
  * Schematic Hierarchy (1), Properties (2) and the Selection Filter (4) (eeschema_settings.cpp:64-125,
  * sch_edit_frame.cpp:305-315); pcbnew's Properties fills its left column alone (pcb_edit_frame.cpp:394-399) and
  * Appearance with the filter sits right.  The Version Control pane (the web's History) docks right on Layer 5 and
- * starts hidden in both (sch_edit_frame.cpp:347-360).  Collaborators and Comments are the web's own.
+ * starts hidden in both (sch_edit_frame.cpp:347-360).  pcbnew docks the Net Inspector at the bottom, added before
+ * Search (pcb_edit_frame.cpp:406-420), hidden until shown (m_ShowNetInspector).  Collaborators and Comments are the web's own.
  */
 export const DOCKS: Record<Editor, { left: string[]; right: string[]; bottom?: string[] }> = {
   sch: { left: ["netnav", "hier", "props", "filter", "peers", "comments", "appearance"], right: ["history"], bottom: ["search"] },
-  pcb: { left: ["props", "peers", "comments"], right: ["appearance", "filter", "history"], bottom: ["search"] },
+  pcb: { left: ["props", "peers", "comments"], right: ["appearance", "filter", "history"], bottom: ["netinsp", "search"] },
 };
 /** Panes hidden until the user opens them (per editor). */
-export const PANE_DEFAULT_HIDDEN: Record<Editor, string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav", "history"], pcb: ["peers", "comments", "search", "history"] };
+export const PANE_DEFAULT_HIDDEN: Record<Editor, string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav", "history"], pcb: ["peers", "comments", "search", "history", "netinsp"] };
 
 export const FILTERS: Record<Editor, [string, string][]> = {
   sch: [["symbols", "Symbols"], ["pins", "Pins"], ["wires", "Wires"], ["labels", "Labels"], ["graphics", "Graphics"], ["images", "Images"], ["text", "Text"], ["other", "Other items"], ["ruleAreas", "Rule Areas"]],

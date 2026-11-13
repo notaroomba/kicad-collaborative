@@ -390,12 +390,12 @@ function layerMenu(cmd: LayerMenuCmd): void {
 }
 
 // ---------------------------------------------------------------- nets
-function netIds(names: string[], kinds?: string[]): Set<string> {
+export function netIds(names: string[], kinds?: string[]): Set<string> {
   const doc = kdoc(), P = pcbTools(), out = new Set<string>(); if (!doc || !P) return out;
   for (const name of names) for (const id of P.netItemIds(doc, name)) { const it = doc.items.get(id); if (it && (!kinds || kinds.includes(it.kind))) out.add(id); }
   return out;
 }
-function netCommand(cmd: NetCmd, names: string[], label: string): void {
+export function netCommand(cmd: NetCmd, names: string[], label: string): void {
   const ctx = tctx();
   if (cmd === "highlight") { const ids = netIds(names); ctx.setHighlight(ids.size ? ids : null); const s = pcbState(); if (s) s.highlightNet = names[0] || null; if (!ids.size) toast(`Nothing on ${label}`); return; }
   if (cmd === "select" || cmd === "unselect") {

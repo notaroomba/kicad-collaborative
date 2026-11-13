@@ -392,29 +392,6 @@ export function openBoardStatistics(ctx: ToolCtx): void {
     } });
 }
 
-// ---------------------------------------------------------------- Net Inspector
-export function openNetInspector(ctx: ToolCtx): void {
-  const doc = board(); if (!doc) { ctx.toast("The Net Inspector needs a board"); return; }
-  const all = PT().netInspector(doc), set = settings();
-  const classOf = (name: string): string => { const nc = PT().netclassOf(set, name); for (const [k, v] of Object.entries(set.netclasses)) if (v === nc) return k; return "Default"; };
-  const host = h("div");
-  let filter = "";
-  const draw = (): void => {
-    const rows = all.filter((r) => !filter || r.name.toLowerCase().includes(filter));
-    const cells: Record<string, CellValue>[] = rows.map((r) => ({ name: r.name || "<no net>", netclass: classOf(r.name), pads: r.padCount, vias: r.viaCount, track: r.trackLength, total: r.trackLength, unconnected: r.unconnected, key: r.name }));
-    host.replaceChildren(grid([{ label: "Name", key: "name" }, { label: "Netclass", key: "netclass", width: "110px" }, { label: "Pad Count", key: "pads", width: "80px" }, { label: "Via Count", key: "vias", width: "80px" },
-      { label: "Track Length", key: "track", type: "len", width: "110px" }, { label: "Total Length", key: "total", type: "len", width: "110px" }, { label: "Unconnected", key: "unconnected", width: "90px" }], cells,
-    { ro: true, height: "440px", onSelect: (i) => { const r = rows[i]; if (r) { ctx.setHighlight(PT().netItemIds(doc, r.name)); ctx.requestRender(); } } }).el);
-  };
-  openDialog({ title: "Net Inspector", width: 820, noOk: true,
-    build(body) {
-      const search = textField("", { placeholder: "Filter", key: "netFilter" });
-      search.input.addEventListener("input", () => { filter = search.get().trim().toLowerCase(); draw(); });
-      draw(); body.append(h("div", { class: "pd-row" }, search.el, h("span", { class: "pd-note" }, `${all.length} nets — select a row to highlight the net on the board`)), host);
-    },
-    cancel() { ctx.setHighlight(null); } });
-}
-
 // ---------------------------------------------------------------- Clearance Resolution
 export function openClearance(ctx: ToolCtx): void {
   const doc = board(); if (!doc) return;

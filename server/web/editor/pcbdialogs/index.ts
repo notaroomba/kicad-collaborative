@@ -5,7 +5,8 @@
 import { openBoardSetup } from "./board-setup";
 import "./find";   // Edit > Find (DIALOG_FIND): registers E.hooks.boardFind / boardFindNext
 import { openFootprintFields } from "./fp-fields";
-import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, openNetInspector, prevMarker } from "./inspect";
+import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, prevMarker } from "./inspect";
+import { showPane } from "../panes";
 import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";
 import { tracksOnly, trackViaDialog } from "./track-via";
 import { newTextBoxDialog } from "./textbox";
@@ -53,8 +54,9 @@ export function installPcbDialogs(): void {
   action("prevMarker", "Previous Marker", "", prevMarker);
   action("nextMarker", "Next Marker", "", nextMarker);
   action("excludeMarker", "Exclude Marker", "", () => excludeMarker());
-  action("netInspector", "Net Inspector", "", openNetInspector);
-  action("showNetInspector", "Net Inspector", "", openNetInspector);
+  // View > Panels > Net Inspector: the docked panel (PCB_EDIT_FRAME's m_netInspectorPanel), a check item
+  action("netInspector", "Net Inspector", "", () => showPane("netinsp"));
+  action("showNetInspector", "Net Inspector", "", () => showPane("netinsp"));
   action("boardStatistics", "Board Statistics", "", openBoardStatistics);
   action("inspectClearance", "Clearance Resolution", "", openClearance);
   // ZONE_FILLER_TOOL: the browser's own filler (web/fab/zonefill.ts)

@@ -63,6 +63,7 @@ import { LENGTH_UNCONSTRAINED, TUNE_IU, TUNE_MSG_INSIDE, TUNE_MSG_PICK, TUNE_MSG
 import { SELECTION_TYPES, boardLayerName, filterIds, idsOnLayer, inspectClearance, itemDescription, msgPanelInfo } from "./msgpanel";
 import { boardFindHits, edaMatches, findStep, netNameCmp, unescapeKiCad } from "./find";
 import { flipFieldChange, footprintFieldNode, hideFieldChanges, requestField, rotateFieldChange } from "./field-edit";
+import { copperStack, layerDistance, netLengths, stackupItems } from "./net-lengths";
 import { clusterRoots, conductors, connectedCopperIds, localRatsnest, netHighlightIds, netInspector, netItemIds, netTable, netlist, ratsnest } from "./netlist";
 import { netNode, netOf, netStyle } from "./nets";
 import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, thievingAllowed, THIEVING_FILE_VERSION, THIEVING_NEEDS_VERSION_MSG } from "./nodes";
@@ -462,7 +463,7 @@ export const pcb = {
   diffPairSizesChanged(ctx: PcbCtx) { ctx = ctx || lastCtx; if (!ctx) return; bind(ctx); const rt = S.route; if (rt && rt.dp) { rt.dpSizes = dpSizes(ctx, { P: rt.net }); rt.width = rt.dpSizes.width; updateHead(ctx); ctx.requestRender(); } },
   /** The layer picker the Select Layer and Place Via commands open (PCB_EDIT_FRAME::SelectOneLayer). */
   setLayerPicker(fn: LayerPicker | null | undefined) { setLayerPickerImpl(fn || ((o, done) => done(null))); },
-  netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
+  netlist, ratsnest, localRatsnest, netInspector, netLengths, copperStack, stackupItems, layerDistance, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
   padAt, padProperties, tunerProperties, groupOf, expandGroups, groupMembers: (doc: BoardDoc, id: string) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
   clipboardText, pasteChanges, cursorPoint, selectionIds, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner,
   get markers() { return S.markers; },
@@ -498,7 +499,7 @@ root.PcbTools = { OffsetItemState, snapAnchors, textGraphics: textGraphicsApi, l
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
   selectionIds, applySelection, requestSelection, bestDragOrigin, snapCursor, itemAnchors, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
   // netTable, editPoints and editPointNode are listed above (the script named them twice, to the same values)
-  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
+  shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netLengths, copperStack, stackupItems, layerDistance, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
   sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch, circleOutside, ovalOutside, circleApprox, ovalApprox, splitCollinearOutlines,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,

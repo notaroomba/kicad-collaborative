@@ -19,6 +19,7 @@ import { CommentsPane } from "./panes/Comments";
 import { SearchPane } from "./panes/Search";
 import { NetNavigatorPane } from "./panes/NetNavigator";
 import { LibrariesPane } from "./panes/Libraries";
+import { NetInspectorPane } from "./panes/NetInspector";
 
 // ---------------------------------------------------------------- remembered sizes
 interface DockLayout { left?: number; right?: number; bottom?: number; panes: Record<string, number> }
@@ -129,6 +130,7 @@ function PaneFor({ name, first }: { name: string; first: boolean }) {
     case "appearance": return <Pane name={name} first={first}><AppearancePane /></Pane>;
     case "search": return <Pane name={name} first={first}><SearchPane /></Pane>;
     case "netnav": return <Pane name={name} first={first}><NetNavigatorPane /></Pane>;
+    case "netinsp": return <Pane name={name} first={first}><NetInspectorPane /></Pane>;
     case "libtree": return <Pane name={name} first={first}><LibrariesPane /></Pane>;
     default: return null;
   }

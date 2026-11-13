@@ -12,7 +12,10 @@
 //
 // Browsers keep Ctrl+Tab for themselves, so the preset switcher is reached where the page receives the key: in a
 // fullscreen window the editor asks for keyboard capture of Tab (navigator.keyboard.lock), and in an installed
-// app window that does not take Ctrl+Tab.
+// app window that does not take Ctrl+Tab.  Everywhere else the preset switcher also opens and steps on Ctrl+` (the key
+// under Esc with the same held Control, by its position so Shift may go with it).  Shift+Tab opens the viewport
+// switcher only with the canvas focused: on a button, a docked pane or a table it stays the browser's step back through
+// the focusable controls.
 import { applyLayerPresetByName, applyViewportByName, layerPresetsMRU, viewportsMRU } from "./panels/appearance";
 import { IS_MAC } from "../keys";
 import { advance, switcherFor, type SwitcherKind as Kind } from "./view-switcher-model";
@@ -29,7 +32,7 @@ const boardFrame = (): boolean => state.view === "editor" && !!E.kdoc && E.kdoc.
 function render(o: Open): void {
   o.list.replaceChildren(...o.items.map((name, i) => {
     const row = document.createElement("div");
-    row.className = "vsw-row" + (i === o.sel ? " on" : "");
+    row.className = "vsw-row kview-row" + (i === o.sel ? " on" : "");
     row.setAttribute("role", "option"); row.setAttribute("aria-selected", String(i === o.sel)); row.dataset.idx = String(i);
     row.textContent = name;
     return row;
@@ -47,7 +50,8 @@ function close(apply: boolean): void {
 function show(kind: Kind, items: string[], shift: boolean): void {
   const key: Open["key"] = kind === "preset" ? "Control" : IS_MAC ? "Alt" : "Shift";
   const el = document.createElement("div");
-  el.id = "viewSwitcher"; el.className = "vsw"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+  el.id = "viewSwitcher"; el.className = "vsw kview-switcher"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+  el.dataset.switcher = kind;
   const title = document.createElement("div"); title.className = "vsw-title"; title.textContent = "View Preset Switcher";
   const list = document.createElement("div"); list.className = "vsw-list"; list.setAttribute("role", "listbox");
   el.append(title, list);
@@ -69,14 +73,26 @@ function ownsTab(t: EventTarget | null): boolean {
   return false;
 }
 
+/** The key the page receives in place of the browser's Ctrl+Tab: Backquote, by its position. */
+const isAltStep = (ev: KeyboardEvent): boolean => ev.code === "Backquote";
+/** The canvas has the keyboard: nothing focusable (body) or the drawing stage itself. */
+function canvasFocused(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || el === document.body || el === document.documentElement) return true;
+  return typeof el.closest === "function" && !!el.closest("#stage");
+}
+
 function onKeyDown(ev: KeyboardEvent): void {
   if (cur) {
     ev.preventDefault(); ev.stopImmediatePropagation();
-    if (ev.key === "Tab") { cur.sel = advance(cur.sel, cur.items.length, ev.shiftKey, cur.key); render(cur); }
+    if (ev.key === "Tab" || (cur.kind === "preset" && isAltStep(ev))) { cur.sel = advance(cur.sel, cur.items.length, ev.shiftKey, cur.key); render(cur); }
     else if (ev.key === "Escape") close(false);
     return;
   }
-  const kind = switcherFor(ev); if (!kind || !boardFrame() || ownsTab(ev.target)) return;
+  let kind = switcherFor(ev);
+  if (!kind && isAltStep(ev) && ev.ctrlKey && !ev.metaKey && !ev.altKey) kind = "preset";
+  if (!kind || !boardFrame() || ownsTab(ev.target)) return;
+  if (kind === "viewport" && !canvasFocused(ev.target)) return;
   const items = kind === "preset" ? layerPresetsMRU() : viewportsMRU();
   if (!items.length) return;   // an empty MRU leaves the key to everyone else
   ev.preventDefault(); ev.stopImmediatePropagation();

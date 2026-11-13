@@ -24,7 +24,9 @@ EXTRA_ICONS = {"import", "export_file", "fabrication", "language", "add_zone", "
                "measurement", "mode_module", "puzzle_piece", "swap", "locked", "show_ratsnest", "group", "component_select_unit",
                "special_tools", "align_items", "convert", "unit_mm", "checked_ok", "right", "text_align_left", "icon_kicad", "hotkeys", "about",
                # the Footprint Wizard frame's toolbar (editor/fpwizard.ts)
-               "module_wizard", "reload", "refresh", "zoom_in", "zoom_out", "zoom_fit_in_page", "export_footprint_names"}
+               "module_wizard", "reload", "refresh", "zoom_in", "zoom_out", "zoom_fit_in_page", "export_footprint_names",
+               # the Net Inspector pane's configure button (pcbnew/widgets/net_inspector_panel.cpp)
+               "config"}
 
 
 MAC_IF = r"#\s*if(?:def\s+|\s+defined\(\s*)__WX(?:OSX_)?MAC__[ \t]*\)?[^\n]*\n"

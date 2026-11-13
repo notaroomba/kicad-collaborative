@@ -5,6 +5,8 @@
 // every panel intent.  Types only: both bundles import this file, neither imports the other.
 
 // ---------------------------------------------------------------- Appearance (pcbnew/widgets/appearance_controls.cpp)
+import type { NetInspCmd, NetInspModel } from "./editor/panels/netinsp";
+export type { NetInspCmd, NetInspModel, NetInspColumn, NetInspRow } from "./editor/panels/netinsp";
 export interface LayerInfo { key: string; name: string; color: string; defaultColor: string; visible: boolean; copper: boolean; tip: string }
 
 /** One row of the Objects tab (APPEARANCE_SETTING); a spacer row has only `spacer`. */
@@ -121,6 +123,10 @@ export interface PanelsApi {
   removePropKey(id: string): boolean;
   searchTabs(): SearchTab[];
   search(tab: string, query: string): SearchResult;
+  /** The board's Net Inspector pane: its columns and rows (editor/panels/netinsp.ts). */
+  netInspector(): NetInspModel;
+  netInspectorCmd(c: NetInspCmd): void;
+  netInspectorFilter(text: string): void;
 }
 
 declare global {

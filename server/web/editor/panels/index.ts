@@ -13,13 +13,14 @@ import { hierarchyDispatch, loadSheets, publishHierarchy } from "./hierarchy";
 import { netNavDispatch, netNavSignature, publishNetNav } from "./netnav";
 import { addPropKey, propGrid, removePropKey, renamePropKey, selectionSignature, setProp } from "./propgrid";
 import { search, searchDispatch, searchTabs } from "./search";
+import { netInspectorCmd, netInspectorModel, setFilter as netInspectorFilter } from "./netinsp";
 
 function dispatch(a: PanelAction): void {
   try { if (appearanceDispatch(a) || hierarchyDispatch(a) || searchDispatch(a) || netNavDispatch(a)) return; console.warn("unknown panel action", a); }
   catch (e) { console.warn("panel action failed", a, e); }
 }
 
-const api: PanelsApi = { getState: panelStore.get, subscribe: panelStore.subscribe, dispatch, propGrid, setProp, renamePropKey, addPropKey, removePropKey, searchTabs, search };
+const api: PanelsApi = { getState: panelStore.get, subscribe: panelStore.subscribe, dispatch, propGrid, setProp, renamePropKey, addPropKey, removePropKey, searchTabs, search, netInspector: () => netInspectorModel(), netInspectorCmd, netInspectorFilter };
 window.CollabPanels = api;
 
 /** The select tool's gate for the tool modules' own picks (the app's picks go through filterAllows directly). */

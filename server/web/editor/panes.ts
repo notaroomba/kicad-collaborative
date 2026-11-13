@@ -12,9 +12,9 @@ import { isSch, requestRender } from "./view";
 import { loadUnits, saveUnits, unitsAppFor } from "../units";
 // ================================================================ KiCad frame (the React chrome reads the store)
 // Docked panes: which are open, per editor, remembered in localStorage (kui.panes.<editor>).
-export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav", "libtree"];
+export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav", "netinsp", "libtree"];
 
-export const PANE_EDITOR_ONLY: Record<string, "sch" | "pcb" | undefined> = { hier: "sch", netnav: "sch" };
+export const PANE_EDITOR_ONLY: Record<string, "sch" | "pcb" | undefined> = { hier: "sch", netnav: "sch", netinsp: "pcb" };
 
 import { PANE_DEFAULT_HIDDEN } from "../tables";
 export { PANE_DEFAULT_HIDDEN };
