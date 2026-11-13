@@ -16,9 +16,9 @@ const r6 = (v: number): number => { const x = +(+v).toFixed(6); return x === 0 ?
 const MIN_SIZE = 15, MAX_SIZE = 6000;   // PANEL_IMAGE_EDITOR::CheckValues, pixels after scaling (at 300 PPI)
 const DEFAULT_PPI = 300;
 
-const layerLabel = (doc: KDoc, name: string): string => { const l = doc.layers.get(name); return l && l.userName ? l.userName : name; };
+const layerLabel = (doc: KDoc, name: string): string => { const l = doc.layers ? doc.layers.get(name) : null; return l && l.userName ? l.userName : name; };
 const layerOptions = (doc: KDoc, cur: string): [string, string][] => {
-  const all = Array.from(doc.layers.keys()).map((n): [string, string] => [n, layerLabel(doc, n)]);
+  const all = Array.from(doc.layers ? doc.layers.keys() : []).map((n): [string, string] => [n, layerLabel(doc, n)]);
   return cur && !all.some((o) => o[0] === cur) ? [[cur, cur], ...all] : all;
 };
 
@@ -57,16 +57,18 @@ export function checkImageScale(v: { pxW: number; pxH: number }, scale: number):
 }
 
 /** TransferDataFromWindow on a copy of the node, in the writer's order. */
-export function applyRefImage(orig: SNode, v: RefImageValues): SNode {
+export function applyRefImage(orig: SNode, v: RefImageValues, sch = false): SNode {
   const node = (K().cloneNode as (n: SNode) => SNode)(orig);
   const drop = (key: string): void => { for (let j = node.length - 1; j > 0; j--) { const c = node[j]; if (isList(c) && c[0] === key) node.splice(j, 1); } };
-  for (const key of ["at", "layer", "rotate", "scale", "opacity", "locked"]) drop(key);
-  const head: SNode[] = [["at", r6(v.x), r6(v.y)], ["layer", v.layer]];
+  // SCH_IO_KICAD_SEXPR::saveBitmap: (at) (rotate) (scale) (opacity), then the uuid, (locked) and the data, which stay put
+  for (const key of sch ? ["at", "rotate", "scale", "opacity"] : ["at", "layer", "rotate", "scale", "opacity", "locked"]) drop(key);
+  const r4 = (x: number): number => { const y = +(+x).toFixed(4); return y === 0 ? 0 : y; };
+  const head: SNode[] = sch ? [["at", r4(v.x), r4(v.y)]] : [["at", r6(v.x), r6(v.y)], ["layer", v.layer]];
   if (r6(v.rotation) !== 0) head.push(["rotate", r6(v.rotation)]);
   if (v.scale !== 1) head.push(["scale", +v.scale.toPrecision(6)]);
   const op = Math.min(1, Math.max(0, v.opacity));
   if (op < 1) head.push(["opacity", +op.toPrecision(6)]);
-  if (v.locked) head.push(["locked", "yes"]);
+  if (v.locked && !sch) head.push(["locked", "yes"]);
   node.splice(1, 0, ...head);
   if (v.data !== dataOf(orig)) {
     const rows: string[] = []; for (let i = 0; i < v.data.length; i += 76) rows.push('"' + v.data.slice(i, i + 76) + '"');   // KICAD_FORMAT::FormatStreamData
@@ -136,7 +138,11 @@ const bytesToB64 = (b: Uint8Array): string => { let s = ""; for (let i = 0; i < 
 interface ImageEntry { w?: number; h?: number; ppi?: number; mime?: string; img?: HTMLImageElement | null; loaded?: boolean }
 
 /** DIALOG_REFERENCE_IMAGE_PROPERTIES (PCB_BASE_EDIT_FRAME::ShowReferenceImagePropertiesDialog). */
-export function refImageDialog(ctx: ToolCtx, item: KItem): boolean {
+/**
+ * With sch, eeschema's DIALOG_IMAGE_PROPERTIES (dialog_image_properties_base): Position X / Y, Rotation and Opacity over
+ * the same PANEL_IMAGE_EDITOR, committed as "Image Properties".
+ */
+export function refImageDialog(ctx: ToolCtx, item: KItem, sch = false): boolean {
   const doc = ctx.doc as KDoc; if (!doc) return false;
   const node0 = item.node, ro = !!ctx.viewOnly;
   const g = (item.geom || []).find((x) => (x as { t?: string }).t === "image") as { entry?: ImageEntry } | undefined;
@@ -169,7 +175,7 @@ export function refImageDialog(ctx: ToolCtx, item: KItem): boolean {
       layer: String(gv("layer")), locked: !!gv("locked"), scale: Number(gv("scale")), data };   // TransferToImage reads the Scale text
   };
   let api: { close(): void } | null = null;
-  api = openDialog({ title: "Reference Image Properties", width: 680, readOnly: ro,
+  api = openDialog({ title: sch ? "Image Properties" : "Reference Image Properties", width: sch ? 600 : 680, readOnly: ro,
     build(body) {
       const x = reg("x", coordField(v0.x, "x", { ro, key: "x" })), y = reg("y", coordField(v0.y, "y", { ro, key: "y" }));
       const rot = reg("rotation", numField(v0.rotation, { ro, key: "rotation", digits: 3 }));
@@ -199,12 +205,17 @@ export function refImageDialog(ctx: ToolCtx, item: KItem): boolean {
       // OnRemoveBackground: DIALOG_COLOR_PICKER, white by default (most images are crops from documents)
       const bgPick = h("input", { type: "color", value: "#ffffff", "data-k": "bgColor", style: "display:none" });
       bgPick.addEventListener("change", () => { const hex = bgPick.value; edit((px) => colourToAlpha(px, [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)])); });
-      const editor = h("div", { class: "pd-box" },
-        preview,
-        form([["Scale:", sc.el], ["PPI:", h("span", { "data-k": "ppi" }, String(v0.ppi))]], true),
-        h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:6px" },
-          btn("Convert to Greyscale", "grey", () => edit(greyscalePixels)), btn("Invert Colors", "invert", () => edit(invertPixels)),
-          btn("Remove Background", "removeBg", () => bgPick.click()), bgPick));
+      const edForm = form([["Scale:", sc.el], ["PPI:", h("span", { "data-k": "ppi" }, String(v0.ppi))]], true);
+      const edBtns = h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:6px" },
+        btn("Convert to Greyscale", "grey", () => edit(greyscalePixels)), btn("Invert Colors", "invert", () => edit(invertPixels)),
+        btn("Remove Background", "removeBg", () => bgPick.click()), bgPick);
+      // PANEL_IMAGE_EDITOR: the preview, with Scale / PPI and the buttons beside it (under it in the board dialog's column)
+      const editor = sch ? h("div", { class: "pd-box", style: "display:flex;gap:12px;align-items:flex-start;margin-top:8px" }, preview, h("div", { style: "flex:1;min-width:0" }, edForm, edBtns))
+        : h("div", { class: "pd-box" }, preview, edForm, edBtns);
+      if (sch) {   // fgSizerPos above m_imageSizer
+        body.append(form([["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Rotation:", rot.el, unitLabel("deg")], ["Opacity:", opacityIn]], true), editor);
+        return;
+      }
       body.append(h("div", { class: "pd-cols2" },
         h("div", null,
           form([["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Rotation:", rot.el, unitLabel("deg")],
@@ -216,9 +227,9 @@ export function refImageDialog(ctx: ToolCtx, item: KItem): boolean {
       if (ro) return true;
       const v = current();
       const finish = (): void => {
-        const node = applyRefImage(node0, v);
+        const node = applyRefImage(node0, v, sch);
         if (K().serialize(node) === K().serialize(node0)) return;   // nothing changed: the item stays as it is
-        ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null })], "Edit Reference Image Properties");
+        ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null })], sch ? "Image Properties" : "Edit Reference Image Properties");
       };
       const chk = v0.pxW && v0.pxH ? checkImageScale(v0, v.scale) : (v.scale < 0 ? { error: "Scale must be a positive number." } : {});
       if (chk.error) { errorMessage(chk.error); return false; }

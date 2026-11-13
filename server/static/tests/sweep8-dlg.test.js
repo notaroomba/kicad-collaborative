@@ -235,5 +235,12 @@ const AN = load(["tools", "sch-tools", "annotate.ts"]), AL = load(["dialogs", "a
     assert.deepEqual(AL.subsheetFiles(d, "", new Set(["a"])), []);
   });
 }
+const RI = load(["editor", "pcbdialogs", "refimage.ts"]);
+test("SCH_IO_KICAD_SEXPR::saveBitmap order for Image Properties: (at) (rotate) (scale) (opacity), no layer, locked kept", () => {
+  const n = K.parse('(image (at 10 20) (scale 2) (uuid "u") (locked yes) (data "AAAA"))');
+  const v = RI.refImageValues(n);
+  assert.equal(ser(RI.applyRefImage(n, { ...v, rotation: 90, opacity: 0.5, scale: 1 }, true)).replace(/\s+/g, " "), '(image (at 10 20) (rotate 90) (opacity 0.5) (uuid "u") (locked yes) (data "AAAA"))');
+  assert.equal(ser(RI.applyRefImage(n, { ...v, x: 1.23456 }, true)).replace(/\s+/g, " "), '(image (at 1.2346 20) (scale 2) (uuid "u") (locked yes) (data "AAAA"))');
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

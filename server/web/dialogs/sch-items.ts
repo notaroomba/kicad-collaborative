@@ -16,6 +16,7 @@ import { trapTab } from "../tools/kicad-dialogs/shell";
 import { schTableDialog } from "../editor/tabledialogs";
 import { keyName } from "../keys";
 import { syntaxHelp } from "../editor/syntax-help";
+import { refImageDialog } from "../editor/pcbdialogs/refimage";
 import { E, toast, toolCtx } from "./editor";
 import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
 import { facesUsed, fontPicker, type FontPickerEl } from "./font-picker";
@@ -641,28 +642,8 @@ function shapeDialog(ctx: Ctx, item: KItem): void {
     },
   });
 }
-function imageDialog(ctx: Ctx, item: KItem): void {
-  const ro = !!ctx.viewOnly, [x, y] = L.atOf(item.node), sc = L.kid(item.node, "scale"), scale = sc ? L.num(sc[1], 1) : 1;
-  let px: HTMLInputElement, py: HTMLInputElement, s: HTMLInputElement;
-  KD().open({
-    title: "Image Properties", width: 400, readOnly: ro,
-    build(b) {
-      const g = h("div", { class: "kd-fmt" });
-      px = lenBox(x, "kd-img-x"); py = lenBox(y, "kd-img-y"); s = textInput(String(scale), undefined, { id: "kd-img-scale", style: "width:90px", disabled: ro });
-      g.append(h("label", null, "Position X:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, px, units()), h("span"), h("label", null, "Position Y:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, py, units()), h("span"),
-        h("label", null, "Scale:"), s, h("span"));
-      b.append(g);
-    },
-    ok() {
-      if (ro) return;
-      const v = Number(s.value); if (!Number.isFinite(v) || v <= 0) { void messageBox("Image scale must be greater than 0."); return false; }
-      const n = L.clone(item.node); L.setAt(n, lenValue(px) ?? x, lenValue(py) ?? y);
-      if (Math.abs(v - scale) > 1e-9) L.put(n, "scale", [L.r4(v)], ["uuid", "data"]);
-      commitItem(ctx, item, n, "Edit Image");
-      return undefined;
-    },
-  });
-}
+/** DIALOG_IMAGE_PROPERTIES: the board's reference-image dialog in its eeschema form (refimage.ts). */
+function imageDialog(ctx: Ctx, item: KItem): void { refImageDialog(ctx as unknown as ToolCtx, item, true); }
 
 // ---------------------------------------------------------------- dispatch
 const SHAPE_KINDS = new Set(["rectangle", "circle", "arc", "bezier", "rule_area"]);
