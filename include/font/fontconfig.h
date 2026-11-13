@@ -27,6 +27,8 @@
 #include <wx/string.h>
 #include <vector>
 #include <map>
+#include <atomic>
+#include <functional>
 #include <unordered_map>
 #include <font/fontinfo.h>
 
@@ -75,6 +77,47 @@ public:
     void ListFonts( std::vector<std::string>& aFonts, const std::string& aDesiredLang,
                     const std::vector<wxString>* aEmbeddedFiles = nullptr, bool aForce = false );
 
+    /// One file of an installed family.
+    struct FAMILY_FILE
+    {
+        wxString file;
+        int      index = 0;
+        bool     bold = false;
+        bool     italic = false;
+    };
+
+    /// Whether a family of exactly this name (case does not matter) can be drawn here.
+    bool HasFamily( const wxString& aFamily );
+
+    /**
+     * The font files of an installed family, one per style it has among regular, bold, italic
+     * and bold italic.  Empty when no family of exactly this name is installed.
+     */
+    std::vector<FAMILY_FILE> FamilyFiles( const wxString& aFamily );
+
+    /// Where fonts this application fetched are kept (Google Fonts, the fonts of online
+    /// projects); every font file in it is available to the application.
+    static wxString DownloadedFontsDir();
+
+    /**
+     * Make font files available to this process, and have everything that draws text look its
+     * fonts up again.  May be called from any thread; the work happens on the main thread.
+     */
+    void AddFontFiles( const std::vector<wxString>& aFiles );
+
+    /// Counts the times the set of available fonts changed (see AddFontFiles).  Anything that
+    /// keeps the result of a font lookup compares the count it was made at.
+    static unsigned Generation();
+
+    /// Called (from whichever thread looked the font up) with the name of a font that is not
+    /// installed, before a substitute is used.  One handler; nullptr removes it.
+    static void SetMissingFontHandler( std::function<void( const wxString& )> aHandler );
+
+    /// Called on the main thread after the set of available fonts changed.
+    /// @return a ticket for RemoveChangeListener.
+    static int  AddChangeListener( std::function<void()> aListener );
+    static void RemoveChangeListener( int aTicket );
+
     /**
      * Set the reporter to use for reporting font substitution warnings.
      *
@@ -91,6 +134,7 @@ public:
 
 private:
     std::map<std::string, FONTINFO> m_fontInfoCache;
+    std::atomic<bool>               m_listStale{ false };
     wxString                        m_fontCacheLastLang;
     static REPORTER*                s_reporter;
 

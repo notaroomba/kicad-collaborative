@@ -21,13 +21,20 @@
 
 #include <mutex>
 #include <font/fontconfig.h>
+#include <collab/collab_fonts.h>
 #include <wx/log.h>
 #include <trace_helpers.h>
 #include <string_utils.h>
 #include <macros.h>
 #include <cstdint>
+#include <climits>
+#include <cstdlib>
 #include <reporter.h>
 #include <embedded_files.h>
+#include <paths.h>
+#include <wx/app.h>
+#include <wx/filename.h>
+#include <wx/thread.h>
 
 #ifdef __WIN32__
 #include <windows.h>
@@ -40,6 +47,13 @@ static bool        g_fcInitSuccess = false;
 
 REPORTER* FONTCONFIG::s_reporter = nullptr;
 static std::mutex g_fontConfigMutex;
+
+// What changes when a font is fetched while the program runs (AddFontFiles).
+static std::atomic<unsigned>                    g_generation{ 0 };
+static std::mutex                               g_hooksMutex;
+static std::function<void( const wxString& )>   g_missingFontHandler;
+static std::map<int, std::function<void()>>     g_changeListeners;
+static int                                      g_nextListener = 1;
 
 /**
  * A simple wrapper to avoid exporting fontconfig in the header
@@ -113,6 +127,19 @@ FONTCONFIG* Fontconfig()
     {
         bootstrapFc();
         g_config = new FONTCONFIG();
+
+        // Fonts fetched on an earlier run (Google Fonts, the fonts of online projects).
+        if( g_fcInitSuccess )
+        {
+            wxString dir = FONTCONFIG::DownloadedFontsDir();
+
+            if( wxFileName::DirExists( dir ) )
+                FcConfigAppFontAddDir( FcConfigGetCurrent(), (const FcChar8*) dir.utf8_str().data() );
+        }
+
+        // A font that is not on this computer is fetched from the online project or from
+        // Google Fonts while the program runs.
+        COLLAB_FONTS::Install();
     }
 
     return g_config;
@@ -374,11 +401,26 @@ FONTCONFIG::FF_RESULT FONTCONFIG::FindFont( const wxString& aFontName, wxString&
             if( retval == FF_RESULT::FF_SUBSTITUTE )
                 retval = FF_RESULT::FF_OK;
         }
-        else if( s_reporter )
+        else
         {
-            s_reporter->Report( wxString::Format( _( "Font '%s' not found; substituting '%s'." ),
-                                                  qualifiedFontName,
-                                                  fontName ) );
+            if( s_reporter )
+            {
+                s_reporter->Report( wxString::Format( _( "Font '%s' not found; substituting '%s'." ),
+                                                      qualifiedFontName,
+                                                      fontName ) );
+            }
+
+            // Somebody may be able to fetch it (a Google Font, a font kept with an online
+            // project); the substitute is used until it arrives.
+            std::function<void( const wxString& )> handler;
+
+            {
+                std::lock_guard<std::mutex> lock( g_hooksMutex );
+                handler = g_missingFontHandler;
+            }
+
+            if( handler )
+                handler( aFontName );
         }
     }
 
@@ -392,6 +434,9 @@ void FONTCONFIG::ListFonts( std::vector<std::string>& aFonts, const std::string&
 {
     if( !g_fcInitSuccess )
         return;
+
+    if( m_listStale.exchange( false ) )
+        aForce = true;
 
     // be sure to cache bust if the language changed
     if( m_fontInfoCache.empty() || m_fontCacheLastLang != aDesiredLang || aForce )
@@ -504,4 +549,183 @@ void FONTCONFIG::ListFonts( std::vector<std::string>& aFonts, const std::string&
 
     for( const std::pair<const std::string, FONTINFO>& entry : m_fontInfoCache )
         aFonts.push_back( entry.second.Family() );
+}
+
+
+wxString FONTCONFIG::DownloadedFontsDir()
+{
+    wxFileName dir( PATHS::GetUserCachePath(), wxEmptyString );
+    dir.AppendDir( wxS( "fonts" ) );
+    return dir.GetPath();
+}
+
+
+unsigned FONTCONFIG::Generation()
+{
+    return g_generation.load();
+}
+
+
+void FONTCONFIG::SetMissingFontHandler( std::function<void( const wxString& )> aHandler )
+{
+    std::lock_guard<std::mutex> lock( g_hooksMutex );
+    g_missingFontHandler = std::move( aHandler );
+}
+
+
+int FONTCONFIG::AddChangeListener( std::function<void()> aListener )
+{
+    std::lock_guard<std::mutex> lock( g_hooksMutex );
+    g_changeListeners[g_nextListener] = std::move( aListener );
+    return g_nextListener++;
+}
+
+
+void FONTCONFIG::RemoveChangeListener( int aTicket )
+{
+    std::lock_guard<std::mutex> lock( g_hooksMutex );
+    g_changeListeners.erase( aTicket );
+}
+
+
+void FONTCONFIG::AddFontFiles( const std::vector<wxString>& aFiles )
+{
+    auto apply =
+            [this, aFiles]()
+            {
+                if( !g_fcInitSuccess )
+                    return;
+
+                FcConfig* config = FcConfigGetCurrent();
+
+                for( const wxString& file : aFiles )
+                    FcConfigAppFontAddFile( config, (const FcChar8*) file.utf8_str().data() );
+
+                m_listStale = true;
+                g_generation++;
+
+                std::vector<std::function<void()>> listeners;
+
+                {
+                    std::lock_guard<std::mutex> lock( g_hooksMutex );
+
+                    for( const auto& [ticket, listener] : g_changeListeners )
+                        listeners.push_back( listener );
+                }
+
+                for( const std::function<void()>& listener : listeners )
+                    listener();
+            };
+
+    // Fontconfig's set of application fonts is read by every lookup on the main thread, so
+    // it is only changed there.
+    if( wxIsMainThread() || !wxTheApp )
+        apply();
+    else
+        wxTheApp->CallAfter( apply );
+}
+
+
+std::vector<FONTCONFIG::FAMILY_FILE> FONTCONFIG::FamilyFiles( const wxString& aFamily )
+{
+    std::vector<FAMILY_FILE> result;
+
+    if( !g_fcInitSuccess || aFamily.IsEmpty() )
+        return result;
+
+    wxScopedCharBuffer name = aFamily.ToUTF8();
+    FcPattern*         pat = FcPatternCreate();
+
+    FcPatternAddString( pat, FC_FAMILY, (const FcChar8*) name.data() );
+
+    FcObjectSet* os = FcObjectSetBuild( FC_FAMILY, FC_FILE, FC_INDEX, FC_WEIGHT, FC_SLANT, FC_WIDTH, FC_OUTLINE,
+                                         nullptr );
+    FcFontSet*   fs = FcFontList( FcConfigGetCurrent(), pat, os );
+
+    // The file whose weight is nearest regular, and the one nearest bold, upright and slanted.
+    struct BEST
+    {
+        wxString file;
+        int      index = 0;
+        int      distance = INT_MAX;
+    };
+
+    BEST best[2][2];    // [bold][italic]
+
+    for( int i = 0; fs && i < fs->nfont; ++i )
+    {
+        FcPattern* font = fs->fonts[i];
+        FcChar8*   file = nullptr;
+        FcBool     outline = FcFalse;
+        int        index = 0;
+        int        weight = FC_WEIGHT_REGULAR;
+        int        slant = FC_SLANT_ROMAN;
+
+        if( FcPatternGetString( font, FC_FILE, 0, &file ) != FcResultMatch
+            || FcPatternGetBool( font, FC_OUTLINE, 0, &outline ) != FcResultMatch || !outline )
+        {
+            continue;
+        }
+
+        // FcFontList matches a family loosely; the name has to be one of the font's own.
+        bool     exact = false;
+        FcChar8* family = nullptr;
+
+        for( int n = 0; FcPatternGetString( font, FC_FAMILY, n, &family ) == FcResultMatch; ++n )
+        {
+            if( wxString::FromUTF8( (const char*) family ).CmpNoCase( aFamily ) == 0 )
+            {
+                exact = true;
+                break;
+            }
+        }
+
+        if( !exact )
+            continue;
+
+        FcPatternGetInteger( font, FC_INDEX, 0, &index );
+        FcPatternGetInteger( font, FC_WEIGHT, 0, &weight );
+        FcPatternGetInteger( font, FC_SLANT, 0, &slant );
+
+        bool italic = slant != FC_SLANT_ROMAN;
+        bool heavy = weight >= FC_WEIGHT_DEMIBOLD;
+        int  width = FC_WIDTH_NORMAL;
+
+        FcPatternGetInteger( font, FC_WIDTH, 0, &width );
+
+        // A condensed or extended cut only stands in when the family has no normal one.
+        int  distance = std::abs( weight - ( heavy ? FC_WEIGHT_BOLD : FC_WEIGHT_REGULAR ) )
+                        + 4 * std::abs( width - FC_WIDTH_NORMAL );
+        BEST& slot = best[heavy ? 1 : 0][italic ? 1 : 0];
+
+        if( distance < slot.distance )
+        {
+            slot.file = wxString::FromUTF8( (const char*) file );
+            slot.index = index & 0xFFFF;    // the upper half names an instance of a variable font
+            slot.distance = distance;
+        }
+    }
+
+    if( fs )
+        FcFontSetDestroy( fs );
+
+    FcObjectSetDestroy( os );
+    FcPatternDestroy( pat );
+
+    for( int b = 0; b < 2; ++b )
+    {
+        for( int i = 0; i < 2; ++i )
+        {
+            if( !best[b][i].file.IsEmpty() )
+                result.push_back( { best[b][i].file, best[b][i].index, b == 1, i == 1 } );
+        }
+    }
+
+    return result;
+}
+
+
+bool FONTCONFIG::HasFamily( const wxString& aFamily )
+{
+    return !FamilyFiles( aFamily ).empty();
 }

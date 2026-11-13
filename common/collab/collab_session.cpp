@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <collab/collab_fonts.h>
 #include <collab/collab_session.h>
 
 #include <collab/collab_ws_client.h>
@@ -51,6 +52,8 @@ COLLAB_SESSION& COLLAB_SESSION::Get()
 
 void COLLAB_SESSION::Shutdown()
 {
+    COLLAB_FONTS::Shutdown();
+
     if( !s_instance )
         return;
 
@@ -615,6 +618,8 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
     // With no adapter there is no local state to keep, so arrival is enough.
     else if( type == "op" )
     {
+        COLLAB_FONTS::NoteFaces( aMsg );
+
         if( adapter )
             adapter->OnRemoteOp( aMsg );
         else
@@ -622,6 +627,8 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
     }
     else if( type == "ops" )
     {
+        COLLAB_FONTS::NoteFaces( aMsg );
+
         if( adapter )
         {
             adapter->OnOpsTail( aMsg );
@@ -633,6 +640,8 @@ void COLLAB_SESSION::routeMessage( const nlohmann::json& aMsg )
     }
     else if( type == "snapshot" )
     {
+        COLLAB_FONTS::NoteFaces( aMsg );
+
         if( adapter )
             adapter->OnSnapshot( aMsg );
         else
@@ -807,6 +816,9 @@ bool COLLAB_SESSION::SendOp( const wxString& aDocId, const wxString& aClientOpId
 
     if( aBaseSeq )
         op[ "baseSeq" ] = *aBaseSeq;
+
+    // A font this edit sets text in travels with the project.
+    COLLAB_FONTS::NoteFaces( aChanges );
 
     sendJson( op );
     return true;

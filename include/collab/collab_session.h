@@ -207,6 +207,9 @@ public:
     void SetProjectId( const wxString& aProjectId ) { m_projectId = aProjectId; }
     const wxString& ProjectId() const { return m_projectId; }
 
+    /// The bearer token the session was connected with (for REST calls about its project).
+    const wxString& Token() const { return m_token; }
+
     void SetProjectDocs( const nlohmann::json& aDocs ) { m_projectDocs = aDocs; }
     const nlohmann::json& ProjectDocs() const { return m_projectDocs; }
 

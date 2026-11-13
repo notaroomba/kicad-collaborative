@@ -26,6 +26,7 @@
 #include <wx/app.h>
 #include <wx/hyperlink.h>
 #include <collab/collab_project.h>
+#include <collab/collab_fonts.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
 #include <gal/cursors.h>
@@ -757,6 +758,14 @@ void PCB_COLLAB_TOOL::joinDoc( const wxString& aDocId, const wxString& aDocPath 
     m_lastPendingShown = 0;
 
     COLLAB_SESSION::Get().JoinDoc( m_docId, std::nullopt, this );
+
+    // The fonts the board is set in: fetched if this computer lacks them, kept with the
+    // project if only this computer has them.
+    {
+        wxFileName board( m_docPath );
+        board.MakeAbsolute( editFrame->Prj().GetProjectPath() );
+        COLLAB_FONTS::NoteFacesInFile( board.GetFullPath() );
+    }
 
     fetchComments();
 

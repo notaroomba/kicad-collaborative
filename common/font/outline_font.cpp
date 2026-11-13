@@ -46,7 +46,12 @@ OUTLINE_FONT::OUTLINE_FONT() :
         m_faceSize( 16 ),
         m_fakeBold( false ),
         m_fakeItal( false ),
-        m_forDrawingSheet( false )
+        m_forDrawingSheet( false ),
+        m_wantBold( false ),
+        m_wantItalic( false ),
+        m_faceIndex( 0 ),
+        m_fontsGeneration( 0 ),
+        m_faceGeneration( 0 )
 {
     std::lock_guard<std::mutex> guard( m_freeTypeMutex );
 
@@ -100,6 +105,9 @@ OUTLINE_FONT* OUTLINE_FONT::LoadFont( const wxString& aFontName, bool aBold, boo
     using fc = fontconfig::FONTCONFIG;
 
 
+    // Before the lookup: fonts added while it runs are then looked at again (refreshFace).
+    unsigned generation = fc::Generation();
+
     fc::FF_RESULT retval = Fontconfig()->FindFont( aFontName, fontFile, faceIndex, aBold, aItalic, aEmbeddedFiles );
 
     if( retval == fc::FF_RESULT::FF_ERROR )
@@ -117,8 +125,61 @@ OUTLINE_FONT* OUTLINE_FONT::LoadFont( const wxString& aFontName, bool aBold, boo
     font->m_fontName = aFontName;       // Keep asked-for name, even if we substituted.
     font->m_fontFileName = fontFile;
     font->m_forDrawingSheet = aForDrawingSheet;
+    font->m_wantBold = aBold;
+    font->m_wantItalic = aItalic;
+    font->m_faceIndex = faceIndex;
+    font->m_fontsGeneration = generation;
 
     return font.release();
+}
+
+
+void OUTLINE_FONT::refreshFace() const
+{
+    using fc = fontconfig::FONTCONFIG;
+
+    unsigned generation = fc::Generation();
+
+    if( m_fontsGeneration.load() == generation )
+        return;
+
+    // One thread looks the font up again; the others go on with the face they have.
+    static std::mutex s_refreshMutex;
+    std::unique_lock<std::mutex> lock( s_refreshMutex, std::try_to_lock );
+
+    if( !lock.owns_lock() || m_fontsGeneration.load() == generation )
+        return;
+
+    OUTLINE_FONT* self = const_cast<OUTLINE_FONT*>( this );
+    wxString      fontFile;
+    int           faceIndex = 0;
+
+    fc::FF_RESULT retval = Fontconfig()->FindFont( m_fontName, fontFile, faceIndex, m_wantBold, m_wantItalic );
+
+    if( retval != fc::FF_RESULT::FF_ERROR && ( fontFile != m_fontFileName || faceIndex != m_faceIndex ) )
+    {
+        // The old face is left alone: glyphs made from it are cached by its address, and
+        // another thread may be measuring with it this instant.
+        FT_Face old = m_face;
+
+        if( self->loadFace( fontFile, faceIndex ) == 0 )
+        {
+            self->m_fakeBold = retval == fc::FF_RESULT::FF_MISSING_BOLD
+                               || retval == fc::FF_RESULT::FF_MISSING_BOLD_ITAL;
+            self->m_fakeItal = retval == fc::FF_RESULT::FF_MISSING_ITAL
+                               || retval == fc::FF_RESULT::FF_MISSING_BOLD_ITAL;
+            self->m_fontFileName = fontFile;
+            self->m_faceIndex = faceIndex;
+            self->m_contourCache.clear();
+            m_faceGeneration++;
+        }
+        else
+        {
+            self->m_face = old;
+        }
+    }
+
+    m_fontsGeneration = generation;
 }
 
 
@@ -233,6 +294,8 @@ void OUTLINE_FONT::GetLinesAsGlyphs( std::vector<std::unique_ptr<GLYPH>>* aGlyph
                                      const VECTOR2I& aPosition, const TEXT_ATTRIBUTES& aAttrs,
                                      const METRICS& aFontMetrics ) const
 {
+    refreshFace();
+
     wxArrayString         strings;
     std::vector<VECTOR2I> positions;
     std::vector<VECTOR2I> extents;
@@ -256,6 +319,8 @@ VECTOR2I OUTLINE_FONT::GetTextAsGlyphs( BOX2I* aBBox, std::vector<std::unique_pt
                                         const EDA_ANGLE& aAngle, bool aMirror, const VECTOR2I& aOrigin,
                                         TEXT_STYLE_FLAGS aTextStyle ) const
 {
+    refreshFace();
+
     // HarfBuzz needs further processing to split tab-delimited text into text runs.
 
     constexpr double TAB_WIDTH = 4 * 0.6;

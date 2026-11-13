@@ -23,6 +23,8 @@
 #include <type_traits> // for swap
 #include <vector>
 #include <mutex>
+#include <climits>
+#include <cstdint>
 
 #include <eda_item.h>
 #include <base_units.h>
@@ -63,6 +65,9 @@
 #include "font/kicad_font_name.h"
 #include "font/fontconfig.h"
 #include "pgm_base.h"
+
+static const KIFONT::FONT* renderCacheKey( const KIFONT::FONT* aFont );
+static unsigned faceGeneration( const KIFONT::FONT* aFont );
 
 class OUTPUTFORMATTER;
 
@@ -511,7 +516,7 @@ bool EDA_TEXT::ResolveFont( const std::vector<wxString>* aEmbeddedFonts )
         // even if not so much on the schematic).  We need to update the font so that KiCad will
         // decide the cache is still valid.  (It will get regenerated if the user edits the text.)
         if( m_render_cache && !m_render_cache->glyphs.empty() )
-            m_render_cache->font = m_attributes.m_Font;
+            m_render_cache->font = renderCacheKey( m_attributes.m_Font );
 
         // The bbox cache isn't keyed on the font, so a box measured against the fallback font
         // before resolution would otherwise survive until the next setter.
@@ -690,6 +695,42 @@ const KIFONT::METRICS& EDA_TEXT::getFontMetrics() const
 }
 
 
+/// How many times the font was given another face: its own file arrived while the program ran
+/// (OUTLINE_FONT::FaceGeneration).  Always 0 for the stroke font.
+static unsigned faceGeneration( const KIFONT::FONT* aFont )
+{
+    if( aFont && aFont->IsOutline() )
+        return static_cast<const KIFONT::OUTLINE_FONT*>( aFont )->FaceGeneration();
+
+    return 0;
+}
+
+
+/**
+ * What a render cache is filed under: the font, and which of its faces the glyphs were made
+ * with.  A font fetched while the program runs changes what its outline font object draws
+ * without changing the object, so glyphs cached while a substitute stood in for it must not be
+ * taken for current.  The value is only ever compared, never followed.
+ */
+static const KIFONT::FONT* renderCacheKey( const KIFONT::FONT* aFont )
+{
+    uintptr_t key = reinterpret_cast<uintptr_t>( aFont );
+    uintptr_t generation = faceGeneration( aFont );
+
+    if( sizeof( uintptr_t ) >= 8 )
+        key ^= ( generation & 0xFFFF ) << ( ( sizeof( uintptr_t ) - 2 ) * 8 );   // bits no address uses
+    else
+        key += generation;
+
+    return reinterpret_cast<const KIFONT::FONT*>( key );
+}
+
+
+/// The entry of m_bbox_cache that says with which face of the font the boxes were measured
+/// (its position's x, see faceGeneration); no text has this line number.
+static constexpr int BBOX_CACHE_GENERATION = INT_MIN;
+
+
 void EDA_TEXT::ClearRenderCache()
 {
     m_render_cache.reset();
@@ -714,7 +755,7 @@ EDA_TEXT::GetRenderCache( const KIFONT::FONT* aFont, const wxString& forResolved
         if( !m_render_cache )
             m_render_cache = std::make_unique<EDA_TEXT_RENDER_CACHE_DATA>();
 
-        if( m_render_cache->glyphs.empty() || m_render_cache->font != aFont
+        if( m_render_cache->glyphs.empty() || m_render_cache->font != renderCacheKey( aFont )
             || m_render_cache->text != forResolvedText
             || m_render_cache->angle != resolvedAngle || m_render_cache->offset != aOffset
             || m_render_cache->mirrored != mirrored )
@@ -729,7 +770,7 @@ EDA_TEXT::GetRenderCache( const KIFONT::FONT* aFont, const wxString& forResolved
 
             font->GetLinesAsGlyphs( &m_render_cache->glyphs, forResolvedText, GetDrawPos() + aOffset, attrs,
                                     getFontMetrics() );
-            m_render_cache->font = aFont;
+            m_render_cache->font = renderCacheKey( aFont );
             m_render_cache->angle = resolvedAngle;
             m_render_cache->text = forResolvedText;
             m_render_cache->offset = aOffset;
@@ -750,7 +791,7 @@ void EDA_TEXT::SetupRenderCache( const wxString& aResolvedText, const KIFONT::FO
         m_render_cache = std::make_unique<EDA_TEXT_RENDER_CACHE_DATA>();
 
     m_render_cache->text = aResolvedText;
-    m_render_cache->font = aFont;
+    m_render_cache->font = renderCacheKey( aFont );
     m_render_cache->angle = aAngle;
     m_render_cache->offset = aOffset;
     m_render_cache->mirrored = IsMirrored();
@@ -781,7 +822,18 @@ BOX2I EDA_TEXT::GetTextBox( const RENDER_SETTINGS* aSettings, int aLine ) const
 
     {
         std::lock_guard<std::mutex> bboxLock( m_bbox_cacheMutex );
-        auto                        cache_it = m_bbox_cache.find( aLine );
+
+        // Boxes measured while a substitute stood in for the font are measured again.
+        int  generation = static_cast<int>( faceGeneration( m_attributes.m_Font ) );
+        auto stamp = m_bbox_cache.find( BBOX_CACHE_GENERATION );
+
+        if( stamp == m_bbox_cache.end() || stamp->second.m_pos.x != generation )
+        {
+            m_bbox_cache.clear();
+            m_bbox_cache[BBOX_CACHE_GENERATION] = { VECTOR2I( generation, 0 ), BOX2I() };
+        }
+
+        auto cache_it = m_bbox_cache.find( aLine );
 
         if( cache_it != m_bbox_cache.end() && cache_it->second.m_pos == drawPos )
             return cache_it->second.m_bbox;

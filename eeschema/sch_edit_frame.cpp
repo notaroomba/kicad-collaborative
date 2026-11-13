@@ -18,6 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <font/fontconfig.h>
+#include <mutex>
 #include <algorithm>
 #include <api/api_handler_sch.h>
 #include <api/api_server.h>
@@ -174,6 +176,50 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_remoteSymbolPane( nullptr ),
         m_currentVariantCtrl( nullptr )
 {
+    // A font fetched while the program runs changes how text is drawn; fields keep their
+    // glyphs themselves (SCH_FIELD's render cache), on every sheet, so those are dropped.
+    static std::once_flag s_fontListener;
+
+    std::call_once( s_fontListener,
+            []()
+            {
+                fontconfig::FONTCONFIG::AddChangeListener(
+                        []()
+                        {
+                            for( wxWindow* window : wxTopLevelWindows )
+                            {
+                                SCH_EDIT_FRAME* frame = dynamic_cast<SCH_EDIT_FRAME*>( window );
+
+                                if( !frame || frame->IsBeingDeleted() || !frame->Schematic().IsValid() )
+                                    continue;
+
+                                SCH_SCREENS screens( frame->Schematic().Root() );
+
+                                for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+                                {
+                                    for( SCH_ITEM* item : screen->Items() )
+                                    {
+                                        item->ClearCaches();
+                                        item->RunOnChildren( []( SCH_ITEM* aChild ) { aChild->ClearCaches(); },
+                                                             RECURSE_MODE::NO_RECURSE );
+                                    }
+
+                                    for( const auto& [name, libSymbol] : screen->GetLibSymbols() )
+                                    {
+                                        if( libSymbol )
+                                            libSymbol->ClearCaches();
+                                    }
+                                }
+
+                                if( frame->GetCanvas() )
+                                {
+                                    frame->GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
+                                    frame->GetCanvas()->ForceRefresh();
+                                }
+                            }
+                        } );
+            } );
+
     m_maximizeByDefault = true;
     m_schematic = new SCHEMATIC( &Prj() );
     m_schematic->SetSchematicHolder( this );

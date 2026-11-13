@@ -21,6 +21,8 @@
 
 #include <api/api_plugin_manager.h>
 #include <base_screen.h>
+#include <font/fontconfig.h>
+#include <mutex>
 #include <bitmaps.h>
 #include <bitmap_store.h>
 #include <confirm.h>
@@ -101,6 +103,31 @@ EDA_DRAW_FRAME::EDA_DRAW_FRAME( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrame
         m_socketServer( nullptr ),
         m_lastToolbarIconSize( 0 )
 {
+    // A font fetched while the program runs (a Google Font, the font of an online project)
+    // changes how text already on screen is drawn: every open canvas draws its items again.
+    static std::once_flag s_fontListener;
+
+    std::call_once( s_fontListener,
+            []()
+            {
+                fontconfig::FONTCONFIG::AddChangeListener(
+                        []()
+                        {
+                            for( wxWindow* window : wxTopLevelWindows )
+                            {
+                                EDA_DRAW_FRAME* frame = dynamic_cast<EDA_DRAW_FRAME*>( window );
+
+                                if( !frame || frame->IsBeingDeleted() || !frame->GetCanvas() )
+                                    continue;
+
+                                if( KIGFX::VIEW* view = frame->GetCanvas()->GetView() )
+                                    view->UpdateAllItems( KIGFX::ALL );
+
+                                frame->GetCanvas()->Refresh();
+                            }
+                        } );
+            } );
+
     m_gridSelectBox       = nullptr;
     m_zoomSelectBox       = nullptr;
     m_zoomCustomEntry     = wxNOT_FOUND;

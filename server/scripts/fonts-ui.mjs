@@ -100,6 +100,10 @@ const tableOf = (buf, tag) => { const n = buf.readUInt16BE(4); for (let i = 0; i
   check('asking again with its tag costs nothing', r.status === 304, String(r.status));
   r = await api(alice, fontUrl('Lobster', { bold: true }));
   check('a family without a bold answers with its regular and says so', r.status === 200 && isFont(r.buf) && r.headers.get('x-font-bold') === '0', `${r.status} ${r.headers.get('x-font-bold')}`);
+  r = await api(alice, fontUrl('Lobster', { bold: true }) + '&exact=1');
+  check('asked for exactly that style (the desktop app), it is 404 instead', r.status === 404, String(r.status));
+  r = await api(alice, fontUrl('Lobster') + '&exact=1');
+  check('and the regular is still there', r.status === 200 && isFont(r.buf), String(r.status));
   r = await api(alice, fontUrl('Corp Serif Pro'));
   check('a font nobody has uploaded is 404', r.status === 404, String(r.status));
   r = await api(carol, fontUrl('Roboto'));

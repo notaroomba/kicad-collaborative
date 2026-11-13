@@ -353,6 +353,7 @@ set( KICOMMON_SRCS
     collab/collab_auth.cpp
     collab/collab_outbox.cpp
     collab/collab_project.cpp
+    collab/collab_fonts.cpp
     collab/collab_rest.cpp
     collab/collab_session.cpp
     collab/collab_ws_client.cpp

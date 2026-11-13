@@ -273,6 +273,69 @@ std::optional<std::string> COLLAB_REST::DownloadArchive( const wxString& aServer
 }
 
 
+static wxString fontFileUrl( KICAD_CURL_EASY& aCurl, const wxString& aServerUrl,
+                             const wxString& aProjectId, const wxString& aFamily, bool aBold,
+                             bool aItalic )
+{
+    return wxString::Format( wxS( "%s/api/projects/%s/fonts/file?family=%s&bold=%d&italic=%d" ),
+                             aServerUrl, aProjectId,
+                             wxString::FromUTF8( aCurl.Escape( aFamily.ToStdString( wxConvUTF8 ) ) ),
+                             aBold ? 1 : 0, aItalic ? 1 : 0 );
+}
+
+
+std::optional<std::string> COLLAB_REST::DownloadProjectFont( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId,
+                                                             const wxString& aFamily, bool aBold,
+                                                             bool aItalic )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, fontFileUrl( curl, aServerUrl, aProjectId, aFamily, aBold, aItalic ) + wxS( "&exact=1" ),
+                  aToken );
+    curl.SetHeader( "Accept", "*/*" );
+
+    if( !performOk( curl ) || curl.GetBuffer().empty() )
+        return std::nullopt;
+
+    return curl.GetBuffer();
+}
+
+
+bool COLLAB_REST::UploadProjectFont( const wxString& aServerUrl, const wxString& aToken,
+                                     const wxString& aProjectId, const wxString& aFamily,
+                                     bool aBold, bool aItalic, int aFaceIndex,
+                                     const wxString& aFileName, const std::string& aBytes,
+                                     ERROR_INFO* aError )
+{
+    KICAD_CURL_EASY curl;
+    wxString        url = fontFileUrl( curl, aServerUrl, aProjectId, aFamily, aBold, aItalic );
+
+    url += wxString::Format( wxS( "&index=%d&name=%s" ), aFaceIndex,
+                             wxString::FromUTF8( curl.Escape( aFileName.ToStdString( wxConvUTF8 ) ) ) );
+
+    setupRequest( curl, url, aToken );
+    curl.SetHeader( "Content-Type", "application/octet-stream" );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_POSTFIELDSIZE_LARGE,
+                      static_cast<curl_off_t>( aBytes.size() ) );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_COPYPOSTFIELDS, aBytes.data() );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CUSTOMREQUEST, "PUT" );
+
+    return performOk( curl, aError );
+}
+
+
+std::optional<nlohmann::json> COLLAB_REST::ListProjectFonts( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId )
+{
+    KICAD_CURL_EASY curl;
+    setupRequest( curl, aServerUrl + wxS( "/api/projects/" ) + aProjectId + wxS( "/fonts" ), aToken );
+
+    return performJson( curl );
+}
+
+
 bool COLLAB_REST::UploadSnapshot( const wxString& aServerUrl, const wxString& aToken,
                                   const wxString& aDocId, long long aSeq,
                                   const std::string& aBytes )

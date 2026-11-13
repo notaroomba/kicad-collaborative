@@ -23,6 +23,7 @@
 #ifndef OUTLINE_FONT_H_
 #define OUTLINE_FONT_H_
 
+#include <atomic>
 #include <gal/gal.h>
 #include <geometry/shape_poly_set.h>
 #ifdef _MSC_VER
@@ -87,6 +88,17 @@ public:
     }
 
     const wxString& GetFileName() const { return m_fontFileName; }
+
+    /**
+     * Counts the times this font was given another face because its own font file arrived
+     * while the program ran (see refreshFace()).  Whatever keeps glyphs or measurements made
+     * with this font compares the count they were made at.
+     */
+    unsigned FaceGeneration() const
+    {
+        refreshFace();
+        return m_faceGeneration.load();
+    }
 
     EMBEDDING_PERMISSION GetEmbeddingPermission() const;
 
@@ -171,6 +183,14 @@ public:
 protected:
     FT_Error loadFace( const wxString& aFontFileName, int aFaceIndex );
 
+    /**
+     * Look the font up again when fonts were added since it was loaded (a Google Font or the
+     * font of an online project fetched while the program runs, FONTCONFIG::AddFontFiles), so
+     * that text set in a font that had to be substituted is drawn in its own font once the
+     * file is there.  The object stays the one every text item points at.
+     */
+    void refreshFace() const;
+
     BOX2I getBoundingBox( const std::vector<std::unique_ptr<GLYPH>>& aGlyphs ) const;
 
     VECTOR2I getTextAsGlyphs( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* aGlyphs,
@@ -201,6 +221,13 @@ private:
     bool              m_fakeItal;
 
     bool              m_forDrawingSheet;
+
+    // What LoadFont() was asked for, and the fonts generation and face index it was answered at
+    bool              m_wantBold;
+    bool              m_wantItalic;
+    int               m_faceIndex;
+    mutable std::atomic<unsigned> m_fontsGeneration;
+    mutable std::atomic<unsigned> m_faceGeneration;
 
     // cache for glyphs converted to straight segments
     // key is glyph index (FT_GlyphSlot field glyph_index)

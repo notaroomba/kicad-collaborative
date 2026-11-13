@@ -13,7 +13,7 @@
 //! `GET  /api/fonts/catalog`                 the Google Fonts list
 //! `GET  /api/fonts/preview?family=`         the few glyphs needed to show a family's name in itself
 //! `GET  /api/projects/{id}/fonts`           the fonts uploaded into a project
-//! `GET  /api/projects/{id}/fonts/file`      a font file for `?family=&bold=&italic=`
+//! `GET  /api/projects/{id}/fonts/file`      a font file for `?family=&bold=&italic=` (`&exact=1`: no fallback style)
 //! `PUT  /api/projects/{id}/fonts/file`      upload one (`?family=&bold=&italic=&index=&name=`)
 
 use std::collections::HashMap;
@@ -539,6 +539,9 @@ pub struct FileQuery {
     bold: Option<String>,
     #[serde(default)]
     italic: Option<String>,
+    /// `exact=1`: 404 rather than a fallback style when the family has no such bold or italic
+    #[serde(default)]
+    exact: Option<String>,
     #[serde(default)]
     index: Option<usize>,
     #[serde(default)]
@@ -585,7 +588,12 @@ pub async fn project_font_file(
         .iter()
         .map(|r| (r.get("bold"), r.get("italic")))
         .collect();
-    let served = if let Some((b, i)) = best_style(&have, bold, italic) {
+    let exact = flag(&q.exact);
+    let stored = best_style(&have, bold, italic);
+    if exact && stored.is_some_and(|s| s != (bold, italic)) {
+        return Err(AppError::NotFound);
+    }
+    let served = if let Some((b, i)) = stored {
         let row = sqlx::query("SELECT family, sha256, data FROM project_font_files WHERE project_id = $1 AND family_key = $2 AND bold = $3 AND italic = $4")
             .bind(project_id)
             .bind(family.to_lowercase())
@@ -597,6 +605,9 @@ pub async fn project_font_file(
     } else {
         let cat = catalog();
         let f = cat.find(&family).ok_or(AppError::NotFound)?;
+        if exact && { let (b, i, _) = google_style(f, bold, italic); (b, i) != (bold, italic) } {
+            return Err(AppError::NotFound);
+        }
         google_file(&state, f, bold, italic).await?
     };
 

@@ -81,6 +81,29 @@ KICOMMON_API std::optional<nlohmann::json> CreateShareLink( const wxString& aSer
                                                             int aExpiresInDays = 0,
                                                             ERROR_INFO* aError = nullptr );
 
+/// GET /api/projects/{id}/fonts/file?family=&bold=&italic=&exact=1 -> the font file of exactly
+/// that style, when the project (or Google Fonts, through the server) has it.
+KICOMMON_API std::optional<std::string> DownloadProjectFont( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId,
+                                                             const wxString& aFamily, bool aBold,
+                                                             bool aItalic );
+
+/// PUT /api/projects/{id}/fonts/file?family=&bold=&italic=&index=&name= with the font file:
+/// keep a font of this computer with the project.  Refused (403, with the reason) when the
+/// font's embedding permission forbids it.
+KICOMMON_API bool UploadProjectFont( const wxString& aServerUrl, const wxString& aToken,
+                                     const wxString& aProjectId, const wxString& aFamily,
+                                     bool aBold, bool aItalic, int aFaceIndex,
+                                     const wxString& aFileName, const std::string& aBytes,
+                                     ERROR_INFO* aError = nullptr );
+
+/// GET /api/projects/{id}/fonts -> { fonts: [ { family, styles: [ { bold, italic } ] } ] }:
+/// the fonts uploaded into the project.
+KICOMMON_API std::optional<nlohmann::json> ListProjectFonts( const wxString& aServerUrl,
+                                                             const wxString& aToken,
+                                                             const wxString& aProjectId );
+
 /// GET /api/projects/{id}/archive -> raw zip bytes.
 KICOMMON_API std::optional<std::string> DownloadArchive( const wxString& aServerUrl,
                                                          const wxString& aToken,

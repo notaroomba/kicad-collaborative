@@ -24,6 +24,7 @@
 #include <widgets/wx_infobar.h>
 #include <wx/hyperlink.h>
 #include <collab/collab_project.h>
+#include <collab/collab_fonts.h>
 #include <collab/collab_rest.h>
 #include <dialogs/dialog_collab_comments.h>
 #include <gal/cursors.h>
@@ -704,7 +705,15 @@ void SCH_COLLAB_TOOL::beginSession( const nlohmann::json& aProject, const wxStri
     m_lastPendingShown = 0;
 
     for( const auto& [docId, path] : m_pathByDocId )
+    {
         session.JoinDoc( docId, std::nullopt, this );
+
+        // The fonts the sheet is set in: fetched if this computer lacks them, kept with
+        // the project if only this computer has them.
+        wxFileName sheet( path );
+        sheet.MakeAbsolute( m_frame->Prj().GetProjectPath() );
+        COLLAB_FONTS::NoteFacesInFile( sheet.GetFullPath() );
+    }
 
     fetchComments();
 

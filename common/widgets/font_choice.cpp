@@ -20,6 +20,7 @@
 #include <widgets/font_choice.h>
 #include <kiplatform/ui.h>
 #include <font/fontconfig.h>
+#include <collab/collab_fonts.h>
 #include <pgm_base.h>
 #include <widgets/ui_common.h>
 
@@ -28,6 +29,7 @@
 #include <wx/fontenum.h>
 #include <wx/settings.h>
 #include <wx/textctrl.h>
+#include <wx/utils.h>
 
 #include <thread>
 #include <mutex>
@@ -145,7 +147,17 @@ void FONT_LIST_MANAGER::UpdateFonts()
     for( const std::string& name : fontNames )
         menuList.Add( wxString( name ) );
 
+    // Every Google Font can be chosen: one that is not installed is downloaded when picked.
+    for( const wxString& name : COLLAB_FONTS::GoogleFamilies() )
+        menuList.Add( name );
+
     menuList.Sort();
+
+    for( size_t ii = menuList.GetCount(); ii > 1; --ii )
+    {
+        if( menuList[ii - 1] == menuList[ii - 2] )
+            menuList.RemoveAt( ii - 1 );
+    }
 
     // Check if fonts changed and update controls
     {
@@ -315,6 +327,14 @@ KIFONT::FONT* FONT_CHOICE::GetFontSelection( bool aBold, bool aItalic, bool aFor
     }
     else
     {
+        // A Google Font that is not on this computer yet: get it now, so that the text is
+        // drawn in it straight away.
+        if( COLLAB_FONTS::FindGoogleFamily( GetValue() ) && !Fontconfig()->HasFamily( GetValue() ) )
+        {
+            wxBusyCursor busy;
+            COLLAB_FONTS::FetchNow( GetValue() );
+        }
+
         return KIFONT::FONT::GetFont( GetValue(), aBold, aItalic, nullptr,
                                       aForDrawingSheet );
     }
