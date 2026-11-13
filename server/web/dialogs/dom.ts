@@ -88,6 +88,25 @@ export function promptText(title: string, label: string, initial = "", validate?
     document.body.append(ov); input.focus(); input.select();
   });
 }
+/** A small modal form on top of whatever dialog is open: a label over each text control (a multi-line one for
+ *  `multiline`), OK / Cancel; resolves the values by key, or null on Cancel (the variant name / description dialogs
+ *  a dialog opens over itself). */
+export function promptFields(title: string, fields: { key: string; label: string; initial?: string; multiline?: boolean }[], width = 360): Promise<Record<string, string> | null> {
+  return new Promise((resolve) => {
+    const inputs = fields.map((f) => {
+      const el = f.multiline ? h("textarea", { "data-k": f.key, style: "width:100%;min-height:60px;box-sizing:border-box" }) as HTMLTextAreaElement : h("input", { type: "text", "data-k": f.key, style: "width:100%;box-sizing:border-box" }) as HTMLInputElement;
+      el.value = f.initial || ""; return { f, el };
+    });
+    const done = (ok: boolean) => { ov.remove(); if (!ok) { resolve(null); return; } const out: Record<string, string> = {}; for (const i of inputs) out[i.f.key] = i.el.value; resolve(out); };
+    const ok = h("button", { class: "btn primary", onclick: () => done(true) }, "OK"), cancel = h("button", { class: "btn", onclick: () => done(false) }, "Cancel");
+    const body = h("div", { class: "kd-body" });
+    inputs.forEach((i, k) => body.append(h("label", { class: "pd-lbl", style: k ? "display:block;margin-top:8px" : "display:block" }, i.f.label), i.el));
+    const dlg = h("div", { class: "kd-dialog", style: `width:${width}px;min-width:0` }, h("div", { class: "kd-title" }, h("span", null, title)), body, h("div", { class: "kd-foot" }, cancel, ok));
+    const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter" && !(ev.target instanceof HTMLTextAreaElement)) { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
+    document.body.append(ov); if (inputs[0]) inputs[0].el.focus();
+  });
+}
 export function confirmBox(title: string, message: string, okLabel = "OK"): Promise<boolean> {
   return new Promise((resolve) => {
     const done = (v: boolean) => { ov.remove(); resolve(v); };

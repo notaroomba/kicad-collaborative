@@ -4,13 +4,21 @@
 // delimiters, format presets, preview, Export downloads the file).  The field list on the left sets each column's
 // BOM name, whether it is included and whether rows group by it; view presets are KiCad's built-ins plus the project's.
 import { E, appState, toast, toolCtx, cloneNode } from "./editor";
-import { KD, checkbox, download, h, promptText, select, textInput, type GridApi, type GridColumn } from "./dom";
+import { KD, checkbox, download, h, promptFields, promptText, select, textInput, type GridApi, type GridColumn } from "./dom";
 import { ATTR_FIELDS, BOM_FMT_PRESETS, BOM_PRESETS, ITEM_NO, QTY, bomExport, bomRows, fieldNames, str, symbolRows, withAllFields, type BomField, type BomFmt, type BomPreset, type BomRow, type SymRow } from "./logic";
 import { loadProject, obj, projectDocs, projectName, readDoc, saveProject, sub, submitDocOp, type Json, type JsonObj } from "./project";
 import { variantDocView, variantEditNode } from "./variant-edits";
 import { currentSheetPath, setCurrentVariant, variantNamesForUI } from "../editor/variant";
-import { addVariant, fieldsTableCopyVariant, fieldsTableDeleteVariant, fieldsTableEditVariantDescription, fieldsTableRenameVariant } from "../editor/variant-ops";
+import { addVariant, type VariantPrompts, fieldsTableCopyVariant, fieldsTableDeleteVariant, fieldsTableEditVariantDescription, fieldsTableRenameVariant } from "../editor/variant-ops";
 
+/** The variant dialogs stacked over the table (KiCad opens them as children of the table). */
+const stackedPrompts: VariantPrompts = {
+  text: (title, message, value) => promptText(title, message, value),
+  nameDesc: async (title, withName, desc0) => {
+    const r = await promptFields(title, [...(withName ? [{ key: "variant-name", label: "Variant name:" }] : []), { key: "variant-desc", label: withName ? "Description (optional):" : "Description:", initial: desc0, multiline: true }]);
+    return r ? { name: r["variant-name"] || "", desc: r["variant-desc"] || "" } : null;
+  },
+};
 // KiCad's small_plus / small_edit / copy / text / small_trash bitmaps (DIALOG_FIELDS_TABLE's variant buttons), drawn
 // in the button's text colour
 const vIcon = (inner: string): SVGSVGElement => { const t = document.createElement("template"); t.innerHTML = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`; return t.content.firstChild as SVGSVGElement; };
@@ -203,16 +211,16 @@ export function openFieldsTable(exportTab = false): void {
         variant = String((E as { currentVariant?: string }).currentVariant || ""); fillVariants();
         if (sel !== null) { const i = variantNamesForUI().indexOf(sel); if (i >= 0) vlist.selectedIndex = i; }
         updateBtns(); refreshAll(); }, 300);
-      const vbtn = (icon: string, title: string, id: string, fn: (names: string[], index: number) => Promise<string | null> | void, needsVariant: boolean) => {
+      const vbtn = (icon: string, title: string, id: string, fn: (names: string[], index: number, prompts: VariantPrompts) => Promise<string | null> | void, needsVariant: boolean) => {
         const b = h("button", { class: "btn sm", type: "button", title, id, disabled: ro, "data-needs-variant": needsVariant ? "1" : "",
-          onclick: () => { const names = variantNamesForUI(); const r = fn(names, vlist.selectedIndex); if (r) void r.then((sel) => afterCmd(sel)); } }, vIcon(V_ICONS[icon])) as HTMLButtonElement;
+          onclick: () => { const names = variantNamesForUI(); const r = fn(names, vlist.selectedIndex, stackedPrompts); if (r) void r.then((sel) => afterCmd(sel)); } }, vIcon(V_ICONS[icon])) as HTMLButtonElement;
         btns.push(b); return b;
       };
       const updateBtns = () => { for (const b of btns) if (b.dataset.needsVariant) b.disabled = ro || vlist.selectedIndex <= 0; };
       vlist.addEventListener("change", updateBtns);
       left.append(h("div", { style: "margin-top:10px" }, h("label", { style: "color:var(--ink-2)" }, "Schematic variants:"), vlist,
         h("div", { class: "kd-row", style: "gap:4px;margin-top:3px" },
-          vbtn("plus", "Add a new variant", "kd-sft-addvariant", () => { addVariant((name) => afterCmd(name)); }, false),
+          vbtn("plus", "Add a new variant", "kd-sft-addvariant", () => { addVariant((name) => afterCmd(name), stackedPrompts); }, false),
           vbtn("edit", "Rename the selected variant", "kd-sft-renamevariant", fieldsTableRenameVariant, true),
           vbtn("copy", "Copy the selected variant", "kd-sft-copyvariant", fieldsTableCopyVariant, true),
           vbtn("text", "Edit the selected variant's description", "kd-sft-descvariant", fieldsTableEditVariantDescription, true),

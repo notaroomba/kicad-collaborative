@@ -121,10 +121,22 @@ function nameDescDialog(title: string, withName: boolean, desc0: string, onOk: (
     ok() { const n = nameIn ? trimWx(nameIn.value) : "", d = descIn ? trimWx(descIn.value) : ""; setTimeout(() => onOk(n, d), 0); return true; } });
 }
 
+/** The dialogs a command asks through: the editor's (one dialog at a time) or, from inside a dialog (the Symbol
+ *  Fields Table), ones stacked over it. */
+export interface VariantPrompts {
+  text(title: string, message: string, value: string): Promise<string | null>;
+  nameDesc(title: string, withName: boolean, desc0: string): Promise<{ name: string; desc: string } | null>;
+}
+const editorPrompts: VariantPrompts = {
+  text: textEntry,
+  nameDesc: (title, withName, desc0) => new Promise((resolve) => nameDescDialog(title, withName, desc0, (name, desc) => resolve({ name, desc }))),
+};
+
 /** ShowAddVariantDialog ("New Design Variant"), and Tools > Variants > Add Design Variant... */
-export function addVariant(done?: (name: string) => void): void {
+export function addVariant(done?: (name: string) => void, prompts: VariantPrompts = editorPrompts): void {
   if (E.viewOnly) { toast("View-only access"); return; }
-  nameDescDialog("New Design Variant", true, "", (name, desc) => {
+  void prompts.nameDesc("New Design Variant", true, "").then((r) => {
+    if (!r) return; const name = trimWx(r.name), desc = trimWx(r.desc);
     if (!validateNewVariantName(name)) return;
     void variantCommand("Add Variant", (n) => n, (reg) => { if (!reg.has(name)) reg.set(name, ""); if (desc) reg.set(name, desc); }, []).then(() => { refreshVariantNames(addedName(name)); setCurrentVariant(name); if (done) done(name); });
   });
@@ -147,15 +159,13 @@ export async function removeVariant(): Promise<void> {
 }
 
 /** The Edit Description dialog for `name`; SetVariantDescription + OnModify (not an undo step in KiCad). */
-export async function editVariantDescriptionFor(name: string): Promise<void> {
+export async function editVariantDescriptionFor(name: string, prompts: VariantPrompts = editorPrompts): Promise<void> {
   if (E.viewOnly) { toast("View-only access"); return; }
   let desc0 = ""; try { desc0 = registryOf(await loadProject()).get(name) || ""; } catch (e) { desc0 = variantDescription(name); }
-  await new Promise<void>((resolve) => {
-    nameDescDialog(`Edit Description for '${name}'`, false, desc0, (_n, desc) => {
-      void saveProject((p) => { const reg = registryOf(p); reg.set(name, desc); writeRegistry(p, reg); }, "Edit Variant Description")
-        .then(() => refreshVariantNames()).catch(() => toast("Could not update the project file.")).then(() => resolve());
-    });
-  });
+  const r = await prompts.nameDesc(`Edit Description for '${name}'`, false, desc0); if (!r) return;
+  const desc = trimWx(r.desc);
+  try { await saveProject((p) => { const reg = registryOf(p); reg.set(name, desc); writeRegistry(p, reg); }, "Edit Variant Description"); refreshVariantNames(); }
+  catch (e) { toast("Could not update the project file."); }
 }
 
 /** Tools > Variants > Edit Variant Description... */
@@ -167,8 +177,8 @@ export async function editVariantDescription(): Promise<void> {
 }
 
 /** Ask for the new name of `oldName` and rename it (one "Rename Variant" undo step). */
-export async function renameVariantNamed(oldName: string): Promise<void> {
-  const typed = await textEntry("Rename Design Variant", "Enter new variant name:", oldName); if (typed === null) return;
+export async function renameVariantNamed(oldName: string, prompts: VariantPrompts = editorPrompts): Promise<void> {
+  const typed = await prompts.text("Rename Design Variant", "Enter new variant name:", oldName); if (typed === null) return;
   const newName = trimWx(typed);
   if (newName === oldName) return;
   if (!validateNewVariantName(newName, oldName)) return;
@@ -210,7 +220,7 @@ export async function copyVariant(): Promise<void> {
 // the list's selection (index 0 is the default); each returns the name the list selects afterwards (null: as is).
 
 /** onDeleteVariant: the entry above the deleted one is selected (and made current). */
-export async function fieldsTableDeleteVariant(names: string[], index: number): Promise<string | null> {
+export async function fieldsTableDeleteVariant(names: string[], index: number, _prompts?: VariantPrompts): Promise<string | null> {
   if (index <= 0 || index >= names.length) { toast("Cannot delete the default variant.", 10000); return null; }
   const name = names[index];
   await variantCommand("Delete Variant", (n) => VM.renameSymbolVariants(n, name, null), (reg) => { reg.delete(name); }, [name]);
@@ -220,17 +230,18 @@ export async function fieldsTableDeleteVariant(names: string[], index: number): 
   return sel;
 }
 /** onRenameVariant. */
-export async function fieldsTableRenameVariant(names: string[], index: number): Promise<string | null> {
+export async function fieldsTableRenameVariant(names: string[], index: number, prompts: VariantPrompts = editorPrompts): Promise<string | null> {
   if (index <= 0 || index >= names.length) { toast("Cannot rename the default variant.", 10000); return null; }
   const oldName = names[index];
-  await renameVariantNamed(oldName);
-  return variantNamesForUI().includes(oldName) ? oldName : null;
+  await renameVariantNamed(oldName, prompts);
+  // the list selects the new name (SetStringSelection), or keeps the old one when nothing happened
+  const now = variantNamesForUI(); return now.includes(oldName) ? oldName : now.find((n) => !names.includes(n)) || null;
 }
 /** onCopyVariant (no undo step, as in KiCad). */
-export async function fieldsTableCopyVariant(names: string[], index: number): Promise<string | null> {
+export async function fieldsTableCopyVariant(names: string[], index: number, prompts: VariantPrompts = editorPrompts): Promise<string | null> {
   if (index <= 0 || index >= names.length) { toast("Cannot copy the default variant.", 10000); return null; }
   const src = names[index];
-  const typed = await textEntry("Copy Design Variant", "Enter name for the copied variant:", src + "_copy"); if (typed === null) return null;
+  const typed = await prompts.text("Copy Design Variant", "Enter name for the copied variant:", src + "_copy"); if (typed === null) return null;
   const newName = trimWx(typed);
   if (!newName) { toast("Variant name cannot be empty.", 10000); return null; }
   if (names.some((n) => n.toLowerCase() === newName.toLowerCase())) { toast(`Variant '${newName}' already exists.`, 10000); return null; }
@@ -239,9 +250,9 @@ export async function fieldsTableCopyVariant(names: string[], index: number): Pr
   return newName;
 }
 /** onEditVariantDescription. */
-export async function fieldsTableEditVariantDescription(names: string[], index: number): Promise<string | null> {
+export async function fieldsTableEditVariantDescription(names: string[], index: number, prompts: VariantPrompts = editorPrompts): Promise<string | null> {
   if (index <= 0 || index >= names.length) { toast("Cannot edit the default variant description.", 10000); return null; }
-  await editVariantDescriptionFor(names[index]);
+  await editVariantDescriptionFor(names[index], prompts);
   return names[index];
 }
 
