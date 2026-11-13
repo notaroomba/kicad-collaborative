@@ -34,7 +34,7 @@ export interface SilkOptions {
   mark?: { shapes: string[][]; size?: number; layer?: string };
 }
 export interface SilkReport {
-  references: number; kept: number; moved: number; resized: Record<string, number>; turned: string[]; hidden: string[]; shown: string[];
+  references: number; kept: number; moved: number; resized: Record<string, number>; turned: string[]; hidden: string[]; shown: string[]; other_side: string[];
   pin_labels: Record<string, string[]>; pin_labels_skipped: Record<string, string[]>; pin_labels_other_side: string[]; mark?: { text: string; at: number[]; layer: string; size: number } | { problem: string }; smallest: number | null; min_size: number;
 }
 export interface SilkPlan { nodes: Map<string, any>; adds: any[]; report: SilkReport }
@@ -104,6 +104,16 @@ function styled(child: any, lx: number, ly: number, ang: number, size: number, t
   font.splice(1, 0, ["size", size, size], ["thickness", Math.max(0.1, Math.round(size * 15) / 100)]);
   return node;
 }
+/** The same text printed on the given side of the board (mirrored on the back, as KiCad draws it). */
+function toSide(child: any, side: string): any {
+  const k = K(); const node = k.cloneNode(child);
+  const lay = k.parseAll(`(layer "${side}.SilkS")`)[0]; const li = node.findIndex((g: any) => Array.isArray(g) && g[0] === "layer");
+  if (li >= 0) node[li] = lay; else node.push(lay);
+  let fx = k.kid(node, "effects"); if (!fx) { fx = ["effects"]; node.push(fx); }
+  for (let i = fx.length - 1; i >= 1; i--) if (Array.isArray(fx[i]) && fx[i][0] === "justify") fx.splice(i, 1);
+  if (side === "B") fx.push(k.parseAll("(justify mirror)")[0]);
+  return node;
+}
 const hiddenText = (node: any): boolean => {
   const k = K(); const h = k.kid(node, "hide"); if (h && k.str(h[1]) !== "no") return true;
   const fx = k.kid(node, "effects"); return !!fx && fx.some((x: any) => x === "hide" || (Array.isArray(x) && x[0] === "hide" && k.str(x[1]) !== "no"));
@@ -141,7 +151,7 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
   const sizes = [top, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4].filter((s, i) => i === 0 || (s < top && s >= low - 1e-9));
   if (low < top && !sizes.some((s) => Math.abs(s - low) < 1e-9)) sizes.push(low);
   const want = opts.refs && opts.refs.length ? new Set(opts.refs.map((r) => r.toLowerCase())) : null;
-  const report: SilkReport = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], pin_labels: {}, pin_labels_skipped: {}, pin_labels_other_side: [], smallest: null, min_size: low };
+  const report: SilkReport = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], other_side: [], pin_labels: {}, pin_labels_skipped: {}, pin_labels_other_side: [], smallest: null, min_size: low };
   const nodes = new Map<string, any>();
   const fps: any[] = Array.from(doc.items.values()).filter((it: any) => it.kind === "footprint");
   const refProp = (fp: any) => k.kids(fp.node, "property").find((p: any) => k.str(p[1]) === "Reference");
@@ -186,6 +196,13 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
     loops.sort((a, b) => area(b) - area(a)); outline = loops[0] || null; holes = loops.slice(1);
     for (const l of loops) for (let i = 0; i < l.length; i++) edges.push([l[i], l[(i + 1) % l.length]]);
   } catch { outline = null; }
+  // areas where copper is kept out (an antenna's clearance): the board's name is not printed there, ink over an antenna detunes it a little and reads as part of it
+  const keepBoxes: Box[] = [];
+  for (const it of doc.items.values() as any) {
+    if (it.kind !== "zone") continue; const ko = k.kid(it.node, "keepout"); if (!ko) continue;
+    const cp = k.kid(ko, "copperpour"); if (!cp || k.str(cp[1]) !== "not_allowed") continue;
+    for (const poly of k.kids(it.node, "polygon")) { const pts: Pt[] = k.ptsOf(poly); if (pts.length < 3) continue; keepBoxes.push([Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))]); }
+  }
   const EDGE = 0.3;
   const onBoard = (b: Box): boolean => {
     if (!outline) return true;
@@ -244,8 +261,10 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
           const row = rows.indexOf(Math.round(across(p) * 10) / 10); const dir = rows.length > 1 ? (row === 0 ? -1 : 1) : dir1;
           const f = new Frame(doc, fpNow, proto, ang, size, name); if (!f.ok) { miss.push(`${p.number} ${name}`); continue; }
           const len = rowAlongX ? f.h : f.w; const edge = rowAlongX ? (dir < 0 ? cb[1] : cb[3]) : (dir < 0 ? cb[0] : cb[2]);
-          const off = edge + dir * (0.3 + len / 2); const x = rowAlongX ? p.x : off, y = rowAlongX ? off : p.y; const b = f.box(x, y);
-          if (!clear(grow(b, 0.05), side, "courtyard:" + fp.id) || hit(b, cb, 0.05) || boxes.some((o) => hit(b, o, 0.1))) { miss.push(`${p.number} ${name}`); continue; }
+          const far = side !== own; const half = (rowAlongX ? (p.h || 1.7) : (p.w || 1.7)) / 2;
+          // on the other side of the board there is no body and no courtyard: the names start right beside the pads
+          const off = far ? across(p) + dir * (half + 0.35 + len / 2) : edge + dir * (0.3 + len / 2); const x = rowAlongX ? p.x : off, y = rowAlongX ? off : p.y; const b = f.box(x, y);
+          if (!clear(grow(b, 0.05), side, "courtyard:" + fp.id) || (!far && hit(b, cb, 0.05)) || boxes.some((o) => hit(b, o, 0.1))) { miss.push(`${p.number} ${name}`); continue; }
           const nd = f.node(x, y); k.kid(nd, "uuid")[1] = k.newUuid(); out.push(nd); boxes.push(b);
         }
         const res: Row = { nodes: out, boxes, miss, size, side };
@@ -281,7 +300,7 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
       const tw = Math.max(...lines.map((l) => l.length)) * sz * 0.9, w = tw + 0.4, h = lines.length * sz * 1.65 + 0.3;
       if (w > ob[2] - ob[0] - 1.6 || h > ob[3] - ob[1] - 1.6) continue;
       for (let y = ob[3] - 0.8 - h; y >= ob[1] + 0.8; y -= 0.5) for (let x = ob[0] + 0.8; x + w <= ob[2] - 0.8; x += 0.5) {
-        const b: Box = [x, y, x + w, y + h]; if (!clear(b, side)) continue;
+        const b: Box = [x, y, x + w, y + h]; if (!clear(b, side) || keepBoxes.some((kb) => hit(b, kb, 0.2))) continue;
         // mirrored text runs toward smaller x from where it starts: it starts at the right end of its room
         const ax = side === "B" ? x + 0.2 + tw : x + 0.2, ay = y + 0.15; const text = lines.join("\\n").replace(/"/g, "'");
         adds.push(k.parseAll(`(gr_text "${text}" (at ${r4(ax)} ${r4(ay)}) (layer "${side}.SilkS") (uuid "${k.newUuid()}") (effects (font (size ${sz} ${sz}) (thickness ${Math.max(0.1, Math.round(sz * 15) / 100)})) (justify left top${side === "B" ? " mirror" : ""})))`)[0]);
@@ -293,13 +312,15 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
   };
 
   // ---- the references
-  interface Job { fp: any; prop: any; ref: string; side: string; body: Box; frames: Map<string, Frame>; horiz: number }
+  interface Job { fp: any; prop: any; ref: string; side: string; body: Box; frames: Map<string, Frame>; horiz: number; was: any }
   const jobs: Job[] = [];
   for (const [id, prop] of mine) {
     const fp = doc.items.get(id); const body = court.get(id); if (!body) continue;
     const fpNow = Object.assign({}, fp, { node: nodeOf(fp) });
     const horiz = [0, 90].find((a) => { const f = new Frame(doc, fpNow, prop, a, 1, "MMMM"); return f.ok && f.w > f.h; }) ?? 0;
-    jobs.push({ fp: fpNow, prop, ref: k.str(prop[2]), side: sideOf(layerOfNode(prop)), body, frames: new Map(), horiz });
+    // a reference an earlier pass printed on the other side of the board is tried on its part's own side again
+    const ownSide = sideOfFp.get(id) || "F"; const here = sideOf(layerOfNode(prop)) === ownSide ? prop : toSide(prop, ownSide);
+    jobs.push({ fp: fpNow, prop: here, ref: k.str(prop[2]), side: ownSide, body, frames: new Map(), horiz, was: prop });
   }
   const frame = (j: Job, size: number, turned: boolean): Frame => {
     const key = size + (turned ? "t" : "h"); let f = j.frames.get(key);
@@ -332,14 +353,29 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
     }
     return null;
   };
+  const underPart = (j: Job): { f: Frame; x: number; y: number; size: number; side: string } | null => {
+    const side = j.side === "F" ? "B" : "F"; const prop = toSide(j.prop, side); const cx = (j.body[0] + j.body[2]) / 2, cy = (j.body[1] + j.body[3]) / 2;
+    for (const size of [Math.min(sizes[0], 0.8), sizes[sizes.length - 1]].filter((v, i, a) => a.indexOf(v) === i)) for (const turned of [false, true]) {
+      const f = new Frame(doc, j.fp, prop, turned ? (j.horiz === 0 ? 90 : 0) : j.horiz, size); if (!f.ok) continue;
+      const tries: Pt[] = [[cx, cy]]; for (const d of [0.6, 1.2, 1.8]) tries.push([cx + d, cy], [cx - d, cy], [cx, cy + d], [cx, cy - d]);
+      for (const [x, y] of tries) if (clear(f.box(x, y), side)) return { f, x, y, size, side };
+    }
+    return null;
+  };
   // the parts with the fewest places go first
   const room = (j: Job) => { let n = 0; for (const turned of [false, true]) { const f = frame(j, sizes[0], turned); if (f.ok) for (const s of spots(j.body, f.w, f.h, 0, turned)) if (clear(f.box(s.x, s.y), j.side)) n++; } return n; };
   const order = jobs.map((j) => ({ j, n: room(j) })).sort((a, b) => a.n - b.n || a.j.ref.localeCompare(b.j.ref, undefined, { numeric: true })).map((x) => x.j);
   const placeRefs = () => { for (const j of order) {
     report.references++;
     const got = find(j, sizes, [0, 0.4]) || find(j, [sizes[sizes.length - 1]], [-0.1, 0.9, 1.5, 2.2, 3.0]);
-    const before = k.serialize(j.prop); let next: any;
-    if (!got) {
+    const before = k.serialize(j.was); let next: any;
+    // no place beside the part on its own side: a crowded board prints the name on the other side, right under the part
+    const under = got ? null : underPart(j);
+    if (under) {
+      next = under.f.node(under.x, under.y); obs[under.side].push({ box: grow(under.f.box(under.x, under.y), 0.2), fp: j.fp.id, key: "ref:" + j.fp.id });
+      report.other_side.push(j.ref); if (under.size < sizes[0] - 1e-9) report.resized[j.ref] = under.size;
+      report.smallest = report.smallest === null ? under.size : Math.min(report.smallest, under.size);
+    } else if (!got) {
       next = k.cloneNode(j.prop); if (!hiddenText(next)) next.push(["hide", "yes"]);
       report.hidden.push(j.ref);
     } else {
@@ -351,7 +387,7 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
       report.smallest = report.smallest === null ? got.size : Math.min(report.smallest, got.size);
     }
     if (k.serialize(next) === before) { report.kept++; continue; }
-    if (got) report.moved++;
+    if (got || under) report.moved++;
     const node = k.cloneNode(nodeOf(j.fp)); const i = node.findIndex((g: any) => Array.isArray(g) && g[0] === "property" && k.str(g[1]) === "Reference");
     if (i < 0) continue; node[i] = next; working.set(j.fp.id, node);
   } };
@@ -366,7 +402,7 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
     placeRefs();
   }
   for (const [id, node] of working) { const it = doc.items.get(id); if (it && k.serialize(node) !== k.serialize(it.node)) nodes.set(id, node); }
-  report.hidden.sort(); report.turned.sort();
+  report.hidden.sort(); report.turned.sort(); report.other_side.sort();
   return { nodes, adds, report };
 }
 

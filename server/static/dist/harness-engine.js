@@ -63069,6 +63069,22 @@ function styled(child, lx, ly, ang, size, text2) {
   font.splice(1, 0, ["size", size, size], ["thickness", Math.max(0.1, Math.round(size * 15) / 100)]);
   return node;
 }
+function toSide(child, side) {
+  const k = K4();
+  const node = k.cloneNode(child);
+  const lay = k.parseAll(`(layer "${side}.SilkS")`)[0];
+  const li = node.findIndex((g2) => Array.isArray(g2) && g2[0] === "layer");
+  if (li >= 0) node[li] = lay;
+  else node.push(lay);
+  let fx = k.kid(node, "effects");
+  if (!fx) {
+    fx = ["effects"];
+    node.push(fx);
+  }
+  for (let i = fx.length - 1; i >= 1; i--) if (Array.isArray(fx[i]) && fx[i][0] === "justify") fx.splice(i, 1);
+  if (side === "B") fx.push(k.parseAll("(justify mirror)")[0]);
+  return node;
+}
 var hiddenText = (node) => {
   const k = K4();
   const h = k.kid(node, "hide");
@@ -63118,7 +63134,7 @@ function planSilk(doc, opts = {}) {
   const sizes = [top, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4].filter((s, i) => i === 0 || s < top && s >= low - 1e-9);
   if (low < top && !sizes.some((s) => Math.abs(s - low) < 1e-9)) sizes.push(low);
   const want = opts.refs && opts.refs.length ? new Set(opts.refs.map((r) => r.toLowerCase())) : null;
-  const report3 = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], pin_labels: {}, pin_labels_skipped: {}, pin_labels_other_side: [], smallest: null, min_size: low };
+  const report3 = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], other_side: [], pin_labels: {}, pin_labels_skipped: {}, pin_labels_other_side: [], smallest: null, min_size: low };
   const nodes = /* @__PURE__ */ new Map();
   const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
   const refProp = (fp) => k.kids(fp.node, "property").find((p) => k.str(p[1]) === "Reference");
@@ -63189,6 +63205,19 @@ function planSilk(doc, opts = {}) {
     for (const l of loops) for (let i = 0; i < l.length; i++) edges.push([l[i], l[(i + 1) % l.length]]);
   } catch {
     outline = null;
+  }
+  const keepBoxes = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "zone") continue;
+    const ko = k.kid(it.node, "keepout");
+    if (!ko) continue;
+    const cp2 = k.kid(ko, "copperpour");
+    if (!cp2 || k.str(cp2[1]) !== "not_allowed") continue;
+    for (const poly of k.kids(it.node, "polygon")) {
+      const pts = k.ptsOf(poly);
+      if (pts.length < 3) continue;
+      keepBoxes.push([Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))]);
+    }
   }
   const EDGE = 0.3;
   const onBoard = (b) => {
@@ -63266,10 +63295,12 @@ function planSilk(doc, opts = {}) {
           }
           const len = rowAlongX ? f.h : f.w;
           const edge = rowAlongX ? dir < 0 ? cb[1] : cb[3] : dir < 0 ? cb[0] : cb[2];
-          const off = edge + dir * (0.3 + len / 2);
+          const far = side !== own;
+          const half = (rowAlongX ? p.h || 1.7 : p.w || 1.7) / 2;
+          const off = far ? across(p) + dir * (half + 0.35 + len / 2) : edge + dir * (0.3 + len / 2);
           const x = rowAlongX ? p.x : off, y = rowAlongX ? off : p.y;
           const b = f.box(x, y);
-          if (!clear(grow2(b, 0.05), side, "courtyard:" + fp.id) || hit2(b, cb, 0.05) || boxes.some((o) => hit2(b, o, 0.1))) {
+          if (!clear(grow2(b, 0.05), side, "courtyard:" + fp.id) || !far && hit2(b, cb, 0.05) || boxes.some((o) => hit2(b, o, 0.1))) {
             miss2.push(`${p.number} ${name}`);
             continue;
           }
@@ -63338,7 +63369,7 @@ function planSilk(doc, opts = {}) {
       if (w > ob[2] - ob[0] - 1.6 || h > ob[3] - ob[1] - 1.6) continue;
       for (let y = ob[3] - 0.8 - h; y >= ob[1] + 0.8; y -= 0.5) for (let x = ob[0] + 0.8; x + w <= ob[2] - 0.8; x += 0.5) {
         const b = [x, y, x + w, y + h];
-        if (!clear(b, side)) continue;
+        if (!clear(b, side) || keepBoxes.some((kb) => hit2(b, kb, 0.2))) continue;
         const ax = side === "B" ? x + 0.2 + tw : x + 0.2, ay = y + 0.15;
         const text2 = lines.join("\\n").replace(/"/g, "'");
         adds.push(k.parseAll(`(gr_text "${text2}" (at ${r42(ax)} ${r42(ay)}) (layer "${side}.SilkS") (uuid "${k.newUuid()}") (effects (font (size ${sz} ${sz}) (thickness ${Math.max(0.1, Math.round(sz * 15) / 100)})) (justify left top${side === "B" ? " mirror" : ""})))`)[0]);
@@ -63360,7 +63391,9 @@ function planSilk(doc, opts = {}) {
       const f = new Frame(doc, fpNow, prop2, a, 1, "MMMM");
       return f.ok && f.w > f.h;
     }) ?? 0;
-    jobs.push({ fp: fpNow, prop: prop2, ref: k.str(prop2[2]), side: sideOf(layerOfNode(prop2)), body, frames: /* @__PURE__ */ new Map(), horiz });
+    const ownSide = sideOfFp.get(id) || "F";
+    const here = sideOf(layerOfNode(prop2)) === ownSide ? prop2 : toSide(prop2, ownSide);
+    jobs.push({ fp: fpNow, prop: here, ref: k.str(prop2[2]), side: ownSide, body, frames: /* @__PURE__ */ new Map(), horiz, was: prop2 });
   }
   const frame = (j, size, turned) => {
     const key2 = size + (turned ? "t" : "h");
@@ -63411,6 +63444,19 @@ function planSilk(doc, opts = {}) {
     }
     return null;
   };
+  const underPart = (j) => {
+    const side = j.side === "F" ? "B" : "F";
+    const prop2 = toSide(j.prop, side);
+    const cx = (j.body[0] + j.body[2]) / 2, cy = (j.body[1] + j.body[3]) / 2;
+    for (const size of [Math.min(sizes[0], 0.8), sizes[sizes.length - 1]].filter((v, i, a) => a.indexOf(v) === i)) for (const turned of [false, true]) {
+      const f = new Frame(doc, j.fp, prop2, turned ? j.horiz === 0 ? 90 : 0 : j.horiz, size);
+      if (!f.ok) continue;
+      const tries = [[cx, cy]];
+      for (const d of [0.6, 1.2, 1.8]) tries.push([cx + d, cy], [cx - d, cy], [cx, cy + d], [cx, cy - d]);
+      for (const [x, y] of tries) if (clear(f.box(x, y), side)) return { f, x, y, size, side };
+    }
+    return null;
+  };
   const room = (j) => {
     let n2 = 0;
     for (const turned of [false, true]) {
@@ -63426,9 +63472,16 @@ function planSilk(doc, opts = {}) {
     for (const j of order) {
       report3.references++;
       const got = find(j, sizes, [0, 0.4]) || find(j, [sizes[sizes.length - 1]], [-0.1, 0.9, 1.5, 2.2, 3]);
-      const before = k.serialize(j.prop);
+      const before = k.serialize(j.was);
       let next;
-      if (!got) {
+      const under = got ? null : underPart(j);
+      if (under) {
+        next = under.f.node(under.x, under.y);
+        obs[under.side].push({ box: grow2(under.f.box(under.x, under.y), 0.2), fp: j.fp.id, key: "ref:" + j.fp.id });
+        report3.other_side.push(j.ref);
+        if (under.size < sizes[0] - 1e-9) report3.resized[j.ref] = under.size;
+        report3.smallest = report3.smallest === null ? under.size : Math.min(report3.smallest, under.size);
+      } else if (!got) {
         next = k.cloneNode(j.prop);
         if (!hiddenText(next)) next.push(["hide", "yes"]);
         report3.hidden.push(j.ref);
@@ -63445,7 +63498,7 @@ function planSilk(doc, opts = {}) {
         report3.kept++;
         continue;
       }
-      if (got) report3.moved++;
+      if (got || under) report3.moved++;
       const node = k.cloneNode(nodeOf(j.fp));
       const i = node.findIndex((g2) => Array.isArray(g2) && g2[0] === "property" && k.str(g2[1]) === "Reference");
       if (i < 0) continue;
@@ -63470,6 +63523,7 @@ function planSilk(doc, opts = {}) {
   }
   report3.hidden.sort();
   report3.turned.sort();
+  report3.other_side.sort();
   return { nodes, adds, report: report3 };
 }
 function silkBoxes(doc) {

@@ -3691,8 +3691,9 @@ def _silkscreen(self, name: str | bool | None = None, rev: str | None = None, da
 
     - Every reference designator goes beside its part where it lies on nothing: not a pad, not other silkscreen, not
       another part, not the board edge, and nearer to its own part than to any other.  One that does not fit at
-      \`size\` is made smaller, turned on its side, or moved a little further out; it is hidden only when none of that
-      finds a place.  \`min_size\` is the smallest it may get: by default the board's own rule (0.8 mm unless
+      \`size\` is made smaller, turned on its side, or moved a little further out; it is hidden only when it finds no
+      place on its own side or, failing that, on the other side of the board right under the part
+      (\`other_side\`: on a crowded board the name is read from the back).  \`min_size\` is the smallest it may get: by default the board's own rule (0.8 mm unless
       board.rules(min_text_height=...) says otherwise); 0.6 mm with a 0.1 mm pen is what most board houses still
       print, so on a crowded board set board.rules(min_text_height=0.6) first.  \`refs\` limits the pass to those parts, \`unhide=True\` also brings
       back references that are hidden now.
@@ -3701,7 +3702,7 @@ def _silkscreen(self, name: str | bool | None = None, rev: str | None = None, da
       all: if its own side has no clear row for every name, a through-hole connector gets them on the other side of
       the board (\`pin_labels_other_side\`), and one with no room on either is listed in \`pin_labels_skipped\` with the
       pins that are in the way.
-    - The board's name, version and date are printed in free space (board.mark()) when the board has no such text yet;
+    - The board's name, version and date are printed in free space, outside copper keep-outs such as an antenna's (board.mark()) when the board has no such text yet;
       \`name=False\` leaves that out, and name / rev / date / org are passed on.
 
     All of it is planned together and written as one edit: the pin names first (their place is fixed by the pins),
@@ -3729,7 +3730,7 @@ def _silkscreen(self, name: str | bool | None = None, rev: str | None = None, da
     res = self.flush() or {}
     d = next((x["silkscreen"] for x in res.get("details") or [] if "silkscreen" in x), {})
     out = {"references": d.get("references", 0), "hidden": d.get("hidden", [])}
-    for key in ("moved", "resized", "turned", "shown", "smallest", "min_size", "pin_labels_skipped", "pin_labels_other_side", "mark"):
+    for key in ("moved", "resized", "turned", "shown", "smallest", "min_size", "pin_labels_skipped", "pin_labels_other_side", "other_side", "mark"):
         if d.get(key) not in (None, [], {}):
             out[key] = d[key]
     out["pin_labels"] = {ref: len(names) for ref, names in (d.get("pin_labels") or {}).items()}      # how many pins of each connector were named
