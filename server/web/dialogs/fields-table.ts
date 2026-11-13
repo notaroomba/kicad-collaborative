@@ -201,7 +201,7 @@ export function openFieldsTable(exportTab = false): void {
       left.append(h("div", { class: "kd-row", style: "margin-top:10px" }, h("label", { style: "white-space:nowrap;color:var(--ink-2)" }, "View presets:"), presetSel)); fillPresetSel();
       // Schematic variants: the list (GetVariantNamesForUI), choosing one shows (and stages edits for) its values
       // and makes it the schematic's current variant (onVariantSelectionChange); add / rename / copy / describe / delete
-      const vlist = h("select", { id: "kd-sft-variants", size: 5, style: "width:100%;margin-top:3px" }) as HTMLSelectElement;
+      const vlist = h("k-select", { id: "kd-sft-variants", size: 5, style: "width:100%;margin-top:3px" }) as HTMLSelectElement;   // a themed list box (components/kselect.ts)
       const fillVariants = () => { const names = variantNamesForUI(); vlist.replaceChildren(...names.map((n, i) => h("option", { value: i === 0 ? "" : n }, n))); vlist.value = variant; if (vlist.selectedIndex < 0) vlist.selectedIndex = 0; };
       vlist.addEventListener("change", () => { variant = vlist.value; setCurrentVariant(variant); refreshAll(); });
       // the buttons act on the list's selection (DIALOG_SYMBOL_FIELDS_TABLE::onRenameVariant …); copy, rename,
