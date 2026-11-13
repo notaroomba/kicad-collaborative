@@ -46,7 +46,7 @@ import { TEXT_INTERLINE, lineOffsets, parseMarkup, textWidth, unescapeText } fro
 import { drawStrokeText, linebreakText, parseStrokeMarkup, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin } from "./stroke-font";
 import { displayNetName, netCode } from "./geom-pcb";
 import { unitLetter } from "./geom-sch";
-import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, textMode } from "./render";
+import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, faceAvailable, fontChanged, textMode, wantFace } from "./render";
 import { pcbSizes } from "./pcb-sizes";
 import { boardItemBox, presenceSelection } from "./kicad-bbox";
 import { padModel } from "./pad-model";
@@ -61,6 +61,9 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
+  // font hook: set to a function (face, bold, italic) => void; called the first time text in an outline font is
+  // drawn, so the app can fetch the font (web/editor/fonts.ts) and call fontChanged(face) once it is on the page
+  onFontWanted: null, fontChanged, wantFace, faceAvailable,
   drawHalo, SCH_SELECTION_SHADOW, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable, tableCellShownText, cellAddr, parseCellAddress, autoPanDirection, autoPanStep, AUTOPAN_TICK_MS,
   // the drawing sheet (web/canvas/sheet.ts): KiCad's built-in (kicad_wks …) description, its interpreter
   // and the text-variable resolution the title block uses; render()/renderSvg() paint what it returns

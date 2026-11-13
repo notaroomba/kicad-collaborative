@@ -21,6 +21,7 @@ import type { DocEntry, ProjectInfo } from "../store";
 import type { GridDef } from "../units";
 import type { ItemSummary, SheetEntry, SvgLayer, WireChange } from "./types";
 import { applyView, base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
+import { fontsForProject } from "./fonts";
 export const docNav = { list: [] as string[], idx: -1, lock: false };
 
 
@@ -254,7 +255,7 @@ export async function openEditor(id: string) {
     if (!state.me) { location.href = "/auth/github/login?next=" + encodeURIComponent(location.pathname + location.search); return; }
     toast("Project not found or private", 3500); navigate("/", true); return;
   }
-  state.project = info;
+  state.project = info; fontsForProject(info.projectId);
   state.role = info.role;
   document.title = `${info.name} — Junction`;
   state.docs = [];

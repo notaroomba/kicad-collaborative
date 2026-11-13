@@ -254,6 +254,32 @@ k-select.input { min-height: var(--h-md); height: auto; }
 .kd-body input[type=text]:focus, .kd-body input[type=number]:focus, .kd-body select:focus, .kd-body k-select:focus-within, .kd-body textarea:focus {
   outline: 0; border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
 .kd-body .ro { color: var(--ink-2); font-family: var(--mono); }
+/* ---- the font choice (web/dialogs/font-picker.ts): a combo box with a search and the names in their own fonts ---- */
+.kd-font { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 6px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--r-2); color: var(--ink); font-family: var(--mono); cursor: default;
+  user-select: none; box-sizing: border-box; }
+.kd-font:hover { border-color: var(--line-2); }
+.kd-font:focus, .kd-font[aria-expanded="true"] { outline: 0; border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.kd-font[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+.kd-font-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kd-font-chev { flex: none; color: var(--ink-2); font-size: 10px; }
+.kd-font-pop { position: fixed; z-index: 90; display: flex; flex-direction: column; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--r-2); box-shadow: var(--shadow);
+  color: var(--ink); font: var(--fs-base)/1.3 var(--font); overflow: hidden; }
+.kd-font-search { flex: none; margin: 6px; padding: 4px 6px; background: var(--paper); border: 1px solid var(--line);
+  border-radius: var(--r-2); color: var(--ink); font: inherit; }
+.kd-font-search:focus { outline: 0; border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.kd-font-list { position: relative; flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); }
+.kd-font-spacer { width: 1px; }
+.kd-font-row, .kd-font-head { position: absolute; left: 0; right: 0; height: 26px; display: flex; align-items: center;
+  padding: 0 10px; white-space: nowrap; overflow: hidden; }
+.kd-font-row { font-size: 14px; cursor: default; }
+.kd-font-row-name { overflow: hidden; text-overflow: ellipsis; }
+.kd-font-row.active { background: var(--sel-soft); }
+.kd-font-row.sel { background: var(--sel); }
+.kd-font-head { color: var(--ink-3); font-size: var(--fs-xs); letter-spacing: .04em; text-transform: uppercase; }
+.kd-font-foot { flex: none; min-height: 22px; padding: 3px 10px; border-top: 1px solid var(--line); color: var(--ink-2);
+  font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kd-body .actions { display: flex; gap: 6px; grid-column: 1 / -1; }
 .kd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }
 .kd-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--line); }

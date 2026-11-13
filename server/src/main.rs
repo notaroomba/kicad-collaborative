@@ -5,6 +5,7 @@ mod kicadlib;
 mod auth;
 mod doc_actor;
 mod error;
+mod fonts;
 mod github;
 mod http;
 mod lenient_json;
@@ -224,6 +225,8 @@ async fn main() -> anyhow::Result<()> {
     };
     relay::start(relay, relay_outbox, pool.clone(), state.registry.clone(), state.access_epoch.clone());
 
+    fonts::spawn_refresh();
+
     // Daily pruning of ops/snapshots behind snapshot coverage.
     {
         let pool = pool.clone();
@@ -373,6 +376,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/{id}/github/pull", post(github::pull))
         // The design assistant (ai.rs)
         .route("/api/ai/datasheet", post(datasheet::read))
+        .route("/api/fonts/catalog", get(fonts::catalog_json))
+        .route("/api/fonts/preview", get(fonts::preview))
+        .route("/api/projects/{id}/fonts", get(fonts::project_fonts))
+        .route("/api/projects/{id}/fonts/file", get(fonts::project_font_file).put(fonts::upload_project_font))
         .route("/api/docs/{id}/ops", get(ai::doc_ops))
         .route("/api/kicad-lib/list", get(kicadlib::list))
         .route("/api/kicad-lib/item", get(kicadlib::item))

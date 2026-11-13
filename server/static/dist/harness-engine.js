@@ -5771,6 +5771,26 @@ function faceAvailable(face) {
   FACES.set(face, ok2);
   return ok2;
 }
+var WANTED = /* @__PURE__ */ new Set();
+function wantFace(face, bold, italic) {
+  const k = face + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
+  if (WANTED.has(k) || /^kicad font$/i.test(face)) return;
+  const cb = root.KiCadCanvas && root.KiCadCanvas.onFontWanted;
+  if (typeof cb !== "function") return;
+  WANTED.add(k);
+  try {
+    cb(face, bold, italic);
+  } catch (e) {
+  }
+}
+function fontChanged(face) {
+  if (face === void 0) {
+    FACES.clear();
+    WANTED.clear();
+    return;
+  }
+  FACES.delete(face);
+}
 var MIN_TEXT_PX = 2;
 function textMode() {
   const m = root.KiCadCanvas && root.KiCadCanvas.textMode;
@@ -5813,6 +5833,7 @@ function drawText(ctx, g2, s, docType, minW, colorOverride, base, flip, bgColor)
   const px = g2.size * s;
   if (px < (g2.minPx || MIN_TEXT_PX)) return;
   const color = colorOverride || g2.color;
+  if (g2.face) wantFace(g2.face, !!g2.bold, !!g2.italic);
   const outline = !!g2.face && faceAvailable(g2.face);
   if (!outline && textMode() === "stroke") {
     let b = base;
@@ -12157,6 +12178,12 @@ var api = {
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
+  // font hook: set to a function (face, bold, italic) => void; called the first time text in an outline font is
+  // drawn, so the app can fetch the font (web/editor/fonts.ts) and call fontChanged(face) once it is on the page
+  onFontWanted: null,
+  fontChanged,
+  wantFace,
+  faceAvailable,
   drawHalo,
   SCH_SELECTION_SHADOW,
   HL_DIM,

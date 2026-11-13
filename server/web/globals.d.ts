@@ -121,6 +121,12 @@ interface KiCadCanvasApi {
   withSchTheme<T>(id: string, fn: () => T): T;
   ORIENT: unknown;
   onAssetLoaded: ((info: { id: string; kind: string; ok: boolean }) => void) | null;
+  /** called the first time text in an outline font is drawn (web/canvas/render.ts wantFace); the editor loads the font */
+  onFontWanted: ((face: string, bold: boolean, italic: boolean) => void) | null;
+  /** a font arrived on the page: look again whether the face can be drawn (no argument: every face) */
+  fontChanged(face?: string): void;
+  wantFace(face: string, bold: boolean, italic: boolean): void;
+  faceAvailable(face: string): boolean;
   /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */
   pcbSizes: typeof import("./canvas/pcb-sizes").pcbSizes;
   /** a library symbol (lib_symbols / .kicad_sym entry) as a drawable document in library space (web/canvas/libsym.ts) */

@@ -12,6 +12,7 @@
 // alone unless it is edited; bold / italic only change when toggled, an alignment only when one of its buttons is
 // down.  A cell whose values do not change keeps its bytes.  Each OK is one change of the table node.
 import { LINE_STYLES, tableDialog } from "./pcbdialogs/table";
+import { fontField } from "../dialogs/font-picker";
 import { box, checkField, errorMessage, fmtLen, form, h, lenField, messageBox, openDialog, parseLen, selectField, unitLabel, unitName, type Field } from "./pcbdialogs/ui";
 
 const isList = Array.isArray;
@@ -215,10 +216,9 @@ export function cellPropsDialog(ctx: ToolCtx, item: KItem, cells: number[], isPc
       const help = h("a", { href: "#", "data-k": "syntax-help", title: "Show syntax help window", style: "white-space:nowrap" }, "Syntax help");
       help.addEventListener("click", (ev) => { ev.preventDefault(); syntaxHelp(isPcb); });
       // the font choice: KiCad Font, the faces in use, and (several cells) the indeterminate entry
-      const faces = new Set<string>(); for (const i of sel) { const f = cellValues(list[i], isPcb).face; if (f) faces.add(f); }
-      const fontOpts: [string, string][] = [...(isPcb ? [] : [["", "Default Font"] as [string, string]]), [isPcb ? "" : "KiCad Font", "KiCad Font"], ...Array.from(faces).map((f): [string, string] => [f, f])];
-      if (isMixed("face")) fontOpts.unshift([MIXED, MIXED]);
-      const font = selectField<string>(isMixed("face") ? MIXED : (v.face || (isPcb ? "" : "")), fontOpts, { ro, key: "font" });
+      const fontExtra: [string, string][] = isPcb ? [] : [["", "Default Font"]];
+      if (isMixed("face")) fontExtra.unshift([MIXED, MIXED]);
+      const font = fontField(doc, isMixed("face") ? MIXED : (v.face || ""), { ro, key: "font", extra: fontExtra, kicadValue: isPcb ? "" : "KiCad Font" });
       (font.el as HTMLElement).style.cssText = "width:auto;min-width:160px;max-width:240px";
       const bold = toggle("B", "Bold", !isMixed("bold") && v.bold, ro, "bold"), italic = toggle("I", "Italic", !isMixed("italic") && v.italic, ro, "italic");
       bold.el.style.fontWeight = "700"; italic.el.style.fontStyle = "italic";

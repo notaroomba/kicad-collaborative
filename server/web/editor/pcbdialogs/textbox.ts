@@ -6,6 +6,7 @@
 // box per PCB_TEXTBOX::SetTextAngle (the box slides about its start, the angle is the text's), and grows the box to
 // GetMinSize when the text no longer fits.  An edited text box is one "Edit Text Box Properties" change; the text
 // box tool (DRAWING_TOOL::DrawRectangle) opens it on the box just drawn and commits "Draw Text Box" on OK.
+import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { checkField, errorMessage, fmtLenU, form, h, lenField, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
@@ -48,6 +49,8 @@ export const BORDER_STYLES: [string, string][] = [["solid", "Solid"], ["dash", "
 export interface TextBoxValues {
   text: string; locked: boolean; layer: string; angle: number; textW: number; textH: number; autoThickness: boolean; textThick: number;
   bold: boolean; italic: boolean; hJustify: string; vJustify: string; mirrored: boolean; border: boolean; borderWidth: number; borderStyle: string;
+  /** the outline font, "" for KiCad Font */
+  face: string;
 }
 
 /** TransferDataToWindow. */
@@ -61,7 +64,7 @@ export function textBoxValues(node: SNode): TextBoxValues {
   return {
     text: sval(node), locked: PT().isLocked(node), layer: sval(kid(node, "layer")), angle: a,
     textW, textH: nval(size, 1, 1), autoThickness: auto, textThick: auto ? Math.round(textW * NM / 8) / NM : nval(th),   // GetPenSizeForNormal
-    bold: flag(font, "bold"), italic: flag(font, "italic"),
+    bold: flag(font, "bold"), italic: flag(font, "italic"), face: faceOfFont(font),
     hJustify: js.includes("left") ? "left" : js.includes("right") ? "right" : "center", vJustify: js.includes("top") ? "top" : js.includes("bottom") ? "bottom" : "center",
     mirrored: js.includes("mirror"), border, borderWidth: border ? nval(kid(stroke, "width")) : NaN, borderStyle: style === "default" ? "solid" : style,
   };
@@ -99,6 +102,7 @@ export function applyTextBox(orig: SNode, v: TextBoxValues, v0: TextBoxValues): 
   put(node, "layer", `(layer ${quote(v.layer)})`, ["uuid", "effects"]);
   let ef = kid(node, "effects"); if (!ef) { put(node, "effects", "(effects (font (size 1 1)))", ["border", "stroke", "knockout"]); ef = kid(node, "effects") as SNode; }
   let font = kid(ef, "font"); if (!font) { ef.splice(1, 0, K().parse("(font)") as SNode); font = kid(ef, "font") as SNode; }
+  if (v.face !== v0.face) setFaceOfFont(font, v.face);
   put(font, "size", `(size ${f6(v.textH)} ${f6(v.textW)})`, ["line_spacing", "thickness", "bold", "italic", "color"]);
   let clamped = false, thick = v.textThick;
   if (!v.autoThickness) {
@@ -153,7 +157,7 @@ export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode |
     const g = (k: string): unknown => fields[k].get();
     const pick = (keys: string[], d: string): string => keys.find((a) => (fields["align-" + a] as Field<boolean>).get()) || d;
     return { text: text ? text.value : v0.text, locked: !!g("locked"), layer: String(g("layer")), angle: Number(g("angle")), textW: Number(g("textW")), textH: Number(g("textH")),
-      autoThickness: !!g("autoThickness"), textThick: Number(g("textThick")), bold: !!g("bold"), italic: !!g("italic"),
+      autoThickness: !!g("autoThickness"), textThick: Number(g("textThick")), bold: !!g("bold"), italic: !!g("italic"), face: String(g("face")),
       hJustify: pick(["left", "center", "right"], v0.hJustify), vJustify: pick(["top", "center", "bottom"], v0.vJustify), mirrored: !!g("mirrored"),
       border: !!g("border"), borderWidth: Number(g("borderWidth")), borderStyle: String(g("borderStyle")) };
   };
@@ -191,7 +195,7 @@ export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode |
       body.append(presets, h("label", { class: "pd-lbl" }, "Text:"), text,
         h("div", { class: "pd-row", style: "margin:8px 0" }, locked.el),
         h("div", { class: "pd-cols2" },
-          form([["Layer:", layer.el], ["Font:", h("span", null, "KiCad Font")]], true),
+          form([["Layer:", layer.el], ["Font:", reg("face", fontField(doc, v0.face, { ro, key: "face" })).el]], true),
           form([["Orientation:", angle.el, null, "Text orientation"]], true)),
         h("div", { style: "margin:6px 0 8px" }, tools),
         h("div", { class: "pd-cols2" },

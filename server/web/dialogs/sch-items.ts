@@ -15,6 +15,7 @@
 import { schTableDialog } from "../editor/tabledialogs";
 import { E, toast, toolCtx } from "./editor";
 import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
+import { facesUsed, fontPicker, type FontPickerEl } from "./font-picker";
 import * as L from "./sch-items-logic";
 import { commitWithOtherUnits } from "./sync-units";
 import { HL, netMap } from "../editor/schnets";
@@ -52,14 +53,9 @@ export function swatch(initial: L.Color, id: string, onPick?: (c: L.Color) => vo
   paint();
   return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center", "data-swatch": id }, btn, clear), get: () => color, set: (c) => { color = c; paint(); }, enable: (on) => { btn.disabled = !on; clear.disabled = !on; } };
 }
-/** Faces the font choice offers: the stroke font, the faces the sheet already uses, common system faces. */
-export function fontFaces(doc: KDoc | null): string[] {
-  const used = new Set<string>();
-  const walk = (n: unknown): void => { if (!Array.isArray(n)) return; if (n[0] === "face" && typeof n[1] === "string") used.add(n[1]); for (const c of n) walk(c); };
-  if (doc) for (const it of doc.items.values()) walk(it.node);
-  const common = ["Arial", "Courier New", "DejaVu Sans", "DejaVu Sans Mono", "Georgia", "Helvetica", "Liberation Sans", "Noto Sans", "Times New Roman", "Verdana"];
-  return [L.KICAD_FONT, ...Array.from(new Set([...used, ...common])).sort((a, b) => a.localeCompare(b))];
-}
+/** Faces a grid's font column offers: the stroke font and the faces the sheet already uses (the dialogs' own font
+ *  choice, font-picker.ts, adds every Google Font). */
+export function fontFaces(doc: KDoc | null): string[] { return [L.KICAD_FONT, ...facesUsed(doc)]; }
 /** A BITMAP_BUTTON toggle (bold / italic / alignment); `group` makes it a radio among its siblings. */
 function toggle(label: string, title: string, on: boolean, id: string, style = ""): HTMLButtonElement {
   const b = h("button", { type: "button", class: "btn kd-tog" + (on ? " on" : ""), title, id, "aria-pressed": on ? "true" : "false", style: "min-width:28px;padding:1px 6px;" + style }, label);
@@ -69,7 +65,7 @@ function toggle(label: string, title: string, on: boolean, id: string, style = "
 /** SetInitialFocus: a dialog opened by a click keeps its first control focused once the click's pointerup lands. */
 function initialFocus(el: HTMLInputElement | HTMLTextAreaElement | null): void {
   if (!el) return;
-  const f = (): void => { const act = document.activeElement as HTMLElement | null; if (document.contains(el) && act !== el && !(act && act.closest && act.closest(".kd-dialog") && act.closest(".kd-dialog") !== el.closest(".kd-dialog"))) { el.focus(); el.select(); } };
+  const f = (): void => { const act = document.activeElement as HTMLElement | null; if (document.contains(el) && act !== el && !(act && act.closest && act.closest(".kd-font-pop")) && !(act && act.closest && act.closest(".kd-dialog") && act.closest(".kd-dialog") !== el.closest(".kd-dialog"))) { el.focus(); el.select(); } };
   setTimeout(f, 0);
   const up = (): void => { setTimeout(f, 0); };
   window.addEventListener("pointerup", up, { once: true, capture: true });
@@ -187,7 +183,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
   const mandatory = kind === "global_label" ? ["Intersheetrefs"] : [];
   const ro = !!ctx.viewOnly;
   let textEl: HTMLInputElement | HTMLTextAreaElement | null = null, multiCb: HTMLInputElement | null = null, grid: { rows(): L.FieldRow[] } | null = null;
-  let fontSel: HTMLSelectElement | null = null, sizeIn: HTMLInputElement | null = null, boldB: HTMLButtonElement | null = null, italB: HTMLButtonElement | null = null, autoCb: HTMLInputElement | null = null;
+  let fontSel: FontPickerEl | null = null, sizeIn: HTMLInputElement | null = null, boldB: HTMLButtonElement | null = null, italB: HTMLButtonElement | null = null, autoCb: HTMLInputElement | null = null;
   const spins: HTMLButtonElement[] = [];
   let color: Swatch | null = null, body: HTMLElement | null = null;
   const help = (): void => {
@@ -240,7 +236,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       spinVal.forEach((sv, i) => { const btn = toggle(spinGlyph[i], spinNames[i], st.spin === sv, "kd-lbl-spin" + i); btn.dataset.group = "spin"; btn.dataset.spin = String(sv); spins.push(btn); bar.append(btn); });
       color = swatch(st.color, "kd-lbl-color", undefined, ro);
       if (dir) grd.append(h("label", null, "Orientation:"), bar, h("span"));
-      else { fontSel = select(fontFaces(doc), st.font, undefined, { id: "kd-lbl-font", style: "width:200px", disabled: ro }); grd.append(h("label", null, "Font:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, fontSel, bar), h("span")); }
+      else { fontSel = fontPicker(doc, st.font, { id: "kd-lbl-font", style: "width:200px", disabled: ro }); grd.append(h("label", null, "Font:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, fontSel, bar), h("span")); }
       sizeIn = lenBox(st.size, "kd-lbl-size");
       grd.append(h("label", null, dir ? "Pin length:" : "Text size:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, sizeIn, units()), h("span"));
       grd.append(h("label", null, "Color:"), color.el, h("span"));
@@ -314,7 +310,7 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       b.append(h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, h("label", { style: "padding-top:4px" }, "Text:"), ta));
       b.append(h("div", { style: "text-align:right" }, h("span", { class: "kd-note" }, "Ctrl+Enter or Shift+Enter: OK")));
       const g = h("div", { class: "kd-fmt", style: "margin-top:6px" });
-      const fontSel = select(fontFaces(doc), fx.font, undefined, { id: "kd-txt-font", style: "width:200px", disabled: ro }); els.font = fontSel;
+      const fontSel = fontPicker(doc, fx.font, { id: "kd-txt-font", style: "width:200px", disabled: ro }); els.font = fontSel;
       const bold = toggle("B", "Bold", fx.bold, "kd-txt-bold", "font-weight:700"), ital = toggle("I", "Italic", fx.italic, "kd-txt-italic", "font-style:italic"); els.bold = bold; els.italic = ital;
       const hb = (["left", "center", "right"] as const).map((v, i) => { const t = toggle(["⇤", "↔", "⇥"][i], ["Align left", "Align horizontal center", "Align right"][i], fx.h === v, "kd-txt-h-" + v); t.dataset.group = "h"; t.dataset.v = v; return t; });
       const vb = (["top", "center", "bottom"] as const).map((v, i) => { const t = toggle(["⤒", "↕", "⤓"][i], ["Align top", "Align vertical center", "Align bottom"][i], fx.v === v, "kd-txt-v-" + v); t.dataset.group = "v"; t.dataset.v = v; return t; });
@@ -354,7 +350,7 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       const n = L.clone(staged); n[1] = text as unknown as SNode;
       const hv = (["left", "center", "right"] as const).find((v, i) => isOn(els["h" + i])) || fx.h;
       const vv = (["top", "center", "bottom"] as const).find((v, i) => isOn(els["v" + i])) || fx.v;
-      L.writeFx(n, { font: (els.font as HTMLSelectElement).value, size: Math.abs(size - fx.size) > 1e-9 ? size : undefined, bold: isOn(els.bold), italic: isOn(els.italic),
+      L.writeFx(n, { font: (els.font as FontPickerEl).value, size: Math.abs(size - fx.size) > 1e-9 ? size : undefined, bold: isOn(els.bold), italic: isOn(els.italic),
         color: tcol ? tcol.get() : fx.color, h: hv, v: vv, href: (els.link as HTMLInputElement).value.trim() });
       const vert = isOn(els.vert), [x, y] = L.atOf(n);
       if (vert !== vertical) L.setAt(n, x, y, vert ? 90 : 0);
@@ -390,7 +386,7 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       const vis = checkbox("Visible", !fx.hidden, undefined, { id: "kd-fld-visible" }), sn = checkbox("Show field name", L.yes(p0, "show_name"), undefined, { id: "kd-fld-showname" }), ap = checkbox("Allow automatic placement", !L.yes(p0, "do_not_autoplace"), undefined, { id: "kd-fld-autoplace" });
       els.visible = vis.querySelector("input") as HTMLInputElement; els.showName = sn.querySelector("input") as HTMLInputElement; els.autoplace = ap.querySelector("input") as HTMLInputElement;
       g.append(h("span"), h("span", { style: "display:flex;gap:14px;flex-wrap:wrap" }, vis, sn, ap), h("span"));
-      const font = select(fontFaces(doc), fx.font, undefined, { id: "kd-fld-font", style: "width:200px", disabled: ro }); els.font = font;
+      const font = fontPicker(doc, fx.font, { id: "kd-fld-font", style: "width:200px", disabled: ro }); els.font = font;
       const bold = toggle("B", "Bold", fx.bold, "kd-fld-bold", "font-weight:700"), ital = toggle("I", "Italic", fx.italic, "kd-fld-italic", "font-style:italic"); els.bold = bold; els.italic = ital;
       const vertical = Math.round(r0) % 180 !== 0;
       const hz = toggle("A", "Horizontal text", !vertical, "kd-fld-horiz"), vt = toggle("A↑", "Vertical text", vertical, "kd-fld-vert"); hz.dataset.group = "o"; vt.dataset.group = "o"; els.vert = vt;
@@ -419,7 +415,7 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       const hv = (["left", "center", "right"] as const).find((v, i) => isOn(els["h" + i])) || fx.h, vv = (["top", "center", "bottom"] as const).find((v, i) => isOn(els["v" + i])) || fx.v;
       const row = L.rowFromField(p, [0, 0], false);
       Object.assign(row, { value: isFile ? row.value : (els.text as HTMLInputElement).value, show: (els.visible as HTMLInputElement).checked, showName: (els.showName as HTMLInputElement).checked,
-        autoplace: (els.autoplace as HTMLInputElement).checked, font: (els.font as HTMLSelectElement).value, size, bold: isOn(els.bold), italic: isOn(els.italic), color: col ? col.get() : fx.color,
+        autoplace: (els.autoplace as HTMLInputElement).checked, font: (els.font as FontPickerEl).value, size, bold: isOn(els.bold), italic: isOn(els.italic), color: col ? col.get() : fx.color,
         h: hv, v: vv, orient: isOn(els.vert) ? 90 : 0, x: lenValue(els.x as HTMLInputElement) ?? x0, y: lenValue(els.y as HTMLInputElement) ?? y0 });
       const moved = L.rowMoved(row, [0, 0]);
       const np = L.fieldFromRow(row, [0, 0]);

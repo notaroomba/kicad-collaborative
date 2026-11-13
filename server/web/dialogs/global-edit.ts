@@ -12,6 +12,7 @@
 import { E, appState, pushUndoFor, toolCtx, undoStack } from "./editor";
 import { KD, checkbox, h, select, textInput } from "./dom";
 import { messageBox } from "./sch-items";
+import { fontPicker, type FontPickerEl } from "./font-picker";
 import { projectDocs, readDoc, submitDocOp } from "./project";
 import * as L from "./global-edit-logic";
 import { HL, loadSheets, netMap } from "../editor/schnets";
@@ -36,14 +37,6 @@ function selectedIds(): Set<string> {
   return ids;
 }
 
-/** Faces the font choice offers: the stroke font, the faces the project's text already uses, common system faces. */
-function fontFaces(doc: KDoc): string[] {
-  const used = new Set<string>();
-  const walk = (n: unknown): void => { if (!Array.isArray(n)) return; if (n[0] === "face" && typeof n[1] === "string") used.add(n[1]); for (const c of n) walk(c); };
-  for (const it of doc.items.values()) walk(it.node);
-  const common = ["Arial", "Courier New", "DejaVu Sans", "DejaVu Sans Mono", "Georgia", "Helvetica", "Liberation Sans", "Noto Sans", "Times New Roman", "Verdana"];
-  return [L.KICAD_FONT, ...Array.from(new Set([...used, ...common])).sort((a, b) => a.localeCompare(b))];
-}
 
 /** A COLOR_SWATCH: the colour, or the checkered "unspecified" (COLOR4D::UNSPECIFIED, the default here). */
 function swatch(id: string, onPick: () => void): { el: HTMLElement; get(): L.Color } {
@@ -76,7 +69,7 @@ export function openGlobalEdit(): void {
   const filterOn = new Map<keyof typeof mem.on, HTMLInputElement>();
   const filterText = new Map<keyof typeof mem.text, HTMLInputElement>();
   let powerSel: HTMLSelectElement | null = null;
-  let fontSel: HTMLSelectElement | null = null, orient: HTMLSelectElement | null = null, hAl: HTMLSelectElement | null = null, vAl: HTMLSelectElement | null = null, lstyle: HTMLSelectElement | null = null;
+  let fontSel: FontPickerEl | null = null, orient: HTMLSelectElement | null = null, hAl: HTMLSelectElement | null = null, vAl: HTMLSelectElement | null = null, lstyle: HTMLSelectElement | null = null;
   let size: HTMLInputElement | null = null, lwidth: HTMLInputElement | null = null, jsize: HTMLInputElement | null = null;
   const setColor = { text: null as HTMLInputElement | null, line: null as HTMLInputElement | null, fill: null as HTMLInputElement | null, dot: null as HTMLInputElement | null };
   let sw: Record<"text" | "line" | "fill" | "dot", { get(): L.Color }> | null = null;
@@ -224,7 +217,7 @@ export function openGlobalEdit(): void {
       // Set To
       const setHost = h("div");
       const tb = KD().staticBox(setHost, "Set To");
-      fontSel = select([LEAVE, ...fontFaces(doc)], LEAVE, undefined, { id: "kd-ge-font", style: "width:180px" });
+      fontSel = fontPicker(doc, LEAVE, { id: "kd-ge-font", style: "width:180px", extra: [[LEAVE, LEAVE]] });
       const tc = swatch("kd-ge-textcolor", () => { (setColor.text as HTMLInputElement).checked = true; });
       const lc = swatch("kd-ge-linecolor", () => { (setColor.line as HTMLInputElement).checked = true; });
       const fc = swatch("kd-ge-fillcolor", () => { (setColor.fill as HTMLInputElement).checked = true; });

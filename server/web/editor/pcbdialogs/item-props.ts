@@ -5,6 +5,7 @@
 // Each edits a copy of the item's node and stores it as one MODIFIED change on OK.  KDialogs.openItem asks
 // pcbItemDialog first and falls back to the generic property sheet for the kinds not handled here (pads
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
+import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { box, checkField, form, grid, h, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
@@ -375,12 +376,13 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
     const layer = selectField<string>(sval(ly), withCurrent(allLayers(doc), sval(ly)), { ro, key: "layer" });
     const knockout = checkField(!!ly && ly.includes("knockout"), "Knockout", { ro, key: "knockout" });
     const bold = checkField(fx.bold, "Bold", { ro, key: "bold" }), italic = checkField(fx.italic, "Italic", { ro, key: "italic" }), mirror = checkField(fx.mirror, "Mirrored", { ro, key: "mirror" });
+    const face0 = faceOfFont(font), face = fontField(doc, face0, { ro, key: "face" });
     const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" }), th = lenField(fx.thick || 0.15, { ro, key: "thickness" });
     const x = lenField(at[0], { ro, key: "x" }), y = lenField(at[1], { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
     const hj = selectField<string>(fx.h, [["left", "Left"], ["center", "Center"], ["right", "Right"]], { ro, key: "hjustify" }), vj = selectField<string>(fx.v, [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]], { ro, key: "vjustify" });
     body.append(h("label", { class: "pd-lbl" }, "Text:"), text, h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
       h("div", { class: "pd-cols2" },
-        form([["Layer:", layer.el], knockout.el, ["Font:", h("span", null, "KiCad Font")], h("span", { class: "pd-inline" }, bold.el, italic.el, mirror.el), ["Horizontal:", hj.el], ["Vertical:", vj.el]], true),
+        form([["Layer:", layer.el], knockout.el, ["Font:", face.el], h("span", { class: "pd-inline" }, bold.el, italic.el, mirror.el), ["Horizontal:", hj.el], ["Vertical:", vj.el]], true),
         form([["Width:", w.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Thickness:", th.el, unitLabel()], ["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")]])));
     return (n) => {
       if (!(w.get() > 0) || !(ht.get() > 0)) return "Text width and height must be greater than zero.";
@@ -391,6 +393,7 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
       put(n, "layer", `(layer ${quote(layer.get())}${knockout.get() ? " knockout" : ""})`, ["uuid", "tstamp", "effects"]);
       let e = kid(n, "effects"); if (!e) { put(n, "effects", "(effects (font (size 1 1) (thickness 0.15)))"); e = kid(n, "effects") as SNode; }
       let f = kid(e, "font"); if (!f) { e.splice(1, 0, K().parse("(font)") as SNode); f = kid(e, "font") as SNode; }
+      if (face.get() !== face0) setFaceOfFont(f, face.get());
       put(f, "size", `(size ${f6(ht.get())} ${f6(w.get())})`, ["thickness", "bold", "italic"]);
       put(f, "thickness", `(thickness ${f6(th.get())})`, ["bold", "italic", "color"]);
       if (bold.get() !== fx.bold) fontFlags(doc, f, "bold", bold.get());

@@ -5,6 +5,7 @@
 // re-derives the value text and its place, and the copy goes in as one "Edit Dimension Properties" change.
 // Driving value mode needs a length constraint bound to both ends (DimensionCanDrive), which the web editor has no
 // way to make, so the Value choice offers Driven and Arbitrary as KiCad does for an unbound dimension.
+import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { box, checkField, form, h, lenField, numField, openDialog, selectField, textField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
@@ -49,6 +50,8 @@ const yes = (n: SNode | null): boolean => !!n && (n.length < 2 || String(n[1]) !
 export interface DimDialogValues {
   arbitrary: boolean; value: string; prefix: string; suffix: string; layer: string; arrowInward: boolean; unitsMode: number; unitsFormat: number; precision: number;
   suppressZeroes: boolean; posMode: number; textX: number; textY: number; keepAligned: boolean; angle: number; textW: number; textH: number; autoThickness: boolean;
+  /** the outline font, "" for KiCad Font */
+  face: string;
   textThick: number; bold: boolean; italic: boolean; hJustify: string; mirrored: boolean; lineThickness: number; arrowLength: number; extOffset: number; extHeight: number; textFrame: number;
 }
 /** TransferDataToWindow: the item's values (mm, degrees). */
@@ -61,7 +64,7 @@ export function dimDialogValues(node: SNode): DimDialogValues {
     prefix: m.prefix, suffix: m.suffix, layer: sval(kid(node, "layer")), arrowInward: m.arrowInward, unitsMode: m.unitsMode, unitsFormat: m.unitsFormat, precision: m.precision,
     suppressZeroes: m.suppressZeroes, posMode: m.posMode, textX: m.textPos[0] / NM, textY: m.textPos[1] / NM, keepAligned: m.keepAligned, angle: a,
     textW: m.textW / NM, textH: m.textH / NM, autoThickness: auto, textThick: auto ? Math.round(m.textW / 8) / NM : m.textThick / NM,
-    bold: m.bold, italic: yes(kid(font, "italic")) || (!!font && font.includes("italic")), hJustify: m.hJustify, mirrored: !!j && j.includes("mirror"),
+    face: faceOfFont(font), bold: m.bold, italic: yes(kid(font, "italic")) || (!!font && font.includes("italic")), hJustify: m.hJustify, mirrored: !!j && j.includes("mirror"),
     lineThickness: m.thickness, arrowLength: m.arrowLength / NM, extOffset: m.extOffset / NM, extHeight: m.extHeight / NM, textFrame: m.textFrame,
   };
 }
@@ -88,6 +91,7 @@ export function applyDimDialog(orig: SNode, v: DimDialogValues): SNode {
     if (at) { if (v.posMode === 2) { at[1] = +f6(v.textX); at[2] = +f6(v.textY); } if (at.length > 3) at[3] = +f6(ang); else at.push(+f6(ang)); }
     let ef = kid(gt, "effects"); if (!ef) { put(gt, "effects", "(effects (font (size 1 1)))"); ef = kid(gt, "effects") as SNode; }
     let font = kid(ef, "font"); if (!font) { ef.splice(1, 0, K().parse("(font)") as SNode); font = kid(ef, "font") as SNode; }
+    if (v.face !== faceOfFont(font)) setFaceOfFont(font, v.face);
     put(font, "size", `(size ${f6(v.textH)} ${f6(v.textW)})`, ["line_spacing", "thickness", "bold", "italic", "color"]);
     put(font, "thickness", v.autoThickness ? null : `(thickness ${f6(v.textThick)})`, ["bold", "italic", "color"]);
     for (const flag of ["bold", "italic"] as const) {
@@ -120,7 +124,7 @@ export function dimensionDialog(ctx: ToolCtx, item: KItem): boolean {
       arrowInward: g("arrowDirection") === "inward", unitsMode: Number(g("unitsMode")), unitsFormat: Number(g("unitsFormat")), precision: Number(g("precision")),
       suppressZeroes: !!g("suppressZeroes"), posMode: Number(g("posMode")), textX: Number(g("textX")), textY: Number(g("textY")), keepAligned: !!g("keepAligned"),
       angle: Number(g("angle")), textW: Number(g("textW")), textH: Number(g("textH")), autoThickness: !!g("autoThickness"), textThick: Number(g("textThick")),
-      bold: !!g("bold"), italic: !!g("italic"), hJustify: halign, mirrored: !!g("mirrored"), lineThickness: Number(g("lineThickness")), arrowLength: Number(g("arrowLength")),
+      face: String(g("face")), bold: !!g("bold"), italic: !!g("italic"), hJustify: halign, mirrored: !!g("mirrored"), lineThickness: Number(g("lineThickness")), arrowLength: Number(g("arrowLength")),
       extOffset: Number(g("extOffset")), extHeight: Number(g("extHeight")), textFrame: Number(g("textFrame")) };
   };
   const measuredText = (v: DimDialogValues): string => { const m = PT().dimRead(applyDimDialog(node0, { ...v, arbitrary: false })); const u = PT().dimUpdate(m); return PT().dimBaseText({ ...u, prefix: "", suffix: "", unitsFormat: 0, override: null }, u.measured || 0); };
@@ -180,7 +184,7 @@ export function dimensionDialog(ctx: ToolCtx, item: KItem): boolean {
         const keep = reg("keepAligned", checkField(v0.keepAligned, "Keep aligned with dimension", { ro, key: "keepAligned", tip: "Automatically set the text orientation to match the dimension lines",
           onChange: (on) => { angle.input.disabled = ro || on; } }));
         for (const f of [tw, tht, bold, italic] as Field<string | number | boolean>[]) live(f);
-        const left = form([["Font:", h("span", null, "KiCad Font")], ["Width:", tw.el, unitLabel(), "Text width"], ["Height:", tht.el, unitLabel(), "Text height"],
+        const left = form([["Font:", reg("face", fontField(doc, v0.face, { ro, key: "face" })).el], ["Width:", tw.el, unitLabel(), "Text width"], ["Height:", tht.el, unitLabel(), "Text height"],
           ["Thickness:", thick.el, h("span", { class: "pd-inline", style: "gap:6px" }, unitLabel(), auto.el), "Text thickness"], ...(leader ? [] : [["Position mode:", posMode.el] as [string, HTMLElement]])], true);
         const right = form([["Position X:", tx.el, unitLabel(), "Text pos X"], ["Position Y:", ty.el, unitLabel(), "Text pos Y"],
           ["Orientation:", angle.el, null, "Text orientation"], keep.el], true);

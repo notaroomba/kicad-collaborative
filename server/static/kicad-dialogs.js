@@ -1020,7 +1020,7 @@
   if (typeof document !== "undefined") document.addEventListener("keydown", (ev) => {
     if (!current || ev.key !== "Escape" || ev.defaultPrevented) return;
     const t = ev.target;
-    if (t && t.closest && t.closest(".kd-overlay, #ctxMenu, [role='menu'], [data-popup-open]")) return;
+    if (t && t.closest && t.closest(".kd-overlay, .kd-font-pop, #ctxMenu, [role='menu'], [data-popup-open]")) return;
     ev.preventDefault();
     ev.stopPropagation();
     current.finish(false);

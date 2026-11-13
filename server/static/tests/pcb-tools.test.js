@@ -2065,7 +2065,7 @@ test("Text Box Properties: values round-trip; OK writes size, pen, flags, justif
   const node = K.parse('(gr_text_box "Line one\\nLine two" (start 10 10) (end 40 30) (margins 1.0025 1.0025 1.0025 1.0025) (layer "F.SilkS") (uuid "tb-1") (effects (font (size 1.5 1.2) (thickness 0.2)) (justify left top)) (border yes) (stroke (width 0.12) (type default)) (knockout no))');
   const v = T.textBoxValues(node);
   assert.deepEqual({ ...v }, { text: "Line one\nLine two", locked: false, layer: "F.SilkS", angle: 0, textW: 1.2, textH: 1.5, autoThickness: false, textThick: 0.2, bold: false, italic: false,
-    hJustify: "left", vJustify: "top", mirrored: false, border: true, borderWidth: 0.12, borderStyle: "solid" });
+    hJustify: "left", vJustify: "top", mirrored: false, border: true, borderWidth: 0.12, borderStyle: "solid", face: "" });
   let r = T.applyTextBox(node, { ...v, borderStyle: "dash" }, v);
   assert.equal(K.serialize(r.node).replace("(type dash)", "(type default)"), K.serialize(node), "only the border style changed");
   r = T.applyTextBox(node, { ...v, text: "A\nB", textW: 2, textH: 2, autoThickness: true, bold: true, hJustify: "center", vJustify: "bottom", mirrored: true, border: false, borderWidth: NaN, locked: true }, v);

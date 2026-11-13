@@ -49,6 +49,7 @@ import { importSymbolLibraries } from "../symedit/dialogs";
 import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
 import { installTableCells } from "./tablecells";   // last: its imports must not reorder the modules above
+import { initFonts } from "./fonts";
 window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el), selectionCount };
 
 
@@ -61,6 +62,7 @@ document.addEventListener("click", (ev) => {
 window.addEventListener("popstate", route);
 
 KiCadCanvas.onAssetLoaded = () => requestRender();
+initFonts();
 
 
 // ---- editing tools (schematic / board modules register on window.CollabTools) ----

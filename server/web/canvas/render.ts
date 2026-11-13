@@ -924,6 +924,25 @@ export function faceAvailable(face: string): boolean {
   return ok;
 }
 
+const WANTED = new Set<string>();
+/**
+ * Tell the app that text in this face (and style) is about to be drawn: KiCadCanvas.onFontWanted(face, bold, italic),
+ * once per style.  The editor fetches the font from the project and calls fontChanged when it is on the page.
+ */
+export function wantFace(face: string, bold: boolean, italic: boolean): void {
+  const k = face + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
+  if (WANTED.has(k) || /^kicad font$/i.test(face)) return;
+  const cb = root.KiCadCanvas && root.KiCadCanvas.onFontWanted;
+  if (typeof cb !== "function") return;
+  WANTED.add(k);
+  try { cb(face, bold, italic); } catch (e) { /* the app's concern */ }
+}
+/** A font arrived on (or left) the page: look again whether the face can be drawn.  No face: every face. */
+export function fontChanged(face?: string): void {
+  if (face === undefined) { FACES.clear(); WANTED.clear(); return; }
+  FACES.delete(face);
+}
+
 /** Text shorter than this on screen (device px of glyph height) is not drawn. */
 export const MIN_TEXT_PX = 2;
 
@@ -979,6 +998,7 @@ export function drawTextStroke(ctx: Ctx2D, g: DrawTextG, minW: number, color: st
 export function drawText(ctx: Ctx2D, g: DrawTextG, s: number, docType: string, minW: number, colorOverride: string | null | undefined, base: Mat | null, flip: boolean, bgColor?: string | null): void {
   const px = g.size * s; if (px < (g.minPx || MIN_TEXT_PX)) return;
   const color = (colorOverride || g.color) as string;
+  if (g.face) wantFace(g.face, !!g.bold, !!g.italic);
   const outline = !!g.face && faceAvailable(g.face);
   if (!outline && textMode() === "stroke") {
     let b = base;
