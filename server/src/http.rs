@@ -1283,12 +1283,16 @@ pub async fn create_blank_project(
     checked_name(name)?;
     let stem = file_stem_for(name);
     let pro = serde_json::to_vec_pretty(&json!({
+        // vias 0.4 / 0.25 mm by default (the person's choice), with the board minimums that let them pass
         "board": { "design_settings": { "defaults": {}, "diff_pair_dimensions": [], "drc_exclusions": [],
-                                         "rules": {}, "track_widths": [], "via_dimensions": [] } },
+                                         "rules": { "min_via_diameter": 0.4, "min_through_hole_diameter": 0.25, "min_via_annular_width": 0.075 },
+                                         "track_widths": [], "via_dimensions": [] } },
         "boards": [],
         "libraries": { "pinned_footprint_libs": [], "pinned_symbol_libs": [] },
         "meta": { "filename": format!("{stem}.kicad_pro"), "version": 1 },
-        "net_settings": { "classes": [], "meta": { "version": 0 } },
+        "net_settings": { "classes": [{ "name": "Default", "bus_width": 12, "clearance": 0.2, "diff_pair_gap": 0.25, "diff_pair_via_gap": 0.25,
+            "diff_pair_width": 0.2, "line_style": 0, "microvia_diameter": 0.3, "microvia_drill": 0.1, "pcb_color": "rgba(0, 0, 0, 0.000)",
+            "schematic_color": "rgba(0, 0, 0, 0.000)", "track_width": 0.2, "via_diameter": 0.4, "via_drill": 0.25, "wire_width": 6 }], "meta": { "version": 0 } },
         "pcbnew": { "page_layout_descr_file": "" },
         "sheets": [],
         "text_variables": {}

@@ -104308,8 +104308,8 @@ function writeRules(pro, r) {
       pcb_color: "rgba(0, 0, 0, 0.000)",
       schematic_color: "rgba(0, 0, 0, 0.000)",
       track_width: 0.2,
-      via_diameter: 0.6,
-      via_drill: 0.3,
+      via_diameter: 0.4,
+      via_drill: 0.25,
       wire_width: 6
     };
     ns.classes.push(c);

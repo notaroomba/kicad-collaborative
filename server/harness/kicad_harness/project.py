@@ -2027,7 +2027,7 @@ class Board(_Doc):
                 return {"routed": 0, "connections": None, "segments": 0, "vias": 0, "length_mm": 0, "unrouted": [str(err).split("(autoroute): ")[-1][:400]]}
             raise
         d = next((x["autoroute"] for x in res.get("details") or [] if "autoroute" in x), {})
-        un = [f"{u.get('net')}: {u.get('from')} to {u.get('to')} ({u.get('reason') or 'no path'})" for u in d.get("unrouted", [])]
+        un = [f"{u.get('net')}: {u.get('from')} to {u.get('to')} ({u.get('reason') or 'no path'}{': ' + u['detail'] if u.get('detail') else ''})" for u in d.get("unrouted", [])]
         out = {"routed": d.get("routed"), "connections": d.get("connections"), "segments": d.get("segments"), "vias": d.get("vias"), "length_mm": d.get("length_mm"), "unrouted": un[:25]}
         if len(un) > 25:
             out["more_unrouted"] = len(un) - 25
