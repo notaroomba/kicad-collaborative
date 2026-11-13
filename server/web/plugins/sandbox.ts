@@ -65,7 +65,7 @@ export function sandboxRuntime(): void {
     design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit", "undo", "redo", "copied", "copy"]),
     view: group("view", ["select", "move", "highlight", "focus", "appearance", "setMarkers", "clearMarkers", "openDocument"]),
     fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom", "svg", "plot", "drc", "netlist", "render", "model"]),
-    project: group("project", ["versions", "saveVersion", "addLibraryFiles"]),
+    project: group("project", ["versions", "saveVersion", "addLibraryFiles", "rewriteDocument"]),
     libs: group("libs", ["libraries", "footprints", "footprint"]),
     net: group("net", ["fetch"]),
     ui: Object.assign(group("ui", ["prompt", "confirm", "showPanel", "hidePanel", "showWindow", "hideWindow", "openLink"]), {

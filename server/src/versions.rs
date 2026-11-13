@@ -51,6 +51,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/projects/{id}/branches", get(list_branches).post(create_branch))
         .route("/api/projects/{id}/branches/{bid}", patch(update_branch).delete(delete_branch))
         .route("/api/projects/{id}/merge", post(merge))
+        .route("/api/docs/{id}/rewrite", post(rewrite))
         // the names these had before versions existed (the desktop app uses them)
         .route("/api/projects/{id}/checkpoints", get(list_checkpoints).post(create_checkpoint))
 }
@@ -711,6 +712,64 @@ pub async fn restore(
     };
     let docs = restore_points(&state, &user, id, &points, &label).await?;
     Ok(Json(json!({ "restored": label, "docs": docs })).into_response())
+}
+
+// ---------- a file rewritten outside the editor ----------
+
+#[derive(Deserialize)]
+pub struct RewriteRequest {
+    /// The file as the program that rewrote it was given it.
+    base: String,
+    /// The file as that program left it.
+    text: String,
+    /// What made the change, for the version that keeps the document as it was.
+    #[serde(default)]
+    label: Option<String>,
+    /// Only say what would change.
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// A program that works on files (a desktop plugin run in the web editor) rewrote one of the project's
+/// documents.  What it changed, item by item, is carried into the document as it is now: edits other
+/// people made since the program was handed the file stay.  The document as it was is kept as a version.
+pub async fn rewrite(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(doc_id): Path<Uuid>,
+    LenientJson(req): LenientJson<RewriteRequest>,
+) -> AppResult<Response> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    editor(&state, &user, doc.project_id).await?;
+    if !crate::merge::mergeable(&doc.doc_type) {
+        return Err(bad("This kind of document cannot be rewritten by a plugin."));
+    }
+    if req.text.len() > 64 * 1024 * 1024 {
+        return Err(bad("The file is too large."));
+    }
+    let (seq, ours) = persist::latest_snapshot(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    // Edits not yet in a saved copy would be lost under the new file: say so instead.
+    let head: Option<i64> = sqlx::query_scalar("SELECT max(seq) FROM ops WHERE doc_id = $1").bind(doc_id).fetch_one(&state.pool).await?;
+    if head.unwrap_or(0) > seq {
+        return Err(AppError::Api(StatusCode::CONFLICT, "unsaved_edits", "The document has edits that are not saved yet. Open it in the editor, let it save, then run the plugin again.".into()));
+    }
+    let ours = String::from_utf8(ours).map_err(|_| bad("The document is not text."))?;
+    // The program may have written the whole file its own way: only what reads differently counts.
+    let theirs = crate::merge::in_layout_of(&req.base, &req.text).ok_or_else(|| bad("The rewritten file is not a well-formed KiCad file."))?;
+    let changes = crate::merge::diff(&req.base, &theirs).ok_or_else(|| bad("The rewritten file is not a well-formed KiCad file."))?;
+    if changes.is_empty() {
+        return Ok(Json(json!({ "changed": false, "changes": [] })).into_response());
+    }
+    let merged = crate::merge::merge3(Some(&req.base), &ours, &theirs, crate::merge::Prefer::Theirs)
+        .ok_or_else(|| bad("The rewritten file could not be merged into the document."))?;
+    if req.dry_run || merged.text == ours {
+        return Ok(Json(json!({ "changed": merged.text != ours, "changes": changes, "conflicts": merged.conflicts })).into_response());
+    }
+    let label = req.label.as_deref().map(str::trim).filter(|l| !l.is_empty()).unwrap_or("a plugin");
+    let stamp = format!("Before {}", label.chars().take(80).collect::<String>());
+    keep_doc(&state.pool, doc.project_id, user.id, &stamp, &doc).await?;
+    reset_to_content(&state, user.id, doc_id, merged.text.as_bytes()).await?;
+    Ok(Json(json!({ "changed": true, "changes": changes, "conflicts": merged.conflicts, "kept": stamp })).into_response())
 }
 
 // ---------- reading history ----------

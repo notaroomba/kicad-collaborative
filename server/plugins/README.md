@@ -252,6 +252,13 @@ How it works:
   `.pretty/*.kicad_mod` footprint behind, the editor asks to add them to the project's libraries
   (`project.addLibraryFiles`, needs `design:write`) instead of handing them over as downloads. 3D models written
   with them are added too.
+- **A schematic a plugin rewrites as a file is carried into the project.** Desktop plugins that change the
+  schematic write the `.kicad_sch` file. The server works out what really changed, item by item, however the
+  plugin laid the file out (`POST /api/docs/{id}/rewrite`, `merge::in_layout_of`), the editor lists it and asks,
+  and the schematic as it was is kept as a version (`project.rewriteDocument`, needs `design:write`). The open
+  board is never changed this way.
+- **HTML pages.** `wx.html.HtmlWindow` and `wx.html2.WebView` show a plugin's HTML in a frame that displays and
+  never runs: no scripts, nothing fetched from the network, links inert.
 - **Files can be dropped on a plugin's window.** `wx.FileDropTarget` and `DragAcceptFiles` receive files dropped
   from the computer; the plugin sees them under `/tmp/dropped`.
 - The project file and the schematics are beside the board, so net classes, design rules and

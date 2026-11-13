@@ -176,7 +176,7 @@ async function one(dir, boardPath, boardGiven) {
   if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
   let copied = ""; { const m = driveSrc && /^# copied: (\S+)$/m.exec(driveSrc); if (m) copied = fs.readFileSync(path.resolve(server, "..", m[1]), "utf8"); }
-  const libraryFiles = []; const moving = []; const handedOver = [];
+  const libraryFiles = []; const moving = []; const handedOver = []; const rewritten = [];
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
     calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75), ...(/\.zip$/i.test(a.filename || "") ? { holds: zipNames(a.base64) } : {}) } : undefined });
@@ -193,6 +193,14 @@ async function one(dir, boardPath, boardGiven) {
       return JSON.stringify({ path: path.basename(boardPath), text, selection: edited ? startSelection.filter((id) => text.includes(id)) : startSelection, version: "10.0.0", files: siblings });
     }
     // Library files offered to the project: the stand-in editor takes what a project takes and remembers it.
+    // A schematic the plugin rewrote as a file: the stand-in project takes it when it is a KiCad file that differs.
+    if (method === "project.rewriteDocument") {
+      const ok = typeof a.text === "string" && a.text.trim().startsWith("(kicad_") && a.text !== a.base && siblings.some((f) => f.path === a.path);
+      if (!ok) return JSON.stringify({ error: "not a document of this project" });
+      const sib = siblings.find((f) => f.path === a.path); sib.text = a.text; rewritten.push(a.path); if (process.env.KC_DUMP) fs.writeFileSync(path.join(process.env.KC_DUMP, path.basename(a.path)), a.text);   // KC_DUMP=<folder>: keep the rewritten file to look at
+      said.push(`Change the schematic: ${a.path}`);
+      return JSON.stringify({ applied: true, changes: [{ kind: "changed", item: a.path }] });
+    }
     if (method === "project.addLibraryFiles") { const added = (a.files || []).filter((f) => typeof f.text === "string" && f.text.trim().startsWith("(") || /\.(step|stp|wrl)$/i.test(f.path)).map((f) => f.path); libraryFiles.push(...(a.files || []).filter((f) => added.includes(f.path))); return JSON.stringify({ added, updated: [], failed: (a.files || []).map((f) => f.path).filter((x) => !added.includes(x)) }); }
     // The editors' copy buffer.  "# copied: <path from the repository root>" in a drive: what Copy took before the run.
     if (method === "design.copied") return JSON.stringify({ text: copied });
@@ -381,6 +389,7 @@ json.dumps(_kc_r, default=str)`)); if (d.error) out = { ok: false, error: "drive
   result.missing = after; result.messages = py.runPython("import json, wx; json.dumps(wx._messages[-6:])");
   result.libraries = libraryFiles.map((f) => f.path);
   if (moving.length) result.moving = moving;
+  if (rewritten.length) result.rewritten = rewritten;
   result.log = logs.slice(-40); result.said = said.slice(-12); result.net = calls.filter((c) => c.method === "net.fetch").length;
   if (again && !process.env.KC_AGAIN && result.actions.every((x) => x.ok)) {
     const r = spawnSync(process.execPath, process.argv.slice(1), { env: { ...process.env, KC_AGAIN: "1" }, encoding: "utf8", maxBuffer: 1 << 28, timeout: 600000 });

@@ -148,6 +148,19 @@ class Dialog(pcbnew.ActionPlugin):
                 f.write(FOOTPRINT)
             dlg.Destroy()
             return
+        if dlg.text.GetValue().startswith("sch:"):
+            # a plugin that edits the schematic as a file, written back its own way (everything on one line)
+            import re
+            here = os.path.dirname(board.GetFileName())
+            name = sorted(n for n in os.listdir(here) if n.endswith(".kicad_sch"))[0]
+            with open(os.path.join(here, name)) as f:
+                text = f.read()
+            text = re.sub(r'\(title "[^"]*"\)', '(title "%s")' % dlg.text.GetValue()[4:], text, count=1)
+            with open(os.path.join(here, name), "w") as f:
+                f.write(" ".join(text.split()))
+            print("PYTOOL rewrote %s" % name)
+            dlg.Destroy()
+            return
         t = pcbnew.PCB_TEXT(board)
         t.SetText(dlg.text.GetValue())
         t.SetLayer(board.GetLayerID(dlg.layer.GetStringSelection()))
@@ -991,6 +1004,27 @@ await idle(a, ID);
   check('and both libraries are in the project\'s library tables', /\(name "PyLib"\)/.test(await content('sym-lib-table')) && /\(name "PyLib"\)/.test(await content('fp-lib-table')), (await content('sym-lib-table')).slice(0, 200) + ' | ' + (await content('fp-lib-table')).slice(0, 200));
   check('nothing was handed over as a download instead', noDownload.length === 0, noDownload.join());
   void docsOf;
+}
+
+// ---- a schematic rewritten as a file is carried into the project's schematic
+{
+  await run(a, await act(a, 'Py: dialog'));
+  await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+  const d4 = inner(a); await d4.waitForSelector('input[type="text"]');
+  await d4.fill('input[type="text"]', 'sch:Titled by a plugin');
+  await d4.locator('button', { hasText: /^OK$/ }).click();
+  await a.waitForSelector('#pluginPrompt', { timeout: 30000 });
+  const asked = await a.locator('#pluginPrompt').innerText();
+  check('the person sees what a plugin changed in the schematic, and only that', /Change the schematic/.test(asked) && /\.kicad_sch/.test(asked) && /this change/.test(asked) && /title_block/.test(asked), asked.slice(0, 400));
+  const noDownload = []; a.on('download', (d) => noDownload.push(d.suggestedFilename()));
+  await a.click('#pluginPromptOk');
+  await idle(a, ID);
+  const sch = (await a.evaluate(() => window.CollabEditor.api.state.project.docs)).find((x) => /\.kicad_sch$/.test(x.path));
+  const text = sch ? await (await a.request.get(`${BASE}/api/docs/${sch.docId}/content?v=${Date.now()}`)).text() : '';
+  check('the change is in the project\'s schematic, which keeps its own layout', text.includes('(title "Titled by a plugin")') && /\n\t\(paper /.test(text) && text.split('\n').length > 50, text.slice(0, 200));
+  const versions = await (await a.request.get(`${BASE}/api/projects/${projectId}/versions`)).json();
+  check('the schematic as it was is kept as a version', JSON.stringify(versions).includes('Before Py Tool'), JSON.stringify(versions).slice(0, 300));
+  check('and it was not handed over as a download', noDownload.length === 0, noDownload.join());
 }
 
 // ---- what the plugin reads

@@ -8,7 +8,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useSyncExternalStore } from "react";
-import { ApiError, copyBuffer, editorState, fab, history, libs, project, reads, selectionSummary, views, writes } from "./api";
+import { ApiError, copyBuffer, editorState, projectDocByPath, fab, history, libs, project, reads, selectionSummary, views, writes } from "./api";
 import { pythonRuntime } from "./pyruntime";
 import { createSandbox, type Sandbox } from "./sandbox";
 import { inScope, isPython, manifestFiles, validateFiles, validateManifest, type InstalledPlugin, type PluginAction, type PluginManifest, type PluginPorter } from "./types";
@@ -442,7 +442,7 @@ const NEEDS: Record<string, string | null> = {
   "view.select": "view", "view.move": "design:write", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
-  "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write",
+  "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write",
   "libs.libraries": null, "libs.footprints": null, "libs.footprint": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
@@ -491,6 +491,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   if (ns === "fab") return fab[fn](a);
   if (ns === "libs") return libs[fn](a);
   if (ns === "project" && fn === "addLibraryFiles") return addLibraryFiles(p, a);
+  if (ns === "project" && fn === "rewriteDocument") return rewriteDocument(p, a);
   if (ns === "project") { if (fn === "saveVersion") log(p.identifier, "host", a && a.name ? `Saved a version: ${String(a.name).slice(0, 80)}` : "Opened the Save Version dialog"); return project[fn](a); }
   if (ns === "net") return netFetch(p, a);
   if (ns === "storage") return storage(p.identifier, fn, a);
@@ -549,6 +550,34 @@ async function addLibraryFiles(p: InstalledPlugin, a: any): Promise<unknown> {
   log(p.identifier, "host", `Added to the project's libraries: ${[...out.added, ...out.updated].join(", ") || "nothing"}${out.failed.length ? `; failed: ${out.failed.join(", ")}` : ""}`);
   if (out.added.length || out.updated.length) toast(`${p.manifest.name}: ${out.added.length + out.updated.length} library file${out.added.length + out.updated.length === 1 ? "" : "s"} added to the project`, 4000);
   return out;
+}
+
+/**
+ * A schematic (or another board of the project) that a plugin rewrote as a file.  The server works out what the
+ * plugin changed, item by item, and carries that into the document as it is now; the person sees the list first.
+ * The open document is not rewritten this way: plugins change it through the editor.
+ */
+async function rewriteDocument(p: InstalledPlugin, a: any): Promise<unknown> {
+  const path = String(a.path || "").replace(/\\/g, "/"), base = typeof a.base === "string" ? a.base : "", text = typeof a.text === "string" ? a.text : "";
+  if (!/\.kicad_(sch|pcb)$/i.test(path) || !base || !text || text.length > 32_000_000) return { error: "not a schematic or board of this project" };
+  let ed: any; try { ed = ED(); } catch { return { error: "no editor" }; }
+  if (!ed || ed.viewOnly) return { error: "this project is open for viewing only" };
+  const doc = projectDocByPath(path); if (!doc) return { error: "the project has no document of that name" };
+  if (doc.open) return { error: "the open document is changed through the editor, not as a file" };
+  const send = async (dry: boolean) => {
+    const r = await fetch(`/api/docs/${encodeURIComponent(doc.docId)}/rewrite`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ base, text, label: p.manifest.name, dry_run: dry }) });
+    const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(String(j.error || j.message || `the server answered ${r.status}`)); return j;
+  };
+  let plan: any; try { plan = await send(true); } catch (e) { return { error: String((e as Error).message || e) }; }
+  const changes: any[] = Array.isArray(plan.changes) ? plan.changes : [];
+  if (!plan.changed || !changes.length) return { unchanged: true };
+  const lines = changes.slice(0, 10).map((c) => `${c.kind} ${c.item}${Array.isArray(c.parts) && c.parts.length ? ` (${c.parts.slice(0, 3).join(", ")})` : ""}`).join("\n") + (changes.length > 10 ? `\n… and ${changes.length - 10} more` : "");
+  const yes = await ask(p, { kind: "confirm", title: "Change the schematic", message: `${p.manifest.name} changed ${path}. Carry ${changes.length === 1 ? "this change" : `these ${changes.length} changes`} into the project? The document as it was is kept in History.\n\n${lines}`, fields: [], okLabel: "Apply changes" });
+  if (!yes) return { declined: true };
+  let done: any; try { done = await send(false); } catch (e) { return { error: String((e as Error).message || e) }; }
+  log(p.identifier, "host", `${path}: ${changes.length} change${changes.length === 1 ? "" : "s"} carried into the project${done.kept ? ` (kept as “${done.kept}”)` : ""}`);
+  toast(`${p.manifest.name}: ${path} updated`, 4000);
+  return { applied: true, changes };
 }
 
 // ---------------------------------------------------------------- dialogs the host draws for a plugin

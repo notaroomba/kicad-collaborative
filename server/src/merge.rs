@@ -503,6 +503,76 @@ pub fn diff(old: &str, new: &str) -> Option<Vec<ItemChange>> {
     Some(out)
 }
 
+/// An element with the whitespace between its tokens taken out: two elements that read the same to
+/// KiCad compare equal, however a program laid them out.
+fn squeeze(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut gap = false;
+    while i < b.len() {
+        match b[i] {
+            c if c.is_ascii_whitespace() => {
+                gap = true;
+                i += 1;
+            }
+            b'(' | b')' => {
+                out.push(b[i] as char);
+                gap = false;
+                i += 1;
+            }
+            _ => {
+                let end = element_end(b, i).unwrap_or(b.len()).max(i + 1);
+                if gap && !out.ends_with('(') {
+                    out.push(' ');
+                }
+                out.push_str(&text[i..end]);
+                gap = false;
+                i = end;
+            }
+        }
+    }
+    out
+}
+
+/// `new` written the way `old` is laid out.  A program that rewrites a whole file (a plugin with its own
+/// s-expression writer) changes the spacing of every item; here every item that still reads the same keeps
+/// the text it has in `old`, so only what the program really changed differs.  New items keep the
+/// program's text; the order is `old`'s, with new items after it.  None when either is not a list or
+/// they are different kinds of list.
+pub fn in_layout_of(old: &str, new: &str) -> Option<String> {
+    let o = parse(old)?;
+    let n = parse(new)?;
+    if o.head != n.head {
+        return None;
+    }
+    let n_map: HashMap<&str, &str> = n.children.iter().map(|c| (c.key.as_str(), c.text)).collect();
+    let o_keys: HashSet<&str> = o.children.iter().map(|c| c.key.as_str()).collect();
+    let mut out = String::with_capacity(old.len());
+    out.push_str(&old[..old.find(o.head).unwrap_or(0)]);
+    out.push_str(o.head);
+    let lead = o.children.last().map(|c| c.lead).unwrap_or(" ");
+    for c in &o.children {
+        let Some(theirs) = n_map.get(c.key.as_str()) else { continue };
+        out.push_str(c.lead);
+        if squeeze(theirs) == squeeze(c.text) {
+            out.push_str(c.text);
+        } else if has_sublist(c.text) && has_sublist(theirs) {
+            out.push_str(&in_layout_of(c.text, theirs).unwrap_or_else(|| (*theirs).to_string()));
+        } else {
+            out.push_str(theirs);
+        }
+    }
+    for c in &n.children {
+        if !o_keys.contains(c.key.as_str()) {
+            out.push_str(lead);
+            out.push_str(c.text);
+        }
+    }
+    out.push_str(o.tail);
+    Some(out)
+}
+
 /// Whether a file of this document type is an s-expression the merge understands.
 pub fn mergeable(doc_type: &str) -> bool {
     matches!(doc_type, "kicad_sch" | "kicad_pcb" | "symbol_lib" | "footprint" | "worksheet")
@@ -513,6 +583,20 @@ mod tests {
     use super::*;
 
     const BASE: &str = "(kicad_pcb\n\t(version 20240108)\n\t(generator \"pcbnew\")\n\t(net 0 \"\")\n\t(net 1 \"GND\")\n\t(footprint \"R_0603\"\n\t\t(layer \"F.Cu\")\n\t\t(uuid \"aaaa1111\")\n\t\t(at 10 10)\n\t\t(property \"Reference\" \"R1\"\n\t\t\t(at 0 0)\n\t\t)\n\t\t(property \"Value\" \"10k\"\n\t\t\t(at 0 1)\n\t\t)\n\t)\n\t(footprint \"C_0603\"\n\t\t(layer \"F.Cu\")\n\t\t(uuid \"bbbb2222\")\n\t\t(at 20 20)\n\t\t(property \"Reference\" \"C1\"\n\t\t\t(at 0 0)\n\t\t)\n\t)\n\t(segment\n\t\t(start 1 1)\n\t\t(end 2 2)\n\t\t(uuid \"cccc3333\")\n\t)\n)\n";
+
+    #[test]
+    fn a_file_rewritten_on_one_line_differs_only_where_it_was_changed() {
+        let one_line = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (net 0 \"\") (net 1 \"GND\") (footprint \"R_0603\" (layer \"F.Cu\") (uuid \"aaaa1111\") (at 10 10) (property \"Reference\" \"R1\" (at 0 0)) (property \"Value\" \"22k\" (at 0 1))) (footprint \"C_0603\" (layer \"F.Cu\") (uuid \"bbbb2222\") (at 20 20) (property \"Reference\" \"C1\" (at 0 0))) (segment (start 1 1) (end 2 2) (uuid \"cccc3333\")) (gr_text \"new  text\" (at 1 1) (uuid \"dddd4444\")))";
+        let laid = in_layout_of(BASE, one_line).unwrap();
+        assert_eq!(laid.replace("\"22k\"", "\"10k\"").replace("\n\t(gr_text \"new  text\" (at 1 1) (uuid \"dddd4444\"))", ""), BASE);
+        let d = diff(BASE, &laid).unwrap();
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert_eq!(d[0].kind, "changed");
+        assert_eq!(d[0].parts, vec!["property Value".to_string()]);
+        assert_eq!(d[1].kind, "added");
+        assert_eq!(in_layout_of(BASE, BASE).unwrap(), BASE);
+        assert_eq!(squeeze("( a  \"b  c\"\n\t( d ) )"), "(a \"b  c\"(d))");
+    }
 
     #[test]
     fn identical_inputs_round_trip_byte_for_byte() {

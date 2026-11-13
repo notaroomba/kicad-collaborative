@@ -208,6 +208,7 @@ export function pythonRuntime(): void {
       case "libs.footprint": out = await kicad.libs.footprint(a); break;
       case "project.saveVersion": out = await kicad.project.saveVersion(a); break;
       case "project.addLibraryFiles": out = await kicad.project.addLibraryFiles(a); break;
+      case "project.rewriteDocument": out = await kicad.project.rewriteDocument(a); break;
       case "net.fetch": out = await kicad.net.fetch(a); break;
       case "view.select": out = await kicad.view.select(a); break;
       case "view.move": out = await kicad.view.move(a); break;

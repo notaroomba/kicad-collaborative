@@ -138,8 +138,8 @@
       "note": "Runs here. Save gives you the layout file as a download; Restore asks you to pick that file and lays the selected sheet out from it."
     },
     "com.github.MitjaNemec.SwapStubs": {
-      "status": "opens",
-      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+      "status": "works",
+      "note": "Runs here. Select two pads of one footprint; they trade nets on the board, and the two labels at the symbol's pins trade places in the schematic. The editor shows the schematic change and asks before it is applied."
     },
     "com.github.MitjaNemec.Archive3DModels": {
       "status": "opens",

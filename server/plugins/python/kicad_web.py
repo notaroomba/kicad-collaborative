@@ -1324,6 +1324,8 @@ def load_board():
             continue
         _write(f"{PROJECT_DIR}/{rel}", str(f.get("text") or "").encode("utf-8"))
         _state["given"].add(rel)
+        if rel.endswith((".kicad_sch", ".kicad_pcb")):
+            _state["given_text"][rel] = str(f.get("text") or "")
         if rel.endswith(".kicad_pro") and (not project or os.path.splitext(rel)[0] == os.path.splitext(os.path.basename(path))[0]):
             try:
                 project = json.loads(f.get("text") or "{}")
@@ -1752,6 +1754,41 @@ def _offer_libraries(fresh):
     return [p for p in fresh if os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/") not in taken]
 
 
+def _offer_rewrites(fresh):
+    """A schematic or another board of the project that the plugin rewrote as a file (desktop plugins that edit the
+    schematic do it that way) is carried into the project's own document: the editor shows what changed and asks.
+    Returns the files that were not taken, which are handed over as a download."""
+    left = []
+    for p in fresh:
+        rel = os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/")
+        base = _state["given_text"].get(rel)
+        if base is None:
+            left.append(p)
+            continue
+        try:
+            with open(p, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            left.append(p)
+            continue
+        if text == base:
+            continue                                  # touched, not changed
+        try:
+            out = _call("project.rewriteDocument", {"path": rel, "base": base, "text": text}) or {}
+        except Exception as e:
+            out = {"error": str(e)}
+        if out.get("applied"):
+            _state["given_text"][rel] = text
+            log.info("%s: %d change%s carried into the project", rel, len(out.get("changes") or []), "" if len(out.get("changes") or []) == 1 else "s")
+        elif out.get("unchanged"):
+            pass
+        else:
+            if out.get("error"):
+                log.warning("%s was changed by the plugin but not carried into the project: %s", rel, out["error"])
+            left.append(p)
+    return left
+
+
 def _hand_over_outputs():
     global _seen_files
     now = _tree(PROJECT_DIR)
@@ -1763,6 +1800,7 @@ def _hand_over_outputs():
     if not fresh or _bridge is None:
         return fresh
     fresh = _offer_libraries(fresh)
+    fresh = _offer_rewrites(fresh)
     if not fresh:
         return []
     if len(fresh) == 1:
@@ -1793,7 +1831,7 @@ def _hand_over_outputs():
 # per project).  Output files are not kept: they are handed over as downloads.
 
 _STATE_ONE, _STATE_ALL = 128 * 1024, 200 * 1024       # one file, and all files of one kind, as stored
-_state = {"shipped": None, "saved": {}, "project": None, "warned": False, "given": set()}
+_state = {"shipped": None, "saved": {}, "project": None, "warned": False, "given": set(), "given_text": {}}
 
 
 def _state_roots():

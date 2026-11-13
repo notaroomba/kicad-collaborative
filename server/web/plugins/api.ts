@@ -21,6 +21,12 @@ const MAX_CHANGES = 2000;
 const editor = () => { const ed = ED(); if (!ed || !ed.api) throw new ApiError("The editor is not ready.", "not_ready"); return ed; };
 const liveDoc = () => { const ed = editor(); const open = design.openEntry(); if (!ed.kdoc || !open) throw new ApiError("No document is open in the editor.", "no_document"); return { ed, doc: ed.kdoc, open }; };
 
+/** A document of the open project by its path, and whether it is the one open in the editor. */
+export function projectDocByPath(path: string): { docId: string; open: boolean } | null {
+  const d = design.projectDocs().find((x: any) => x.path === path); if (!d) return null;
+  const open = design.openEntry(); return { docId: d.docId, open: !!open && open.docId === d.docId };
+}
+
 /** Run one of the assistant's read tools, turning its ToolError into the plugin's error. */
 async function read<T>(fn: () => T | Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) { if (e instanceof ToolError) throw new ApiError(e.message, "not_found"); throw e; }
