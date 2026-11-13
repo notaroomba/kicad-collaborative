@@ -215,6 +215,16 @@ def _free_at(g, at, r: float, skip=()) -> bool:
     return True
 
 
+def _clear_of_pads(g, at, net: str, r: float) -> bool:
+    """A stitching via may stand inside a part's courtyard (beside a header row, under a switch): what it must stay off
+    is the pads of other nets.  The rules check that follows takes out any that still sits too close to copper."""
+    for p in g["parts"]:
+        for q in p["pads"]:
+            if q[3] != net and math.hypot(at[0] - q[1], at[1] - q[2]) < r:
+                return False
+    return True
+
+
 def _board_fiducials(self, inset: float = 2.5) -> dict:
     """Put the board's fiducials (FID1..) in three corners, as far apart as the outline allows, clear of other parts.
     The schematic must have them first (sch.fiducials(), then board.sync())."""
@@ -356,7 +366,7 @@ def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0
     """A row of vias on `net` along a path you choose: `path` is a list of points [(x, y), ...] in mm and a via goes
     every `spacing` mm along it.  With `offset` the path is a centre line (a trace, the edge of a section) and two rows
     are placed, one each side, `offset` mm from it: the fence beside an antenna feed or around a noisy block.  A via that
-    would stand inside a part or that the rules check finds too close to other copper is left out.
+    would stand on or beside a pad of another net, or that the rules check finds too close to other copper, is left out.
     Returns {"vias", "tried", "removed"}."""
     self.flush()
     pts_in = [(float(p[0]), float(p[1])) for p in path]
@@ -378,7 +388,7 @@ def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0
             d = carry
             while d <= L + 1e-6:
                 at = (_r(ax + ux * d - uy * side), _r(ay + uy * d + ux * side))
-                if _free_at(g, at, 0.3) and all(math.hypot(at[0] - q[0], at[1] - q[1]) > spacing * 0.6 for q in pts):
+                if _clear_of_pads(g, at, name, 0.9) and all(math.hypot(at[0] - q[0], at[1] - q[1]) > spacing * 0.6 for q in pts):
                     pts.append(at)
                 d += spacing
             carry = d - L

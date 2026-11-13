@@ -1856,36 +1856,6 @@ class Board(_Doc):
             e["width"] = width
         self._edit(e)
 
-    def fence(self, net: str, path, spacing: float = 1.5, keep: float = 1.0, gaps=()) -> dict:
-        """A row of stitching vias on \`net\` (ground) along a path of points [(x, y), ...], one every \`spacing\` mm: the via
-        fence beside an RF feed, around an antenna's keep-out or between two areas of a board.  A position closer than
-        \`keep\` mm to a pad of another net, or closer than 0.9 mm to a via that is there, is left out, and so is anything
-        inside a box in \`gaps\` ([x0, y0, x1, y1], for the corridor a feed line crosses).  Place it before \`route()\`, which
-        then goes round the vias.  Returns {"placed": n, "skipped": n, "at": [...]}."""
-        self.flush()
-        self._geom = None
-        g = self.geometry()
-        want = self._net(net)
-        pads = [(q[1], q[2]) for part in g["parts"] for q in part["pads"] if q[3] != want]
-        there = self.__dict__.setdefault("_fenced", [])      # the vias earlier fences of this script put down
-        placed, skipped = [], 0
-        pts = [tuple(p) for p in path]
-        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-            length = math.hypot(x1 - x0, y1 - y0)
-            n = max(1, int(round(length / spacing)))
-            for i in range(n + 1):
-                x, y = _r(x0 + (x1 - x0) * i / n), _r(y0 + (y1 - y0) * i / n)
-                if any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in gaps) or \\
-                        any(math.hypot(x - px, y - py) < keep for px, py in pads) or \\
-                        any(math.hypot(x - vx, y - vy) < 0.9 for vx, vy in there + placed):
-                    skipped += 1
-                    continue
-                self.via(net, (x, y))
-                placed.append((x, y))
-        there += placed
-        self.flush()
-        return {"placed": len(placed), "skipped": skipped, "at": placed}
-
     def via(self, net: str, at, size: float | None = None, drill: float | None = None) -> None:
         e = {"op": "add_via", "net": net, "x": _r(at[0]), "y": _r(at[1])}
         if size:
@@ -3563,6 +3533,16 @@ def _free_at(g, at, r: float, skip=()) -> bool:
     return True
 
 
+def _clear_of_pads(g, at, net: str, r: float) -> bool:
+    """A stitching via may stand inside a part's courtyard (beside a header row, under a switch): what it must stay off
+    is the pads of other nets.  The rules check that follows takes out any that still sits too close to copper."""
+    for p in g["parts"]:
+        for q in p["pads"]:
+            if q[3] != net and math.hypot(at[0] - q[1], at[1] - q[2]) < r:
+                return False
+    return True
+
+
 def _board_fiducials(self, inset: float = 2.5) -> dict:
     """Put the board's fiducials (FID1..) in three corners, as far apart as the outline allows, clear of other parts.
     The schematic must have them first (sch.fiducials(), then board.sync())."""
@@ -3704,7 +3684,7 @@ def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0
     """A row of vias on \`net\` along a path you choose: \`path\` is a list of points [(x, y), ...] in mm and a via goes
     every \`spacing\` mm along it.  With \`offset\` the path is a centre line (a trace, the edge of a section) and two rows
     are placed, one each side, \`offset\` mm from it: the fence beside an antenna feed or around a noisy block.  A via that
-    would stand inside a part or that the rules check finds too close to other copper is left out.
+    would stand on or beside a pad of another net, or that the rules check finds too close to other copper, is left out.
     Returns {"vias", "tried", "removed"}."""
     self.flush()
     pts_in = [(float(p[0]), float(p[1])) for p in path]
@@ -3726,7 +3706,7 @@ def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0
             d = carry
             while d <= L + 1e-6:
                 at = (_r(ax + ux * d - uy * side), _r(ay + uy * d + ux * side))
-                if _free_at(g, at, 0.3) and all(math.hypot(at[0] - q[0], at[1] - q[1]) > spacing * 0.6 for q in pts):
+                if _clear_of_pads(g, at, name, 0.9) and all(math.hypot(at[0] - q[0], at[1] - q[1]) > spacing * 0.6 for q in pts):
                     pts.append(at)
                 d += spacing
             carry = d - L
@@ -5437,6 +5417,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,p=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:p,stderr:p});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of G)i.FS.writeFile("/kh/"+r,l);i.runPython(B);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,p=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:p,stderr:p});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of G)i.FS.writeFile("/kh/"+r,l);i.runPython(B);let T=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(T(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
 `).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
 `),d(o),process.exit(0)}L().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
