@@ -55,7 +55,8 @@ def _wx_sub_attr(modname):
             raise AttributeError(name)
         if hasattr(wx, name) and name not in wx._missing:
             return getattr(wx, name)
-        wx._missing.add(f"{modname}.{name}")
+        if name not in ("NewEvent", "NewCommandEvent"):
+            wx._missing.add(f"{modname}.{name}")
         if name.endswith("Mixin") or name.endswith("Mixins"):
             return type(name, (object,), {"__init__": _MIXIN_INIT})
         if name in ("NewEvent", "NewCommandEvent"):
@@ -1057,6 +1058,9 @@ def boot(identifier, files, bridge=None, name=""):
     pcbnew._Host.focus = _focus
     pcbnew._Host.highlight = _highlight
     wx._bridge = _WxBridge() if bridge is not None else None
+    # wx.Clipboard is the editors' own copy buffer: Copy in the schematic or board editor fills it, Paste there reads it
+    wx._Clipboard._wx_read = (lambda: str((_call("design.copied") or {}).get("text") or "")) if bridge is not None else None
+    wx._Clipboard._wx_write = (lambda text: _call("design.copy", {"text": text})) if bridge is not None else None
     wx._after_event = _after_event
     wx._before_event = _before_event
     wx._editor.update(actions=lambda: [(str(getattr(p, "name", "") or type(p).__name__), p) for p in _actions], run=_editor_run,
@@ -1260,12 +1264,14 @@ def load_board():
     if not text:
         raise pcbnew.WebUnsupported("Running this plugin without a board open")
     _write(path, text.encode("utf-8"))
+    _state["given"].add(os.path.relpath(path, PROJECT_DIR).replace(os.sep, "/"))
     project = {}
     for f in info.get("files") or []:
         rel = os.path.normpath(str(f.get("path") or "")).replace("\\", "/")
         if not rel or rel.startswith("..") or rel.startswith("/"):
             continue
         _write(f"{PROJECT_DIR}/{rel}", str(f.get("text") or "").encode("utf-8"))
+        _state["given"].add(rel)
         if rel.endswith(".kicad_pro") and (not project or os.path.splitext(rel)[0] == os.path.splitext(os.path.basename(path))[0]):
             try:
                 project = json.loads(f.get("text") or "{}")
@@ -1700,7 +1706,7 @@ def _hand_over_outputs():
 # per project).  Output files are not kept: they are handed over as downloads.
 
 _STATE_ONE, _STATE_ALL = 128 * 1024, 200 * 1024       # one file, and all files of one kind, as stored
-_state = {"shipped": None, "saved": {}, "project": None, "warned": False}
+_state = {"shipped": None, "saved": {}, "project": None, "warned": False, "given": set()}
 
 
 def _state_roots():
@@ -1798,9 +1804,17 @@ def _save_state():
             _call("storage.set", {"key": "py.state", "value": kept})
             _state["saved"]["own"] = changed
         if _state["project"]:
-            hidden = _state_walk(PROJECT_DIR, hidden_only=True)
+            # beside the board: the plugin's hidden housekeeping first, then the other small files it wrote there (a
+            # saved block, a preset), which on the desktop would still lie in the project folder the next day.  The
+            # design's own files come from the editor each time and are never kept here.
+            hidden = _state_walk(PROJECT_DIR)
+            for rel in list(hidden):
+                if rel in _state["given"]:
+                    del hidden[rel]
             if hidden != _state["saved"].get("project"):
-                files, lost = _state_pack(PROJECT_DIR, order(hidden))
+                is_hidden = lambda rel: any(part.startswith(".") for part in rel.split("/"))
+                files, lost = _state_pack(PROJECT_DIR, sorted(order(hidden), key=lambda rel: not is_hidden(rel)))
+                lost = [rel for rel in lost if is_hidden(rel)]          # outputs too large to keep were handed over anyway
                 dropped += lost
                 _call("storage.set", {"key": _state["project"], "value": {"files": files}})
                 _state["saved"]["project"] = hidden

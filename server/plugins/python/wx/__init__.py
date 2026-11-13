@@ -376,6 +376,15 @@ WXK_RETURN, WXK_ESCAPE, WXK_TAB, WXK_DELETE, WXK_BACK, WXK_SPACE, WXK_NUMPAD_ENT
 MOD_NONE, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_CMD, MOD_WIN = 0, 1, 2, 4, 2, 8
 ACCEL_NORMAL, ACCEL_ALT, ACCEL_CTRL, ACCEL_SHIFT = 0, 1, 2, 4
 LANGUAGE_DEFAULT, LANGUAGE_ENGLISH = 0, 58
+ALPHA_OPAQUE, ALPHA_TRANSPARENT = 255, 0
+ButtonNameStr, PanelNameStr, StaticTextNameStr, ControlNameStr, FrameNameStr, DialogNameStr = "button", "panel", "staticText", "control", "frame", "dialog"
+SYS_COLOUR_MENUBAR, SYS_COLOUR_MENUHILIGHT, SYS_COLOUR_GRADIENTACTIVECAPTION, SYS_COLOUR_GRADIENTINACTIVECAPTION = 25, 26, 27, 28
+LANGUAGE_UNKNOWN, LANGUAGE_ENGLISH_US, LANGUAGE_ENGLISH_UK = 1, 79, 78
+LANGUAGE_CHINESE, LANGUAGE_CHINESE_SIMPLIFIED, LANGUAGE_CHINESE_TRADITIONAL = 43, 44, 45
+LANGUAGE_JAPANESE, LANGUAGE_JAPANESE_JAPAN, LANGUAGE_KOREAN, LANGUAGE_GERMAN, LANGUAGE_FRENCH, LANGUAGE_SPANISH = 120, 121, 127, 88, 79, 179
+LANGUAGE_ITALIAN, LANGUAGE_RUSSIAN, LANGUAGE_PORTUGUESE, LANGUAGE_POLISH, LANGUAGE_DUTCH = 117, 160, 155, 154, 55
+SHOW_EFFECT_NONE, SHOW_EFFECT_ROLL_TO_LEFT, SHOW_EFFECT_ROLL_TO_RIGHT, SHOW_EFFECT_ROLL_TO_TOP, SHOW_EFFECT_ROLL_TO_BOTTOM = 0, 1, 2, 3, 4
+SHOW_EFFECT_SLIDE_TO_LEFT, SHOW_EFFECT_SLIDE_TO_RIGHT, SHOW_EFFECT_SLIDE_TO_TOP, SHOW_EFFECT_SLIDE_TO_BOTTOM, SHOW_EFFECT_BLEND, SHOW_EFFECT_EXPAND = 5, 6, 7, 8, 9, 10
 ITEM_NORMAL, ITEM_CHECK, ITEM_RADIO, ITEM_SEPARATOR = 0, 1, 2, -1
 ID_SEPARATOR = -2
 WS_EX_VALIDATE_RECURSIVELY, WS_EX_BLOCK_EVENTS = 1, 2
@@ -1659,6 +1668,8 @@ def _binder(name, command=True):
     return b
 
 
+for _n in ("SPLITTER_SASH_POS_CHANGED", "SPLITTER_SASH_POS_CHANGING", "SPLITTER_SASH_POS_RESIZE", "SPLITTER_DOUBLECLICKED", "SPLITTER_DCLICK", "SPLITTER_UNSPLIT"):
+    globals().setdefault("EVT_" + _n, _binder("EVT_" + _n))
 for _n in ("BUTTON", "CHECKBOX", "CHOICE", "COMBOBOX", "TEXT", "TEXT_ENTER", "RADIOBUTTON", "RADIOBOX", "SPINCTRL", "SPINCTRLDOUBLE", "SLIDER", "SCROLL",
            "SCROLL_CHANGED", "SCROLL_THUMBTRACK", "LISTBOX", "LISTBOX_DCLICK", "CHECKLISTBOX", "TOGGLEBUTTON", "MENU", "TOOL", "NOTEBOOK_PAGE_CHANGED",
            "NOTEBOOK_PAGE_CHANGING", "LIST_ITEM_SELECTED", "LIST_ITEM_DESELECTED", "LIST_ITEM_ACTIVATED", "LIST_COL_CLICK", "FILEPICKER_CHANGED",
@@ -1977,6 +1988,9 @@ _PROBED = frozenset((
 class Window(EvtHandler):
     _TAG = "div"
     _CLS = "wx-panel"
+
+    InheritAttributes = lambda self: None
+    ShouldInheritColours = lambda self: True
 
     def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, name="", *more, **kw):
         EvtHandler.__init__(self)
@@ -3920,6 +3934,9 @@ class _Picker(Window):
 
     SetInitialDirectory = lambda self, d: None
     GetTextCtrl = lambda self: None
+    SetTextCtrlGrowable = SetPickerCtrlGrowable = SetTextCtrlProportion = SetPickerCtrlProportion = SetInternalMargin = lambda self, *a: None
+    HasTextCtrl = IsTextCtrlGrowable = lambda self: True
+    IsPickerCtrlGrowable = lambda self: False
     GetPickerCtrl = lambda self: None
 
 
@@ -5805,20 +5822,31 @@ class _Clipboard:
     def Close(self):
         pass
 
+    # Set by kicad_web: the board and schematic editors' own copy buffer (what Copy in this project's editor took, and
+    # what its Paste will place).  It is the editor's buffer, not the computer's clipboard, which a plugin cannot read.
+    _wx_read = None
+    _wx_write = None
+
     def SetData(self, data):
         text = getattr(data, "_text", "")
         _Clipboard._wx_last = text
-        if _DOM and text:
+        if text and _Clipboard._wx_write:
             try:
-                _kc().copy(text)
+                _Clipboard._wx_write(text)
             except Exception:
                 pass
         return True
 
     def GetData(self, data):
-        # The browser does not let a frame read the clipboard; what this plugin itself copied can be read back.
-        if _Clipboard._wx_last and hasattr(data, "SetText"):
-            data.SetText(_Clipboard._wx_last)
+        text = ""
+        if _Clipboard._wx_read:
+            try:
+                text = _Clipboard._wx_read() or ""
+            except Exception:
+                text = ""
+        text = text or _Clipboard._wx_last
+        if text and hasattr(data, "SetText"):
+            data.SetText(text)
             return True
         return False
 

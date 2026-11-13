@@ -147,3 +147,57 @@ def key(win, code):
 def painted(win):
     """The drawing steps a self-painting window last put on its canvas (each a list: name, numbers...)."""
     return list(win.__dict__.get("_wx_last_ops", []))
+
+
+# ---- a drive that plays the web service a plugin talks to (def net(method, url, headers, body) in the drive)
+
+_opened = []
+
+
+def _watch_links():
+    import kicad_web
+    if getattr(kicad_web._open_target, "_kc_watched", False):
+        return
+    real = kicad_web._open_target
+
+    def watched(target):
+        _opened.append(str(target))
+        return real(target)
+
+    watched._kc_watched = True
+    kicad_web._open_target = watched
+
+
+_watch_links()
+
+
+def opened():
+    """The web addresses the plugin asked the browser to open, in order."""
+    return [t for t in _opened if t.startswith(("http://", "https://"))]
+
+
+def multipart(headers, body):
+    """A multipart/form-data upload, taken apart: ({field: text}, {field: (filename, bytes)})."""
+    import email.parser
+    import email.policy
+    kind = headers.get("content-type", "")
+    assert kind.lower().startswith("multipart/form-data"), "the upload is not a form with files: Content-Type %r" % kind
+    msg = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(b"Content-Type: " + kind.encode("latin-1") + b"\r\n\r\n" + body)
+    fields, files = {}, {}
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        filename = part.get_filename()
+        data = part.get_payload(decode=True) or b""
+        if filename is not None:
+            files[name] = (filename, data)
+        else:
+            fields[name] = data.decode("utf-8", "replace")
+    return fields, files
+
+
+def archive(data):
+    """The files in a zip archive: {name: bytes}."""
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return {n: z.read(n) for n in z.namelist() if not n.endswith("/")}

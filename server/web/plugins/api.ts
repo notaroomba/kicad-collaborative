@@ -481,6 +481,24 @@ export const history: Record<string, () => Promise<unknown>> = {
   redo: async () => { const { ed } = mayWrite(); const depth = () => { try { return Number(appState().undo.redo) || 0; } catch { return -1; } }; const before = depth(); ed.api.redoLast(); return { done: depth() !== before }; },
 };
 
+// ---------------------------------------------------------------- the editors' copy buffer
+
+/**
+ * What Copy in this project's schematic or board editor took, and what its Paste will place: KiCad's clipboard text.
+ * It is the editor's own buffer (shared between this browser's editor tabs), never the computer's clipboard, which a
+ * plugin's frame is not allowed to read.  A plugin may put KiCad items there (text that starts with a bracket) for the
+ * person to paste.
+ */
+export const copyBuffer: Record<string, (a: any) => Promise<unknown>> = {
+  copied: async () => { const { ed } = liveDoc(); return { text: String(ed.api.toolCtx().clipboard.get() || "") }; },
+  copy: async (a) => {
+    const { ed } = mayWrite(); const text = String(a.text || "");
+    if (!/^\s*\(/.test(text)) throw new ApiError("Only KiCad items can be put in the editor's copy buffer.", "invalid");
+    if (text.length > 4_000_000) throw new ApiError("That is too much to copy at once.", "too_large");
+    ed.api.toolCtx().clipboard.set(text); return { copied: text.length };
+  },
+};
+
 // ---------------------------------------------------------------- view
 
 const idsOf = (doc: any, a: any): string[] => {

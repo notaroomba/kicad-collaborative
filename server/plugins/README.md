@@ -243,6 +243,11 @@ How it works:
   (per person, per plugin) and put back when it starts. Its hidden files beside the board (`.kinotes/` and the
   like) are kept the same way, per project. One file may be 128 KB, all of a kind 200 KB as stored; what does not
   fit is named in the plugin's log. Uninstalling the plugin clears them.
+  Other small files it writes beside the board (a saved block, a preset) are kept too, after the hidden ones, and
+  are still handed over as a download when written.
+- **The clipboard is the editors' copy buffer.** `wx.TheClipboard` reads what Copy in this project's schematic or
+  board editor took and writes KiCad items for its Paste (`kicad.design.copied()` / `kicad.design.copy({ text })`).
+  The buffer is shared between this browser's editor tabs. The computer's clipboard is never read.
 - The project file and the schematics are beside the board, so net classes, design rules and
   plugins that read the schematic work.
 - The interpreter starts the first time one of the plugin's commands is used in a project

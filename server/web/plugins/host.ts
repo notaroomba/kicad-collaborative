@@ -8,7 +8,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useSyncExternalStore } from "react";
-import { ApiError, editorState, fab, history, libs, project, reads, selectionSummary, views, writes } from "./api";
+import { ApiError, copyBuffer, editorState, fab, history, libs, project, reads, selectionSummary, views, writes } from "./api";
 import { pythonRuntime } from "./pyruntime";
 import { createSandbox, type Sandbox } from "./sandbox";
 import { inScope, isPython, manifestFiles, validateFiles, validateManifest, type InstalledPlugin, type PluginAction, type PluginManifest, type PluginPorter } from "./types";
@@ -438,7 +438,7 @@ async function whenReady(id: string, tries = 100): Promise<Run> {
 const NEEDS: Record<string, string | null> = {
   "design.overview": "design:read", "design.documents": "design:read", "design.components": "design:read", "design.component": "design:read", "design.nets": "design:read",
   "design.items": "design:read", "design.selection": "design:read", "design.runChecks": "design:read", "design.boardInfo": "design:read", "design.board": "design:read",
-  "design.apply": "design:write", "design.commit": "design:write", "design.undo": "design:write", "design.redo": "design:write",
+  "design.apply": "design:write", "design.commit": "design:write", "design.undo": "design:write", "design.redo": "design:write", "design.copied": "design:read", "design.copy": "design:write",
   "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
@@ -475,6 +475,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   const [ns, fn] = method.split(".");
   if (ns === "design") {
     if (reads[fn]) return reads[fn](a);
+    if (fn === "copied" || fn === "copy") return copyBuffer[fn](a);
     if (fn === "undo" || fn === "redo") { const out = await history[fn](); log(p.identifier, "host", fn === "undo" ? "Chose Edit → Undo" : "Chose Edit → Redo"); return out; }
     // A plugin that writes in a loop (an edit event answered with an edit) is stopped here rather than flooding the session.
     const now = Date.now(); run.commits = run.commits.filter((t) => now - t < 10000);

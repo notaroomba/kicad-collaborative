@@ -211,6 +211,8 @@ export function pythonRuntime(): void {
       case "view.highlight": out = await kicad.view.highlight(a); break;
       case "view.appearance": out = await kicad.view.appearance(a); break;
       case "design.undo": out = await kicad.design.undo(); break;
+      case "design.copied": out = await kicad.design.copied(); break;
+      case "design.copy": out = await kicad.design.copy(a); break;
       case "design.redo": out = await kicad.design.redo(); break;
       case "view.focus": out = await kicad.view.focus(a); break;
       case "ui.confirm": out = await kicad.ui.confirm(a); break;

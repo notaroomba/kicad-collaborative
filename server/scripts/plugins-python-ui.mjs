@@ -70,6 +70,14 @@ class Move(pcbnew.ActionPlugin):
             runs = int(open(path).read()) if os.path.exists(path) else 0
             with open(path, "w") as f:
                 f.write(str(runs + 1))
+        # the editors' copy buffer: what was copied in the editor is read, and a block is left there for Paste
+        took = wx.TextDataObject()
+        if wx.TheClipboard.Open():
+            got = wx.TheClipboard.GetData(took)
+            with open(os.path.join(os.path.dirname(board.GetFileName()), ".pytool", "copied"), "w") as f:
+                f.write(took.GetText() if got else "")
+            wx.TheClipboard.SetData(wx.TextDataObject('(text "from the plugin" (at 1 2 0))'))
+            wx.TheClipboard.Close()
         fp.SetPosition(pcbnew.VECTOR2I(pos.x + pcbnew.FromMM(5), pos.y))
         fp.SetOrientationDegrees(fp.GetOrientationDegrees() + 90)
         fp.Flip(fp.GetPosition(), False)
@@ -1111,6 +1119,8 @@ const runsIn = (store) => {
 };
 const runsBefore = runsIn(await kept(a));
 check('the plugin\'s settings file and its hidden file beside the board are kept in its storage', runsBefore.home >= 1 && runsBefore.project === runsBefore.home && runsBefore.projectKey === 'py.project.' + projectId, JSON.stringify(runsBefore));
+check('what a plugin puts on the clipboard lands in the editor\'s copy buffer', (await a.evaluate(() => window.CollabEditor.api.toolCtx().clipboard.get())) === '(text "from the plugin" (at 1 2 0))');
+await a.evaluate(() => window.CollabEditor.api.toolCtx().clipboard.set('(wire (pts (xy 1 1) (xy 2 2)))'));   // Copy in the editor
 await a.reload();
 await editorReady(a);
 await a.waitForTimeout(1500);
@@ -1123,6 +1133,11 @@ check('the first click starts it and runs the command', (await frames(a)) === 1 
 console.log(`      (cold start to finished edit: ${Date.now() - t1} ms)`);
 await idle(a, ID);
 const runsAfter = runsIn(await kept(a));
+{
+  const store = await kept(a); const key = Object.keys(store).find((k) => k.startsWith('py.project.'));
+  const body = key ? (store[key].files || {})['.pytool/copied'] : null;
+  check('a plugin reads what Copy in the editor took, also after a reload', !!body && zlib.inflateSync(Buffer.from(body, 'base64')).toString() === '(wire (pts (xy 1 1) (xy 2 2)))', body ? zlib.inflateSync(Buffer.from(body, 'base64')).toString() : 'no file');
+}
 check('and on the next visit the plugin finds them again', runsAfter.home === runsBefore.home + 1 && runsAfter.project === runsBefore.project + 1, JSON.stringify([runsBefore, runsAfter]));
 
 // ---- a viewer cannot change the board through a plugin

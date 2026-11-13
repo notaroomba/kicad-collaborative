@@ -28,12 +28,12 @@
   "status": "works"
  },
  "com.github.Huaqiu-Electronics.kicad-hqpcb-plugin": {
-  "status": "partly",
-  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "status": "works",
+  "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: Update Price sends the order form and shows the prices answered; Add to Cart uploads the Gerber and drill files with the form and opens the order page. Needs network access granted."
  },
  "com.github.Huaqiu-Electronics.kicad-hqsearch-plugin": {
-  "status": "partly",
-  "note": "It opens and prepares its work. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "status": "works",
+  "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: a search lists the parts answered, with price and stock. Needs network access granted."
  },
  "com.github.Huaqiu-Electronics.kicad-nextpcb-plugin": {
   "status": "works"
@@ -63,8 +63,8 @@
   "status": "works"
  },
  "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
-  "status": "limited",
-  "note": "Saving a block reads what the schematic editor copied to the clipboard, which a plugin in the browser is not allowed to read."
+  "status": "works",
+  "note": "Runs here. Copy in the schematic editor, then Save Block; Import puts a block back in the editor's copy buffer for Paste. Blocks are kept with the project in this browser."
  },
  "com.github.Steffen-W.KiCad-Parasitics": {
   "status": "works"
@@ -103,8 +103,8 @@
   "status": "works"
  },
  "com.github.aivon-pcba.aivon-plug-in-for-kicad": {
-  "status": "partly",
-  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "status": "works",
+  "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: the upload holds the Gerbers, drill files, netlist and part lists with the board's size and layer count, and the quote page it names is opened. Needs network access granted."
  },
  "com.github.andresarmento.kicad2gcode": {
   "status": "opens",
@@ -158,7 +158,7 @@
  },
  "com.github.fablabkerala.gerber2png-plugin-for-kicad": {
   "status": "partly",
-  "note": "It makes the Gerber archive and hands it over as a download. Passing it straight to the Gerber2Png page needs a local network port: open that page and load the archive there."
+  "note": "It makes the Gerber archive and hands it over as a download. The Gerber2Png page fetches the archive from a port on your own computer, which a browser tab cannot open: load the downloaded archive in that page instead."
  },
  "com.github.g200kg.kicad-gerberzipper2": {
   "status": "works",
@@ -174,8 +174,8 @@
   "status": "works"
  },
  "com.github.heronitec-solutions.kicomlib": {
-  "status": "opens",
-  "note": "It opens. It is a client for a KiComLib library server; nobody has tried it here against one."
+  "status": "limited",
+  "note": "It opens. It keeps library folders on a computer in step with a KiComLib server you run yourself; the web editor has no such folders and a plugin here can only reach the web addresses its own package names."
  },
  "com.github.jOaSbA.localize-dependencies": {
   "status": "limited",
@@ -235,8 +235,8 @@
   "status": "works"
  },
  "com.github.pcbway.PCBWay-Plug-in-for-Kicad": {
-  "status": "partly",
-  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "status": "works",
+  "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: the upload holds the Gerbers, drill files, netlist and part lists with the board's size and layer count, and the order page it names is opened. Needs network access granted."
  },
  "com.github.riehlies.kisi": {
   "status": "works",
@@ -330,8 +330,8 @@
   "note": "Notes and tasks are kept per project in this browser, for you only; collaborators do not see them."
  },
  "com.stenchill.kicad": {
-  "status": "partly",
-  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "status": "works",
+  "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: the paste and outline Gerbers go up with the stencil settings, the progress stream is followed, the mesh files are saved in a dated folder and handed over, and View in 3D opens the shared page. Needs network access granted."
  },
  "org.openscopeproject.InteractiveHtmlBom": {
   "status": "works"

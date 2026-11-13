@@ -152,6 +152,7 @@ async function one(dir, boardPath, boardGiven) {
   // "# sibling: <path from the repository root>": another file of the project, beside the board (a board to panelize, …)
   if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
+  let copied = ""; { const m = driveSrc && /^# copied: (\S+)$/m.exec(driveSrc); if (m) copied = fs.readFileSync(path.resolve(server, "..", m[1]), "utf8"); }
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
     calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75) } : undefined });
@@ -162,6 +163,9 @@ async function one(dir, boardPath, boardGiven) {
       if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
       return JSON.stringify({ path: path.basename(boardPath), text, selection: edited ? [] : startSelection, version: "10.0.0", files: siblings });
     }
+    // The editors' copy buffer.  "# copied: <path from the repository root>" in a drive: what Copy took before the run.
+    if (method === "design.copied") return JSON.stringify({ text: copied });
+    if (method === "design.copy") { copied = String(a.text || ""); return JSON.stringify({ copied: copied.length }); }
     if (method === "ui.confirm") { said.push(`${a.title || ""}: ${String(a.message || "").slice(0, 300)}`); return "true"; }
     if (method === "ui.prompt") { const v = {}; for (const f of a.fields || []) v[f.name] = f.default ?? ""; return JSON.stringify(v); }
     if (method === "files.pick") return "null";
@@ -173,6 +177,29 @@ async function one(dir, boardPath, boardGiven) {
     // the network: there is none here, except one made-up host that answers with what it was sent (the runtime's own tests use it)
     if (method === "net.fetch") {
       let host = ""; try { host = new URL(a.url).hostname; } catch { /* not an address */ }
+      // A drive that defines net(method, url, headers, body) plays the web service the plugin talks to: it checks what
+      // arrived and answers (status, body) or (status, body, headers); None is "no such host".  Nothing leaves this machine.
+      if (driveSrc && /^def net\(/m.test(driveSrc) && host !== "echo.kicad-web.test") {
+        py.globals.set("_kc_net_req", JSON.stringify({ method: a.method, url: a.url, headers: a.headers || [], body: a.body || "" }));
+        const out = py.runPython(`
+import json as _kj, base64 as _kb, sys as _ks
+if "/kicad/drive" not in _ks.path: _ks.path.insert(0, "/kicad/drive")
+import kc_drive as _kd
+_kr = _kj.loads(_kc_net_req)
+_ka = _kd.net(_kr["method"], _kr["url"], {str(k).lower(): v for k, v in _kr["headers"]}, _kb.b64decode(_kr["body"]))
+if _ka is None:
+    _ko = {"error": "the drive's stand-in service has no such address: " + _kr["url"]}
+else:
+    _kst, _kbody = _ka[0], _ka[1]
+    _kh = dict(_ka[2]) if len(_ka) > 2 else {}
+    if isinstance(_kbody, (dict, list)):
+        _kbody = _kj.dumps(_kbody); _kh.setdefault("Content-Type", "application/json")
+    if isinstance(_kbody, str): _kbody = _kbody.encode("utf-8")
+    _ko = {"status": int(_kst), "reason": "OK" if int(_kst) < 400 else "Error", "headers": [[k, v] for k, v in _kh.items()], "body": _kb.b64encode(_kbody).decode("ascii"), "url": _kr["url"]}
+_kj.dumps(_ko)
+`);
+        return out;
+      }
       if (host !== "echo.kicad-web.test") return JSON.stringify({ error: "the test harness has no network" });
       const sent = Buffer.from(a.body || "", "base64");
       const answer = JSON.stringify({ method: a.method, url: a.url, headers: a.headers, bytes: sent.length, text: sent.toString("utf8").slice(0, 2000) });

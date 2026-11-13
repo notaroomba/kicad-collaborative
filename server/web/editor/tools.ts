@@ -13,8 +13,14 @@ import { dragG, isSch, pxPerMm, requestRender, requestRepaint, stage, worldMm } 
    // ERC/DRC markers handed over by the tool modules; the project's .kicad_pro text (design rules)
 // KiCad's clipboard is s-expression text: the modules write it here and to the system clipboard when allowed.
 // read() takes the system clipboard when it holds any s-expression (a lone (text …), (bus …), (sheet …) is one too).
-export const appClipboard = { text: "", get() { return appClipboard.text; }, set(t: unknown) { appClipboard.text = String(t || ""); if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(appClipboard.text).catch(() => {}); },
-  async read() { try { if (navigator.clipboard && navigator.clipboard.readText) { const t = await navigator.clipboard.readText(); if (t && /^\s*\(\s*[a-z_]+[\s("]/i.test(t)) return t; } } catch (e) { /* permission denied: use the buffer */ } return appClipboard.text; } };
+// The buffer is also kept in this browser's storage, so Copy in the schematic's tab can be pasted in the board's tab
+// (and read by a plugin there) without the browser's clipboard permission.
+const CLIP_KEY = "kui.clipboard";
+const clipStored = () => { try { return localStorage.getItem(CLIP_KEY) || ""; } catch (e) { return ""; } };
+export const appClipboard = { text: "", get() { return appClipboard.text || clipStored(); },
+  set(t: unknown) { appClipboard.text = String(t || ""); try { if (appClipboard.text.length <= 2_000_000) localStorage.setItem(CLIP_KEY, appClipboard.text); else localStorage.removeItem(CLIP_KEY); } catch (e) { /* storage full or blocked: this tab still has it */ } if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(appClipboard.text).catch(() => {}); },
+  async read() { try { if (navigator.clipboard && navigator.clipboard.readText) { const t = await navigator.clipboard.readText(); if (t && /^\s*\(\s*[a-z_]+[\s("]/i.test(t)) return t; } } catch (e) { /* permission denied: use the buffer */ } return appClipboard.get(); } };
+if (typeof window !== "undefined") window.addEventListener("storage", (ev) => { if (ev.key === CLIP_KEY) appClipboard.text = ev.newValue || ""; });
 
 export const undoStack: UndoEntry[] = [], redoStack: UndoEntry[] = [];
 

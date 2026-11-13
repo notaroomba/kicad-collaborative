@@ -25,7 +25,7 @@ class DataViewItem:
         self._row = row
 
     def IsOk(self):
-        return self._row is not None and not self._row.get("gone")
+        return self._row is not None and not (isinstance(self._row, dict) and self._row.get("gone"))
 
     __bool__ = IsOk
 
@@ -343,9 +343,41 @@ class DataViewListCtrl(Window):
     def GetStore(self):
         return self
 
-    GetModel = GetStore
+    # a model that hands the rows over (DataViewIndexListModel, PyDataViewModel): the table is filled from it and
+    # filled again whenever the model says its rows changed
+    _wx_model = None
+
+    def AssociateModel(self, model):
+        old = self._wx_model
+        if old is not None and self in getattr(old, "_wx_views", []):
+            old._wx_views.remove(self)
+        self._wx_model = model
+        if model is not None:
+            if not hasattr(model, "_wx_views"):
+                model._wx_views = []
+            model._wx_views.append(self)
+        self._wx_refill()
+        return True
+
+    def GetModel(self):
+        return self._wx_model
+
+    def _wx_refill(self):
+        model = self._wx_model
+        chosen = [i for i, r in enumerate(self._rows) if r["sel"]]
+        self.DeleteAllItems()
+        if model is None:
+            return
+        cols = [c.GetModelColumn() if c.GetModelColumn() is not None else i for i, c in enumerate(self._cols)]
+        for values, data, depth in model._wx_rows(cols):
+            row = self._wx_insert(len(self._rows), ["" if v is None else v for v in values], data)
+            if depth and row["tds"]:
+                row["tds"][0].style.paddingLeft = f"{8 + 16 * depth}px"
+        for i in chosen:
+            if i < len(self._rows):
+                self._wx_mark(self._rows[i], True)
+
     GetCount = GetItemCount
-    AssociateModel = lambda self, *a: True
 
     def GetValue(self, row, col):
         row = self._wx_index(row)
@@ -477,6 +509,131 @@ class DataViewListCtrl(Window):
 DataViewCtrl = DataViewListCtrl
 DataViewTreeCtrl = DataViewListCtrl
 DataViewListStore = DataViewListCtrl
+
+
+class _Model:
+    """What every model shares: the views showing it, told to fill again when the rows change."""
+
+    def _wx_changed(self, *a, **k):
+        for v in list(getattr(self, "_wx_views", [])):
+            try:
+                v._wx_refill()
+            except Exception:
+                pass
+        return True
+
+    RowAppended = RowPrepended = RowInserted = RowDeleted = RowsDeleted = RowChanged = RowValueChanged = _wx_changed
+    Reset = Cleared = ItemAdded = ItemsAdded = ItemDeleted = ItemsDeleted = ItemChanged = ItemsChanged = ValueChanged = Resort = _wx_changed
+    AddNotifier = RemoveNotifier = IncRef = DecRef = UseWeakRefs = lambda self, *a: None
+    HasDefaultCompare = lambda self: False
+    IsContainer = lambda self, item: False
+    GetParent = lambda self, item: NullDataViewItem
+    GetAttr = lambda self, item, col, attr: False
+    IsEnabled = lambda self, item, col: True
+    HasContainerColumns = lambda self, item: False
+    IsListModel = lambda self: False
+    IsVirtualListModel = lambda self: False
+
+
+class DataViewIndexListModel(_Model):
+    """Rows by number: GetValueByRow(row, col) and GetCount() are the plugin's."""
+
+    def __init__(self, rows=0):
+        self._wx_count = int(rows or 0)
+        self._wx_views = []
+
+    def GetCount(self):
+        return self._wx_count
+
+    def GetRow(self, item):
+        r = getattr(item, "_row", None)
+        if isinstance(r, dict):
+            for v in self._wx_views:
+                if r in v._rows:
+                    return v._rows.index(r)
+            return -1
+        return int(r) if isinstance(r, int) else -1
+
+    def GetItem(self, row):
+        for v in self._wx_views:
+            if 0 <= row < len(v._rows):
+                return DataViewItem(v._rows[row])
+        return NullDataViewItem
+
+    def Reset(self, rows=None):
+        if rows is not None:
+            self._wx_count = int(rows)
+        return self._wx_changed()
+
+    def GetValue(self, item, col):
+        return self.GetValueByRow(self.GetRow(item), col)
+
+    def SetValue(self, value, item, col):
+        return self.SetValueByRow(value, self.GetRow(item), col)
+
+    GetValueByRow = lambda self, row, col: ""
+    SetValueByRow = lambda self, value, row, col: False
+    GetAttrByRow = lambda self, row, col, attr: False
+    IsListModel = lambda self: True
+
+    def _wx_rows(self, cols):
+        for r in range(int(self.GetCount() or 0)):
+            values = []
+            for c in cols:
+                try:
+                    values.append(self.GetValueByRow(r, c))
+                except (IndexError, KeyError):
+                    values.append("")
+            yield values, None, 0
+
+
+DataViewVirtualListModel = PyDataViewIndexListModel = PyDataViewVirtualListModel = DataViewIndexListModel
+
+
+class PyDataViewModel(_Model):
+    """Rows as a tree of the plugin's own objects: GetChildren(parent, children) and GetValue(item, col) are the
+    plugin's.  The tree is shown opened out, children indented under their parent."""
+
+    def __init__(self):
+        self._wx_views = []
+        self._wx_objects = {}
+
+    def ObjectToItem(self, obj):
+        if obj is None:
+            return NullDataViewItem
+        item = DataViewItem(id(obj))
+        self._wx_objects[id(obj)] = obj
+        return item
+
+    def ItemToObject(self, item):
+        r = getattr(item, "_row", None)
+        if isinstance(r, dict):                       # a row of the table: the model's own item is kept with it
+            return self.ItemToObject(r.get("data")) if isinstance(r.get("data"), DataViewItem) else None
+        return self._wx_objects.get(r)
+
+    GetColumnCount = lambda self: 0
+    GetColumnType = lambda self, col: "string"
+    GetChildren = lambda self, parent, children: 0
+    GetValue = lambda self, item, col: ""
+    SetValue = lambda self, value, item, col: False
+
+    def _wx_rows(self, cols, parent=None, depth=0):
+        children = []
+        self.GetChildren(parent if parent is not None else NullDataViewItem, children)
+        for item in children:
+            values = []
+            for c in cols:
+                try:
+                    v = self.GetValue(item, c)
+                    values.append("" if v is False or v is None else v)
+                except Exception:
+                    values.append("")
+            yield values, item, depth
+            if depth < 8 and self.IsContainer(item):
+                yield from self._wx_rows(cols, item, depth + 1)
+
+
+DataViewModel = PyDataViewModel
 
 
 class _Renderer:

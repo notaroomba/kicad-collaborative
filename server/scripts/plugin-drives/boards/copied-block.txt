@@ -1,0 +1,4 @@
+(wire (pts (xy 100.33 50.8) (xy 110.49 50.8)) (stroke (width 0) (type default)) (uuid "5b0c1f0e-6f0e-4b53-9a43-0b1c7f3f1a01"))
+(wire (pts (xy 100.33 53.34) (xy 110.49 53.34)) (stroke (width 0) (type default)) (uuid "5b0c1f0e-6f0e-4b53-9a43-0b1c7f3f1a02"))
+(label "SDA" (at 110.49 50.8 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "5b0c1f0e-6f0e-4b53-9a43-0b1c7f3f1a03"))
+(label "SCL" (at 110.49 53.34 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "5b0c1f0e-6f0e-4b53-9a43-0b1c7f3f1a04"))

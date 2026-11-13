@@ -418,6 +418,24 @@ class Grid(Window):
 
     SetCellFont = SetCellSize = SetCellOverflow = SetCellAlignment
 
+    # the grid's own colours, as the plugin sets them for the whole table
+    def SetDefaultCellBackgroundColour(self, colour):
+        self._table.style.background = wx.Colour(colour).GetAsString()
+
+    def SetDefaultCellTextColour(self, colour):
+        self._table.style.color = wx.Colour(colour).GetAsString()
+
+    def SetLabelBackgroundColour(self, colour):
+        self._head.style.background = wx.Colour(colour).GetAsString()
+
+    def SetLabelTextColour(self, colour):
+        self._head.style.color = wx.Colour(colour).GetAsString()
+
+    def SetGridLineColour(self, colour):
+        self._table.style.borderColor = wx.Colour(colour).GetAsString()
+
+    SetSelectionBackground = SetSelectionForeground = SetCellHighlightColour = SetDefaultRowSize = SetDefaultColSize = SetDefaultCellFont = SetLabelFont = lambda self, *a, **k: None
+
     def SetAttr(self, row, col, attr):
         if self._wx_ok(row, col) and isinstance(attr, GridCellAttr):
             cell = self._rows[row]["cells"].setdefault(col, {})
