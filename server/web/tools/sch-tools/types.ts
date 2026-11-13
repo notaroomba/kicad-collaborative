@@ -114,6 +114,8 @@ export type SchState = {
   autoStartWires: boolean; autoPress?: { mm: Pt; client: Pt; mods: { shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } } | null; autoCursor?: string | null;
   dragEndedAt?: number; forceFollow?: boolean; internalSwitch?: boolean; multi?: Set<string> | null; otherRefs?: Iterable<string> | null;
   showDangling?: boolean; docGen: number;
+  /** the modifier keys of the last pointer move (Shift turns the magnetic snap and its indicator off) */
+  mods?: Mods | null;
   labelQueue?: SNode[] | null;
   lastLabelShape?: string; lastFlagShape?: string; lastAutoRotate?: boolean; autoRotateIds?: Set<string>;
   lastTextH?: string; lastTextV?: string; lastTextBold?: boolean; lastTextItalic?: boolean; lastTextVertical?: boolean; lastTextSpin?: number;

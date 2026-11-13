@@ -6,7 +6,7 @@ import { BUS_TEXT, previewJunctions } from "./junction";
 import { anchorOf } from "./orient";
 import { outline, paint } from "./overlay";
 import { drawEditPoints } from "./point-edit";
-import { snapConn } from "./snap";
+import { snapAnchor, snapConn } from "./snap";
 import { drawSchArcPreview } from "./arcs";
 import { drawTableLines } from "./nodes";
 import { CLR, K, S, atOf, kids, ptsOf, str, toolOf } from "./state";
@@ -36,6 +36,23 @@ export function danglingEnds(doc: KDoc): Dangling[] {
     else if (k === "bus_entry") { const c = connPoints(doc, it); add(c[0], "BUS_ENTRY_END", it); add(c[1], "WIRE_ENTRY_END", it); }
   }
   const out: Dangling[] = [];
+  // SCH_BUS_WIRE_ENTRY::UpdateDanglingState: an end has a wire when another wire ends there, a bus when it lies on a
+  // bus; a wire at one end and a bus at the other connects both, otherwise only the end that has either
+  for (const it of doc.items.values()) {
+    if (it.kind !== "bus_entry") continue;
+    const ends = connPoints(doc, it); if (ends.length < 2) continue;
+    const hasWire = [false, false], hasBus = [false, false];
+    for (const ln of lines) for (let i = 0; i < 2; i++) {
+      if (ln.kind === "wire") { const q = ptsOf(ln.node); if (same(q[0], ends[i]) || same(q[q.length - 1], ends[i])) hasWire[i] = true; }
+      else if (segs(ln).some(([a, b]) => segDist(ends[i], a, b) <= 1e-3)) hasBus[i] = true;
+    }
+    let d0 = true, d1 = true;
+    if ((hasWire[0] && hasBus[1]) || (hasWire[1] && hasBus[0])) d0 = d1 = false;
+    else if (hasWire[0] || hasBus[0]) d0 = false;
+    else if (hasWire[1] || hasBus[1]) d1 = false;
+    if (d0) out.push({ p: ends[0], what: "busEntry", item: it, color: "busEntry" });
+    if (d1) out.push({ p: ends[1], what: "busEntry", item: it, color: "busEntry" });
+  }
   for (const it of lines) {
     if (it.kind !== "wire") continue;                                   // only wires show the indicator
     const p = ptsOf(it.node);
@@ -66,7 +83,7 @@ export function danglingEnds(doc: KDoc): Dangling[] {
  * ends of a graphic line (never connected, so always dangling) a graphic line.
  */
 export function autostartKind(doc: KDoc, p: Pt) {
-  for (const d of danglingList(doc)) if (same(d.p, p)) {
+  for (const d of danglingList(doc)) if (d.what !== "busEntry" && same(d.p, p)) {
     if (d.what === "label") { const n = d.item.kind === "sheet" ? null : d.item.node; if (n && BUS_TEXT.test(str(n[1]))) return "bus"; }
     return "wire";
   }
@@ -93,12 +110,19 @@ export const AUTOSTART_CURSOR: Record<string, string> = { wire: LINE_CURSOR("#00
 export const AUTOSTART_TOOL: Record<string, string> = { wire: "wire", bus: "bus", polyline: "lines" };
 S.autoStartWires = true;                   // eeschema drawing.auto_start_wires (default on)
 export const brighten = (hex: string, f: number) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return hex; const v = parseInt(m[1], 16); const c = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((x) => Math.round(x * (1 - f) + 255 * f)); return `rgb(${c[0]},${c[1]},${c[2]})`; };
-export const MIL = 0.0254, DANGLING_SYMBOL_SIZE = 12 * MIL, TARGET_PIN_RADIUS = 15 * MIL, DEFAULT_PEN = 6 * MIL;
+export const MIL = 0.0254, DANGLING_SYMBOL_SIZE = 12 * MIL, TARGET_PIN_RADIUS = 15 * MIL, DEFAULT_PEN = 6 * MIL, TARGET_BUSENTRY_RADIUS = 12 * MIL;
 let danglingCache: { doc: KDoc | null; gen: number; list: Dangling[] } = { doc: null, gen: -1, list: [] };
 S.docGen = 0;
 export function danglingList(doc: KDoc) {
   if (danglingCache.doc !== doc || danglingCache.gen !== S.docGen || S.drag) danglingCache = { doc, gen: S.docGen, list: danglingEnds(doc) };
   return danglingCache.list;
+}
+/** The local labels whose connection point dangles (render's `dangling` option: a selected one shows no anchor). */
+let danglingIdsCache: { list: Dangling[] | null; ids: Set<string> } = { list: null, ids: new Set() };
+export function danglingLabelIds(doc: KDoc): Set<string> {
+  const list = danglingList(doc);
+  if (danglingIdsCache.list !== list) danglingIdsCache = { list, ids: new Set(list.filter((d) => d.what === "label" && d.item.kind === "label").map((d) => d.item.id)) };
+  return danglingIdsCache.ids;
 }
 export function drawDangling(c: CanvasRenderingContext2D, doc: KDoc, px: number) {
   danglingList(doc);
@@ -107,6 +131,8 @@ export function drawDangling(c: CanvasRenderingContext2D, doc: KDoc, px: number)
   for (const d of danglingCache.list) {
     const col = brighten(K.SCH[d.color] || K.SCH.wire, 0.3); c.strokeStyle = col;
     if (d.what === "pin") { c.beginPath(); c.arc(d.p[0], d.p[1], TARGET_PIN_RADIUS, 0, Math.PI * 2); c.stroke(); continue; }
+    // SCH_PAINTER::draw( SCH_BUS_ENTRY_BASE ): a circle of the pen width plus TARGET_BUSENTRY_RADIUS / 2 (6 mils)
+    if (d.what === "busEntry") { const n = d.item.node, st = n.find((x) => Array.isArray(x) && x[0] === "stroke") as SNode | undefined, wd = st ? (st.find((x) => Array.isArray(x) && x[0] === "width") as SNode | undefined) : undefined; const pen = wd && +wd[1] > 0 ? +wd[1] : DEFAULT_PEN; c.beginPath(); c.arc(d.p[0], d.p[1], pen + TARGET_BUSENTRY_RADIUS / 2, 0, Math.PI * 2); c.stroke(); continue; }
     const w = d.what === "wire" ? DEFAULT_PEN : DANGLING_SYMBOL_SIZE / 2, r = w + DANGLING_SYMBOL_SIZE / 2;
     c.strokeRect(d.p[0] - r, d.p[1] - r, 2 * r, 2 * r);
   }
@@ -124,8 +150,9 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
   S.ctx = ctx; installDom(ctx);
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
   if (S.showDangling !== false) drawDangling(c, doc, px);
-  // no rollover in the selection tool (eeschema has none); the delete tool shows what a click would remove
-  if (S.hover && S.hover !== S.sel && !S.drag && curTool() !== "select") { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
+  // no rollover in any tool but the delete tool (SCH_TOOL_BASE::InteractiveDelete), which brightens the item a click
+  // would remove: LAYER_BRIGHTENED with its 0.15-alpha shadow (BrightenItem), the rest of the sheet as it is
+  if (S.hover && !S.drag && curTool() === "delete") { const it = doc.items.get(S.hover); if (it) paintItems(c, view, doc, [it], { highlight: new Set([it.id]) }); }
   // the selected item gets KiCad's selection shadow from the canvas pass (the host adds S.sel to the selection)
   if (curTool() === "select" && !S.drag) drawEditPoints(c, ctx, px);
   if (S.highlight && typeof ctx.setHighlight !== "function") {   // app.js paints the highlight when it can; else a plain outline
@@ -143,6 +170,8 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
       c.save(); c.strokeStyle = s.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(s.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.globalAlpha = 0.85;
       c.beginPath(); c.moveTo(s.pts[0][0], s.pts[0][1]); for (let i = 1; i < s.pts.length; i++) c.lineTo(s.pts[i][0], s.pts[i][1]); c.stroke(); c.restore();
     }
+    // SCH_MOVE_TOOL: every step previews JUNCTION_HELPERS::PreviewJunctions of the selection and the drag lines
+    if (S.drag.moved) drawJunctionDots(c, dragJunctions(doc, S.drag), px);
   }
   const w = S.wire;
   if (w) {
@@ -177,18 +206,57 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
     c.restore();
   }
   if (S.carry && S.carry.item) {
-    paint(c, S.carry.item, 0.65, px);
-    const b = S.carry.item.bbox;
-    if (b) { c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.strokeRect(b[0] - 0.3, b[1] - 0.3, b[2] - b[0] + 0.6, b[3] - b[1] + 0.6); c.restore(); }
-    else if (S.carry.kind === "image" && S.carry.size) {   // the canvas draws no bitmap: a crossed box of the image's size, centred on the anchor
-      const [w, h] = S.carry.size, [x, y] = anchorOf("image", S.carry.node);
-      c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]);
-      c.strokeRect(x - w / 2, y - h / 2, w, h); c.beginPath(); c.moveTo(x - w / 2, y - h / 2); c.lineTo(x + w / 2, y + h / 2); c.moveTo(x + w / 2, y - h / 2); c.lineTo(x - w / 2, y + h / 2); c.stroke(); c.restore();
-    }
+    // SCH_DRAWING_TOOLS: the new item is IS_NEW | IS_MOVING and selected, so it draws in its own colours and font with
+    // the selection shadow, its field anchors hidden while it moves (parentMoving); an image as its bitmap
+    const it = S.carry.item;
+    paintItems(c, view, doc, [it], { selected: new Set([it.id]), moving: new Set([it.id]) });
   }
-  const t = toolOf(S.tool);
-  if (t && S.cursor && !S.carry && t.id !== "delete") {   // where the next click lands
-    const p = t.kind === "wire" || t.kind === "bus" ? snapConn(ctx, S.cursor, t.kind) : ctx.snap(S.cursor);
-    c.save(); c.strokeStyle = CLR.hover; c.lineWidth = px; const h = 5 * px; c.strokeRect(p[0] - h, p[1] - h, 2 * h, 2 * h); c.restore();
-  }
+  // EE_GRID_HELPER: a cursor snapped to an object's anchor (a pin, a wire end, a label …) shows the SNAP_INDICATOR,
+  // a plain grid snap nothing
+  const sp = snapIndicatorAt(ctx);
+  if (sp) drawSnapIndicator(c, sp, px);
+}
+/**
+ * Items drawn by the canvas painter over the overlay: a carried item, the delete tool's brightened candidate.  They
+ * are painted as a document of their own, over what the canvas holds.
+ */
+export function paintItems(c: CanvasRenderingContext2D, view: KView, doc: KDoc, items: KItem[], opts: Record<string, unknown>) {
+  const one = Object.assign({}, doc, { items: new Map(items.map((it) => [it.id, it])) }) as KDoc;
+  c.save();
+  try { K.render(one, c, view, Object.assign({ background: false, overlay: true, grid: 0, frame: false, hidden: S.ctx && (S.ctx as { hiddenLayers?: Set<string> }).hiddenLayers || undefined }, opts) as KRenderOpts); }
+  finally { c.restore(); }
+}
+/** Where the tool's cursor snapped to an object anchor (the wire / bus tools, a carried label), or null. */
+export function snapIndicatorAt(ctx: SchCtx): Pt | null {
+  const t = toolOf(S.tool); if (!S.cursor || (t && t.id === "delete")) return null;
+  if (S.mods && S.mods.shiftKey) return null;   // Shift: no magnetic snap
+  const c = S.carry;
+  const kind = S.wire ? S.wire.kind : c ? (TEXT_KINDS_SNAP.has(c.kind) ? (c.kind === "bus" ? "bus" : "wire") : null) : t && (t.kind === "wire" || t.kind === "bus") ? t.kind : null;
+  if (!kind || kind === "polyline") return null;
+  return snapAnchor(ctx, S.cursor, kind);
+}
+// what placeCarry snaps to connections rather than the grid alone
+const TEXT_KINDS_SNAP = new Set(["label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "no_connect", "junction", "bus_entry", "wire", "bus"]);
+/**
+ * KIGFX::SNAP_INDICATOR (ORIGIN_VIEWITEM CIRCLE_CROSS, 16 px, 1 px pen) in COLOR4D( 0, 0.1, 0.4, 1 ).  A schematic
+ * anchor carries no POINT_TYPE, so no type icon is added.
+ */
+export const SNAP_INDICATOR_COLOR = "rgb(0,26,102)", SNAP_INDICATOR_SIZE = 16;
+export function drawSnapIndicator(c: CanvasRenderingContext2D, p: Pt, px: number) {
+  const r = SNAP_INDICATOR_SIZE * px;
+  c.save(); c.globalAlpha = 1; c.setLineDash([]); c.strokeStyle = SNAP_INDICATOR_COLOR; c.lineWidth = px; c.lineCap = "butt";
+  c.beginPath(); c.arc(p[0], p[1], r, 0, Math.PI * 2);
+  c.moveTo(p[0] - r, p[1]); c.lineTo(p[0] + r, p[1]); c.moveTo(p[0], p[1] - r); c.lineTo(p[0], p[1] + r); c.stroke(); c.restore();
+}
+/** The junctions a move / drag would add: PreviewJunctions over the moved lines, the stretched ends and the new drag lines. */
+export function dragJunctions(doc: KDoc, d: NonNullable<typeof S.drag>): Pt[] {
+  const lines: { kind: string; a: Pt; b: Pt }[] = [], skip = new Set<string>();
+  const add = (kind: string, pts: Pt[]) => { for (let i = 1; i < pts.length; i++) lines.push({ kind, a: pts[i - 1], b: pts[i] }); };
+  // the moved and stretched lines are already where the drag has them: they count once, as preview lines
+  const line = (it: KItem) => { if ((it.kind === "wire" || it.kind === "bus") && !skip.has(it.id) && doc.items.get(it.id)) { skip.add(it.id); add(it.kind, ptsOf(doc.items.get(it.id)!.node)); } };
+  for (const e of d.items || []) if (e.item) line(e.item);
+  for (const a of d.anchors || []) for (const e of a.ends || []) line(e.item);
+  for (const s of d.preview || []) add(s.kind, s.pts);
+  if (!lines.length) return [];
+  try { return previewJunctions(doc, lines, skip); } catch (e) { return []; }
 }

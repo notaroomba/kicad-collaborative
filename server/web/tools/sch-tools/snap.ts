@@ -15,10 +15,15 @@ export function snapConn(ctx: SchCtx, mm: Pt, kind: string, ev?: Mods | null): P
   const noGrid = !!(ev && (ev.ctrlKey || ev.metaKey)), noAnchors = !!(ev && ev.shiftKey);
   const g = noGrid ? [mm[0], mm[1]] : ctx.snap([mm[0], mm[1]]);
   if (noAnchors) return [r4(g[0]), r4(g[1])];
+  const a = snapAnchor(ctx, mm, kind);
+  return a || [r4(g[0]), r4(g[1])];
+}
+/** The object anchor (pin, line end) snapConn lands on for this cursor, or null when it falls back to the grid. */
+export function snapAnchor(ctx: SchCtx, mm: Pt, kind: string): Pt | null {
   const r = Math.max((ctx.gridPitch || 1.27) * 0.45, 6 * mmPerPx(ctx));
   let best: Pt | null = null as Pt | null, bd = r;
   const take = (x: number, y: number) => { const d = Math.hypot(x - mm[0], y - mm[1]); if (d < bd) { bd = d; best = [x, y]; } };
   if (kind !== "bus") for (const p of pinsAt(ctx.doc, mm[0], mm[1], r)) take(p.x, p.y);
   for (const it of ctx.doc.items.values()) { if (it.kind !== (kind || "wire")) continue; for (const p of ptsOf(it.node)) if (Math.abs(p[0] - mm[0]) <= r && Math.abs(p[1] - mm[1]) <= r) take(p[0], p[1]); }
-  return best ? [r4(best[0]), r4(best[1])] : [r4(g[0]), r4(g[1])];
+  return best ? [r4(best[0]), r4(best[1])] : null;
 }

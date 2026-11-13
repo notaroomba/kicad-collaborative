@@ -131,7 +131,8 @@ test("symbol bodies: fills, De Morgan body style, extends, DNP cross, sim-exclus
   doc = sch('(symbol (lib_id "L:Derived") (at 100 100 0) (unit 1) (body_style 1) (dnp yes) (exclude_from_sim yes) (uuid "c"))');
   it = doc.items.get("c"); assert(it.geom.some((g) => g.t === "arc"), "derived symbol inherits the parent drawing");
   assert.strictEqual(it.geom.filter((g) => g.color === "rgba(220,9,13,0.85)").length, 2, "DNP cross");
-  assert(it.geom.some((g) => g.alpha === 0.5), "excluded-from-sim body is dimmed"); assert(it.geom.some((g) => g.color === "rgba(194,194,194,0.95)"), "exclusion marker");
+  // SCH_PAINTER keeps an excluded symbol's own colours and only adds the marker
+  assert(!it.geom.some((g) => g.alpha === 0.5), "excluded-from-sim body keeps its alpha"); assert(it.geom.some((g) => g.color === "rgba(194,194,194,0.95)" && g.simMarker), "exclusion marker");
   assert(!it.geom.find((g) => g.t === "arc").color.startsWith("#840000"), "DNP body colour is desaturated");
 });
 test("board dimension, target, chamfered and trapezoid pads, blind via, keepout", () => {
@@ -368,16 +369,17 @@ test("sheet pins: every side reads into the sheet with the swapped input/output 
   sh = shapeOf("P"); assert.strictEqual(sh.pts.length, 5); assert(sh.pts.every((p) => p[1] <= 60 + 1e-9)); assert.strictEqual(sh.pts.filter((p) => Math.abs(p[1] - (60 - 2 * hs)) < 1e-9).length, 2, "passive: a box");
   for (const g of shapes) { assert.strictEqual(g.layer, "Sheets"); assert(g.w > 0); }
 });
-test("highlight option: the set is drawn brightened with a halo, everything else at 25% alpha", () => {
+test("highlight option: the set is drawn brightened with a halo; a board dims everything else to 25%, a schematic does not", () => {
   assert.strictEqual(K.brightened("#C83434", 0.5), "#e49a9a"); assert.strictEqual(K.highlightColor("#C83434", true), "#e49a9a"); assert.strictEqual(K.highlightColor("#009600", false), K.SCH.brightened); assert.strictEqual(K.HL_DIM, 0.25);
   const sch = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w2")) (junction (at 5 0) (diameter 0) (color 0 0 0 0) (uuid "j1")) (label "NET" (at 2 5 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1")))');
   const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };
   let ctx = recCtx(800, 600); K.render(sch, ctx, view, { highlight: new Set(["w1", "j1"]) });
   const strokes = ctx.ops.filter((o) => o.op === "stroke");
   assert(strokes.some((o) => o.stroke === K.SCH.brightened && o.alpha === 1), "highlighted wire in LAYER_BRIGHTENED");
-  assert(strokes.some((o) => o.stroke === K.SCH.wire && o.alpha === 0.25), "the other wire is dimmed");
+  // SCH_EDITOR_CONTROL::UpdateNetHighlighting only brightens the net's items: the rest draws as usual
+  assert(strokes.some((o) => o.stroke === K.SCH.wire && o.alpha === 1), "the other wire keeps its alpha");
+  assert(!ctx.ops.some((o) => o.alpha === 0.25), "nothing on a schematic is dimmed");
   assert(ctx.ops.some((o) => o.op === "fill" && o.fill === K.SCH.brightened && o.alpha === 1), "junction fill takes the highlight colour");
-  assert(ctx.ops.some((o) => o.op === "fillText" && o.alpha === 0.25 && o.fill === K.SCH.label), "text of other items is dimmed");
   assert(strokes.filter((o) => o.stroke === K.SCH.brightened && o.alpha === 0.15).length >= 2, "halo pass around the highlighted geometry");
   ctx = recCtx(800, 600); K.render(sch, ctx, view, { highlight: null }); assert(!ctx.ops.some((o) => o.alpha === 0.25 || o.stroke === K.SCH.brightened), "null highlight: normal drawing");
   ctx = recCtx(800, 600); K.render(sch, ctx, view, { highlight: new Set() }); assert(!ctx.ops.some((o) => o.alpha === 0.25), "empty set: normal drawing");

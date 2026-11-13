@@ -17,6 +17,14 @@ export function textRect(item: Pick<KItem, "kind" | "node">): Box {
   const c = [map(0, v0), map(w, v0), map(w, v1), map(0, v1)];
   return [Math.min(...c.map((q) => q[0])), Math.min(...c.map((q) => q[1])), Math.max(...c.map((q) => q[0])), Math.max(...c.map((q) => q[1]))];
 }
+/**
+ * A label's or text's hit box: the box of its drawn geometry (stroke-font glyphs, label outline) when the canvas built
+ * one, else the estimate.  The estimate does not keep the text upright, so a label at 180 or 270 degrees would be
+ * boxed on the wrong side of its anchor.
+ */
+export function textBox(item: KItem): Box {
+  const b = item.bbox; return b && b[2] - b[0] > 0.05 && b[3] - b[1] > 0.05 ? b : textRect(item);
+}
 export function rectOf(item: KItem): Box { return TEXT_KINDS.has(item.kind) ? textRect(item) : item.bbox || (() => { const [x, y] = atOf(item.node); return [x - 0.6, y - 0.6, x + 0.6, y + 0.6]; })(); }
 export const boxDist = (b: Box | null, x: number, y: number) => b ? Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0) : Infinity;
 export function inSweep(t: number, g: SchGeom) { const n = (v: number) => ((v % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); return g.anticlockwise ? n(g.a0 - t) <= n(g.a0 - g.a1) : n(t - g.a0) <= n(g.a1 - g.a0); }
@@ -38,7 +46,7 @@ export function hitNonSymbol(doc: KDoc, x: number, y: number, tol: number) {
     else if (it.kind === "text_box" || it.kind === "netclass_flag" || it.kind === "directive_label" || it.kind === "table" || it.kind === "image") d = boxDist(it.bbox, x, y);
     else if (it.kind === "bus_entry") { const [ax, ay] = atOf(it.node), s = kid(it.node, "size"); d = segDist([x, y], [ax, ay], [ax + (s ? num(s[1]) : 2.54), ay + (s ? num(s[2]) : 2.54)]); }
     else if (it.kind === "junction" || it.kind === "no_connect") { const [ax, ay] = atOf(it.node); d = Math.max(0, Math.hypot(ax - x, ay - y) - 0.6); }
-    else if (TEXT_KINDS.has(it.kind)) { const b = textRect(it); d = Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0); }
+    else if (TEXT_KINDS.has(it.kind)) { const b = textBox(it); d = Math.max(b[0] - x, x - b[2], b[1] - y, y - b[3], 0); }
     else continue;
     if (d <= tol && d < bd) { bd = d; best = it; }
   }

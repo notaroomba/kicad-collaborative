@@ -119,6 +119,7 @@ export function onPointerDown(ev: DownEvent, mm: Pt, ctx: SchCtx) {
 }
 export function onPointerMove(ev: PtrEvent | null | undefined, mm: Pt, ctx: SchCtx) {
   S.ctx = ctx; S.cursor = mm; if (ev && ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY!];
+  S.mods = ev ? { shiftKey: !!ev.shiftKey, ctrlKey: !!ev.ctrlKey, metaKey: !!ev.metaKey, altKey: !!ev.altKey } : null;
   if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind, ev); if (!same(S.wire.cur, p)) { wireFollow(ctx, p); ctx.requestRender(); } return; }
   if (S.carry) { placeCarry(ctx, mm, ev); return; }
   if (S.draw && S.draw.arc) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { schArcMove(S.draw, p); ctx.requestRender(); } return; }

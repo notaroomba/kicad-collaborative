@@ -24,7 +24,7 @@ import { assignPastedRef, clipboardText, copyAsText, copySelection, cutSelection
 import { CLIP, clipRead, clipWrite, cursorOf, selectedItems, setSelectionIds } from "./commands";
 import { junctionAt, needsJunction, pinsAt } from "./connect";
 import { convertNode, convertSelection, validNetname } from "./convert";
-import { autostartKind, danglingEnds, drawOverlay } from "./dangling";
+import { autostartKind, danglingEnds, danglingLabelIds, drawOverlay } from "./dangling";
 import { type PromptFn, autostartAt, isPowerSymbol, onDownCapture, onKeyCapture, onUpCapture, pickSymbol, placeClassLabel, powerSymbols, setPromptImpl } from "./dom";
 import { beginDrag, bendPath, cancelDrag, cleanupAt, connPoints, cycleLineMode, endDrag, makeAnchor, mergeAt, modeText, moveDrag, ridersOf, setDragMode, setLineMode } from "./drag";
 import { cleanupSheetPins, ercCheck, ercNets, runERC, subsheetDoc, syncSheetPins } from "./erc";
@@ -69,7 +69,7 @@ const sch = {
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
   clipboardText, parseClipboard, ercCheck, annotateChanges, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
-  _: { setFollow(on: boolean) { S.forceFollow = !!on; }, schArcDrawMode, pinAt, pinBox, pinAltFunction, pinOf, pinProperties, pinHelper, PIN_HELPERS, swapPinLabels, singleNetLabelForPin, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
+  _: { setFollow(on: boolean) { S.forceFollow = !!on; }, danglingLabelIds, schArcDrawMode, pinAt, pinBox, pinAltFunction, pinOf, pinProperties, pinHelper, PIN_HELPERS, swapPinLabels, singleNetLabelForPin, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
     convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
     ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,

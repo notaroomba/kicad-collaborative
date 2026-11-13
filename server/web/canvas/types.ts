@@ -76,6 +76,10 @@ export type GeomFlags = {
   _p?: Path2D | null; _bb?: Box | null;
   /** the pin (number, or sheet pin name) a primitive of a symbol / sheet draws: a net highlight brightens single pins */
   pinNo?: string;
+  /** a schematic's excluded-from-simulation marker (drawn under markSimExclusions) */
+  simMarker?: boolean;
+  /** hatch fill lines: no selection shadow of their own */
+  noShadow?: boolean;
 };
 
 export type LineGeom = GeomFlags & { t: "line"; x1: number; y1: number; x2: number; y2: number };
@@ -219,6 +223,14 @@ export interface RenderOpts {
   region?: number[] | null;
   /** css colour under the drawing, or false for none */
   background?: string | false | null;
+  /** drawn over what the canvas already holds (a tool preview): with background false nothing is cleared */
+  overlay?: boolean;
+  /** schematic: local labels whose connection point dangles (a selected one shows no anchor) */
+  dangling?: Set<string> | null;
+  /** schematic: items being moved whole ("parentMoving": their fields show no anchors) */
+  moving?: Set<string> | null;
+  /** schematic View-menu display options (EESCHEMA_SETTINGS appearance) */
+  showDirectiveLabels?: boolean; markSimExclusions?: boolean; showErcErrors?: boolean; showErcWarnings?: boolean; showErcExclusions?: boolean;
 }
 /** renderSvg / renderPng options: render()'s, plus the export area and format. */
 export interface ExportOpts extends RenderOpts {

@@ -21,7 +21,7 @@ import { E } from "./state";
 import { startMove } from "./gestures";
 import { schKey } from "./tools";
 import { esc, toast } from "./util";
-import { applyView, fitBox, isSch, mmW, mmX0, mmY0, stage, world, zoomBy } from "./view";
+import { applyView, fitBox, isSch, mmW, mmX0, mmY0, requestRender, stage, world, zoomBy } from "./view";
 
 type Sx = (string | number | Sx)[];
 interface DocEntry { docId: string; path: string; docType: string }
@@ -209,6 +209,19 @@ export const MENU_HANDLERS: Record<string, ActionHandler> = {
   cursorFullCrosshairs: () => (E.crosshairMode === "full" ? setCrosshair("small", "cursorSmallCrosshairs") : setCrosshair("full", "cursorFullCrosshairs")),
   toggleHiddenFields: () => { toggleRenderOpt("showHiddenText", "toggleHiddenFields"); setToggle("showHiddenText", !!E.renderOpts.showHiddenText); },
   showHiddenText: () => { toggleRenderOpt("showHiddenText", "showHiddenText"); setToggle("toggleHiddenFields", !!E.renderOpts.showHiddenText); },
+  // eeschema's View options (EESCHEMA_SETTINGS appearance), each a render option of the schematic painter
+  toggleDirectiveLabels: () => schView("showDirectiveLabels", "toggleDirectiveLabels"),
+  markSimExclusions: () => schView("markSimExclusions", "markSimExclusions"),
+  toggleERCErrors: () => schView("showErcErrors", "toggleERCErrors"),
+  toggleERCWarnings: () => schView("showErcWarnings", "toggleERCWarnings"),
+  toggleERCExclusions: () => schView("showErcExclusions", "toggleERCExclusions", false),
+  // no simulation results are kept here, so the operating-point labels have nothing to show either way
+  toggleOPVoltages: () => schView("showOpVoltages", "toggleOPVoltages"),
+  toggleOPCurrents: () => schView("showOpCurrents", "toggleOPCurrents"),
+  togglePinAltIcons: () => {
+    const on = !(E.renderOpts.showPinAltIcons !== false); E.renderOpts.showPinAltIcons = on; setToggle("togglePinAltIcons", on);
+    KiCadCanvas.setSchDisplay({ pinAltIcons: on }, E.kdoc && isSch() ? E.kdoc : null); E.renderFull = true; requestRender();
+  },
   highContrastModeCycle: () => { if (isSch()) return; cycleInactiveMode(); },
   highContrastMode: () => { if (isSch()) toggleRenderOpt("highContrast", "highContrastMode"); else toggleInactiveMode(); },
   layerAlphaInc: () => { if (!isSch()) layerAlphaStep(1); }, layerAlphaDec: () => { if (!isSch()) layerAlphaStep(-1); },
@@ -223,6 +236,13 @@ Object.assign(HANDLERS, MENU_HANDLERS, {
   drag: () => { startMove("drag"); },
 });
 setToggle("languageEnglish", true);
+/** A schematic View option held in the render options; `dflt` is KiCad's default (EESCHEMA_SETTINGS). */
+function schView(key: string, id: string, dflt = true): void {
+  const on = !(E.renderOpts[key] === undefined ? dflt : !!E.renderOpts[key]);
+  E.renderOpts[key] = on; setToggle(id, on); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender();
+}
+for (const id of ["toggleDirectiveLabels", "markSimExclusions", "toggleERCErrors", "toggleERCWarnings", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons"]) setToggle(id, true);
+setToggle("toggleERCExclusions", false);
 
 /** Exposed for the chrome (window.CollabApp.selectionCount) so menus can grey out what needs a selection. */
 export function selectionCount(): number { return E.kdoc ? selectedIds().length : 0; }

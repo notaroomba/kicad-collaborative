@@ -80,6 +80,7 @@ export function drawAppOverlays(ctx: CanvasRenderingContext2D, view: OverlayView
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
   const dark = !sch;
   for (const f of overlayHooks) { try { f(ctx); } catch (e) { console.warn(e); } }   // the selected table cells and their COL_WIDTH / ROW_HEIGHT handles
+  if (sch) drawFieldUmbilical(ctx, px);
   const ms = E.measure as { a: Pt; b?: Pt } | null;
   if (ms && ms.b) drawRuler(ctx, view, sch, ms.a, ms.b);
   const bs = E.boxSel as { start: Pt; cur: Pt; pts: Pt[]; lasso: boolean; mode?: string } | null;
@@ -90,4 +91,19 @@ export function drawAppOverlays(ctx: CanvasRenderingContext2D, view: OverlayView
   }
   const zr = E.zoomRect as { a?: Pt; b?: Pt } | null;
   if (zr && zr.a && zr.b) drawSelectionArea(ctx, px, dark, { rect: [zr.a, zr.b], inside: true });
+}
+
+/**
+ * SCH_PAINTER::draw( SCH_FIELD ): a field moving on its own (IsMoving, parent not moving) draws the umbilical line
+ * from its position to its parent's, GetOutlineWidth() (one pixel) in LAYER_SCHEMATIC_ANCHOR.
+ */
+export function drawFieldUmbilical(ctx: CanvasRenderingContext2D, px: number): void {
+  const fd = E.fdrag as { id: string; name: string; moved: boolean } | null;
+  if (!fd || !fd.moved || !E.kdoc) return;
+  const it = E.kdoc.items.get(fd.id); if (!it) return;
+  const K = KiCadCanvas;
+  const prop = K.kids(it.node, "property").find((p: SNode) => K.str(p[1]) === fd.name); if (!prop) return;
+  const fa = K.kid(prop, "at"), pa = K.kid(it.node, "at"); if (!fa || !pa) return;
+  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.strokeStyle = "#0000FF"; ctx.lineWidth = px; ctx.lineCap = "butt";
+  ctx.beginPath(); ctx.moveTo(K.num(fa[1]), K.num(fa[2])); ctx.lineTo(K.num(pa[1]), K.num(pa[2])); ctx.stroke(); ctx.restore();
 }

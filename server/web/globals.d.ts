@@ -118,6 +118,7 @@ interface KiCadCanvasApi {
   schTheme(): string;
   schThemeColors(id: string): Record<string, string>;
   setSchTheme(id: string): boolean;
+  setSchDisplay(o: { pinAltIcons?: boolean }, doc?: KDoc | null): void;
   withSchTheme<T>(id: string, fn: () => T): T;
   ORIENT: unknown;
   onAssetLoaded: ((info: { id: string; kind: string; ok: boolean }) => void) | null;

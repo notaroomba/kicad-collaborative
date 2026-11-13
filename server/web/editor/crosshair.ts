@@ -27,7 +27,8 @@ export function placeCrosshair(mm: number[] | null): void {
   const svg = $("#crosshair") as unknown as SVGSVGElement | null;
   if (!svg) return;
   if (!mm || !E.kdoc) { if (shown) { svg.classList.remove("live"); shown = false; } return; }
-  const p = snapMm(mm), wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  // SCH_TOOL_BASE::InteractiveDelete: the picker runs with SetSnapping( false ), so its cursor sits on the pointer
+  const p = E.kdoc.type === "sch" && E.tool === "delete" ? mm : snapMm(mm), wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
   if (!(wr.width > 0) || !(wr.height > 0)) return;
   const x = Math.round(wr.left - sr.left + ((p[0] - mmX0()) / mmW()) * wr.width) + 0.5;
   const y = Math.round(wr.top - sr.top + ((p[1] - mmY0()) / mmH()) * wr.height) + 0.5;

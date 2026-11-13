@@ -363,7 +363,7 @@ export function drawHover(ctx: CanvasRenderingContext2D, view: KView): void {
   ctx.save();
   try {
     KiCadCanvas.setViewTransform(ctx, view);
-    drawHalo(ctx, d, new Set([id]), s, dpr, E.hiddenLayers, isSch() ? { color: KiCadCanvas.SCH_SELECTION_SHADOW as string, alpha: 1, extraPx: 2, extraMm: 2 * 0.0254, strokesOnly: true } : { color: (c: string) => bright(c || "#ffffff", 0.6), alpha: 0.32, extraPx: 3 });
+    drawHalo(ctx, d, new Set([id]), s, dpr, E.hiddenLayers, isSch() ? { color: (KiCadCanvas.SCH as Record<string, string>).selection, alpha: 1, extraPx: 2, extraMm: 2 * 0.0254, strokesOnly: true } : { color: (c: string) => bright(c || "#ffffff", 0.6), alpha: 0.32, extraPx: 3 });
   } catch (e) { console.warn(e); } finally { ctx.restore(); }
 }
 

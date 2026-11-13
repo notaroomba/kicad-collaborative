@@ -43,7 +43,10 @@ test("pinAt: the pin's line from its end to the body; the body itself and hidden
   const doc = K.parseDoc(SHEET);
   const h = _.pinAt(doc, [43.18, 48.26], 0.2); assert.ok(h); assert.strictEqual(h.pin.number, "1"); assert.strictEqual(h.item.id, "u1");
   assert.strictEqual(_.pinAt(doc, [44.45, 48.26], 0.2).pin.number, "1", "along the pin");
-  assert.strictEqual(_.pinAt(doc, [50.8, 50.8], 0.2), null, "the body");
+  assert.strictEqual(_.pinAt(doc, [53.5, 51.5], 0.2), null, "the body");
+  // show_pin_alt_icons: pin 4 (PA0, with alternates) draws its icon beyond its inside name, near the body centre,
+  // and PIN_LAYOUT_CACHE::GetPinBoundingBox merges that icon's box
+  assert.strictEqual(_.pinAt(doc, [50.8, 50.8], 0.2).pin.number, "4", "the alternate icon is part of the pin");
   assert.strictEqual(_.pinAt(doc, [58.42, 53.34], 0.2), null, "a hidden pin");
   assert.strictEqual(_.pinAt(doc, [58.42, 53.34], 0.2, true).pin.number, "5", "shown hidden pins");
 });
@@ -123,7 +126,7 @@ test("pinAt: the pin's shown name and number are part of it (GetBoundingBox( fal
   assert.strictEqual(_.pinAt(doc, [44.45, 47.2], 0).pin.number, "1", "on the number above the line");
   assert.strictEqual(_.pinAt(doc, [43.18 - 0.1, 48.26], 0).pin.number, "1", "just off the connection point, inside the floor");
   assert.strictEqual(_.pinAt(doc, [43.18 - 0.5, 48.26], 0), null, "beyond the floor");
-  assert.strictEqual(_.pinAt(doc, [50.8, 50.8], 0), null, "the body centre");
+  assert.strictEqual(_.pinAt(doc, [53.5, 51.5], 0), null, "inside the body, clear of the pins");
   const u = doc.items.get("u1"), b = _.pinBox(u, _.pinOf(doc, { id: "u1", number: "1" }).pin);
   assert.ok(b[2] > 46.736 && b[2] < 50.8, "the box reaches over the name, not to the centre: " + b);
 });

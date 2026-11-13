@@ -24,11 +24,12 @@
 import { root } from "./env";
 import { PCB_BG, PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, SCH_DEFAULT, SCH_THEMES, pcbColor, pcbZ, schTheme, schThemeColors, setSchTheme, withSchTheme } from "./colors";
 import { PAPER_SIZES, addItem, applyDocProps, computeBBox, mm2mils, paperSize, parseDoc, titleBlockOf } from "./doc";
+import type { Doc } from "./types";
 import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
 import { SvgPath, renderPng, renderSvg, serialize, serializeItem, svgDrawingSheet, wrapFragment } from "./export";
 import { buildGeom, ensureSchTheme, inSchTheme } from "./geom";
 import { hatchLines } from "./geom-pcb";
-import { ORIENT, resolveLib, symbolTransform } from "./geom-sch";
+import { ORIENT, resolveLib, schDisplay, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, geomTouchesRect, itemTouchesRect, itemVisible, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
 import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, MARKER_SCALE, PX_PER_MM_ZOOM1, RATSNEST_COLOR, VIA_NETNAME_COLOR, ZONE_OPACITY, brightened, dashPattern, defaultCreateCanvas, drawDrawingSheet, drawHalo, drawMarkers, drawPad, drawSelectionHalo, SCH_SELECTION_SHADOW, selectedColor, flipCentre, flipX, highlightColor, markerAt, markerPolygon, markerScale, render, setViewTransform, trackNameColor, unflipX, zoomFactor } from "./render";
@@ -54,7 +55,10 @@ import { parseLibSymbol, subUnitBody, PIN_TYPE_NAMES, libGraphicGeom } from "./l
 import { footprintDocApi } from "./footprint-doc";
 import { tableModel } from "./table-model";
 import { autoPanDirection, autoPanStep, AUTOPAN_TICK_MS } from "./autopan";
-export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS, PCB_BG,
+export const api = {
+  // the schematic View options that change geometry (show_pin_alt_icons): set, then the symbols of `doc` are rebuilt
+  setSchDisplay(o: { pinAltIcons?: boolean }, doc?: Doc | null) { if (typeof o.pinAltIcons === "boolean") schDisplay.pinAltIcons = o.pinAltIcons; if (doc && doc.type === "sch") for (const it of doc.items.values()) if (it.kind === "symbol") { try { buildGeom(doc, it); } catch (e) { /* no geometry */ } } }, schDisplay,
+  parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS, PCB_BG,
   // schematic colour themes (colors.ts): KiCad Default / KiCad Classic / Dark; the painters rebuild stale geometry,
   // renderSvg / renderPng use opts.colorTheme (KiCad Default unless given)
   SCH_DEFAULT, SCH_THEMES, schTheme, schThemeColors, setSchTheme, withSchTheme, ensureSchTheme, inSchTheme,

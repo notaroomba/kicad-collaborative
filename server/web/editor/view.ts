@@ -90,6 +90,22 @@ function boardSelected(): Set<string> | null {
 /** Paint a frame now with the whole picture in #canvas itself (for a reader of its pixels: a zoom frame may otherwise leave it blank over a plate). */
 export function drawCanvasSettled() { if (E.kdoc) settledFrame(drawCanvas); }
 E.drawCanvasSettled = drawCanvasSettled;
+/**
+ * What the schematic painter needs from the tools besides the selection: the dangling local labels (a selected
+ * one shows no anchor) and the items moved whole (their fields show no anchor, SCH_PAINTER's parentMoving).
+ */
+function schPaintState(selected: Set<string> | null): { dangling?: Set<string>; moving?: Set<string> } {
+  if (!isSch() || !E.kdoc || !CollabTools.sch) return {};
+  const tools = CollabTools.sch as unknown as { _?: { danglingLabelIds?: (d: KDoc) => Set<string> }; state?: { drag?: { items?: { item?: { id?: string } }[] } | null } };
+  const out: { dangling?: Set<string>; moving?: Set<string> } = {};
+  if (selected && selected.size && tools._ && tools._.danglingLabelIds) { try { out.dangling = tools._.danglingLabelIds(E.kdoc); } catch (e) { /* no tools yet */ } }
+  const d = tools.state && tools.state.drag;
+  if (d && d.items && d.items.length) out.moving = new Set(d.items.map((e) => (e && e.item && e.item.id) || "").filter((id) => id));
+  // a field dragged on its own draws its umbilical line instead of its anchor
+  const fd = E.fdrag as { id: string; name: string; moved: boolean } | null;
+  if (fd && fd.moved) (out.moving || (out.moving = new Set())).add(fd.id + "#field:" + fd.name);
+  return out;
+}
 export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
@@ -103,7 +119,8 @@ export function drawCanvas() {
   // updates the item's box only when it lands, after the document version was bumped)
   if (force && E.comments && E.comments.length) drawComments();
   updateMsgPanel();
-  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
+  const selected = boardSelected();
+  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected, highlight: E.highlightIds, skip: skip || undefined }, schPaintState(selected), E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off: HTMLCanvasElement = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));

@@ -16,6 +16,8 @@ export function dimColor(c: string, bg: string): string {
 }
 
 /** "KiCad Default" (builtin_color_themes.h s_defaultTheme): the schematic colours of a fresh KiCad, and of every export. */
+/** The browser runs on macOS (KiCad's __WXMAC__ colour and pen choices). */
+export const IS_MAC_PLATFORM = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 export const SCH_DEFAULT = Object.freeze({
   bg: "#F5F4EF", grid: "#B5B5B5", gridAxes: "#000084", wire: "#009600", bus: "#000084", junction: "#009600", outline: "#840000",
   body: "#FFFFC2", pin: "#840000", pinName: "#006464", pinNum: "#A90000", ref: "#006464", value: "#006464",
@@ -28,6 +30,9 @@ export const SCH_DEFAULT = Object.freeze({
   // (common/settings/builtin_color_themes.h:78-79, eeschema/sch_view.cpp:137-138).
   pageLimits: "#B5B5B5",
   brightened: "#FF00FF",   // LAYER_BRIGHTENED: net highlighting / selection disambiguation
+  // LAYER_SELECTION_SHADOWS: KiCad Default is (.3, .7, 1.0, .6) on macOS, which "looks better with a lighter
+  // shadow", (.4, .7, 1.0, .8) elsewhere (builtin_color_themes.h)
+  selection: IS_MAC_PLATFORM ? "rgba(77,179,255,0.6)" : "rgba(102,179,255,0.8)",
 });
 
 // ---------------------------------------------------------------- schematic colour themes
@@ -45,6 +50,7 @@ export const SCH_THEMES: Record<string, SchThemeDef> & { default: SchThemeDef } 
     sheet: "#840084", sheetName: "#008484", sheetFile: "#848400", sheetFields: "#840084", sheetLabel: "#008484", noconnect: "#000084", notes: "#0000C2",
     busEntry: "#008400", dnp: "rgba(255,0,0,0.85)", netclass: "#000000", ruleArea: "#840000", excluded: "rgba(194,194,194,0.95)", hidden: "#C2C2C2",
     privateNotes: "#0000C2", frame: "#840000", brightened: "#FF00FF",
+    selection: IS_MAC_PLATFORM ? "rgba(199,235,255,0.8)" : "rgba(102,179,255,0.8)",   // KiCad Classic's shadow
   } },
   // A dark sheet in the manner of the popular community dark themes: near-black paper, KiCad's hues lifted so
   // every layer keeps at least 4.5:1 against the background, the same layer-to-hue mapping as KiCad Default.
