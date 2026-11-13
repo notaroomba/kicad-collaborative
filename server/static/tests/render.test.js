@@ -314,7 +314,7 @@ test("schematic image: base64 atoms join, size = px × 25.4/PPI × scale centred
     near(di.args[1], g.x, 1e-9); near(di.args[2], g.y, 1e-9); near(di.args[3], g.w, 1e-9); near(di.args[4], g.h, 1e-9);
     assert(!ctx.ops.some((o) => o.op === "strokeRect" && o.dash.length), "no placeholder once loaded");
     // selection halo and highlight cover the image
-    ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["im1"]) }); assert(ctx.ops.some((o) => o.op === "strokeRect" && o.stroke === "#66B2FF" && o.alpha === 0.55));
+    ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["im1"]) }); assert(ctx.ops.some((o) => o.op === "strokeRect" && o.stroke === K.SCH_SELECTION_SHADOW));
     // a failed decode reports ok: false and keeps the placeholder
     const doc2 = K.parseDoc(SCH_HEAD + `(image (at 10 10) (uuid "im2") ${dataAtoms(b64)})` + ")"); assert.strictEqual(FakeImage.made.length, 2, "a different item id gets its own entry");
     FakeImage.made[1].onerror(); assert.deepStrictEqual(events[1], { id: "im2", kind: "image", ok: false });
@@ -404,9 +404,12 @@ test("selected: a halo for every id in the set; polylines with a fill", () => {
   const doc = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w2")) (wire (pts (xy 0 8) (xy 10 8)) (stroke (width 0) (type default)) (uuid "w3")) (junction (at 5 0) (diameter 0) (color 0 0 0 0) (uuid "j1")))');
   const view = { ppm: 10, zoom: 1, panX: 0, panY: 0, x0: -5, y0: -5, dpr: 1 };
   let ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["w1", "w2", "w3"]) });
-  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && o.stroke === "#66B2FF" && o.alpha === 0.55).length, 3, "one halo stroke per selected wire");
+  // SCH_PAINTER's LAYER_SELECTION_SHADOWS pass: the shadow colour (alpha in the colour), drawn before the wires themselves
+  const SH = K.SCH_SELECTION_SHADOW;
+  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && o.stroke === SH).length, 3, "one shadow stroke per selected wire");
+  { const firstShadow = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === SH), firstWire = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke !== SH && o.stroke !== undefined && /^#00(96|84)00$/i.test(o.stroke)); assert(firstWire < 0 || firstShadow < firstWire, "shadows under the wires"); }
   ctx = recCtx(800, 600); K.render(doc, ctx, view, { selected: new Set(["w1", "j1", "nope"]) });
-  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && o.stroke === "#66B2FF").length, 2); assert.strictEqual(ctx.ops.filter((o) => o.op === "fill" && o.fill === "#66B2FF").length, 1, "filled circle halo");
+  assert.strictEqual(ctx.ops.filter((o) => o.op === "stroke" && o.stroke === SH).length, 2); assert.strictEqual(ctx.ops.filter((o) => o.op === "fill" && o.fill === SH).length, 1, "a junction dot (filled in its own colour) keeps its filled shadow");
   // sheet-level polylines: a closed outline with (fill …) is filled like an SCH_SHAPE (drawPolygon writes these)
   const poly = (fill, id) => SCH_HEAD + `(polyline (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 0)) (stroke (width 0) (type default)) (fill ${fill}) (uuid "${id}")))`;
   let it = K.parseDoc(poly("(type background)", "p1")).items.get("p1"); assert.strictEqual(it.geom.length, 2);
@@ -785,7 +788,7 @@ test("markers: MARKER_BASE flag polygon, DRC / ERC colours, zoom scale, shadow, 
   const selCu = K.selectedColor("#C83434");
   const track = ctx.ops.findIndex((o) => o.op === "stroke" && o.stroke === selCu), first = ctx.ops.indexOf(fills[0]);
   assert(track >= 0 && track < first, "selected track in the selected colour, markers above the geometry");
-  assert(!ctx.ops.some((o) => o.stroke === "#66B2FF" || o.fill === "#66B2FF"), "no selection halo on a board");
+  assert(!ctx.ops.some((o) => o.stroke === K.SCH_SELECTION_SHADOW || o.fill === K.SCH_SELECTION_SHADOW), "no selection halo on a board");
   assert.strictEqual(selCu, "#d97272", "F.Cu selected: factor 0.25 + brightness^3 = 0.304, Brightened");
   assert.strictEqual(K.selectedColor("#4D7FC4"), "#8cacd9", "B.Cu selected");
   assert.strictEqual(K.selectedColor("#000000"), "#000000", "near-black layers keep their colour");

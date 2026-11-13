@@ -124,8 +124,9 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
   S.ctx = ctx; installDom(ctx);
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
   if (S.showDangling !== false) drawDangling(c, doc, px);
-  if (S.hover && S.hover !== S.sel && !S.drag) { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
-  if (S.sel) { const it = doc.items.get(S.sel); if (it) outline(c, it, CLR.sel, px, 2); }
+  // no rollover in the selection tool (eeschema has none); the delete tool shows what a click would remove
+  if (S.hover && S.hover !== S.sel && !S.drag && curTool() !== "select") { const it = doc.items.get(S.hover); if (it) outline(c, it, CLR.hover, px, 1.5); }
+  // the selected item gets KiCad's selection shadow from the canvas pass (the host adds S.sel to the selection)
   if (curTool() === "select" && !S.drag) drawEditPoints(c, ctx, px);
   if (S.highlight && typeof ctx.setHighlight !== "function") {   // app.js paints the highlight when it can; else a plain outline
     for (const id of S.highlight) { const it = doc.items.get(id); if (it) outline(c, it, "#FF40FF", px, 2); }
@@ -137,7 +138,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
     }
   }
   if (S.drag) {
-    for (const e of S.drag.items) outline(c, e.item, CLR.sel, px, 2);
+    // the dragged items keep their selection shadow from the canvas pass (the host adds them to the selection)
     for (const s of S.drag.preview || []) {                 // new wires the drop will create
       c.save(); c.strokeStyle = s.kind === "bus" ? CLR.bus : CLR.wire; c.lineWidth = Math.max(s.kind === "bus" ? 0.3048 : 0.1524, 2 * px); c.lineCap = "round"; c.globalAlpha = 0.85;
       c.beginPath(); c.moveTo(s.pts[0][0], s.pts[0][1]); for (let i = 1; i < s.pts.length; i++) c.lineTo(s.pts[i][0], s.pts[i][1]); c.stroke(); c.restore();

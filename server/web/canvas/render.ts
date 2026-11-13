@@ -11,7 +11,7 @@ import { drawStrokeText, strokeLine, strokeOrigin } from "./stroke-font";
 import type { AnyCanvas, Box, CircleGeom, Ctx2D, Doc, DrawTextG, Geom, Marker, Mat, ObjectsOpt, PadGeom, PathSink, RatsLine, RectGeom, RenderOpts, TextGeom, View, ViaRingGeom } from "./types";
 
 /** drawHalo's style: the halo colour (or a function of the geometry's colour), its alpha and the extra stroke width in device px. */
-export interface HaloStyle { color: string | ((c: string) => string); alpha: number; extraPx: number }
+export interface HaloStyle { color: string | ((c: string) => string); alpha: number; extraPx: number; extraMm?: number; strokesOnly?: boolean }
 // ---------------------------------------------------------------- rendering
 export const HAS_PATH2D = typeof Path2D !== "undefined";
 
@@ -497,6 +497,11 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const base = [A, 0, 0, s, E, ty]; const viewRect = [fx0, fy0, fx1, fy1];
   const dirty = () => { curStroke = curFill = null; curWidth = -1; curCap = "round"; curAlpha = -1; };
   let ratsDone = !rats, previewIdx = 0;
+  // selection: eeschema draws its selection shadow (LAYER_SELECTION_SHADOWS) under the items, so the strokes stay
+  // on top and only a glow shows around them; pcbnew repaints the item in its selected colour instead (below)
+  const schSel = !isPcb && opts.selected && opts.selected.size ? (skip ? [...opts.selected].filter((id) => !skip.has(id)) : [...opts.selected]) : null;
+  const anchors = schSel ? fieldAnchors(doc, schSel, hidden) : null;
+  if (schSel) { drawSelectionHalo(ctx, doc, schSel, s, dpr, hidden); if (anchors) drawFieldAnchors(ctx, anchors, s, dpr, true); dirty(); }
   for (const z of ZS) {
     // overlay passes that sit at this depth
     if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
@@ -589,12 +594,10 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     ctx.moveTo(-a, 0); ctx.lineTo(a, 0); ctx.moveTo(0, -a); ctx.lineTo(0, a); ctx.stroke(); ctx.restore();
   }
   // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
-  if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });   // skipped items (drawn elsewhere) get none
+  if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: isPcb ? 3 : SCH_HIGHLIGHT_THICKNESS, strokesOnly: !isPcb });   // skipped items (drawn elsewhere) get none
+  if (anchors) drawFieldAnchors(ctx, anchors, s, dpr, false);   // LAYER_SCHEMATIC_ANCHOR, over the items
   // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)
   if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
-  // selection: eeschema draws a selection shadow (a translucent halo around the item's own geometry);
-  // pcbnew repaints the item in its selected colour instead, which the geometry pass above already did
-  if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -790,16 +793,72 @@ export function traceTrackOutline(ctx: PathSink, g: Geom): void {
   } else tracePath(ctx, g);
 }
 
-/** Draw KiCad's selection shadow around every geom of the given item ids (canvas must be in document space). */
-export function drawSelectionHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number, dpr: number, hidden?: Set<string> | null): void { drawHalo(ctx, doc, ids, s, dpr, hidden, { color: "#66B2FF", alpha: 0.55, extraPx: 5 }); }
+/**
+ * LAYER_SELECTION_SHADOWS in KiCad's default schematic theme (builtin_color_themes.h): a lighter blue on macOS,
+ * which "looks better with a lighter shadow", (.4, .7, 1.0) elsewhere, both at 0.8.
+ */
+export const SCH_SELECTION_SHADOW = (typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || ""))
+  ? "rgba(199,235,255,0.8)" : "rgba(102,179,255,0.8)";
+/** eeschema's selection.thickness / highlight_thickness (EESCHEMA_SETTINGS: 3 and 2). */
+export const SCH_SELECTION_THICKNESS = 3, SCH_HIGHLIGHT_THICKNESS = 2;
+const MIL = 0.0254;
+/**
+ * KiCad's selection shadow (SCH_PAINTER, aLayer == LAYER_SELECTION_SHADOWS): every stroke of the item, pins and
+ * the glyphs of its text redrawn wider in the shadow colour, under the item itself.  getShadowWidth() adds
+ * `thickness` pixels plus `thickness` mils to each stroke; shapes are not filled (selection.fill_shapes is off).
+ * Canvas in document space; `under` is the caller's promise that the item is drawn over it afterwards.
+ */
+export function drawSelectionHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number, dpr: number, hidden?: Set<string> | null, thickness = SCH_SELECTION_THICKNESS): void {
+  drawHalo(ctx, doc, ids, s, dpr, hidden, { color: SCH_SELECTION_SHADOW, alpha: 1, extraPx: thickness, extraMm: thickness * MIL, strokesOnly: true });
+}
+
+/**
+ * The anchors of the selected fields: a selected symbol selects its fields (SCH_SELECTION_TOOL::highlight runs
+ * SetSelected on the children), and SCH_PAINTER draws a selected field's anchor (drawAnchor) at its position.
+ */
+export function fieldAnchors(doc: Doc, keys: Iterable<string>, hidden?: Set<string> | null): number[][] | null {
+  const out: number[][] = [];
+  for (const key of keys) {
+    const cut = typeof key === "string" ? key.indexOf("#") : -1, id = cut > 0 ? key.slice(0, cut) : key, sub = cut > 0 ? key.slice(cut + 1) : null;
+    const it = doc.items.get(id); if (!it) continue;
+    const only = sub && sub.startsWith("field:") ? sub.slice(6) : null;
+    if (sub && !only) continue;                       // a selected pin has no field anchors
+    if (!only && it.kind !== "symbol") continue;
+    const seen = new Set<string>();
+    for (const g of it.geom) {
+      if (g.t !== "text" || !g.field || seen.has(g.field) || (only && g.field !== only)) continue;
+      if (hidden && hidden.has(g.layer)) continue;
+      seen.add(g.field); out.push([g.x, g.y]);
+    }
+  }
+  return out.length ? out : null;
+}
+/**
+ * SCH_PAINTER::drawAnchor: a cross of TEXT_ANCHOR_SIZE (8 mils) radius plus 8/25 px, in LAYER_SCHEMATIC_ANCHOR
+ * blue at the dangling-indicator pen (default pen / 3); its shadow pass draws it in the selection shadow colour
+ * at the shadow width.
+ */
+export function drawFieldAnchors(ctx: Ctx2D, pts: number[][], s: number, dpr: number, shadow: boolean): void {
+  const px = dpr / s, r = 8 * MIL + (8 / 25) * px;
+  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "round";
+  ctx.strokeStyle = shadow ? SCH_SELECTION_SHADOW : SCH_ANCHOR_COLOR;
+  ctx.lineWidth = shadow ? SCH_SELECTION_THICKNESS * px + SCH_SELECTION_THICKNESS * MIL : Math.max(0.1524 / 3, px);
+  ctx.beginPath();
+  for (const [x, y] of pts) { ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.moveTo(x, y - r); ctx.lineTo(x, y + r); }
+  ctx.stroke(); ctx.restore();
+}
+export const SCH_ANCHOR_COLOR = "#0000FF";   // LAYER_SCHEMATIC_ANCHOR
 
 /**
  * A translucent halo around every geom of the given item ids: style = { color: css colour or (geomColour) → css colour,
  * alpha, extraPx: width added to each stroke, in device px }.  Every id in the set gets its halo.
  */
 export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number, dpr: number, hidden: Set<string> | null | undefined, style: HaloStyle): void {
-  const minW = Math.max(1, dpr) / s, extra = style.extraPx * dpr / s;
+  const minW = Math.max(1, dpr) / s, extra = style.extraPx * dpr / s + (style.extraMm || 0);
   const colorFn = typeof style.color === "function" ? style.color : () => style.color as string;
+  const strokesOnly = !!style.strokesOnly;
+  const m = typeof (ctx as CanvasRenderingContext2D).getTransform === "function" ? (ctx as CanvasRenderingContext2D).getTransform() : null;
+  const base: Mat | null = m ? [m.a, m.b, m.c, m.d, m.e, m.f] as unknown as Mat : null;
   ctx.save();
   ctx.globalAlpha = style.alpha; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash([]);
   for (const key of ids) {
@@ -809,8 +868,15 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
     for (const g of it.geom) {
       if (hidden && hidden.has(g.layer)) continue;
       if (sub !== null && (sub !== (g.pinNo !== undefined ? "pin:" + g.pinNo : g.field ? "field:" + g.field : ""))) continue;
+      if (strokesOnly && (g as { noStroke?: boolean }).noStroke) continue;   // a sheet / body background fill has no stroke to shadow
       const halo = colorFn(g.color as string); ctx.strokeStyle = halo; ctx.fillStyle = halo;
       if (g.t === "text") {
+        if (strokesOnly && base && HAS_PATH2D) {
+          // the glyphs themselves, each stroke widened (SCH_PAINTER draws shadow text with m_StrokeWidth + shadowWidth)
+          const tg = g as unknown as DrawTextG; const pen = tg.w > 0 ? tg.w : tg.size / 8;
+          ctx.save(); drawTextStroke(ctx, Object.assign({}, tg, { w: pen + extra, knockout: false }) as DrawTextG, minW + extra, halo, base, false); ctx.restore();
+          continue;
+        }
         const w = typeof textWidth === "function" ? textWidth(g.text || "", g.size, g.w || 0.1524) : (g.text || "").length * g.size * 0.75;
         const h = g.size * 1.35;
         ctx.save(); ctx.translate(g.x, g.y); if (g.rot) ctx.rotate(-g.rot * Math.PI / 180); if (g.mirror) ctx.scale(-1, 1);
@@ -823,7 +889,9 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
       if (g.t === "poly" && (!g.pts || g.pts.length < 2)) continue;
       ctx.lineWidth = Math.max(g.w || 0, minW) + extra;
       const p = (ctx as unknown as { __plot?: boolean }).__plot ? null : pathOf(g);
-      if (g.fill || g.t === "pad" || g.t === "circle") { if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } }
+      // strokes only: a shape filled in its own outline colour (a junction dot, a FILLED_SHAPE) keeps its fill
+      const fillIt = strokesOnly ? !!g.fill && g.fill === g.color : (g.fill || g.t === "pad" || g.t === "circle");
+      if (fillIt) { if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } }
       if (p) ctx.stroke(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.stroke(); }
     }
   }

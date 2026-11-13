@@ -64,7 +64,19 @@ export function sizeCanvas() {
 /** The app's selection plus the board module's own picks (tracks, vias, graphics, zones): all repainted brightened. */
 function boardSelected(): Set<string> | null {
   const base = selectedSet(); const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string>; padSel?: string | null });
-  if (isSch() || !pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) return base;
+  if (isSch()) {
+    // the schematic module's own selection (wires, labels, junctions …) and what it is dragging get the same
+    // selection shadow as the host's symbols
+    const S = CollabTools.sch && (CollabTools.sch.state as unknown as { sel?: string | null; drag?: { items?: { item?: { id?: string } }[] } | null });
+    const extra: string[] = []; if (S && S.sel) extra.push(S.sel);
+    // a field or pins selected on their own: that part of the symbol alone ("id#field:Name", "id#pin:N")
+    if (E.selField) extra.push(E.selField.id + "#field:" + E.selField.name);
+    for (const p of (E.selPins || []) as { id: string; number: string }[]) extra.push(p.id + "#pin:" + p.number);
+    if (S && S.drag && S.drag.items) for (const e of S.drag.items) if (e && e.item && e.item.id) extra.push(e.item.id);
+    if (!extra.length) return base;
+    const out = new Set<string>(base || []); for (const id of extra) out.add(id); return out;
+  }
+  if (!pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) return base;
   const out = new Set<string>(base || []); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel);
   const more = CollabTools.pcb && CollabTools.pcb.selectedPadKeys ? CollabTools.pcb.selectedPadKeys() : []; for (const k of more) out.add(k);
   return out;
@@ -105,24 +117,9 @@ export function drawCanvas() {
     const of = (CollabTools.sch._ as unknown as { pinOf?: (d: KDoc, r: unknown) => { pin: { x: number; y: number; root: [number, number] } } | null }).pinOf;
     const found = E.selPins.map((p: unknown) => (of ? of(E.kdoc, p) : null));
     if (found.some((h: unknown) => !h)) E.selPins = E.selPins.filter((_p: unknown, i: number) => !!found[i]);
-    for (const h of found) if (h) {
-      cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
-      const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
-      // the selection halo drawSelectionHalo puts around a selected item (#66B2FF at 0.55)
-      cctx.strokeStyle = "#66B2FF"; cctx.globalAlpha = 0.55; cctx.lineCap = "round";
-      cctx.lineWidth = 0.1524 + 5 * px;
-      cctx.beginPath(); cctx.moveTo(h.pin.x, h.pin.y); cctx.lineTo(h.pin.root[0], h.pin.root[1]); cctx.stroke();
-            cctx.restore();
-    }
+    // their selection shadow is drawn by the canvas pass (boardSelected adds "id#pin:N")
   }
-  if (E.selField) {
-    const it = E.kdoc.items.get(E.selField.id); if (!it) { E.selField = null; return; }
-    cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
-    const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
-    cctx.fillStyle = "rgba(102,178,255,0.35)"; cctx.strokeStyle = "#4D7FC4"; cctx.lineWidth = 1.5 * px;
-    for (const f of KiCadCanvas.fieldBoxes(it, E.hiddenLayers)) { if (f.name !== E.selField.name) continue; cctx.beginPath(); f.pts.forEach((q, i) => i ? cctx.lineTo(q[0], q[1]) : cctx.moveTo(q[0], q[1])); cctx.closePath(); cctx.fill(); cctx.stroke(); }
-    cctx.restore();
-  }
+  if (E.selField) { const it = E.kdoc.items.get(E.selField.id); if (!it) E.selField = null; }   // its shadow and anchor come from the canvas pass
 }
 
 

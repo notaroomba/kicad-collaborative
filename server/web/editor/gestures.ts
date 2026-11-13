@@ -351,15 +351,16 @@ function queueHover(ev: PointerEvent): void { hoverEv = { clientX: ev.clientX, c
 /** Brighten the hovered item (called from the canvas pass, in document space). */
 export function drawHover(ctx: CanvasRenderingContext2D, view: KView): void {
   const d = doc(), id = E.hoverId as string | null; if (!d || !id || !d.items.has(id)) return;
-  if (!E.hoverPinned && (E.tool !== "select" || selectionIds().includes(id))) return;
-  if (!E.hoverPinned && !isSch()) return;   // pcbnew has no rollover look: only a hovered Clarify Selection row brightens its item
+  // neither eeschema nor pcbnew has a rollover look: an item lights up only when it is selected, or while its
+  // Clarify Selection row is hovered (the menu brightens the candidate it names)
+  if (!E.hoverPinned) return;
   const dpr = view.dpr || 1, s = view.ppm * view.zoom * dpr;
-  const drawHalo = KiCadCanvas.drawHalo as (ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden: Set<string>, style: { color: string | ((c: string) => string); alpha: number; extraPx: number }) => void;
+  const drawHalo = KiCadCanvas.drawHalo as (ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden: Set<string>, style: { color: string | ((c: string) => string); alpha: number; extraPx: number; extraMm?: number; strokesOnly?: boolean }) => void;
   const bright = KiCadCanvas.brightened as (c: string, f: number) => string;
   ctx.save();
   try {
     KiCadCanvas.setViewTransform(ctx, view);
-    drawHalo(ctx, d, new Set([id]), s, dpr, E.hiddenLayers, isSch() ? { color: "#66B2FF", alpha: 0.28, extraPx: 4 } : { color: (c: string) => bright(c || "#ffffff", 0.6), alpha: 0.32, extraPx: 3 });
+    drawHalo(ctx, d, new Set([id]), s, dpr, E.hiddenLayers, isSch() ? { color: KiCadCanvas.SCH_SELECTION_SHADOW as string, alpha: 1, extraPx: 2, extraMm: 2 * 0.0254, strokesOnly: true } : { color: (c: string) => bright(c || "#ffffff", 0.6), alpha: 0.32, extraPx: 3 });
   } catch (e) { console.warn(e); } finally { ctx.restore(); }
 }
 

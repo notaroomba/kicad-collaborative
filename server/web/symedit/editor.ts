@@ -453,13 +453,12 @@ export class SymbolEditor {
     this.el.empty.style.display = doc ? "none" : "flex";
     if (!doc || !t) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = K().SCH.bg; ctx.fillRect(0, 0, c.width, c.height); return; }
     const v = this.view(); const view = { ppm: 1, zoom: v.s, panX: v.px, panY: v.py, x0: 0, y0: 0, dpr };
-    K().render(doc, ctx, view, { grid: this.gridMm, gridAxes: true, frame: false, showHiddenPins: this.showHiddenPins } as KRenderOpts);
+    const sel = new Set([...t.sel].filter((id) => doc.items.has(id)));
+    // the selection shadow is drawn by the canvas pass, under the items (SCH_PAINTER's LAYER_SELECTION_SHADOWS)
+    K().render(doc, ctx, view, { grid: this.gridMm, gridAxes: true, frame: false, showHiddenPins: this.showHiddenPins, selected: sel.size ? sel : undefined } as KRenderOpts);
     const s = K().setViewTransform(ctx, view);
     // the symbol anchor (LAYER_SCHEMATIC_ANCHOR cross at the origin)
     const a = 6 * dpr / s; ctx.strokeStyle = ANCHOR; ctx.lineWidth = dpr / s; ctx.beginPath(); ctx.moveTo(-a, 0); ctx.lineTo(a, 0); ctx.moveTo(0, -a); ctx.lineTo(0, a); ctx.stroke();
-    const sel = new Set([...t.sel].filter((id) => doc.items.has(id)));
-    if (this.carry || (this.drag && this.drag.mode === "move")) { /* the moved items draw as themselves */ }
-    if (sel.size) K().drawSelectionHalo(ctx, doc, sel, s, dpr);
     if (this.drag && this.drag.mode === "band") {
       const [x0, y0] = [this.drag.x0, this.drag.y0], [x1, y1] = [this.mouse.x, this.mouse.y];
       ctx.save(); ctx.lineWidth = dpr / s; ctx.strokeStyle = x1 >= x0 ? "#4F9CFF" : "#4FCF6F"; ctx.setLineDash(x1 >= x0 ? [] : [4 / s, 3 / s]);

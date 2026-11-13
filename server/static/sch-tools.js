@@ -4959,13 +4959,9 @@ Link '${target}' to this file?`)) return null;
     installDom(ctx);
     const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
     if (S.showDangling !== false) drawDangling(c, doc, px);
-    if (S.hover && S.hover !== S.sel && !S.drag) {
+    if (S.hover && S.hover !== S.sel && !S.drag && curTool() !== "select") {
       const it = doc.items.get(S.hover);
       if (it) outline(c, it, CLR.hover, px, 1.5);
-    }
-    if (S.sel) {
-      const it = doc.items.get(S.sel);
-      if (it) outline(c, it, CLR.sel, px, 2);
     }
     if (curTool() === "select" && !S.drag) drawEditPoints(c, ctx, px);
     if (S.highlight && typeof ctx.setHighlight !== "function") {
@@ -4993,7 +4989,6 @@ Link '${target}' to this file?`)) return null;
       }
     }
     if (S.drag) {
-      for (const e of S.drag.items) outline(c, e.item, CLR.sel, px, 2);
       for (const s of S.drag.preview || []) {
         c.save();
         c.strokeStyle = s.kind === "bus" ? CLR.bus : CLR.wire;
