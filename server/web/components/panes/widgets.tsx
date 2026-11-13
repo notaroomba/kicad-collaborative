@@ -54,21 +54,22 @@ export function useContextMenu(): { at: MenuAt | null; open: (ev: { clientX: num
 }
 
 // ---------------------------------------------------------------- colour swatch + picker
-// KiCad's colour picker opens on its "Defined Colors" palette; these are that page's rows.
+// KiCad's colour picker opens on its "Defined Colors" palette; these are that page's rows.  They are opaque: picking one
+// sets the opacity to its own (DIALOG_COLOR_PICKER::buttColorClick takes the defined colour's alpha too).
 const PALETTE = ["#C83434", "#E08A2E", "#E2C12C", "#7FC820", "#22B84C", "#1FB8A6", "#2D9BE0", "#4D7FC4", "#7F5FD0", "#C04FC8", "#E0508C", "#8A5A2B",
   "#FF6060", "#FFB060", "#FFF060", "#B8FF60", "#60FF90", "#60FFE8", "#60C8FF", "#8CA8FF", "#B090FF", "#F080FF", "#FF90C0", "#C8A070",
   "#FFFFFF", "#D0D0D0", "#A0A0A0", "#707070", "#404040", "#000000"];
 /** A css colour as "#rrggbb" plus its opacity 0..100 (the colours here are "#rrggbb", "#rrggbbaa" or "rgb[a](r,g,b[,a])"). */
 export function splitColor(c: string | null): { hex: string; alpha: number } {
   const h = c ? /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(c) : null;
-  if (h) return { hex: "#" + h[1].toLowerCase(), alpha: h[2] ? Math.round(parseInt(h[2], 16) / 2.55) : 100 };
+  if (h) return { hex: "#" + h[1], alpha: h[2] ? Math.round(parseInt(h[2], 16) / 2.55) : 100 };
   const m = c ? /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(c) : null;
   if (m) return { hex: "#" + [m[1], m[2], m[3]].map((v) => Math.max(0, Math.min(255, Math.round(+v))).toString(16).padStart(2, "0")).join(""), alpha: m[4] === undefined ? 100 : Math.round(Math.max(0, Math.min(1, +m[4])) * 100) };
   return { hex: "#808080", alpha: 100 };
 }
 /** "#rrggbb" at full opacity, else "rgba(r,g,b,a)" (the canvas library's rgba() form). */
 export function joinColor(hex: string, alpha: number): string {
-  if (alpha >= 100) return hex.toLowerCase();
+  if (alpha >= 100) return hex;
   const v = parseInt(hex.slice(1), 16);
   return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${+(Math.max(0, alpha) / 100).toFixed(3)})`;
 }
@@ -94,16 +95,16 @@ export function ColorPicker({ at, onClose }: { at: ColorAt | null; onClose: () =
   if (!at) return null;
   const W = 232, left = Math.max(4, Math.min(at.x, window.innerWidth - W - 8)), top = Math.max(4, Math.min(at.y, window.innerHeight - 290));
   const withOpacity = at.opacity !== false, a = withOpacity ? alpha : 100;
-  const pick = (c: string | null) => { at.set(c === null ? null : joinColor(c, a)); onClose(); };
+  const pick = (c: string | null, alphaPct = a) => { at.set(c === null ? null : joinColor(c, alphaPct)); onClose(); };
   const valid = /^#[0-9a-f]{6}$/i.test(val);
   return createPortal(
     <div ref={ref} className="kcolor fixed z-[400] p-2 bg-panel border border-line rounded-md shadow-panel text-sm text-ink" style={{ left, top, width: W }}>
       <div className="font-semibold mb-1.5">{at.title}</div>
       <div className="flex flex-wrap gap-[3px] mb-2">
-        {PALETTE.map((c) => <button type="button" key={c} title={c} data-color={c} className="w-4 h-4 p-0 rounded-xs border border-black/40 cursor-pointer" style={{ background: c }} onClick={() => pick(c)} />)}
+        {PALETTE.map((c) => <button type="button" key={c} title={c} data-color={c} className="w-4 h-4 p-0 rounded-xs border border-black/40 cursor-pointer" style={{ background: c }} onClick={() => pick(c, 100)} />)}
       </div>
       <div className="flex items-center gap-1.5 mb-2">
-        <input type="color" value={val} onChange={(ev) => setVal(ev.target.value)} className="w-8 h-6 p-0 border border-line bg-transparent" />
+        <input type="color" value={val.toLowerCase()} onChange={(ev) => setVal(ev.target.value)} className="w-8 h-6 p-0 border border-line bg-transparent" />
         <input type="text" value={val} spellCheck={false} onChange={(ev) => setVal(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && valid) pick(val); }}
           className="flex-1 min-w-0 px-1 py-0.5 bg-panel border border-line rounded-xs text-ink font-mono text-xs" />
         <Swatch color={valid ? joinColor(val, a) : null} title="New color" />

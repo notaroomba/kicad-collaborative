@@ -63,7 +63,7 @@ export type GeomFlags = {
   padText?: boolean; padNet?: boolean; padNum?: boolean;
   /** the points of a polygon (PolyGeom; optional on the others, which some readers probe for) */
   pts?: Pt[];
-  zoneFill?: boolean; zoneOutline?: boolean; zoneUnfilled?: boolean; zoneClearance?: number; zoneHatch?: boolean;
+  zoneFill?: boolean; zoneOutline?: boolean; teardrop?: boolean; zoneUnfilled?: boolean; zoneClearance?: number; zoneHatch?: boolean;
   /** a field of a symbol / footprint, by name */
   field?: string;
   /** a hidden field kept for the showHiddenText option */

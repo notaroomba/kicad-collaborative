@@ -7,6 +7,7 @@ import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
 import { KD, checkbox, h, promptText, select, textInput } from "./dom";
 import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, gridLabel, savePrefs, type EditorId, type Prefs, type SchThemeId } from "./prefs";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
+import { getInactiveMode, setInactiveMode } from "../editor/panels/appearance";
 
 interface ActionMeta { id: string; label: string; key: string | null }
 const MIL = 0.0254;
@@ -25,6 +26,8 @@ export function openPreferences(page?: string): void {
   const p: Prefs = clonePrefs();
   let uiMode: ThemeMode = getThemeMode();
   let arcEdit = pcbTools() ? pcbTools()!.arcEditMode() : 0;
+  // the inactive layer mode is the open board's project setting (.kicad_prl "board.high_contrast_mode"), not a user preference
+  let contrast = getInactiveMode();
   const here: EditorId = E.DOC_TYPE === "kicad_sch" ? "sch" : "pcb";
   const gridsPage = (ed: EditorId) => (pg: HTMLElement) => {
     const g = p.grids[ed], o = g.overrides, pre = `kd-pref-${ed}`;
@@ -116,7 +119,7 @@ export function openPreferences(page?: string): void {
           { label: "Display Options", build(pg) {
             const ap = KD().staticBox(pg, "Annotations");
             ap.append(checkbox("Show pad numbers", p.pcbDisplay.showPadNumbers, (on) => { p.pcbDisplay.showPadNumbers = on; }, { id: "kd-pref-padnumbers" }), checkbox("Show net names", p.pcbDisplay.showNetNames, (on) => { p.pcbDisplay.showNetNames = on; }, { id: "kd-pref-netnames" }),
-              checkbox("High-contrast display mode", p.pcbDisplay.contrastMode !== "normal", (on) => { p.pcbDisplay.contrastMode = on ? (p.pcbDisplay.contrastMode === "normal" ? "dim" : p.pcbDisplay.contrastMode) : "normal"; }, { id: "kd-pref-contrast" }));
+              checkbox("High-contrast display mode", contrast !== "normal", (on) => { contrast = on ? (contrast === "normal" ? "dim" : contrast) : "normal"; }, { id: "kd-pref-contrast" }));
           } },
           { label: "Grids", build: gridsPage("pcb") },
           { label: "Editing Options", build(pg) {
@@ -130,5 +133,5 @@ export function openPreferences(page?: string): void {
         ] },
       ], { selected: page || (here === "sch" ? "Mouse and Touchpad" : "Mouse and Touchpad") });
     },
-    ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
+    ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
 }

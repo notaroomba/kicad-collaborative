@@ -210,11 +210,13 @@ export function buildZoneGeom(doc: Doc, item: Item, n: SNode): void {
   // (connect_pads [yes|no|thru_hole_only] (clearance c)): the copper clearance the fill keeps from other nets (0.5 mm default)
   const cp = kid(n, "connect_pads"); const clN = cp && kid(cp, "clearance"); const clearance = clN ? num(clN[1], 0.5) : 0.5;
   const unfilled = !keepout && !kids(n, "filled_polygon").length;
+  // (attr (teardrop (type padvia))): ZONE::IsTeardropArea — PCB_PAINTER draws it with the track opacity
+  const attr = kid(n, "attr"), td = attr && kid(attr, "teardrop") ? { teardrop: true } : null;
   for (const poly of kids(n, "polygon")) {
     const p = polyPtsOf(poly); if (p.length < 2) continue;
     for (const layer of layersZ) {
       const color = pcbColor(layer); const z = pcbZ(layer) + (keepout ? Z_TEXT : 0.5);
-      G<PolyGeom>(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled });
+      G<PolyGeom>(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled, ...td });
       if (hatchStyle !== "none" && pitch > 0) {
         // ZONE::HatchBorder: short diagonal ticks along the border (edge) or full diagonals (full); slope by layer parity
         const info = doc.layers.get(layer); const slope = info && (info.id & 1) ? 1 : -1;
@@ -226,7 +228,7 @@ export function buildZoneGeom(doc: Doc, item: Item, n: SNode): void {
   if (keepout) return;   // rule areas have no fill
   for (const fp of kids(n, "filled_polygon")) {
     const layer = layerOf(fp, layersZ[0]); const p = polyPtsOf(fp); if (p.length < 3) continue;
-    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true, net });
+    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true, net, ...td });
   }
 }
 

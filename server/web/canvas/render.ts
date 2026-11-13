@@ -309,6 +309,12 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   // PCB_RENDER_SETTINGS::GetColor: a zone's colour alpha times m_zoneOpacity ("board.opacity.zones", 0.6 by default);
   // the Appearance ▸ Objects ▸ Zones slider sets it outright
   const zoneA = objAlpha && typeof objAlpha.zones === "number" ? Math.max(0, Math.min(1, objAlpha.zones)) : ZONE_OPACITY;
+  // ... except a teardrop area, which takes m_trackOpacity (and no zone opacity)
+  const trackA = objAlpha && typeof objAlpha.tracks === "number" ? Math.max(0, Math.min(1, objAlpha.tracks)) : 1;
+  // PCB_RENDER_SETTINGS::LoadColors: a board layer colour is drawn with an alpha of 0.2 at least ("if the alpha
+  // channel is too small, the layer is not visible"); the stored colour keeps what the user set
+  const layerDraw = layerColors ? new Map<string, string>() : null;
+  if (layerColors) for (const [k, c] of layerColors) layerDraw!.set(k, minLayerAlpha(c));
   const itemColors = isPcb && opts.itemColors && opts.itemColors.size ? opts.itemColors : null, tint = itemColors ? new Map<Geom, string>() : null;
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
@@ -494,16 +500,16 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   for (const z of ZS) {
     // overlay passes that sit at this depth
     if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
-    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (zoneA / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); dirty(); }
+    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, ((pg.teardrop ? trackA : zoneA) / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); dirty(); }
     const arr = BUCKETS.get(z);
     if (arr) for (const g of arr) {
       let alpha = g.alpha === undefined ? 1 : g.alpha;
       if (hcLayer && g.layer !== hcLayer && g.layer !== "holes" && !g.padText) alpha *= HC_DIM;
-      if (g.zoneFill) alpha *= zoneA;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity
+      if (g.zoneFill) alpha *= g.teardrop ? trackA : zoneA;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity (m_trackOpacity for a teardrop)
       if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g.color, fill = g.fill;
-      if (objAlpha && !g.zoneFill) { const oc = objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null); const oa = oc ? objAlpha[oc] : undefined; if (oa !== undefined && oa < 1) alpha *= oa; }
-      if (layerColors && !g.hole) { const lc = layerColors.get(g.layer); if (lc) { const def = pcbColor(g.layer); if (color === def) color = lc; if (fill === def) fill = lc; } }
+      if (objAlpha && !g.zoneFill) { const oc = g.teardrop ? "tracks" : objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null); const oa = oc ? objAlpha[oc] : undefined; if (oa !== undefined && oa < 1) alpha *= oa; }
+      if (layerDraw && !g.hole) { const lc = layerDraw.get(g.layer); if (lc) { const def = pcbColor(g.layer); if (color === def) color = lc; if (fill === def) fill = lc; } }
       if (netColors && g.net! > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ!.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net!); if (nc) { color = nc; if (fill) fill = nc; } }
       if (tint) { const tc = tint.get(g); if (tc && copperZ!.indexOf(g.layer) >= 0) { color = tc; if (fill) fill = tc; } }
       // board selection: the item repainted in its layer's selected colour (PCB_PAINTER::getColor), holes untouched
@@ -573,7 +579,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     }
   }
   if (!ratsDone) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); }
-  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (zoneA / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); }
+  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, ((pg.teardrop ? trackA : zoneA) / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); }
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
   // the Footprint Editor's footprint sits at the origin: its anchor is the LAYER_ANCHOR cross there
@@ -591,6 +597,14 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+/** A layer colour as PCB_RENDER_SETTINGS::LoadColors draws it: an alpha below 0.2 is raised to 0.2. */
+export function minLayerAlpha(c: string): string {
+  const m = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i.exec(c);
+  if (m) return +m[4] < 0.2 ? `rgba(${m[1]},${m[2]},${m[3]},0.2)` : c;
+  const h = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(c);
+  return h && parseInt(h[2], 16) < 51 ? "#" + h[1] + "33" : c;
 }
 
 /** Which Appearance ▸ Objects row a geometry belongs to (null: governed by its layer alone). */

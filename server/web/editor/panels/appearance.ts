@@ -7,7 +7,6 @@
 // ratsnest state.  Nothing here is written into the board file.
 import type { AppearanceState, InactiveMode, LayerInfo, LayerMenuCmd, NetClassRow, NetCmd, NetColorMode, NetRow, ObjectRow, PanelAction, RatsnestMode } from "../../panels-api";
 import { parseColor, rgba } from "../../canvas/colors";
-import { saveContrastMode, prefs } from "../../dialogs/prefs";
 import { confirmBox } from "../../dialogs/dom";
 import { setToggles, store } from "../appstore";
 import { hotkeyCyclePopup } from "../hotkey-popup";
@@ -112,7 +111,7 @@ function builtinPresets(all: string[]): Preset[] {
 // ---------------------------------------------------------------- persisted state
 interface UserPrefs { colors: Record<string, string>; objHidden: string[]; objOpacity: Record<string, number>; netColorMode: NetColorMode; ratsnestMode: RatsnestMode; opacityAbs?: boolean }
 interface Viewport { name: string; rect: [number, number, number, number] }
-interface ProjectPrefs { hidden: string[] | null; netColors: Record<string, string>; classColors: Record<string, string>; hiddenNets: string[]; hiddenClasses: string[]; presets: Preset[]; viewports: Viewport[]; viewport: string | null }
+interface ProjectPrefs { hidden: string[] | null; netColors: Record<string, string>; classColors: Record<string, string>; hiddenNets: string[]; hiddenClasses: string[]; presets: Preset[]; viewports: Viewport[]; viewport: string | null; contrastMode?: InactiveMode }
 
 const USER_KEY = "kui.appearance";
 const projKey = () => "kui.appearance." + (projectId() || "x");
@@ -266,11 +265,16 @@ function layerKeys(): string[] { const doc = kdoc(); return doc ? boardLayerKeys
 function setVisibleLayers(visible: string[]): void { const v = new Set(visible); setHidden(new Set(layerKeys().filter((l) => !v.has(l)))); }
 
 function setFlip(on: boolean): void { E.renderOpts.flip = !!on; setToggles({ flipBoard: !!on }); }
-function setInactive(mode: InactiveMode): void {
+function setInactive(mode: InactiveMode, save = true): void {
   E.renderOpts.highContrast = mode !== "normal"; E.renderOpts.inactiveHide = mode === "hide";
   setToggles({ highContrastMode: mode !== "normal" });
-  saveContrastMode(mode);   // PCB_DISPLAY_OPTIONS::m_ContrastModeDisplay is the user's, not the board's
+  // PCB_DISPLAY_OPTIONS::m_ContrastModeDisplay is the project's local setting ("board.high_contrast_mode" in the
+  // .kicad_prl, PROJECT_LOCAL_SETTINGS), kept with the other .kicad_prl items of this project, not in the board file
+  if (save && (proj.contrastMode || "normal") !== mode) { if (mode === "normal") delete proj.contrastMode; else proj.contrastMode = mode; saveProj(); }
 }
+/** The board's inactive layer display mode (Preferences ▸ PCB Editor ▸ Display Options reads and sets it too). */
+export function getInactiveMode(): InactiveMode { return inactiveMode(); }
+export function setInactiveMode(mode: InactiveMode): void { if (isSchDoc() || !kdoc()) return; setInactive(mode); applyAppearance(); publishAppearance(); }
 const CONTRAST_LABELS: [InactiveMode, string][] = [["normal", "Normal"], ["dim", "Dimmed"], ["hide", "Hidden"]];
 /** View ▸ Inactive Layer View Mode (ACTIONS::highContrastMode, PCB_CONTROL::HighContrastMode): normal ⇄ dimmed. */
 export function toggleInactiveMode(): void {
@@ -295,7 +299,9 @@ export function layerAlphaStep(dir: 1 | -1): boolean {
   const K = KC(), cur = user.colors[key] || K.pcbColor(key), [r, g, b, a] = parseColor(cur);
   const want = Math.round((a + dir * ALPHA_STEP) * 100) / 100;
   if (dir > 0 ? a > ALPHA_MAX - ALPHA_STEP + 1e-6 : a < ALPHA_MIN + ALPHA_STEP - 1e-6) return false;   // KiCad rings the bell
-  const c = rgba(r, g, b, Math.max(ALPHA_MIN, Math.min(ALPHA_MAX, want)));
+  // from below the floor (the picker's Opacity slider goes to 0) } steps up from there, as KiCad does; the
+  // renderer draws anything under 0.2 at 0.2 (PCB_RENDER_SETTINGS::LoadColors)
+  const c = rgba(r, g, b, Math.max(0, Math.min(ALPHA_MAX, want)));
   if (c.toLowerCase() === K.pcbColor(key).toLowerCase()) delete user.colors[key]; else user.colors[key] = c;
   saveUser(); applyAppearance(); publishAppearance();
   return true;
@@ -432,7 +438,8 @@ export function appearanceDocOpened(): void {
   loadProj();
   if (proj.hidden) { const keys = new Set(layerKeys()); E.hiddenLayers = new Set(proj.hidden.filter((l) => keys.has(l))); store.slice("document", { hiddenLayers: Array.from(E.hiddenLayers as Set<string>) }); }
   if (user.objHidden.includes("grid") && E.gridOn) setGridAndRatsnest();
-  const mode = prefs().pcbDisplay.contrastMode; if (mode !== inactiveMode()) setInactive(mode);
+  const m = proj.contrastMode, mode: InactiveMode = m === "dim" || m === "hide" ? m : "normal";
+  if (mode !== inactiveMode()) setInactive(mode, false);
   applyAppearance(); publishAppearance();
 }
 
