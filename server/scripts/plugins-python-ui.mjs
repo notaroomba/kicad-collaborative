@@ -173,6 +173,21 @@ class Dialog(pcbnew.ActionPlugin):
             print("PYTOOL models", fp.GetReference(), len(fp.Models()))
             dlg.Destroy()
             return
+        if dlg.text.GetValue().startswith("file:"):
+            # a plugin that writes the board's own file (edited elsewhere and read back): R2 is 3 mm further right in it,
+            # written its own way (everything on one line, no ids kept in order)
+            r2 = footprint(board, "R2")
+            x, y = pcbnew.ToMM(r2.GetPosition().x), pcbnew.ToMM(r2.GetPosition().y)
+            with open(board.GetFileName()) as f:
+                text = f.read()
+            import re
+            at = re.search(r'\(uuid "%s"\)\s*\(at ([-\d.]+) ([-\d.]+)' % r2.m_Uuid.AsString(), text)
+            moved = text[:at.start(1)] + ("%.4f" % (float(at.group(1)) + 3)) + text[at.end(1):]
+            with open(board.GetFileName(), "w") as f:
+                f.write(" ".join(moved.split()))
+            print("PYTOOL wrote the board file", x, y)
+            dlg.Destroy()
+            return
         if dlg.text.GetValue().startswith("sch:"):
             # a plugin that edits the schematic as a file, written back its own way (everything on one line)
             import re
@@ -980,7 +995,8 @@ console.log('    html page text: ' + pageText);
 const boxes = dlg.locator('input.wx-tree-chk');
 const rowsBefore = await dlg.locator('.wx-tree tr td').allInnerTexts();
 await boxes.first().click();
-const ticked = await boxes.evaluateAll((els) => els.map((el) => el.checked));
+let ticked = [];
+for (let i = 0; i < 40; i++) { ticked = await boxes.evaluateAll((els) => els.map((el) => el.checked)); if (ticked.length === 3 && ticked.every(Boolean)) break; await a.waitForTimeout(100); }
 check('a tree list shows its items with tick boxes, and ticking one reaches the plugin', rowsBefore.join('|').replace(/[▾▸\s]/g, '') === 'amp.kicad_pcb|left|right' && ticked.length === 3 && ticked.every(Boolean), JSON.stringify({ rowsBefore, ticked }));
 await a.waitForTimeout(300);
 await shot(a, 'py-04-dialog');
@@ -1056,6 +1072,25 @@ await idle(a, ID);
     return { docType: doc && doc.docType, url, head: text.slice(0, 12), named, other: window.KiCadProjectModel('packages3D/Nope') };
   });
   check('it is a document of the project that the 3D viewer reads for that footprint', got.docType === 'model3d' && /^\/api\/docs\/[0-9a-f-]+\/content$/.test(got.url || '') && got.head === 'ISO-10303-21' && got.named === '${KIPRJMOD}/packages3D/PyBox.wrl' && got.other === null, JSON.stringify(got));
+}
+
+// ---- a board file a plugin writes itself is carried into the board as an edit
+{
+  const was = await fp(a, 'R2'); const depth = await undoDepth(a);
+  const texts = () => a.evaluate(() => Array.from(window.CollabEditor.kdoc.items.values()).length);
+  const count = await texts();
+  await run(a, await act(a, 'Py: dialog'));
+  await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+  const d5 = inner(a); await d5.waitForSelector('input[type="text"]');
+  await d5.fill('input[type="text"]', 'file:');
+  await d5.locator('button', { hasText: /^OK$/ }).click();
+  await idle(a, ID);
+  const is = await fp(a, 'R2');
+  check('a footprint moved in the board file a plugin wrote is moved on the board', Math.abs(is.x - (was.x + 3)) < 1e-3 && Math.abs(is.y - was.y) < 1e-3 && is.rot === was.rot && is.pads === was.pads, `${JSON.stringify(was)} -> ${JSON.stringify(is)}`);
+  check('nothing else was added or removed, and it is one undo step', (await texts()) === count && (await undoDepth(a)) === depth + 1, `${count} -> ${await texts()}, undo ${depth} -> ${await undoDepth(a)}`);
+  await a.evaluate(() => window.CollabEditor.api.undoLast());
+  await a.waitForTimeout(400);
+  check('Undo takes it back', JSON.stringify(await fp(a, 'R2')) === JSON.stringify(was));
 }
 
 // ---- a schematic rewritten as a file is carried into the project's schematic

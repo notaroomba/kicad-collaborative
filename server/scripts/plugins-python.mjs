@@ -231,6 +231,17 @@ async function one(dir, boardPath, boardGiven) {
       // several files come as one ZIP: the person unpacks it and picks the file inside
       const loose = handedOver.flatMap((h) => (/\.zip$/i.test(h.name) ? unzip(h.base64) : [h]));
       const hit = loose.reverse().find((h) => !exts.length || exts.some((e) => h.name.toLowerCase().endsWith(e)));
+      // a drive with picked(name, data) is the person changing that file in another program before choosing it
+      if (hit && /^def picked\(/m.test(driveSrc)) {
+        py.globals.set("_kc_picked", JSON.stringify(hit));
+        hit.base64 = py.runPython(`
+import json as _kj, base64 as _kb, sys as _ks
+if "/kicad/drive" not in _ks.path: _ks.path.insert(0, "/kicad/drive")
+import kc_drive as _kd
+_kp = _kj.loads(_kc_picked)
+_kb.b64encode(bytes(_kd.picked(_kp["name"], _kb.b64decode(_kp["base64"])))).decode("ascii")
+`);
+      }
       return hit ? JSON.stringify(hit) : "null";
     }
     // A plugin's storage in the editor.  STATE=<json file> keeps it between runs of this script, as the browser does.

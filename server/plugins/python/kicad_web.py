@@ -1260,6 +1260,57 @@ def _install_library_files():
 MODEL_DIR = "/usr/share/kicad/3dmodels"
 
 
+def _read_back(path, mode, real_open):
+    """A plugin that reads again a file it handed over earlier (an export the person was to change in another program,
+    like a drawing of the board) is after the person's changed copy, which is on their computer: they are asked for
+    it, once a run.  Cancel leaves the copy from the last run, if this session still has it."""
+    if not mode.startswith("r") or "+" in mode:
+        return
+    try:
+        p = os.path.abspath(os.fspath(path))
+    except (TypeError, OSError):
+        return
+    if not p.startswith(PROJECT_DIR + "/"):
+        return
+    rel = os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/")
+    if rel not in _state["handed"] or rel in _state["asked_back"]:
+        return
+    _state["asked_back"].add(rel)
+    name, ext = os.path.basename(rel), os.path.splitext(rel)[1].lower()
+    try:
+        out = _call("files.pick", {"title": "%s reads %s. Choose the file to use, or cancel to use the one from its last run." % (_label[0], name),
+                                   "accept": [ext] if ext else [], "as": "base64"})
+    except Exception as e:
+        log.warning("%s could not be asked for: %s", name, e)
+        return
+    if out and "name" in out:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with real_open(p, "wb") as fh:
+            fh.write(base64.b64decode(out.get("base64", "")) if "base64" in out else str(out.get("text", "")).encode("utf-8"))
+
+
+# Drawings are what a person takes to another program and brings back; a plugin's notes and settings beside the board
+# are read back all the time and are kept here anyway, so they are never asked for.
+_ROUND_TRIP = (".svg", ".dxf")
+
+
+def _handed_key():
+    return (_state["project"] or "py.project") + ".handed"
+
+
+def _note_handed(paths):
+    """Remember, per project, which files this plugin handed over as downloads (see _read_back)."""
+    rels = {os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/") for p in paths}
+    rels = {r for r in rels if r.lower().endswith(_ROUND_TRIP)}
+    if not rels - _state["handed"]:
+        return
+    _state["handed"] |= rels
+    try:
+        _call("storage.set", {"key": _handed_key(), "value": sorted(_state["handed"])[-200:]})
+    except Exception as e:
+        log.warning("could not note the files handed over: %s", e)
+
+
 def _install_model_files():
     """KiCad's 3D model library as the files a desktop installation has under its 3dmodels folder: a plugin that
     opens, copies or looks for <library>.3dshapes/<name>.step there gets the model, fetched through the editor the
@@ -1300,6 +1351,8 @@ def _install_model_files():
     def open_(file, *a, **k):
         if isinstance(file, (str, os.PathLike)):
             fetch(file)
+            if _state["handed"] and _running[0] > 0:
+                _read_back(file, str(a[0] if a else k.get("mode", "r")), real_open)
         return real_open(file, *a, **k)
     open_.__name__ = "open"
     open_.__doc__ = real_open.__doc__
@@ -1378,6 +1431,7 @@ def load_board():
         raise pcbnew.WebUnsupported("Running this plugin without a board open")
     _write(path, text.encode("utf-8"))
     _state["given"].add(os.path.relpath(path, PROJECT_DIR).replace(os.sep, "/"))
+    _state["board_file"] = (path, text)
     project = {}
     for f in info.get("files") or []:
         rel = os.path.normpath(str(f.get("path") or "")).replace("\\", "/")
@@ -1837,6 +1891,232 @@ def _offer_libraries(fresh):
     return [p for p in fresh if os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/") not in taken]
 
 
+def _carry_board_file():
+    """A desktop plugin that edits the board outside KiCad (export, change the export elsewhere, import) ends by writing
+    the board's own file again, and the person reopens it.  Here the board is the editor's, so what the file says is
+    carried into it as ordinary edits, one undo step: footprints are moved, turned and flipped; tracks, vias and
+    lines drawn on the board are moved, added and removed; zone outlines are redrawn.  Only where things are is taken
+    from the file: such plugins write a bare board (no ids, few settings), so every item keeps its own properties and
+    new copper is a copy of copper of the same net and layer.  Other drawings (text, arcs, circles, filled shapes) and
+    anything the file leaves out of a footprint stay as they are."""
+    board = pcbnew._Host.board
+    path, given = _state.get("board_file") or (None, None)
+    if board is None or not path or board.GetFileName() != path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if text == given or text == board._text():
+        return None
+    _state["board_file"] = (path, text)
+    try:
+        root = pcbnew._parse(text)[0]
+    except Exception as e:
+        log.warning("The board file the plugin wrote could not be read: %s", e)
+        return None
+    if not isinstance(root, list) or not root or str(root[0]) != "kicad_pcb":
+        return None
+    kid, num = pcbnew._kid, pcbnew._f
+    TOL = 2000                                    # nm: what a round trip through another program's units loses
+    nm = lambda v: int(round(num(v) * 1e6))
+    word = lambda n, name: (lambda k: str(k[1]) if k is not None and len(k) > 1 else "")(kid(n, name))
+    xy = lambda n, name: (lambda k: (nm(k[1]), nm(k[2])) if k is not None and len(k) > 2 else None)(kid(n, name))
+    nets = {str(n[1]): str(n[2]) for n in root[1:] if isinstance(n, list) and len(n) > 2 and str(n[0]) == "net"}
+    net_of = lambda n: nets.get(word(n, "net"), "")
+    near = lambda a, b: abs(a[0] - b[0]) <= TOL and abs(a[1] - b[1]) <= TOL
+    same_ends = lambda a, b: (near(a[0], b[0]) and near(a[1], b[1])) or (near(a[0], b[1]) and near(a[1], b[0]))
+    apart = lambda a, b: min(sum(abs(p[0] - q[0]) + abs(p[1] - q[1]) for p, q in zip(a, o)) for o in (b, b[::-1]))
+    vec = lambda p: pcbnew.VECTOR2I(int(p[0]), int(p[1]))
+    done = {"footprints": 0, "tracks": 0, "vias": 0, "lines": 0, "zones": 0}
+
+    # footprints, found by their place in the schematic, else by reference
+    by_path, by_ref = {}, {}
+    for fp in board.GetFootprints():
+        by_path.setdefault(fp.GetPath().AsString(), fp)
+        by_ref.setdefault(fp.GetReference(), fp)
+    for n in root[1:]:
+        if not isinstance(n, list) or not n or str(n[0]) not in ("footprint", "module"):
+            continue
+        ref = ""
+        for k in n:
+            if isinstance(k, list) and len(k) > 2 and ((str(k[0]) == "property" and str(k[1]) == "Reference") or (str(k[0]) == "fp_text" and str(k[1]) == "reference")):
+                ref = str(k[2])
+        fp = by_path.get(word(n, "path")) if word(n, "path") else None
+        fp = fp or by_ref.get(ref)
+        at = kid(n, "at")
+        if fp is None or at is None or len(at) < 3:
+            continue
+        changed = False
+        if word(n, "layer") in ("F.Cu", "B.Cu") and (word(n, "layer") == "B.Cu") != bool(fp.IsFlipped()):
+            fp.Flip(fp.GetPosition(), False)
+            changed = True
+        pos, want = fp.GetPosition(), (nm(at[1]), nm(at[2]))
+        if not near((pos.x, pos.y), want):
+            fp.SetPosition(vec(want))
+            changed = True
+        turn = num(at[3]) if len(at) > 3 else 0.0
+        if abs((fp.GetOrientationDegrees() - turn + 180) % 360 - 180) > 0.01:
+            fp.SetOrientationDegrees(turn)
+            changed = True
+        done["footprints"] += changed
+
+    def settle(live, new, same, far, move, make, count):
+        """live: [(key, shape, item)], new: [(key, shape, node)].  What is where it was stays untouched; what is left on
+        both sides is paired, nearest first, and moved; the rest is added (as a copy of a like item) or removed."""
+        left = {}
+        for key, shape, item in live:
+            left.setdefault(key, []).append((shape, item))
+        models = {key: rows[0][1] for key, rows in left.items()}
+        extra = {}
+        for key, shape, node in new:
+            rows = left.get(key, [])
+            hit = next((i for i, (have, _it) in enumerate(rows) if same(have, shape)), None)
+            if hit is not None:
+                rows.pop(hit)
+            else:
+                extra.setdefault(key, []).append((shape, node))
+        for key, wanted in extra.items():
+            rows = left.get(key, [])
+            for shape, node in wanted:
+                if rows:
+                    i = min(range(len(rows)), key=lambda j: far(rows[j][0], shape))
+                    move(rows.pop(i)[1], shape, node)
+                else:
+                    make(models.get(key), key, shape, node)
+                done[count] += 1
+        for rows in left.values():
+            for _shape, item in rows:
+                board.Remove(item)
+                done[count] += 1
+
+    def segments(head):
+        for n in root[1:]:
+            if isinstance(n, list) and n and str(n[0]) == head and xy(n, "start") and xy(n, "end"):
+                yield n
+
+    def width_of(n):
+        k = kid(n, "width")
+        return nm(k[1]) if k is not None and len(k) > 1 else 0
+
+    # tracks
+    def move_track(t, shape, node):
+        t.SetStart(vec(shape[0]))
+        t.SetEnd(vec(shape[1]))
+        if width_of(node) > 0 and abs(t.GetWidth() - width_of(node)) > 1000:
+            t.SetWidth(width_of(node))
+
+    def make_track(model, key, shape, node):
+        if model is not None:
+            t = model.Duplicate()
+        else:
+            t = pcbnew.PCB_TRACK(board)
+            t.SetLayer(board.GetLayerID(key[0]))
+            net = board.FindNet(key[1]) if key[1] else None
+            if net is not None:
+                t.SetNet(net)
+            t.SetWidth(width_of(node) or pcbnew.FromMM(0.25))
+        board.Add(t)
+        move_track(t, shape, node)
+
+    live = [((word(t._node, "layer"), t.GetNetname()), ((t.GetStart().x, t.GetStart().y), (t.GetEnd().x, t.GetEnd().y)), t)
+            for t in board.GetTracks() if str(t._node[0]) == "segment"]
+    new = [((word(n, "layer"), net_of(n)), (xy(n, "start"), xy(n, "end")), n) for n in segments("segment")]
+    wide = {id(t): t for _k, _s, t in live}
+    settle(live, new, same_ends, apart, move_track, make_track, "tracks")
+    # a track that stayed where it was but was made wider or narrower
+    for key, shape, node in new:
+        w = width_of(node)
+        for t in wide.values():
+            if w > 0 and t._board is not None and (word(t._node, "layer"), t.GetNetname()) == key and abs(t.GetWidth() - w) > 1000 \
+                    and same_ends(((t.GetStart().x, t.GetStart().y), (t.GetEnd().x, t.GetEnd().y)), shape):
+                t.SetWidth(w)
+                done["tracks"] += 1
+                break
+
+    # vias
+    def move_via(v, shape, node):
+        v.SetPosition(vec(shape[0]))
+
+    def make_via(model, key, shape, node):
+        if model is None:
+            return                                   # nothing to copy a via's drill and layers from
+        v = model.Duplicate()
+        board.Add(v)
+        v.SetPosition(vec(shape[0]))
+
+    live = [((t.GetNetname(),), ((t.GetPosition().x, t.GetPosition().y),), t) for t in board.GetTracks() if str(t._node[0]) == "via"]
+    new = [((net_of(n),), (xy(n, "at"),), n) for n in root[1:] if isinstance(n, list) and n and str(n[0]) == "via" and xy(n, "at")]
+    settle(live, new, lambda a, b: near(a[0], b[0]), lambda a, b: abs(a[0][0] - b[0][0]) + abs(a[0][1] - b[0][1]), move_via, make_via, "vias")
+
+    # lines drawn on the board (the outline, mostly)
+    def move_line(g, shape, node):
+        g.SetStart(vec(shape[0]))
+        g.SetEnd(vec(shape[1]))
+
+    def make_line(model, key, shape, node):
+        if model is None:
+            return
+        g = model.Duplicate()
+        board.Add(g)
+        move_line(g, shape, node)
+
+    live = [((word(g._node, "layer"),), ((g.GetStart().x, g.GetStart().y), (g.GetEnd().x, g.GetEnd().y)), g)
+            for g in board.GetDrawings() if str(g._node[0]) == "gr_line"]
+    new = [((word(n, "layer"),), (xy(n, "start"), xy(n, "end")), n) for n in segments("gr_line")]
+    settle(live, new, same_ends, apart, move_line, make_line, "lines")
+
+    # zone outlines: the zones of one net and layer, in file order
+    def zone_key(n):
+        k = kid(n, "layers")
+        return (word(n, "net_name"), tuple(str(x) for x in k[1:]) if k is not None else (word(n, "layer"),))
+
+    def ring(n):
+        poly = kid(n, "polygon")
+        pts = kid(poly, "pts") if poly is not None else None
+        out = [(nm(p[1]), nm(p[2])) for p in (pts or [])[1:] if isinstance(p, list) and len(p) > 2 and str(p[0]) == "xy"]
+        return out[:-1] if len(out) > 1 and near(out[0], out[-1]) else out
+
+    zones = {}
+    for z in board.Zones():
+        zones.setdefault(zone_key(z._node), []).append(z)
+    for n in root[1:]:
+        if not isinstance(n, list) or not n or str(n[0]) != "zone":
+            continue
+        rows = zones.get(zone_key(n), [])
+        if not rows:
+            continue
+        z = rows.pop(0)
+        want, have = ring(n), ring(z._node)
+        if len(pcbnew._kids(z._node, "polygon")) != 1 or len(pcbnew._kids(n, "polygon")) != 1 or len(want) < 3:
+            continue
+        if len(want) == len(have) and all(near(a, b) for a, b in zip(want, have)):
+            continue
+        poly = pcbnew.SHAPE_POLY_SET()
+        poly.AddOutline(pcbnew.SHAPE_LINE_CHAIN([vec(p) for p in want], True))
+        z.SetOutline(poly)
+        z.UnFill()
+        done["zones"] += 1
+
+    said = [("%d footprint%s moved" % (done["footprints"], "" if done["footprints"] == 1 else "s")) if done["footprints"] else "",
+            ("%d track change%s" % (done["tracks"], "" if done["tracks"] == 1 else "s")) if done["tracks"] else "",
+            ("%d via change%s" % (done["vias"], "" if done["vias"] == 1 else "s")) if done["vias"] else "",
+            ("%d outline line%s changed" % (done["lines"], "" if done["lines"] == 1 else "s")) if done["lines"] else "",
+            ("%d zone outline%s redrawn" % (done["zones"], "" if done["zones"] == 1 else "s")) if done["zones"] else ""]
+    said = ", ".join(x for x in said if x)
+    log.info("The board file the plugin wrote was carried into the board: %s", said or "nothing had changed")
+    _wx_bridge_status("Board file read back: " + (said or "nothing had changed"))
+    return done
+
+
+def _wx_bridge_status(text):
+    try:
+        _call("ui.status", {"text": text, "nowait": True})
+    except Exception:
+        pass
+
+
 def _offer_rewrites(fresh):
     """A schematic or another board of the project that the plugin rewrote as a file (desktop plugins that edit the
     schematic do it that way) is carried into the project's own document: the editor shows what changed and asks.
@@ -1900,6 +2180,7 @@ def _hand_over_outputs():
         name = f"{stem}-{package_name(_plugin['name'])[:40].strip('_') or 'plugin'}.zip"
     try:
         _call("files.save", {"filename": name, "base64": base64.b64encode(data).decode("ascii")})
+        _note_handed(fresh)
     except Exception as e:
         print(f"Could not hand over {name}: {e}", file=sys.stderr)
     return fresh
@@ -1914,7 +2195,7 @@ def _hand_over_outputs():
 # per project).  Output files are not kept: they are handed over as downloads.
 
 _STATE_ONE, _STATE_ALL = 128 * 1024, 200 * 1024       # one file, and all files of one kind, as stored
-_state = {"shipped": None, "saved": {}, "project": None, "warned": False, "given": set(), "given_text": {}}
+_state = {"shipped": None, "saved": {}, "project": None, "warned": False, "given": set(), "given_text": {}, "handed": set(), "asked_back": set(), "board_file": None}
 
 
 def _state_roots():
@@ -1993,6 +2274,12 @@ def _restore_project_state(project_id):
         return
     if isinstance(kept, dict):
         _state_unpack(PROJECT_DIR, kept.get("files") or {})
+    try:
+        handed = _call("storage.get", {"key": _handed_key()}) or []
+        if isinstance(handed, list):
+            _state["handed"] |= {str(r) for r in handed[:200]}
+    except Exception:
+        pass
 
 
 def _save_state():
@@ -2277,7 +2564,9 @@ def run_action(index):
     try:
         load_board()
         _seen_files = _tree(PROJECT_DIR)
+        _state["asked_back"] = set()
         plugin.Run()
+        _carry_board_file()
     except SystemExit:
         pass
     except BaseException as e:

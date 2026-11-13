@@ -195,8 +195,8 @@
   "status": "works"
  },
  "com.github.jarrettr.stretch": {
-  "status": "opens",
-  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+  "status": "works",
+  "note": "Runs here. To SVG hands over a drawing of the board. To PCB asks for the drawing you changed and carries what moved into the board as one undo step: checked with a track bent in two, a track made wider, a footprint moved and a zone corner pulled in, with everything else left as it was. The plugin writes a bare board file, so only positions are taken from it: items keep their ids and settings; text, arcs, circles and filled shapes drawn on the board are not changed."
  },
  "com.github.joelsa.kicad-hide-references-plugin": {
   "status": "works"

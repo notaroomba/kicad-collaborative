@@ -252,6 +252,15 @@ How it works:
   `.pretty/*.kicad_mod` footprint behind, the editor asks to add them to the project's libraries
   (`project.addLibraryFiles`, needs `design:write`) instead of handing them over as downloads. 3D models written
   with them are added too.
+- **A board file a plugin writes itself is carried into the board.** Plugins that take the board to another program
+  and back (Stretch: board to SVG, edit, SVG to board) end by writing the `.kicad_pcb` file. What that file says
+  about where things are becomes ordinary edits in one undo step: footprints moved, turned or flipped, tracks, vias
+  and board lines moved, added or removed, zone outlines redrawn. Items keep their ids and properties (such plugins
+  write a bare board), and new copper is a copy of copper of the same net and layer. Text, arcs, circles and filled
+  shapes drawn on the board are not taken from the file.
+- **A drawing a plugin handed over is asked for when it reads it again.** An `.svg` or `.dxf` that went out as a
+  download is on the person's computer, changed; when the plugin opens that file in a later run the person is asked
+  to choose it (cancel uses the copy of the last run).
 - **3D models.** `FOOTPRINT.Models()` is the footprint's own list (pop, push_back and a changed `m_Filename` change
   the footprint). KiCad's 3D model library is there as files under `${KICAD9_3DMODEL_DIR}` (STEP only, fetched when
   a plugin opens or copies one). A model file a plugin puts in the project folder that a footprint of the board
