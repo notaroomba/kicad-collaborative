@@ -147,6 +147,28 @@ class Blinker(unittest.TestCase):
         area = lay["drawing_area"]
         self.assertTrue(area[0] <= lay["extent"][0] and lay["extent"][2] <= area[2] and lay["extent"][3] <= area[3], lay)
 
+    def test_tidy_keeps_a_built_sheet_and_clear_empties_sheet_and_board(self):
+        sch, built = self._sheet()
+        self.project.save()
+        path = os.path.join(self.dir, "blinky.kicad_sch")
+        with open(path, encoding="utf-8") as f:
+            before = f.read()
+        self.assertEqual(sch.tidy()["overlaps"], 0)      # nothing is drawn over anything, so tidy moves nothing
+        self.project.save()
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), before)
+        board = self.project.board()
+        board.outline(0, 0, 50, 40)
+        board.sync()
+        board.flush()
+        self.assertGreater(len(board.parts()), 0)
+        self.assertEqual(board.clear(), len(built and sch.parts()))
+        self.assertEqual(board.parts(), [])
+        self.assertEqual(board._call("get_items", kinds=["gr_rect", "gr_line", "gr_poly"])["count"] > 0, True)   # the outline stays
+        self.assertGreater(sch.clear(), 0)
+        self.assertEqual(sch.parts(), [])
+        self.assertIsNone(sch.layout(limit=1).get("extent"))
+
     def test_the_layout_check_finds_what_is_drawn_over_something_else(self):
         sch, built = self._sheet()
         self.assertEqual(built["overlaps"], 0, built.get("overlap_list"))

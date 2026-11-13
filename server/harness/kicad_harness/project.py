@@ -8,6 +8,7 @@ went wrong, never file contents.
 from __future__ import annotations
 
 import math
+import random
 import re
 import uuid as _uuid
 
@@ -209,6 +210,30 @@ class _Doc:
         if warnings or kind:
             out["warnings_by_kind"] = wkinds
         return out
+
+    def clear(self, keep: tuple = ()) -> int:
+        """Take everything off this sheet or board, for a rebuild from nothing.  `keep` names kinds of item to leave
+        (on a board the outline stays unless outline=False is given to Board.clear).  Returns how many items were removed."""
+        self.flush()
+        count, skip = 0, set()
+        for _ in range(400):   # get_items answers in pages: take a page off, ask again
+            got = self._call("get_items", near={"x": 0, "y": 0, "radius": 1e7})
+            todo = [it for it in got.get("items", []) if it["id"] not in skip]
+            for it in todo:
+                if it.get("kind") in keep or self._kept(it):
+                    skip.add(it["id"])
+                    continue
+                self._edit({"op": "remove", "id": it["id"]})
+                count += 1
+            self.flush()
+            if not todo or not any(it["id"] not in skip for it in todo):
+                break
+        if count:
+            self.project.note(f"{getattr(self, 'path', None) or 'board'}: cleared {count} items")
+        return count
+
+    def _kept(self, it: dict) -> bool:
+        return False
 
     def remove(self, *refs: str) -> None:
         for ref in refs:
@@ -685,8 +710,12 @@ class Schematic(_Doc):
         self.flush()
 
     def tidy(self) -> dict:
-        """Put every part's fields where nothing is in the way, then report what still overlaps: {"overlaps": n, "by_kind": {...}, "first": [...]}."""
-        self.autoplace_fields()
+        """Move any reference or value that is drawn over something to the nearest clear spot, then report what still overlaps:
+        {"overlaps": n, "by_kind": {...}, "first": [...]}.  Fields that are already clear stay where they are, so a sheet drawn
+        by build() keeps its look; autoplace_fields() is the call that puts every field back beside its part."""
+        self.flush()
+        self._edit({"op": "clear_fields"})
+        self.flush()
         r = self.layout(limit=12)
         return {"overlaps": r.get("count", 0), "by_kind": r.get("by_kind", {}), "first": [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]}
 
@@ -902,7 +931,12 @@ class Schematic(_Doc):
         top = (used[3] + 7.62) if used else None
         papers = [p for p in _PAPERS if p[1] >= (before.get("page") or [297, 210])[0] - 1] or [_PAPERS[-1]]
         spots, paper = None, papers[-1]
-        orders = [blocks, sorted(blocks, key=lambda b: -b["h"]), sorted(blocks, key=lambda b: -b["w"] * b["h"])]
+        orders = [blocks, sorted(blocks, key=lambda b: -b["h"]), sorted(blocks, key=lambda b: -b["w"] * b["h"]), sorted(blocks, key=lambda b: -b["w"])]
+        rng = random.Random(1)      # then a fixed set of other orders: packing is cheap, a page size too large is half an empty sheet
+        for _ in range(400):
+            o = list(blocks)
+            rng.shuffle(o)
+            orders.append(o)
         for cand in papers:   # the order given when it fits; tallest or largest first when that saves a page size
             for order in orders:
                 spots = self._pack(order, cand, top)
@@ -1292,6 +1326,15 @@ class Board(_Doc):
         if drill:
             e["drill"] = drill
         self._edit(e)
+
+    def clear(self, keep: tuple = (), outline: bool = True) -> int:
+        """Take everything off the board for a rebuild from nothing: footprints, tracks, vias, zones, drawings.  The board
+        outline stays unless outline=False.  Returns how many items were removed."""
+        self._keep_outline = outline
+        return super().clear(keep)
+
+    def _kept(self, it: dict) -> bool:
+        return getattr(self, "_keep_outline", True) and str(it.get("kind", "")).startswith("gr_") and "Edge.Cuts" in it.get("sexpr", "")
 
     def unroute(self, *nets: str, keep: tuple = ("GND",)) -> int:
         """Take the tracks and vias of these nets off the board (of every net but `keep` when none is named), so that

@@ -59,8 +59,10 @@ read: `refs`, `parts`, `pins`, `pin`, `nets`, `net_of`, `unconnected`, `check`.
 How the sheet reads: `build(groups={"Title": [refs]}, notes={"Title": "why ..."})` draws each group as a
 framed section with its title and notes; `section(title, refs, notes)`, `frame(box, title, notes)` and
 `note(text, near=ref)` do the same on a sheet that exists. `overlaps()` lists everything that is drawn on top
-of something else or off the page (an empty list is a clean sheet), `tidy()` runs KiCad's field autoplace
-and reports what is left, `autoplace_fields(refs)`, `page("A3")`, `layout()`, `sections()` and `svg(path)` (a picture, on
+of something else or off the page (an empty list is a clean sheet), `tidy()` moves any reference or value
+that is drawn over something to the nearest clear spot and reports what is left (fields that are clear stay,
+so a built sheet keeps its look), `autoplace_fields(refs)` puts fields back beside their parts, `clear()` empties
+the sheet for a rebuild (`board.clear()` does the same on the board and keeps the outline), `page("A3")`, `layout()`, `sections()` and `svg(path)` (a picture, on
 local files) are the tools around them. `build` draws every block off the page, measures it as drawn and
 packs the blocks onto the smallest page they fit on, so its result has `overlaps: 0`.
 

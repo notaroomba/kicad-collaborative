@@ -173,9 +173,11 @@ class Blocks:
                     hung.append((r, rest[0]))
             if len(series) > 1:
                 label, series = True, []          # several branches: each starts from its own label
-            if not series and hung and not label:
+            if not series and hung:
                 singles = [h for h in hung if len(h) == 1]
-                pick = next((h for h in singles if not self.plain(h[0])), singles[-1] if singles else None)
+                rails = {self.kind(self.other(h[0], net)[2]) for h in singles if self.plain(h[0])}
+                paired = rails == {"sup", "gnd"}       # a pull-up over a pull-down stays a stack on the node
+                pick = next((h for h in singles if not self.plain(h[0])), singles[-1] if singles and not label and not paired else None)
                 if pick:
                     hung.remove(pick)
                     series = [pick[0]]
@@ -188,7 +190,8 @@ class Blocks:
             rects.append(_rect(ax, y - 1.9, ax + w + 0.5, y + 0.3))
             cx, lead = (ax + _up(w + 1.0) - G, G) if d > 0 else (ax, G)
             label = False
-        last_px = None
+        last_px, last_v = None, 0
+        hung.sort(key=lambda h: 0 if len(h) == 1 and self.plain(h[0]) else 1)     # single resistors and capacitors first, so a pull-up and a pull-down pair up
         for h in hung:
             r = h[0]
             a, b, m = self.other(r, net)
@@ -204,7 +207,10 @@ class Blocks:
             else:
                 rail = m
             v = -1 if self.kind(rail) == "sup" else 1
-            if d > 0:
+            stacked = len(h) == 1 and last_v == -v and self.plain(r)     # a divider: one part up to the supply, the next down to ground from the same node
+            if stacked:
+                px, nlead = last_px, max(lead, _up(fw + 2.5) if d > 0 else 2 * G)
+            elif d > 0:
                 px = cx + max(lead, 2 * G, _up(lw) if lw else 0)
                 nlead = _up(fw + 2.5)
             else:
@@ -221,10 +227,12 @@ class Blocks:
                 depth += self.span(h[1])
             ops.append(("sym", rail, far))
             rects.append(_rect(px - 2.3 - lw, y, px + 1.2 + fw, y + v * (depth + (5.4 if v > 0 else 6.4))))
-            pts.append((px, y))
-            dots.append((px, y))
+            if not stacked:
+                pts.append((px, y))
+                dots.append((px, y))
             refs += list(h)
             cx, lead, last_px = px, nlead, px
+            last_v = 0 if stacked or len(h) != 1 or not self.plain(r) else v
         if k != "sig" and not first:
             if last_px is None:
                 return None
@@ -248,7 +256,14 @@ class Blocks:
             rects.append(_rect(hi - 0.8, y - 1.9, hi - 0.8 + wv, y - 0.25))      # the value, on the wire after it
             pts.append(A)
             cx, lead = B[0], max(G, _up(post_w - 0.2))
-            if m is not None and self.kind(m) != "sig":
+            sub = None
+            if m is not None and self.kind(m) == "sup" and not self.plain(r):
+                # an inductor or bead feeding a supply: that supply's capacitors hang at its output, under the supply's symbol
+                sub = self.trunk(g, m, B[0], y, d, False, lead=lead, used=tuple(used) + tuple(refs))
+            if sub:
+                for key, mine in (("ops", ops), ("rects", rects), ("refs", refs), ("ends", ends), ("inline", inline)):
+                    mine += sub[key]
+            elif m is not None and self.kind(m) != "sig":
                 E = (cx + d * lead, y)
                 ops.append(("wire", [B, E]))
                 ends.append((E, m, d))
@@ -330,6 +345,8 @@ class Blocks:
                 sides.setdefault(p["side"], []).append(p)
         want = lambda p: self.intent.get((ref, p["number"])) or ""
         inline: list = []
+        drawn: dict = {}      # what each side's wiring occupies, for the capacitors that hang from the supply rail above
+        top_nets = {want(p) for p in sides.get("top", [])}
         for side in ("left", "right"):
             ps = sorted(sides.get(side, []), key=lambda p: p["y"])
             d = -1 if side == "left" else 1
@@ -347,6 +364,16 @@ class Blocks:
                 k = self.kind(net)
                 wired = tuple((ref, p["number"]) for p in run)
                 at = run[-1] if k == "gnd" else run[0] if k == "sup" else run[len(run) // 2]
+                blocked = False
+                if k != "sig":      # the symbol hangs from the pin of the run where it lies over no other pin's row
+                    sx = (run[0]["x"] + d * G if len(run) > 1 else run[0]["x"]) + d * G
+                    others = [q["y"] for q in ps if want(q) and q not in run]
+
+                    def free(p):
+                        r = self.sym_rect(net, (sx, p["y"]))
+                        return not any(r[1] + 0.05 < yy < r[3] - 0.05 for yy in others)
+                    pick = next((p for p in (reversed(run) if k == "gnd" else run) if free(p)), None)
+                    blocked, at = pick is None, pick or at
                 ops = []
                 if len(run) > 1:
                     bx = run[0]["x"] + d * G
@@ -360,14 +387,15 @@ class Blocks:
                 else:
                     origin = (at["x"], at["y"])
                 self.emit(ops)
-                busy = bool(self.smalls_on(net, g)) if k == "sig" else k == "sup" and 0 < len([r for r in self.smalls_on(net, g) if self.kind(self.other(r, net)[2]) == "gnd"]) <= 3
+                # a supply's capacitors hang at its supply pin on top of the part when it has one, not at a strap pin on the side
+                busy = bool(self.smalls_on(net, g)) if k == "sig" else k == "sup" and net not in top_nets and 0 < len([r for r in self.smalls_on(net, g) if self.kind(self.other(r, net)[2]) == "gnd"]) <= 3
                 if k == "sig" and not busy:
                     if self.need_label(net, g, wired=wired):
                         E = (origin[0] + d * G, origin[1])
                         self.emit([("wire", [origin, E]), ("label", net, E, 0 if d > 0 else 180)] + ([("dot", origin)] if len(run) > 1 else []))
                         taken.append(_rect(origin[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3))
                     continue
-                later.append((run, net, k, origin, wired, busy, len(run) > 1))
+                later.append((run, net, k, origin, wired, busy, len(run) > 1, blocked))
             lines: list = []
             soft: list = []      # rail symbols at the ends of wires: a neighbour ending on the same rail joins them instead of avoiding them
             clash = lambda rs: any(_hit(a, b) for a in rs for b in taken) or any(a[3] - a[1] > 0.5 and _hit(a, b) for a in rs for b in lines)
@@ -381,9 +409,11 @@ class Blocks:
             rows = [p["y"] for p in ps]
             for net in dict.fromkeys(e[1] for e in later if not e[5]):
                 mine = [e for e in later if e[1] == net and not e[5]]
-                if len(mine) < 2:
-                    continue
                 gnd = self.kind(net) == "gnd"
+                # one ground pin with a few pins under it drops past them the same way, so its symbol covers none of their wires
+                drop = gnd and len(mine) == 1 and mine[0][7] and len([yy for yy in rows if yy > mine[0][3][1]]) <= 3
+                if len(mine) < 2 and not drop:
+                    continue
                 ys = sorted(e[3][1] for e in mine)
                 end = max(rows) + G if gnd else min(rows) - G
                 for i in range(2, 60):
@@ -404,11 +434,11 @@ class Blocks:
                 taken.append(self.sym_rect(net, (X, end)))
                 lines.append(_rect(X - 0.3, min(ys[0], end), X + 0.3, max(ys[-1], end)))
                 later = [e for e in later if e not in mine]
-            later.sort(key=lambda e: (0, -e[3][1]) if e[2] == "gnd" and not e[5] else (1, e[3][1]))
-            for run, net, k, origin, wired, busy, barred in later:
+            later.sort(key=lambda e: (2, e[3][1]) if e[7] and not e[5] else (0, -e[3][1]) if e[2] == "gnd" and not e[5] else (1, e[3][1]))
+            for run, net, k, origin, wired, busy, barred, _ in later:
                 plan = None
                 if busy:
-                    for i in range(1, 28):
+                    for i in range(1, 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, wired=wired)
                         if not plan or fits(plan):
                             break
@@ -442,6 +472,7 @@ class Blocks:
                 self.emit([("wire", [origin, E]), ("sym", net, E)] + ([("dot", origin)] if barred else []))
                 taken += rs
             self.emit(self.power_ends(sorted(ends, key=lambda e: e[0][1])))
+            drawn[side] = taken + [r for r, _ in soft] + [_rect(e[0][0] - 3.0, e[0][1] - 7.0, e[0][0] + 3.0 + G, e[0][1] + 7.0) for e in ends]
         for side in ("top", "bottom"):
             ps = sorted(sides.get(side, []), key=lambda p: p["x"])
             v = -1 if side == "top" else 1
@@ -449,17 +480,64 @@ class Blocks:
             signal = [p for p in ps if want(p) and self.kind(want(p)) == "sig"]
             natural = lambda net: (self.kind(net) == "sup") == (side == "top")
             railed: set = set()
-            if len(power) > 1 and not signal and min(b["x"] - a["x"] for a, b in zip(power, power[1:])) < 2 * G - 1e-3:
+            dense = len(power) > 1 and not signal and min(b["x"] - a["x"] for a, b in zip(power, power[1:])) < 2 * G - 1e-3
+            order = [n for n in dict.fromkeys(want(p) for p in power) if natural(n) and len([p for p in power if want(p) == n]) > 1] if dense else []
+            # the supply's own capacitors (up to three) hang from its rail to the right of the part, as in a datasheet's application circuit
+            caps: list = []
+            if side == "top" and not signal and len(order) <= 1:
+                nets_here = list(dict.fromkeys(want(p) for p in power if natural(want(p))))
+                if len(nets_here) == 1 and (not order or order == nets_here):
+                    caps = [r for r in self.smalls_on(nets_here[0], g) if self.kind(self.other(r, nets_here[0])[2]) == "gnd"]
+                    if 0 < len(caps) <= 3 and len({self.other(r, nets_here[0])[2] for r in caps}) == 1:
+                        order = nets_here
+                    else:
+                        caps = []
+            if order:
                 lo, hi = power[0]["x"], power[-1]["x"]
-                order = [n for n in dict.fromkeys(want(p) for p in power) if natural(n) and len([p for p in power if want(p) == n]) > 1]
                 for kk, net in enumerate(order):
                     mine = [p for p in power if want(p) == net]
                     rail = mine[0]["y"] + v * (G + kk * G)
-                    sx = lo - 3 * G * (kk // 2 + 1) if kk % 2 == 0 else hi + 3 * G * (kk // 2 + 1)
-                    xs = sorted({p["x"] for p in mine} | {sx})
-                    ops = [("wire", [(p["x"], p["y"]), (p["x"], rail)]) for p in mine]
-                    ops.append(("wire", [(xx, rail) for xx in xs]))
-                    ops += [("dot", (xx, rail)) for xx in xs[1:-1]]
+                    if len(order) == 1:      # one rail: its symbol stands centred over (or under) its pins
+                        sx = round((mine[0]["x"] + mine[-1]["x"]) / 2 / 1.27) * 1.27
+                    else:
+                        sx = lo - 3 * G * (kk // 2 + 1) if kk % 2 == 0 else hi + 3 * G * (kk // 2 + 1)
+                    ops, capx = [], []
+                    if caps:
+                        try:
+                            body = s.lib(self.lib(ref))["units"][0].get("body_box") or [0, 0, 0, 0]
+                        except HarnessError:
+                            body = [0, 0, 0, 0]
+                        right = drawn.get("right", [])
+                        edge = max([hi + G, SCRATCH[0] + body[2]] + [r[2] for r in right])
+                        pitch = max(4 * G, _up(max(self.width(r, self.parts[r].get("value")) for r in caps) + 5.0))
+                        x0 = hi + _up(edge - hi + 2 * G)
+                        gnet = self.other(caps[0], net)[2]
+                        bots = []
+                        for i, r in enumerate(caps):
+                            cx = x0 + i * pitch
+                            a, _, _ = self.other(r, net)
+                            bots.append(self.put(ops, r, (cx, rail), a, (0, -1)))
+                            capx.append(cx)
+                        if any(_hit(_rect(hi, rail - 0.3, capx[-1], rail + 0.3), r) for r in right):
+                            ops, capx = [], []        # something on the right reaches up through the rail: these stay a bank beside the part
+                        elif len(caps) == 1:
+                            ops.append(("sym", gnet, bots[0]))
+                        else:
+                            by = max(q[1] for q in bots) + G
+                            for q in bots:
+                                ops.append(("wire", [q, (q[0], by)]))
+                            ops.append(("wire", [(q[0], by) for q in bots]))
+                            ops += [("dot", (q[0], by)) for q in bots[1:-1]]
+                            ops.append(("sym", gnet, (bots[0][0], by)))
+                    pinx = {p["x"] for p in mine}
+                    xs = sorted(pinx | {sx} | set(capx))
+                    ops += [("wire", [(p["x"], p["y"]), (p["x"], rail)]) for p in mine]
+                    if len(xs) > 1:
+                        ops.append(("wire", [(xx, rail) for xx in xs]))
+                    for i, xx in enumerate(xs):      # a dot wherever three or more ends meet
+                        n = (xx in pinx) + (abs(xx - sx) < 1e-6) + (xx in capx) + (i > 0) + (i < len(xs) - 1)
+                        if n >= 3:
+                            ops.append(("dot", (xx, rail)))
                     ops.append(("sym", net, (sx, rail)))
                     self.emit(ops)
                     railed |= {p["number"] for p in mine}
@@ -584,6 +662,7 @@ class Blocks:
             cx0 = x0 + (w + 4 * G if bigs else 0)
             cx, cy, row = cx0, gy, 0.0
             limit = max(150.0, w)
+            per_row = 10
 
             def beside(inline):
                 nonlocal cx, cy, row, height
@@ -606,9 +685,15 @@ class Blocks:
                 kinds = {self.kind(self.intent.get((r, n))): self.intent.get((r, n)) for n in self.offs(r)}
                 if "sup" in kinds and "gnd" in kinds:
                     banks.setdefault((kinds["sup"], kinds["gnd"]), []).append(r)
+            if bigs and height > 70 and banks:      # beside a tall IC the capacitor rows stack to its height instead of running wide
+                rows_free = max(1, int(height // 30))
+                per_row = min(10, max(3, math.ceil(sum(len(v) for v in banks.values()) / rows_free)))
+                limit = max(60.0, per_row * 13.0)
             for (sup, gnd), rs in banks.items():
-                for i in range(0, len(rs), 10):
-                    self.bank(rs[i:i + 10], sup, gnd)
+                n = math.ceil(len(rs) / per_row)       # rows of even length: nine capacitors are three rows of three, not four, four and one
+                size = math.ceil(len(rs) / n)
+                for i in range(0, len(rs), size):
+                    self.bank(rs[i:i + size], sup, gnd)
                     beside([])
             for labelled in (True, False):      # chains that start from a net's label first, then what is left
                 for r in refs:
