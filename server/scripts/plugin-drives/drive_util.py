@@ -201,3 +201,38 @@ def archive(data):
     import zipfile
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         return {n: z.read(n) for n in z.namelist() if not n.endswith("/")}
+
+
+def gerber_drawn(text, flashes=0, strokes=0):
+    """A Gerber file that is whole and draws: format and apertures declared, at least this many flashes and strokes, ended."""
+    assert "%FSLAX" in text and "%ADD" in text and text.rstrip().endswith("M02*"), "not a whole Gerber file: %s" % text[:200]
+    assert text.count("D03*") >= flashes and text.count("D01*") >= strokes, "the Gerber draws too little: %d flashes, %d strokes" % (text.count("D03*"), text.count("D01*"))
+    return text.count("D03*"), text.count("D01*")
+
+
+def holes_drilled(drill_texts):
+    """The Excellon files drill every round hole of the open board once and route every slot: (drilled, routed)."""
+    import pcbnew
+    board = pcbnew.GetBoard()
+    assert drill_texts and all(d.startswith("M48") and d.rstrip().endswith("M30") for d in drill_texts), "not whole drill files: %s" % [d[:60] for d in drill_texts]
+    pads = [p for fp in board.GetFootprints() for p in fp.Pads() if p.GetDrillSize().x > 0]
+    slots = sum(1 for p in pads if p.GetDrillSize().x != p.GetDrillSize().y)
+    rounds = sum(1 for t in board.GetTracks() if t.Type() == pcbnew.PCB_VIA_T) + len(pads) - slots
+    text = "".join(drill_texts)
+    drilled, routed = text.count("\nX"), text.count("\nG00X") + text.count("G85")
+    assert "T1C" in text and drilled == rounds and routed == slots, "%d holes drilled and %d slots routed; the board has %d and %d" % (drilled, routed, rounds, slots)
+    return drilled, routed
+
+
+def parts_placed(rows, ref="Designator", x="Mid X", y="Mid Y"):
+    """Placement rows (dicts) name parts of the open board at their own places, measured from the drill origin, Y up."""
+    import pcbnew
+    board = pcbnew.GetBoard()
+    aux = board.GetDesignSettings().GetAuxOrigin()
+    at = {fp.GetReference().upper(): fp.GetPosition() for fp in board.GetFootprints()}
+    strange = [r[ref] for r in rows if r[ref].upper() not in at]
+    assert rows and not strange, "placement rows for parts the board does not have: %s" % strange[:8]
+    num = lambda v: float(str(v).replace("mm", ""))      # noqa: E731
+    off = [r[ref] for r in rows if abs(num(r[x]) - pcbnew.ToMM(at[r[ref].upper()].x - aux.x)) > 0.01 or abs(num(r[y]) + pcbnew.ToMM(at[r[ref].upper()].y - aux.y)) > 0.01]
+    assert not off, "parts placed somewhere else than on the board: %s" % off[:8]
+    return len(rows)

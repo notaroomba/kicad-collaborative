@@ -108,7 +108,8 @@
   "status": "works"
  },
  "com.github.aivon-pcba.Aivon-Fabrication-Toolkit-for-KiCad": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: the Gerber and drill archive, BOM, placement file and netlist are opened and checked against the board (every hole drilled, every part at its place)."
  },
  "com.github.aivon-pcba.aivon-plug-in-for-kicad": {
   "status": "works",
@@ -118,14 +119,16 @@
   "status": "works"
  },
  "com.github.asukiaaa.gerber-to-order": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: the five archives are opened and their Gerbers and drill files checked against the board. Written for KiCad 6; boards with more than six copper layers are beyond the plugin itself."
  },
  "com.github.bbenchoff.orthoroute": {
   "status": "works",
   "note": "Its router runs on the processor here, in the page: the graphics card acceleration it uses on the desktop (CUDA) is not available in a browser, so large boards route slowly."
  },
  "com.github.bennymeg.JLC-Plugin-for-KiCad": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: the Gerber and drill archive, BOM, placement file and netlist are opened and checked against the board (every hole drilled, every part at its place)."
  },
  "com.github.black-ghost-off.autoled": {
   "status": "works",
@@ -168,7 +171,7 @@
  },
  "com.github.g200kg.kicad-gerberzipper2": {
   "status": "works",
-  "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
+  "note": "Driven end to end on real Gerber and drill files. On a board that renames its copper layers the plugin does not find the copper files, in KiCad too."
  },
  "com.github.gauravmm.hierarchicalpcb": {
   "status": "works",
@@ -240,7 +243,8 @@
   "status": "works"
  },
  "com.github.pcbway.PCBWay-Fabrication-Toolkit-for-KiCad": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: the Gerber and drill archive, BOM, placement file and netlist are opened and checked against the board (every hole drilled, every part at its place)."
  },
  "com.github.pcbway.PCBWay-Plug-in-for-Kicad": {
   "status": "works",

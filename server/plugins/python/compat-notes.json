@@ -67,7 +67,7 @@
     },
     "com.github.g200kg.kicad-gerberzipper2": {
       "status": "works",
-      "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
+      "note": "Driven end to end on real Gerber and drill files. On a board that renames its copper layers the plugin does not find the copper files, in KiCad too."
     },
     "com.github.weirdgyn.viastitcher": {
       "status": "works",
@@ -176,6 +176,22 @@
     "com.github.30350n.pcb2blender": {
       "status": "works",
       "note": "It writes the .pcb3d file: the board as VRML in KiCad's own layout, each part's 3D model as a file of its own (KiCad's STEP models, tessellated by the editor's 3D viewer), and the layer drawings. The file's contents are checked here; opening it in Blender has not been tried. This package is the plugin's KiCad 6 version, so it is answered in KiCad 6's terms. A model file the project does not hold is left out."
+    },
+    "com.github.bennymeg.JLC-Plugin-for-KiCad": {
+      "status": "works",
+      "note": "Driven end to end: the Gerber and drill archive, BOM, placement file and netlist are opened and checked against the board (every hole drilled, every part at its place)."
+    },
+    "com.github.pcbway.PCBWay-Fabrication-Toolkit-for-KiCad": {
+      "status": "works",
+      "note": "Driven end to end: the Gerber and drill archive, BOM, placement file and netlist are opened and checked against the board (every hole drilled, every part at its place)."
+    },
+    "com.github.aivon-pcba.Aivon-Fabrication-Toolkit-for-KiCad": {
+      "status": "works",
+      "note": "Driven end to end: the Gerber and drill archive, BOM, placement file and netlist are opened and checked against the board (every hole drilled, every part at its place)."
+    },
+    "com.github.asukiaaa.gerber-to-order": {
+      "status": "works",
+      "note": "Driven end to end: the five archives are opened and their Gerbers and drill files checked against the board. Written for KiCad 6; boards with more than six copper layers are beyond the plugin itself."
     }
   }
 }

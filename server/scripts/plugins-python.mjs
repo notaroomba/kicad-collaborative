@@ -287,6 +287,35 @@ _kj.dumps(_ko)
     }
     // fabrication: a stand-in for the editor's writers, enough for a plugin to carry on with what it does with the files
     const stem = path.basename(boardPath).replace(/\.kicad_pcb$/, "");
+    // Gerbers, drill files, placements and the BOM are the editor's own writers too (static/dist/fab.js, as web/plugins/api.ts
+    // calls them), so a drive can open what a fabrication plugin packs and find the board in it
+    if (/^fab\.(gerbers|drill|positions|bom|layers)$/.test(method) && process.env.KC_FAB_STANDIN !== "1") {
+      if (!globalThis.KiCadFab || !globalThis.KiCadFab.plotGerbers) { require(path.join(server, "static", "kicad-canvas.js")); require(path.join(server, "static", "dist", "fab.js")); }
+      let text = board;
+      if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
+      const K = globalThis.KiCadCanvas, F = globalThis.KiCadFab, ctx = { doc: K.parseDoc(text, "kicad_pcb"), setup: text, projectName: stem };
+      const strs = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 80) : undefined);
+      if (method === "fab.layers") return JSON.stringify({ layers: F.plottableLayers(ctx.doc) });
+      if (method === "fab.gerbers") {
+        const all = F.plottableLayers(ctx.doc), want = strs(a.layers);
+        const r = F.plotGerbers(ctx, { layers: want ? want.filter((l) => all.includes(l)) : undefined, useProtelExtensions: !!a.useProtelExtensions, useGerberX2: a.useGerberX2 !== false, useAuxOrigin: !!a.useAuxOrigin,
+          precision: a.precision === 5 ? 5 : 6, plotReference: a.plotReference !== false, plotValue: a.plotValue !== false, subtractMaskFromSilk: !!a.subtractMaskFromSilk, commonLayers: strs(a.commonLayers),
+          sketchDnpOnFab: a.sketchDnpOnFab, hideDnpOnFab: a.hideDnpOnFab, crossoutDnpOnFab: a.crossoutDnpOnFab });
+        return JSON.stringify({ files: r.files.map((f) => ({ name: f.name, text: f.text, layer: f.layer })), warnings: r.warnings, missing: want ? want.filter((l) => !all.includes(l)) : [] });
+      }
+      if (method === "fab.drill") {
+        const zeros = ["decimal", "suppress_leading", "suppress_trailing", "keep"].includes(a.zeros) ? a.zeros : "decimal";
+        const files = F.drillFiles(ctx, { metric: a.metric !== false, zeros, merge: !!a.merge, minimalHeader: !!a.minimalHeader, mirrorY: !!a.mirrorY, ovalMode: a.ovalMode === "g85" ? "g85" : "route", useAuxOrigin: !!a.useAuxOrigin,
+          extension: typeof a.extension === "string" && /^[A-Za-z0-9]{1,8}$/.test(a.extension) ? a.extension : undefined });
+        return JSON.stringify({ files: files.map((f) => ({ name: f.name, text: f.text, holes: f.holes, tools: f.tools })) });
+      }
+      if (method === "fab.positions") {
+        const side = a.side === "front" || a.side === "back" ? a.side : "both";
+        const rows = F.positions(ctx, { side, smdOnly: !!a.smdOnly, excludeThroughHole: !!a.excludeThroughHole, excludeDnp: !!a.excludeDnp, useAuxOrigin: !!a.useAuxOrigin, negateBottomX: !!a.negateBottomX });
+        return JSON.stringify({ rows: rows.map((r) => ({ ref: r.ref, value: r.value, package: r.pkg, x: r.x, y: r.y, rotation: r.rot, side: r.side })), csv: F.placementCsv(rows), ascii: F.placementAscii(rows, side, "2026-01-01 00:00:00", "KiCad") });
+      }
+      const lines = F.bom(ctx, { excludeDnp: !!a.excludeDnp }); return JSON.stringify({ csv: F.bomCsv(lines), lines: lines.length });
+    }
     if (method === "fab.gerbers") return JSON.stringify({ files: (a.layers || []).map((l) => ({ name: `${stem}-${l.replace(/\./g, "_")}.gbr`, text: "G04 stand-in*\nM02*\n", layer: l })), warnings: [], missing: [] });
     if (method === "fab.drill") return JSON.stringify({ files: [{ name: `${stem}-PTH.drl`, text: "M48\nM30\n", holes: 0, tools: [] }, { name: `${stem}-NPTH.drl`, text: "M48\nM30\n", holes: 0, tools: [] }] });
     if (method === "fab.positions") return JSON.stringify({ rows: [], csv: "Ref,Val,Package,PosX,PosY,Rot,Side\n", ascii: "" });

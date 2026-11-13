@@ -1,5 +1,6 @@
 """Gerber Zipper 2: press "Make Gerber and ZIP" with the first manufacturer and expect its step-by-step run to finish:
 Gerbers and drill files made by kicad-cli, the ZIP written with them inside, and BOM and position files beside it."""
+# board: demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb
 import os
 import zipfile
 import wx
@@ -30,10 +31,16 @@ def after_run(_action):
     assert zips, "no ZIP was written: %s" % sorted(os.listdir(out))
     with zipfile.ZipFile(os.path.join(out, zips[0])) as z:
         names = z.namelist()
-        sizes = [i.file_size for i in z.infolist()]
-    # the files' contents come from the editor's own Gerber and drill writers; this headless run has a stand-in editor
-    # that hands back placeholders, so only the browser run can check what is in them
-    assert len(names) >= 6 and min(sizes) > 0, "the ZIP is not a set of Gerbers: %s" % list(zip(names, sizes))
-    assert any(n.upper().endswith(".GTL") for n in names) and any(n.upper().endswith(".TXT") for n in names), names
+        text = {n: z.read(n).decode("utf-8", "replace") for n in names}
+    # the Gerbers and drill files are the editor's own writers' work (the board keeps KiCad's standard layer names; a board
+    # that renames its copper layers gets files named after them, in KiCad too, and the plugin does not find those)
+    top = [n for n in names if n.upper().endswith(".GTL")]
+    assert top and any(n.upper().endswith(".GBL") for n in names) and any(n.upper().endswith(".GML") or n.upper().endswith(".GKO") or n.upper().endswith(".GM1") for n in names), names
+    g = text[top[0]]
+    assert "%FSLAX" in g and "%ADD" in g and g.count("D03*") > 100 and g.count("D01*") > 100 and g.rstrip().endswith("M02*"), g[:300]
+    drl = [n for n in names if n.upper().endswith(".TXT") or n.upper().endswith(".DRL") or n.upper().endswith(".XLN")]
+    assert drl, names
+    d = text[drl[0]]
+    assert d.startswith("M48") and "T1C" in d and d.count("\nX") > 20 and d.rstrip().endswith("M30"), d[:300]
     assert any("BOM" in f for f in os.listdir(out)) and any("POS" in f for f in os.listdir(out)), sorted(os.listdir(out))
-    return {"zip": zips[0], "in_zip": len(names), "smallest": min(sizes), "asked": seen.get("asked", [])[:3]}
+    return {"zip": zips[0], "in_zip": len(names), "top_copper_flashes": g.count("D03*"), "holes": d.count("\nX"), "asked": seen.get("asked", [])[:3]}

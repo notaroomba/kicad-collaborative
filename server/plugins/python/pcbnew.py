@@ -2818,11 +2818,19 @@ class PCB_SHAPE(BOARD_CONNECTED_ITEM):
     def GetArcAngle(self):
         c = _circle3(self.GetStart(), self.GetArcMid(), self.GetEnd())
         if not c:
-            return EDA_ANGLE(0)
+            return 0.0 if _Host.kicad6 else EDA_ANGLE(0)
         s, m, e = self.GetStart(), self.GetArcMid(), self.GetEnd()
         a0, a1, a2 = (_math.atan2(p.y - c[1], p.x - c[0]) for p in (s, m, e))
         d1, d2 = (a1 - a0) % (2 * _math.pi), (a2 - a0) % (2 * _math.pi)
-        return EDA_ANGLE(_math.degrees(d2 if d1 <= d2 else d2 - 2 * _math.pi))
+        deg = _math.degrees(d2 if d1 <= d2 else d2 - 2 * _math.pi)
+        return deg * 10.0 if _Host.kicad6 else EDA_ANGLE(deg)       # KiCad 6 spoke in tenths of a degree
+
+    def GetArcAngleStart(self):
+        """KiCad 6 only (later versions have CalcArcAngles): the angle of the arc's start seen from its centre, in tenths
+        of a degree.  A plugin that asks is written for KiCad 6 and is answered in its terms from here on."""
+        _Host.kicad6 = True
+        c, s = self.GetCenter(), self.GetStart()
+        return (_math.degrees(_math.atan2(s.y - c.y, s.x - c.x)) % 360.0) * 10.0
 
     def GetCenter(self):
         k = self._kind()
