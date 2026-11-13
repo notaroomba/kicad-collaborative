@@ -136,6 +136,7 @@ export type SchState = {
   pedit?: PointEdit | null;
   netHL?: NetHighlighter | null;
   dragMode: string; lineMode: string; posture: boolean;
+  /** eeschema input.esc_clears_net_highlight (default on) */ escClearsNetHighlight?: boolean;
   autoStartWires: boolean; autoPress?: { mm: Pt; client: Pt; mods: { shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } } | null; autoCursor?: string | null;
   dragEndedAt?: number; forceFollow?: boolean; internalSwitch?: boolean; multi?: Set<string> | null; otherRefs?: Iterable<string> | null;
   showDangling?: boolean; docGen: number;

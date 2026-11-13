@@ -256,7 +256,7 @@ export function onKeyCapture(ev: KeyboardEvent) {
   if (ev.key === "Escape") {
     let took = true;
     if (S.pedit) pointEditEnd(ctx, false); else if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
-    else if (S.carry) cancelCarry(ctx); else if (S.pinPlace) cancelPinPlace(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) clearHighlight(ctx); else took = false;
+    else if (S.carry) cancelCarry(ctx); else if (S.pinPlace) cancelPinPlace(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight && S.escClearsNetHighlight !== false) clearHighlight(ctx); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; S.selEnds = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
   } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {

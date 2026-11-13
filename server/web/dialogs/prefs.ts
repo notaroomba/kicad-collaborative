@@ -21,7 +21,11 @@ export interface GridPrefs { sizes: number[]; names?: string[]; last?: number; f
 export interface Prefs {
   mouse: { autoZoomSpeed: boolean; zoomSpeed: number; middleDrag: "pan" | "none"; rightDrag: "pan" | "none"; centerOnZoom: boolean };
   schDisplay: { showHiddenPins: boolean; showHiddenFields: boolean; showPageLimits: boolean };
-  schEditing: { lineMode: "free" | "90" | "45"; mouseDragIsDrag: boolean; autoAnnotate: boolean };
+  /** EESCHEMA_SETTINGS (panel_eeschema_editing_options): drawing.line_mode, input.drag_is_move (inverted),
+   *  drawing.auto_start_wires, input.esc_clears_net_highlight, annotation.automatic, drawing.default_repeat_offset_x / _y
+   *  (mm here, mils in KiCad's file) and drawing.repeat_label_increment */
+  schEditing: { lineMode: "free" | "90" | "45"; mouseDragIsDrag: boolean; autoAnnotate: boolean; autoStartWires: boolean; escClearsNetHighlight: boolean;
+    repeatX: number; repeatY: number; repeatIncrement: number };
   /** the schematic canvas colours (Preferences > Schematic Editor > Colors): a theme, and whether a dark UI swaps in the dark sheet */
   schColors: { theme: SchThemeId; followDark: boolean };
   /** the inactive layer mode is not here: it is the project's ("board.high_contrast_mode", Appearance panel) */
@@ -46,7 +50,7 @@ const PCB_GRID_SIZES = PCB_DEFAULT_GRIDS;
 export const DEFAULT_PREFS: Prefs = {
   mouse: { autoZoomSpeed: true, zoomSpeed: 5, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true },
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
-  schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
+  schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true, autoStartWires: true, escClearsNetHighlight: true, repeatX: 0, repeatY: 100 * 0.0254, repeatIncrement: 1 },
   schColors: { theme: "default", followDark: false },
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, trackClearance: 2, padClearance: true },
   common: { hcDimming: 0.8 },
@@ -182,7 +186,9 @@ export function applyPrefs(full = true): void {
       E.renderOpts.showHiddenPins = p.schDisplay.showHiddenPins; E.renderOpts.showHiddenFields = p.schDisplay.showHiddenFields; E.renderOpts.pageLimits = p.schDisplay.showPageLimits;
       setToggles({ toggleHiddenPins: p.schDisplay.showHiddenPins, toggleHiddenFields: p.schDisplay.showHiddenFields });
       const sch = CollabTools.sch;
-      if (sch) { try { const ctx = toolCtx(); sch.setLineMode(ctx, p.schEditing.lineMode); sch.setDragMode(ctx, p.schEditing.mouseDragIsDrag ? "drag" : "move"); sch.state.annotateAuto = p.schEditing.autoAnnotate; syncSchModes(); } catch (e) { console.warn(e); } }
+      if (sch) { try { const ctx = toolCtx(); sch.setLineMode(ctx, p.schEditing.lineMode); sch.setDragMode(ctx, p.schEditing.mouseDragIsDrag ? "drag" : "move"); const st = sch.state as { annotateAuto: boolean; autoStartWires: boolean; escClearsNetHighlight?: boolean; repeatOffset: [number, number]; repeatIncrement: number };
+          st.annotateAuto = p.schEditing.autoAnnotate; st.autoStartWires = p.schEditing.autoStartWires; st.escClearsNetHighlight = p.schEditing.escClearsNetHighlight;
+          st.repeatOffset = [p.schEditing.repeatX, p.schEditing.repeatY]; st.repeatIncrement = p.schEditing.repeatIncrement; syncSchModes(); } catch (e) { console.warn(e); } }
     } else {
       E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
       (E.renderOpts as { hcDimming?: number }).hcDimming = p.common.hcDimming;

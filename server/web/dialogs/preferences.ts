@@ -9,7 +9,7 @@ import { hotkeysPanel } from "./hotkeys-panel";
 import type { UserHotkeys } from "../menuspec";
 import { KD, checkbox, h, select } from "./dom";
 import { messageBox } from "../editor/pcbdialogs/ui";
-import { messageText } from "../units";
+import { loadUnits, messageText } from "../units";
 import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, editorId, gridLabel, savePrefs, scaleOf, type EditorId, type Prefs, type SchThemeId } from "./prefs";
 import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
@@ -200,10 +200,28 @@ export function openPreferences(page?: string, staged?: Staged): void {
           } },
           { label: "Grids", build: gridsPage("sch") },
           { label: "Editing Options", build(pg) {
-            const ed = KD().staticBox(pg, "Editing");
-            ed.append(h("div", { class: "kd-row", style: "margin-bottom:6px" }, h("label", { style: "color:var(--ink-2)" }, "Line drawing mode:"), select([["free", "Free Angle"], ["90", "90 deg Angle"], ["45", "45 deg Angle"]], p.schEditing.lineMode, (v) => { p.schEditing.lineMode = v as "free" | "90" | "45"; }, { id: "kd-pref-linemode", style: "width:160px" })),
-              checkbox("Mouse drag performs Drag (G) operation", p.schEditing.mouseDragIsDrag, (on) => { p.schEditing.mouseDragIsDrag = on; }, { id: "kd-pref-dragmode", title: "If unchecked, mouse drag will perform move (M) operation" }),
-              checkbox("Automatically annotate symbols", p.schEditing.autoAnnotate, (on) => { p.schEditing.autoAnnotate = on; }, { id: "kd-pref-autoannotate" }));
+            // PANEL_EESCHEMA_EDITING_OPTIONS
+            const se = p.schEditing, ed = KD().staticBox(pg, "Editing");
+            ed.append(h("div", { class: "kd-row", style: "margin-bottom:6px" }, h("label", { style: "color:var(--ink-2)" }, "Line drawing mode:"), select([["free", "Free Angle"], ["90", "90 deg Angle"], ["45", "45 deg Angle"]], se.lineMode, (v) => { se.lineMode = v as "free" | "90" | "45"; }, { id: "kd-pref-linemode", style: "width:160px" })),
+              checkbox("Mouse drag performs Drag (G) operation", se.mouseDragIsDrag, (on) => { se.mouseDragIsDrag = on; }, { id: "kd-pref-dragmode", title: "If unchecked, mouse drag will perform move (M) operation" }),
+              checkbox("Automatically start wires on unconnected pins", se.autoStartWires, (on) => { se.autoStartWires = on; }, { id: "kd-pref-autowires", title: "When enabled, you can start wiring by clicking on unconnected pins even when the wire tool is not active" }),
+              checkbox("<ESC> clears net highlighting", se.escClearsNetHighlight, (on) => { se.escClearsNetHighlight = on; }, { id: "kd-pref-escnet", title: "First <ESC> in selection tool clears selection, next clears net highlighting" }),
+              checkbox("Automatically annotate symbols", se.autoAnnotate, (on) => { se.autoAnnotate = on; }, { id: "kd-pref-autoannotate" }));
+            // Repeated Items: the pitches through UNIT_BINDER in the schematic editor's units, the label step a spin control
+            const su = loadUnits("eeschema").units, per = su === "mil" ? 0.0254 : su === "in" ? 25.4 : 1, uname = su === "mil" ? "mils" : su;
+            const show = (mm: number): string => String(+(mm / per).toFixed(su === "in" ? 4 : su === "mil" ? 2 : 4));
+            const pitch = (id: string, mm: number, set: (v: number) => void): HTMLInputElement => {
+              const inp = h("input", { type: "text", id, value: show(mm), style: "width:90px" }) as HTMLInputElement;
+              inp.addEventListener("change", () => { const v = parseFloat(inp.value); if (isFinite(v)) { set(+(v * per).toFixed(6)); inp.value = show(v * per); } else inp.value = show(mm); });
+              return inp;
+            };
+            const inc = h("input", { type: "number", id: "kd-pref-repeatinc", min: "-100000", max: "100000", step: "1", value: String(se.repeatIncrement), style: "width:90px" }) as HTMLInputElement;
+            inc.addEventListener("change", () => { const v = Math.round(+inc.value); if (isFinite(v)) { se.repeatIncrement = Math.max(-100000, Math.min(100000, v)); inc.value = String(se.repeatIncrement); } });
+            const ri = KD().staticBox(pg, "Repeated Items");
+            ri.append(h("div", { style: "display:grid;grid-template-columns:max-content max-content max-content;gap:6px 8px;align-items:center" },
+              h("label", null, "Horizontal pitch:"), pitch("kd-pref-repeatx", se.repeatX, (v) => { se.repeatX = v; }), h("span", { class: "ro" }, uname),
+              h("label", null, "Vertical pitch:"), pitch("kd-pref-repeaty", se.repeatY, (v) => { se.repeatY = v; }), h("span", { class: "ro" }, uname),
+              h("label", null, "Label increment:"), inc, h("span", null)));
           } },
           { label: "Colors", build(pg) {
             const sw = h("div", { id: "kd-pref-swatches", style: "display:flex;gap:6px;flex-wrap:wrap;margin-top:12px" });
