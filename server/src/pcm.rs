@@ -286,6 +286,7 @@ fn manifest_of(pkg: &Value, version: &Value) -> Value {
 pub async fn list() -> AppResult<Json<Value>> {
     let idx = index().await?;
     let have = icons();
+    let alone = icon_base().is_some();
     let mut out = Vec::with_capacity(idx.packages.len());
     for pkg in idx.packages.iter() {
         let Some(version) = pick_version(pkg) else { continue };
@@ -299,7 +300,8 @@ pub async fn list() -> AppResult<Json<Value>> {
             "details": clip(pkg.get("description_full").and_then(Value::as_str).unwrap_or(""), 1500),
             "size": version.get("download_size").and_then(Value::as_u64).unwrap_or(0),
             "compat": compat_of(identifier),
-            "icon": have.contains_key(identifier),
+            // true: known to have one; null: worth asking for (it is fetched on its own); false: none
+            "icon": if have.contains_key(identifier) { json!(true) } else if alone { Value::Null } else { json!(false) },
         }));
     }
     out.sort_by(|a, b| {
@@ -310,9 +312,63 @@ pub async fn list() -> AppResult<Json<Value>> {
     Ok(Json(json!({ "plugins": out, "iconsPending": ICONS_LOADING.load(std::sync::atomic::Ordering::SeqCst) })))
 }
 
+/// Where one plugin's icon is kept when the resources archive has not delivered it: KiCad's metadata repository,
+/// the source the archive is built from (`packages/<identifier>/icon.png`).  `KC_PCM_ICONS` names another base
+/// address, or `off`.  With a repository of your own (`KC_PCM_REPOSITORY`) and no `KC_PCM_ICONS`, there is none.
+const DEFAULT_ICONS: &str = "https://gitlab.com/kicad/addons/metadata/-/raw/main/packages";
+
+fn icon_base() -> Option<String> {
+    match std::env::var("KC_PCM_ICONS") {
+        Ok(v) if v.eq_ignore_ascii_case("off") || v.is_empty() => None,
+        Ok(v) => Some(v.trim_end_matches('/').to_string()),
+        Err(_) if std::env::var("KC_PCM_REPOSITORY").is_ok() => None,
+        Err(_) => Some(DEFAULT_ICONS.to_string()),
+    }
+}
+
+/// One plugin's icon, fetched on its own and remembered (a miss is remembered for an hour too).
+async fn icon_alone(identifier: &str) -> Option<Arc<Vec<u8>>> {
+    type Slot = (Instant, Option<Arc<Vec<u8>>>);
+    static ONE: OnceLock<Mutex<HashMap<String, Slot>>> = OnceLock::new();
+    static GATE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    let table = ONE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((at, got)) = table.lock().ok()?.get(identifier) {
+        if got.is_some() || at.elapsed() < INDEX_TTL {
+            return got.clone();
+        }
+    }
+    let base = icon_base()?;
+    // only for a plugin the repository lists, so the address is never made from what a browser sent
+    let idx = index().await.ok()?;
+    if !idx.packages.iter().any(|p| p.get("identifier").and_then(Value::as_str) == Some(identifier)) {
+        return None;
+    }
+    if !identifier.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) || identifier.contains("..") {
+        return None;
+    }
+    let _turn = GATE.get_or_init(|| tokio::sync::Semaphore::new(8)).acquire().await.ok()?;
+    if let Some((at, got)) = table.lock().ok()?.get(identifier) {
+        if got.is_some() || at.elapsed() < INDEX_TTL {
+            return got.clone();
+        }
+    }
+    let got = match tokio::time::timeout(Duration::from_secs(20), fetch(&format!("{base}/{identifier}/icon.png"), MAX_ICON_BYTES)).await {
+        Ok(Ok(bytes)) if bytes.starts_with(PNG_MAGIC) => Some(Arc::new(bytes)),
+        _ => None,
+    };
+    if let Ok(mut t) = table.lock() {
+        t.insert(identifier.to_string(), (Instant::now(), got.clone()));
+    }
+    got
+}
+
 /// `GET /api/plugins/pcm/{identifier}/icon` — the plugin's icon from KiCad's repository, a PNG.
 pub async fn icon(Path(identifier): Path<String>) -> Response {
-    match icons().get(&identifier) {
+    let found = match icons().get(&identifier) {
+        Some(bytes) => Some(bytes.clone()),
+        None => icon_alone(&identifier).await,
+    };
+    match found {
         Some(bytes) => (
             [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=3600"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
             bytes.as_ref().clone(),

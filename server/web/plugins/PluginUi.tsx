@@ -383,7 +383,7 @@ function CatalogTab() {
     </div>) }); }
   if (source === "all" || source === "kicad") for (const e of kicad) { const m = e.manifest; const cur = have(m.identifier); const newer = cur && (cur.manifest.version || "") !== (m.version || ""); const c = e.compat; rows.push({ key: `k:${e.identifier}`, name: m.name, node: (
     <div className="plg-card with-icon" key={`k:${e.identifier}`} data-plugin={e.identifier} data-source="kicad">
-      <PcmIcon identifier={e.identifier} has={!!e.icon} />
+      <PcmIcon identifier={e.identifier} has={e.icon !== false} />
       <div className="plg-card-body">
         <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span>{m.author ? <span className="plg-muted">by {m.author}</span> : null}<span className="plg-from" title="From KiCad's Plugin and Content Manager">KiCad</span><span className="grow" />
           {c ? <span className={cx("plg-compat", c.status)} title={c.note || ""}>{COMPAT_LABEL[c.status] || c.status}</span> : <span className="plg-compat" title="Newer than this editor's test run">Not tested yet</span>}</div>

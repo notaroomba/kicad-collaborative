@@ -24,7 +24,7 @@ export interface RunState { ready: boolean; failed: boolean; busy: string | null
 /** How one of KiCad's official plugins fared against the web runtime (scripts/plugins-python.mjs). */
 export interface Compat { status: "works" | "partly" | "limited" | "unsupported" | "untested"; note?: string }
 /** A plugin in KiCad's own repository. */
-export interface OfficialEntry { identifier: string; manifest: PluginManifest; details: string; size: number; compat: Compat | null; icon?: boolean }
+export interface OfficialEntry { identifier: string; manifest: PluginManifest; details: string; size: number; compat: Compat | null; icon?: boolean | null }
 /** A plugin window the editor floats around the plugin's frame (a wx dialog of a Python plugin). */
 export interface PluginWindowState { plugin: string; pluginName: string; title: string; width: number; height: number; modal: boolean }
 export interface PromptField { name: string; label: string; type?: "text" | "number" | "select" | "checkbox" | "textarea" | "file"; default?: unknown; options?: Array<string | { value: string; label: string }>; accept?: string[]; as?: "text" | "bytes"; placeholder?: string; min?: number; max?: number; step?: number }
