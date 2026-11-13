@@ -4,7 +4,7 @@ import { cursorOf, editable, selectedItems, setSelectionIds, snapCursor } from "
 import { LABEL_KINDS, beginDrag, connPoints, isNetLine } from "./drag";
 import { type EditTxn, editTxn, explicitJunctionNeeded, screenConnections, segOf, txnAddJunction, txnCleanUp, txnTrimWire } from "./junction";
 import { anchorOf, cloneNode, shiftNode } from "./orient";
-import { LINE_KINDS, S, TEXT_KINDS, str, uuidOf } from "./state";
+import { LINE_KINDS, S, TEXT_KINDS, kids, str, uuidOf } from "./state";
 import { autoRotateOf, setAutoRotate, supportsAutoRotate } from "./autorotate";
 import { deep, modChange, r4, segDist, segs } from "./util";
 
@@ -17,6 +17,22 @@ export function incrementText(text: unknown, delta: number) {
   const m = str(text).match(/^([\s\S]*?)(\d+)(\D*)$/); if (!m) return str(text);
   const n = parseInt(m[2], 10) + (delta === undefined ? 1 : delta); if (n < 0) return null;
   return m[1] + String(n).padStart(m[2].length, "0") + m[3];
+}
+/**
+ * SCH_LABEL_BASE::IncrementLabel on a label node: its text steps; SCH_DIRECTIVE_LABEL::IncrementLabel steps its
+ * Netclass and Component Class fields instead.  False (and that text unchanged) when a value would go below zero.
+ */
+export function incrementLabelNode(kind: string, node: SNode, delta: number): boolean {
+  if (kind === "netclass_flag" || kind === "directive_label") {
+    let ok = true;
+    for (const f of kids(node, "property")) {
+      const name = str(f[1]); if (name !== "Netclass" && name !== "Component Class") continue;
+      const tx = incrementText(f[2], delta); if (tx === null) ok = false; else f[2] = tx;
+    }
+    return ok;
+  }
+  const tx = incrementText(node[1], delta); if (tx === null) return false;
+  node[1] = tx; return true;
 }
 // Junctions the new items need (SCH_SCREEN::GetNeededJunctions + AddJunction), inside a dry-run edit.
 export function txnNeededJunctions(t: EditTxn, doc: KDoc, items: KItem[]) {
@@ -56,10 +72,7 @@ export function repeatLast(ctx: SchCtx) {
   try {
     for (const lp of src) {
       const node = cloneNode({ kind: lp.kind, node: deep(lp.node) });
-      if (LABEL_KINDS.has(lp.kind) && lp.kind !== "netclass_flag" && lp.kind !== "directive_label") {
-        const tx = incrementText(node[1], S.repeatIncrement);
-        if (tx === null) { if (!warned) ctx.toast("Label value cannot go below zero"); warned = true; } else node[1] = tx;
-      }
+      if (LABEL_KINDS.has(lp.kind) && !incrementLabelNode(lp.kind, node, S.repeatIncrement)) { if (!warned) ctx.toast("Label value cannot go below zero", 4000); warned = true; }
       if (lp.kind === "symbol") {
         const p = snapCursor(ctx), a = anchorOf("symbol", node); shiftNode("symbol", node, r4(p[0] - a[0]), r4(p[1] - a[1]));
         if (S.annotateAuto) { const rf = refField(node); if (rf) setReference(node, unannotated(str(rf[2]))); assignPastedRef(doc, node, used); }

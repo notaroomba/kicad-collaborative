@@ -253,5 +253,22 @@ test("ERC: multi-unit symbols: missing units, different footprints and values ac
   assert.deepStrictEqual(per[0].filter((m) => m.code === "missing_unit").map((m) => m.text), ["Symbol U1 has unplaced units [ C, Bias ]"]);
 });
 
+test("repeat: a directive label steps its Netclass and Component Class fields (SCH_DIRECTIVE_LABEL::IncrementLabel)", () => {
+  const n = K.parse('(netclass_flag "" (length 2.54) (shape round) (at 10 10 0) (property "Netclass" "BUS3" (at 10 8 0)) (property "Component Class" "grp09" (at 10 6 0)) (property "Other" "X1" (at 10 4 0)))');
+  assert.strictEqual(_.incrementLabelNode("netclass_flag", n, 2), true);
+  const val = (name) => K.str(K.kids(n, "property").find((q) => K.str(q[1]) === name)[2]);
+  assert.deepStrictEqual([val("Netclass"), val("Component Class"), val("Other")], ["BUS5", "grp11", "X1"]);
+  assert.strictEqual(_.incrementLabelNode("netclass_flag", n, -20), false, "below zero");
+  assert.strictEqual(val("Netclass"), "BUS5");
+  const l = K.parse('(label "D7" (at 0 0 0))'); assert.ok(_.incrementLabelNode("label", l, 1)); assert.strictEqual(l[1], "D8");
+  assert.ok(!_.incrementLabelNode("label", l, -9)); assert.strictEqual(l[1], "D8");
+  // Insert after placing one: the repeated flag carries the next class
+  const { d, c } = fresh(); sch.state.repeatOffset = [0, 2.54]; sch.state.repeatIncrement = 1;
+  const it = K.createItem(d, K.parse('(netclass_flag "" (length 2.54) (shape round) (at 25.4 25.4 0) (uuid "f1") (property "Netclass" "HS1" (at 25.4 23 0) (effects (font (size 1.27 1.27)))))'));
+  _.rememberPlaced(it.kind, it.node); assert.ok(_.repeatLast(c));
+  const flags = Array.from(d.items.values()).filter((x) => x.kind === "netclass_flag").map((x) => K.str(K.kids(x.node, "property")[0][2]));
+  assert.deepStrictEqual(flags.sort(), ["HS1", "HS2"]);
+});
+
 console.log(`sch-sweep9: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

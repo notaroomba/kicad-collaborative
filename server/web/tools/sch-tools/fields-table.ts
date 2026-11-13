@@ -52,7 +52,19 @@ export function openFieldsTable(ctx: SchCtx) {
       table.rows.map((r) => `<tr>${fields.map((f) => `<td style="padding:1px 3px"><input data-id="${escapeHtml(r.id)}" data-field="${escapeHtml(f)}" value="${escapeHtml(r.values[f] || "")}" style="width:${f === "Reference" ? 60 : 130}px"${ro}></td>`).join("")}</tr>`).join("")}</tbody></table></div>
       <p class="kd-note" style="margin-top:8px">Edit any cell; OK commits every changed symbol as one change.${ctx.viewOnly ? "" : ' <button class="btn sm" id="kd-addfield">Add field…</button>'}</p>`;
     const add = body!.querySelector("#kd-addfield");
-    if (add) add.addEventListener("click", () => { const name = (typeof window !== "undefined" && window.prompt) ? window.prompt("New field name") : null; if (name && !fields.includes(name)) { collect(); fields.push(name); render(); } });
+    if (add) add.addEventListener("click", () => addField());
+  };
+  // DIALOG_FIELDS_TABLE::OnAddField: a wxTextEntryDialog in the themed dialog shell (never the browser's prompt)
+  const addField = () => {
+    let inp: HTMLInputElement | null = null;
+    KD.open({ title: "Add Field", width: 340,
+      build(b: HTMLElement) { b.innerHTML = '<p style="margin:0 0 8px">New field name:</p><input type="text" data-kd-newfield style="width:100%">'; inp = b.querySelector("input"); setTimeout(() => inp && inp.focus(), 0); },
+      ok() {
+        const name = inp ? inp.value : "";
+        if (!name) { ctx.toast("Field must have a name."); return; }
+        if (fields.some((f) => f.toLowerCase() === name.toLowerCase())) { ctx.toast(`Field name '${name}' already in use.`); return; }
+        collect(); fields.push(name); render();
+      } });
   };
   const collect = () => { for (const inp of body!.querySelectorAll<HTMLInputElement>("input[data-id]")) { const r = table.rows.find((x) => x.id === inp.dataset.id); if (r) r.values[inp.dataset.field!] = inp.value; } };
   const original = new Map(table.rows.map((r) => [r.id, Object.assign({}, r.values)]));
