@@ -114,6 +114,27 @@ test("hypertext: EDA_TEXT link definition (text and text box only), goto-page hr
   assert.equal(H.gotoPageOf("https://x"), null);
 });
 
+test("hypertext: a url in plain text is hovered only under the cursor; a url field opens its whole text", () => {
+  const H = load(["editor", "hypertext.ts"]);
+  assert.deepEqual(K.urlRuns("See https://kicad.org now").map((r) => [r.start, r.end, r.url]), [[4, 21, "https://kicad.org"]]);
+  assert.deepEqual(K.urlRuns("ftp://x and http://a http://b").map((r) => r.url), ["http://a", "http://b"]);
+  assert.ok(K.isUrlText("https://example.org/ds.pdf")); assert.ok(K.isUrlText("file:///tmp/a.pdf")); assert.ok(!K.isUrlText("~")); assert.ok(!K.isUrlText("http://"));
+  const g = { t: "text", text: "See https://kicad.org", x: 10, y: 20, size: 2, h: "left", v: "bottom" };
+  const b = K.urlRunBox(g, 4, 21), b0 = K.urlRunBox(g, 0, 3);
+  assert.ok(b.x0 > b0.x1 && b.x1 > b.x0, JSON.stringify([b0, b]));
+  const on = [10 + (b.x0 + b.x1) / 2, 20 - 1], off = [10 + (b0.x0 + b0.x1) / 2, 20 - 1];
+  assert.equal(K.urlRunAt(g, on).url, "https://kicad.org"); assert.equal(K.urlRunAt(g, off), null);
+  // rotated 90°: the text runs up the sheet
+  const r = Object.assign({}, g, { rot: 90 }); assert.equal(K.urlRunAt(r, [10 - 1, 20 - (b.x0 + b.x1) / 2]).url, "https://kicad.org");
+  const item = { id: "t", kind: "text", node: K.parse('(text "See https://kicad.org" (at 10 20 0) (effects (font (size 2 2))))'), geom: [g] };
+  assert.deepEqual(H.hoveredHypertext(item, on, null), { id: "t", href: "https://kicad.org", geom: g, run: { start: 4, end: 21 } });
+  assert.equal(H.hoveredHypertext(item, off, null), null);
+  const fg = { t: "text", field: "Datasheet", text: "https://example.org/ds.pdf", x: 0, y: 0, size: 1.27, h: "left", v: "bottom" };
+  const sym = { id: "s", kind: "symbol", node: ["symbol"], geom: [fg] };
+  assert.equal(H.hoveredHypertext(sym, [100, 100], "Datasheet").href, "https://example.org/ds.pdf");
+  assert.equal(H.hoveredHypertext({ id: "s", kind: "symbol", geom: [Object.assign({}, fg, { text: "~" })] }, [0, 0], "Datasheet"), null);
+});
+
 test("dialog geometry: a remembered place and size come back clamped to the window", () => {
   const S = load(["tools", "kicad-dialogs", "shell.ts"]);
   assert.deepEqual(S.clampGeometry({ left: 100, top: 50, width: 500, height: 300 }, 1440, 900), { left: 100, top: 50, width: 500, height: 300 });

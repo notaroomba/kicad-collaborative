@@ -375,17 +375,18 @@ let hoverRaf = 0, hoverEv: { clientX: number; clientY: number } | null = null;
 function computeHover(): void {
   hoverRaf = 0; const ev = hoverEv; hoverEv = null;
   const d = doc(); if (!d || !ev) return;
-  let id: string | null = null, over = false, roll: KItem | null = null;
+  let id: string | null = null, over = false, roll: KItem | null = null, rollField: string | null = null; const at = worldMm(ev);
   if (E.tool === "select" && !interactionBusy() && !E.pan && !E.contextMenuOpen) {
-    const hit = pickAt(worldMm(ev));
+    const hit = pickAt(at);
     if (isSch() && hit && hit.item) roll = hit.item;
+    else if (isSch() && hit && hit.field) { roll = d.items.get(hit.field.id) || null; rollField = roll ? hit.field.name : null; }
     // the schematic module outlines its own items (wires, labels …) on hover; fields have their own selection box
     if (hit && hit.movable) id = hit.movable.id; else if (hit && hit.item && !isSch()) id = hit.item.id;
     const under = hit && (hit.movable ? hit.movable.id : hit.item ? hit.item.id : null);
     over = !!under && !E.viewOnly && selectionIds().includes(under);
   }
   if (id !== E.hoverId) { E.hoverId = id; requestRepaint(); }
-  if (setRollover(roll, heldModifiers())) requestRender();
+  if (setRollover(roll, heldModifiers(), at, rollField)) requestRender();
   // over something already selected a drag moves it: say so with the cursor (KiCad's "moving" arrow)
   stage.classList.toggle("over-sel", over);
   refreshCursor();

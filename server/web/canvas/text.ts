@@ -73,3 +73,41 @@ const UNESCAPE: Record<string, string> = { dblquote: '"', quote: "'", lt: "<", g
 const UNESCAPE_RE = /\{(dblquote|quote|lt|gt|backslash|slash|bar|comma|colon|space|dollar|tab|return|brace)\}/g;
 /** UnescapeString (common/string_utils.cpp): {slash} → /, {colon} → :, … as every GetShownText does before drawing. */
 export function unescapeText(s: string): string { return s && s.indexOf("{") >= 0 ? s.replace(UNESCAPE_RE, (m: string, k: string) => UNESCAPE[k]) : s; }
+
+// ---------------------------------------------------------------- hypertext (MARKUP::url, IsURL)
+/**
+ * The url nodes of one line as MARKUP_PARSER finds them (include/markup_parser.h): "http://" or "https://" and then
+ * every character up to a space.  [start, end) index the marked-up source.
+ */
+export function urlRuns(line: string): { start: number; end: number; url: string }[] {
+  const out: { start: number; end: number; url: string }[] = []; const re = /https?:\/\/[^ ]+/g; let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) out.push({ start: m.index, end: m.index + m[0].length, url: m[0] });
+  return out;
+}
+/** string_utils IsURL: the text holds a URL anywhere ((https?|ftp|file)://… not ending in . , : ; < >). */
+export function isUrlText(s: string): boolean { return /(https?|ftp|file):\/\/[-\w+&@#/%?=~|!:,.;]*[^.,:;<>\s¶]/i.test(s); }
+/**
+ * Where the url run [start, end) of a one-line text geometry sits in the text's own frame (origin at its anchor,
+ * x along the baseline, y down): FONT::drawMarkup's glyph box of that node, from the cap height to the descenders.
+ */
+export function urlRunBox(g: { text: string; raw?: string; size: number; sizeX?: number; w?: number; h: string; v: string }, start: number, end: number): { x0: number; x1: number; y0: number; y1: number; base: number } {
+  const src = g.raw || g.text; const sx = g.sizeX && g.sizeX > 0 ? g.sizeX : g.size;
+  const shown = (s: string) => parseMarkup(s).text;
+  const W = textWidth(shown(src), sx, 0), lead = shown(src.slice(0, start)), run = shown(src.slice(0, end));
+  const left = g.h === "left" ? 0 : g.h === "right" ? -W : -W / 2;
+  const x0 = left + (lead ? textWidth(lead, sx, 0) + 0.2 * sx : 0), x1 = left + textWidth(run, sx, 0);
+  const base = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
+  return { x0, x1, y0: base - g.size * 1.05, y1: base + g.size * 0.3, base };
+}
+/** A document point in a text geometry's own frame (the inverse of the painter's anchor / rotation / mirror). */
+export function textLocal(g: { x: number; y: number; rot?: number; mirror?: boolean }, p: readonly number[]): [number, number] {
+  const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), dx = p[0]! - g.x, dy = p[1]! - g.y;
+  return [(g.mirror ? -1 : 1) * (c * dx + sn * dy), -sn * dx + c * dy];
+}
+/** The url run of a text geometry under the point p (SCH_PAINTER's rollover position), or null. */
+export function urlRunAt(g: { x: number; y: number; rot?: number; mirror?: boolean; text: string; raw?: string; size: number; sizeX?: number; h: string; v: string }, p: readonly number[]): { start: number; end: number; url: string } | null {
+  const src = g.raw || g.text; const runs = urlRuns(src); if (!runs.length) return null;
+  const [lx, ly] = textLocal(g, p);
+  for (const r of runs) { const b = urlRunBox(g, r.start, r.end); if (lx >= b.x0 && lx <= b.x1 && ly >= b.y0 && ly <= b.y1) return r; }
+  return null;
+}

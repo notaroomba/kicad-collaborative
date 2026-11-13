@@ -7,7 +7,7 @@ import { ensureSchTheme } from "./geom";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
 import { documentDrawingSheet } from "./sheet";
-import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
+import { TEXT_INTERLINE, lineOffsets, textWidth, urlRunBox } from "./text";
 import { drawStrokeText, setOverbarHeight, strokeLine, strokeOrigin } from "./stroke-font";
 import { hopShapes, strokeHopShape } from "./hop-over";
 import { schFormat } from "./geom-sch";
@@ -559,7 +559,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       if (isSel || (padSel && (g.padIndex !== undefined ? selPcb!.has(padSel + g.padIndex) : g.field !== undefined && g.t === "text" && selPcb!.has(padSel + "field:" + g.field)))) selGeoms!.add(g);
       if (brightIds && brightIds.has(it.id)) brightGeoms!.add(g);
       if (outsideGeoms && !isSel && !entered!.has(it.id)) outsideGeoms.add(g);
-      if (rollId === it.id && g.t === "text") rollGeoms!.add(g);
+      if (rollId === it.id && g.t === "text" && (!opts.rolloverGeom || opts.rolloverGeom === g)) rollGeoms!.add(g);
       if (netNames && g.net! > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
@@ -643,10 +643,11 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     const t = g.t;
     if (t === "text") {
       // SCH_PAINTER: a rolled-over text with a link definition is drawn whole in LAYER_HOVERED, underlined
-      const roll = rollGeoms !== null && rollGeoms.has(g);
-      if (roll) color = SCH.hovered;
+      const roll = rollGeoms !== null && rollGeoms.has(g), run = roll && opts.rolloverRun ? opts.rolloverRun : null;
+      if (roll && !run) color = SCH.hovered;
       drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG);
-      if (roll) drawUnderline(ctx, g, color!, minW, base);
+      if (roll && !run) drawUnderline(ctx, g, color!, minW, base);
+      else if (run && base) drawRunHover(ctx, g, run, s, doc.type, minW, base, bg || PCB_BG);
       curStroke = curFill = null; curWidth = -1; curCap = "round"; return;
     }
     if (t === "image") {
@@ -1517,6 +1518,26 @@ export function drawTextStroke(ctx: Ctx2D, g: DrawTextG, minW: number, color: st
     return;
   }
   drawStrokeText(ctx, base, spec, color, minW);
+}
+
+/**
+ * FONT::drawMarkup with a mouse position: the url node under it is drawn again in LAYER_HOVERED (clipped to its own
+ * glyph box) and underlined from the node's start to its end, the bar trimmed 0.1·size at each end.
+ */
+export function drawRunHover(ctx: Ctx2D, g: DrawTextG, run: { start: number; end: number }, s: number, docType: string, minW: number, base: Mat, bg: string): void {
+  const b = urlRunBox(g, run.start, run.end); if (!(b.x1 > b.x0)) return;
+  const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
+  const local = () => ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
+  ctx.save(); local();
+  ctx.beginPath(); ctx.rect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0); ctx.clip();
+  ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
+  drawText(ctx, g, s, docType, minW, SCH.hovered, base, false, bg);
+  ctx.restore();
+  local();
+  const trim = 0.1 * g.size, y = b.base + 0.16 * g.size;
+  ctx.strokeStyle = SCH.hovered; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(b.x0 + trim, y); ctx.lineTo(b.x1 - trim, y); ctx.stroke();
+  ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
 }
 
 /**

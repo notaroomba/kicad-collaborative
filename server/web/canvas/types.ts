@@ -235,6 +235,9 @@ export interface RenderOpts {
   itemColors?: Map<string, string | string[]> | null;
   /** the schematic item with a hyperlink under the cursor (SCH_ITEM::SetIsRollover): its text in LAYER_HOVERED, underlined */
   rollover?: string | null;
+  /** with `rollover`: only this text geometry, and only this url run of it ([start, end) of its source), is hovered
+   *  (FONT::drawMarkup with a mouse position: the url node under the cursor in LAYER_HOVERED, underlined) */
+  rolloverGeom?: object | null; rolloverRun?: { start: number; end: number } | null;
   /** [x0, y0, x1, y1] device px: repaint only that part */
   region?: number[] | null;
   /** css colour under the drawing, or false for none */

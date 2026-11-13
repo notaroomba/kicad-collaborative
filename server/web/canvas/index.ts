@@ -45,7 +45,7 @@ import { projectFile } from "./project-file";
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
 import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable, tableCellShownText, cellAddr, parseCellAddress } from "./tables-images";
-import { SCH_PEN, TEXT_INTERLINE, lineOffsets, parseMarkup, setSchPen, textWidth, unescapeText } from "./text";
+import { SCH_PEN, TEXT_INTERLINE, isUrlText, lineOffsets, parseMarkup, setSchPen, textWidth, unescapeText, urlRunAt, urlRunBox, urlRuns } from "./text";
 import { drawStrokeText, linebreakText, parseStrokeMarkup, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin } from "./stroke-font";
 import { displayNetName, netCode } from "./geom-pcb";
 import { unitLetter } from "./geom-sch";
@@ -94,7 +94,7 @@ export const api = {
   PRODUCT_NAME, WS_TOKENS, TB_TOKENS, PAPER_SIZES, mm2mils, TEXT_INTERLINE, lineOffsets,
   fieldBoxes, fieldAt, pointInQuad, hitTestDetail, geomHit, geomBox,
   // exposed for tests and tools
-  symbolTransform, textWidth, parseMarkup, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf,
+  symbolTransform, textWidth, parseMarkup, urlRuns, urlRunAt, urlRunBox, isUrlText, hatchLines, arcFrom3, bezierPts, pcbColor, pcbZ, drawPad, buildGeom, effectsOf, fillOf,
   // display-option helpers (see render()): ratsnest / marker / net-name / zone-preview / flip constants and look-ups
   bboxOf, padAt, padGeomHit, markerAt, markerPolygon, markerScale, busConnectedLabels, busPinTint, isBusLabel, drawMarkers, zoomFactor, flipX, unflipX, flipCentre, dashPattern, trackNameColor,
   MARKER_CORNERS, MARKER_SCALE, MARKER_COLORS, RATSNEST_COLOR, ZONE_OPACITY, HIDDEN_TEXT_ALPHA, PX_PER_MM_ZOOM1, VIA_NETNAME_COLOR,
