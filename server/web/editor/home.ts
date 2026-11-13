@@ -12,7 +12,7 @@ export function navigate(path: string, replace?: boolean): void {
 export function route() {
   const m = location.pathname.match(/^\/p\/([0-9a-f-]{36})(?:\/edit|\/live)?\/?$/i);
   if (m) { openEditor(m[1]); return; }
-  state.homeTab = location.pathname.startsWith("/gallery") ? "explore" : location.pathname.startsWith("/trash") ? "trash" : "projects";
+  state.homeTab = location.pathname.startsWith("/gallery") ? "explore" : location.pathname.startsWith("/trash") ? "trash" : location.pathname.startsWith("/time") ? "time" : "projects";
   showHome();
 }
 

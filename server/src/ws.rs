@@ -340,6 +340,10 @@ async fn handle_socket(
 
     // --- Main loop ---
     let mut joined: HashMap<Uuid, JoinedDoc> = HashMap::new();
+    // Time tracking (timetrack.rs): what this socket last showed of its cursor and view in each
+    // document; the editors' idle keepalive repeats it and so is not activity.
+    let mut last_seen: HashMap<Uuid, String> = HashMap::new();
+    let track_kind = peer.kind.clone();
 
     // Someone who only watches never sends anything, so losing access cannot wait for
     // their next message: the epoch is looked at on a timer as well, and every joined
@@ -514,6 +518,9 @@ async fn handle_socket(
                     );
                     continue;
                 }
+                if user.is_some() {
+                    crate::timetrack::activity(&state, user_id, doc_id, &track_kind, true);
+                }
                 let _ = d
                     .tx
                     .send(DocMsg::SubmitOp {
@@ -545,6 +552,18 @@ async fn handle_socket(
                         );
                         drop_doc(&mut joined, doc_id, &client_id, &out_tx).await;
                         continue;
+                    }
+                }
+                if let (Some(_), Some(_)) = (&user, joined.get(&doc_id)) {
+                    let seen = format!("{}|{}", presence_state.get("cursor").map(|v| v.to_string()).unwrap_or_default(),
+                        presence_state.get("viewport").map(|v| v.to_string()).unwrap_or_default());
+                    if last_seen.get(&doc_id) != Some(&seen) {
+                        let first = !last_seen.contains_key(&doc_id);
+                        last_seen.insert(doc_id, seen);
+                        // opening a document is not yet working on it
+                        if !first {
+                            crate::timetrack::activity(&state, user_id, doc_id, &track_kind, false);
+                        }
                     }
                 }
                 if let Some(d) = joined.get(&doc_id) {

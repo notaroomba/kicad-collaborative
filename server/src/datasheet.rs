@@ -57,7 +57,7 @@ fn allow_local() -> bool {
     matches!(std::env::var("AI_DATASHEET_ALLOW_LOCAL").as_deref(), Ok("1"))
 }
 
-fn public(ip: IpAddr) -> bool {
+pub(crate) fn public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v) => {
             let o = v.octets();

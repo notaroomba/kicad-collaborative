@@ -24,6 +24,7 @@ mod plugins;
 mod registry;
 mod relay;
 mod templates;
+mod timetrack;
 mod versions;
 mod ws;
 
@@ -290,6 +291,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/desktop/token", post(auth::desktop_token))
         .route("/auth/desktop/confirm", post(auth::desktop_confirm))
         .route("/api/me", get(auth::me))
+        .route("/api/me/wakatime", get(timetrack::get_settings).put(timetrack::put_settings).delete(timetrack::delete_settings))
+        .route("/api/me/wakatime/test", post(timetrack::test_settings))
+        .route("/api/me/time", get(timetrack::my_time))
+        .route("/api/projects/{id}/time", get(timetrack::project_time))
+        .route("/time", get(pages::app_page))
         .route("/api/ws-ticket", get(auth::ws_ticket))
         .route("/auth/adopt", get(auth::adopt))
         .route("/auth/dev", get(auth::dev_login))

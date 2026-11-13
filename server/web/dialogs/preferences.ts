@@ -14,6 +14,7 @@ import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, editorId, gridLabel, savePrefs
 import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
 import { getInactiveMode, setInactiveMode } from "../editor/panels/appearance";
+import { wakatimePage, type WakaPage } from "./wakatime";
 
 const MIL = 0.0254;
 
@@ -90,6 +91,7 @@ export function openPreferences(page?: string, staged?: Staged): void {
   let arcEdit = staged ? staged.arcEdit : pcbTools() ? pcbTools()!.arcEditMode() : 0;
   // the inactive layer mode is the open board's project setting (.kicad_prl "board.high_contrast_mode"), not a user preference
   let contrast = staged ? staged.contrast : getInactiveMode();
+  let waka: WakaPage | null = null;
   let hk: ReturnType<typeof hotkeysPanel> | null = null, body0: HTMLElement | null = null;
   const pageKey = (): string => { const n = body0 && body0.querySelector<HTMLElement>(".kd-tb-node.child.on"); return (n && n.dataset.page) || ""; };
   // the frame it was opened from: its grid list's selection is the grid in use (the Symbol Editor keeps its own)
@@ -148,6 +150,7 @@ export function openPreferences(page?: string, staged?: Staged): void {
     extra: [{ label: "Reset to Defaults", fn: () => {
       const key = pageKey();
       if (key === "Common/Hotkeys") { if (hk) hk.resetToDefaults(); return; }
+      if (key === "Common/WakaTime") return;   // nothing local to reset: the key is removed with Remove Key
       const st: Staged = { p, uiMode, arcEdit, contrast, hotkeys: hk ? hk.staged() : undefined };
       resetPage(key, st); KD().close(); openPreferences(key, st);
     } }],
@@ -183,6 +186,8 @@ export function openPreferences(page?: string, staged?: Staged): void {
             sg.append(h("p", { class: "kd-note", style: "margin:0" }, "Vertical touchpad or scroll wheel movement zooms; the browser's own gestures pan with a middle or right button drag."));
           } },
           { label: "Hotkeys", build(pg) { hk = hotkeysPanel(pg, staged && staged.hotkeys); } },
+          // not a KiCad panel: Junction's WakaTime heartbeats (the desktop app has the same page)
+          { label: "WakaTime", build(pg) { waka = wakatimePage(pg, (host, title) => KD().staticBox(host, title)); } },
         ] },
         // PANEL_SYM_EDIT_GRIDS: the Symbol Editor's own window settings
         { label: "Symbol Editor", pages: [
@@ -254,5 +259,6 @@ export function openPreferences(page?: string, staged?: Staged): void {
         ] },
       ], { selected: page || lastPage || "Mouse and Touchpad" });
     },
-    ok() { lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
+    ok() { lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved");
+      if (waka) waka.apply().catch((e) => toast(`WakaTime settings were not saved: ${e instanceof Error ? e.message : String(e)}`)); } });
 }

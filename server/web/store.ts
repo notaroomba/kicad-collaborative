@@ -173,7 +173,7 @@ export interface FpLibRow {
 export interface AppState {
   view: "home" | "editor";
   /** which page of the home view is showing, and a counter bumped on every visit (web/home) */
-  homeTab?: "projects" | "explore" | "trash";
+  homeTab?: "projects" | "explore" | "trash" | "time";
   homeTick?: number;
   me: User | null;
   project: ProjectInfo | null;

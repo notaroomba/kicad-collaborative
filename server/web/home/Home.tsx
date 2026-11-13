@@ -10,12 +10,13 @@ import type { Project } from "./api";
 import { ShareDialog, type ShareTarget } from "./ShareDialog";
 import { cachedThumb, localThumb } from "./thumb";
 import { filesFromDrop, UploadDialog } from "./UploadDialog";
+import { TimePage } from "./TimePage";
 import { FirstProject } from "../onboarding/FirstProject";
 import { miniBoard, startGuidedProject } from "../onboarding/state";
 import { ago, Avatar, Confirm, copyText, Ic, layerOpen, Menu, Modal, PHONE, toast, toastError, useMedia, type MenuAt, type MenuEntry } from "./ui";
 
 const RELEASES = "https://github.com/notaroomba/junction/releases";
-type Tab = "projects" | "explore" | "trash";
+type Tab = "projects" | "explore" | "trash" | "time";
 type Scope = "all" | "owned" | "shared" | "starred";
 type Sort = "updated" | "name" | "created";
 type Layout = "grid" | "list";
@@ -457,6 +458,7 @@ function Projects({ me, tick, onUpload, onGuided, onJoin, onShare }: { me: User;
       { id: "star", label: p.starred ? "Remove star" : "Add star", icon: "star", run: () => { star(p); } },
       { id: "share", label: mine ? "Share…" : "See who has access…", icon: "share", run: () => onShare({ projectId: p.projectId, name: p.name, isPublic: p.public }) },
       { id: "copy", label: "Copy link", icon: "link", run: () => { copyText(url, "Link copied"); } },
+      { id: "time", label: "Time spent", icon: "clock", run: () => go(`/time?project=${p.projectId}`) },
       ...(mine ? [
         { id: "rename", label: "Rename", icon: "edit", run: () => setRenaming(p.projectId) },
         { id: "details", label: "Edit details…", icon: "info", run: () => setDetails(p) },
@@ -716,7 +718,7 @@ export function Home() {
   const me = useApp((s) => s.me);
   const view = useApp((s) => s.view);
   const homeTab = useApp((s) => s.homeTab);
-  const tab: Tab = homeTab === "explore" ? "explore" : homeTab === "trash" ? "trash" : "projects";
+  const tab: Tab = homeTab === "explore" ? "explore" : homeTab === "trash" ? "trash" : homeTab === "time" ? "time" : "projects";
   const tick = useApp((s) => s.homeTick) || 0;
   const [share, setShare] = useState<ShareTarget | null>(null);
   const [upload, setUpload] = useState<null | { files?: API.UploadFile[] }>(null);
@@ -829,6 +831,7 @@ export function Home() {
               {me ? <a aria-label="Import from GitHub" className="hp-side-btn" href="/github"><Ic name="branch" size={18} /><span>Import from GitHub</span></a> : null}
               {me ? <button type="button" id="homeParts" aria-label="Part libraries" className="hp-side-btn" onClick={() => (window as unknown as { KiCadParts?: { open(o: { tab: string }): void } }).KiCadParts?.open({ tab: "libraries" })}><Ic name="grid" size={18} /><span>Part libraries</span></button> : null}
               {me ? <button type="button" id="homePlugins" aria-label="Plugins" className="hp-side-btn" onClick={() => (window as unknown as { KcPlugins?: { openManager(): void } }).KcPlugins?.openManager()}><Ic name="plugin" size={18} /><span>Plugins</span></button> : null}
+              {me ? <a aria-label="Time spent" aria-current={tab === "time" ? "page" : undefined} className={"hp-side-btn" + (tab === "time" ? " on" : "")} id="homeTime" href="/time" onClick={(ev) => { ev.preventDefault(); go("/time"); }}><Ic name="clock" size={18} /><span>Time spent</span></a> : null}
               {me ? <a aria-label="Connect AI" className="hp-side-btn" id="homeConnect" href="/connect"><Ic name="link" size={18} /><span>Connect AI</span></a> : null}
             </div>
             <div className="hp-side-foot">
@@ -842,6 +845,7 @@ export function Home() {
             <div className="hp-page">
               {tab === "explore" ? <Explore me={me} tick={tick + bump} />
                 : tab === "trash" && me ? <Trash tick={tick + bump} />
+                : tab === "time" && me ? <TimePage tick={tick + bump} />
                 : me ? <Projects me={me} tick={tick + bump} onUpload={() => startUpload()} onGuided={() => startGuided("home")} onJoin={() => setJoin(true)} onShare={setShare} />
                 : <Welcome onJoin={() => setJoin(true)} />}
             </div>
@@ -864,6 +868,8 @@ export function Home() {
       {join ? <JoinDialog me={me} onClose={() => setJoin(false)} /> : null}
       {account && me ? <Menu at={account} title={me.login} onClose={() => setAccount(null)} items={[
         { id: "trash", label: "Trash", icon: "trash", run: () => go("/trash") },
+        { id: "time", label: "Time spent", icon: "clock", run: () => go("/time") },
+        { id: "waka", label: "WakaTime settings", icon: "clock", run: () => { go("/time"); setTimeout(() => document.getElementById("wakatime")?.scrollIntoView({ block: "start" }), 300); } },
         { id: "sync", label: "GitHub sync", icon: "branch", run: () => { location.href = "/github"; } },
         { id: "mcp", label: "Connect an AI assistant (MCP)", icon: "link", run: () => { location.href = "/connect"; } },
         { id: "gh", label: "GitHub profile", icon: "open", run: () => { window.open(`https://github.com/${me.login}`, "_blank", "noopener"); } },

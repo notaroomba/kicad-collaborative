@@ -35,6 +35,7 @@ const PATHS: Record<string, string> = {
   restore: '<path d="M4.5 12a7.5 7.5 0 102.3-5.4"/><path d="M4.5 4.5v5h5"/>',
   branch: '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/><circle cx="17" cy="8.5" r="2.2"/><path d="M7 8.2v7.6M17 10.7c0 3.3-4.5 2.6-8 4.6"/>',
   plugin: '<path d="M9 4.5a2 2 0 014 0V6h4v4h1.5a2 2 0 010 4H17v5h-4.2v-1.2a1.8 1.8 0 00-3.6 0V19H5v-4.5h1.3a2 2 0 000-4H5V6h4z"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.4 2"/>',
   signout: '<path d="M10 4.5H5.5v15H10M15 8l4 4-4 4M19 12H9.5"/>',
 };
 export function Ic({ name, size = 16 }: { name: keyof typeof PATHS | string; size?: number }) {
