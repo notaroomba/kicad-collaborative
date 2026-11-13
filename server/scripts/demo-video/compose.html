@@ -1,0 +1,75 @@
+<!doctype html>
+<!-- The demo video as a page: a 1920 x 1080 stage whose contents are a function of time.
+     render.mjs loads it, hands it the timeline (window.load) and asks for one frame after another
+     (window.seek).  Footage is the photographs record.mjs took; this page only frames and captions them. -->
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #0b0b0c; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #0b0b0c; color: #ededed;
+           font-family: Inter, "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  .layer { position: absolute; inset: 0; opacity: 0; }
+  .win { position: absolute; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px #2a2a2d; background: #111; }
+  .win img { display: block; width: 100%; height: 100%; }
+  .who { position: absolute; top: 34px; font-size: 22px; color: #9a9a9f; }
+  #caption { position: absolute; left: 160px; bottom: 44px; font-size: 30px; font-weight: 500; letter-spacing: -0.01em; opacity: 0; }
+  #speed { position: absolute; right: 160px; bottom: 48px; font-size: 22px; color: #8a8a90; font-variant-numeric: tabular-nums; opacity: 0; }
+  .card { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .card h1 { font-size: 96px; font-weight: 600; letter-spacing: -0.03em; margin: 28px 0 0; }
+  .card p { font-size: 34px; color: #a8a8ad; margin: 18px 0 0; }
+  .card code { font-family: "DejaVu Sans Mono", monospace; font-size: 28px; color: #d0d0d4; margin-top: 44px; }
+  .card svg, .card img.icon { width: 150px; height: 150px; }
+  .prompt { position: absolute; left: 360px; top: 330px; width: 1120px; padding: 40px 48px; border-radius: 12px; background: #151517; box-shadow: 0 0 0 1px #2a2a2d;
+            font-size: 36px; line-height: 1.45; min-height: 220px; box-sizing: border-box; }
+  .prompt small { display: block; font-size: 22px; color: #8a8a90; margin-bottom: 18px; }
+  .caret { display: inline-block; width: 3px; height: 38px; background: #ededed; vertical-align: -6px; margin-left: 2px; }
+</style>
+<div id="stage"><div id="layers"></div><div id="caption"></div><div id="speed"></div></div>
+<script>
+  let T = null; const layers = [];
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const FADE = 0.35;
+  // the photograph that was on screen at footage time t (the last one taken at or before t)
+  const frameAt = (frames, t) => { let lo = 0, hi = frames.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (frames[m].t <= t) lo = m; else hi = m - 1; } return frames[lo].file; };
+  window.load = (timeline) => {
+    T = timeline; const root = document.getElementById('layers');
+    for (const s of T.scenes) {
+      const el = document.createElement('div'); el.className = 'layer' + (s.kind === 'footage' ? '' : ' card'); root.appendChild(el);
+      const L = { s, el, imgs: [] };
+      if (s.kind === 'footage') for (const w of s.windows) {
+        const box = document.createElement('div'); box.className = 'win'; box.style.cssText = `left:${w.x}px;top:${w.y}px;width:${w.w}px;height:${w.h}px`;
+        const img = new Image(); box.appendChild(img); el.appendChild(box); L.imgs.push({ img, w, src: '' });
+        if (w.label) { const who = document.createElement('div'); who.className = 'who'; who.style.left = w.x + 'px'; who.textContent = w.label; el.appendChild(who); }
+      } else if (s.kind === 'title') {
+        el.innerHTML = `<img class="icon" src="${T.icon}"><h1>${s.title}</h1><p>${s.sub}</p>` + (s.code ? `<code>${s.code}</code>` : '');
+      } else if (s.kind === 'prompt') {
+        el.classList.remove('card'); el.innerHTML = `<div class="prompt"><small>${s.label}</small><span class="typed"></span><span class="caret"></span></div>`;
+      }
+      layers.push(L);
+    }
+    return T.length;
+  };
+  window.seek = async (t) => {
+    const waits = []; let caption = '', capA = 0, speed = '', spA = 0;
+    for (const L of layers) {
+      const s = L.s, local = t - s.start; const on = local >= 0 && local < s.length;
+      const a = on ? clamp(Math.min(s.cutIn ? 1 : local / FADE, s.cutOut ? 1 : (s.length - local) / FADE), 0, 1) : 0; L.el.style.opacity = a;
+      if (!on) continue;
+      if (s.kind === 'footage') {
+        const ft = s.from + local * s.speed;      // footage time
+        for (const I of L.imgs) { const src = I.w.dir + '/' + frameAt(I.w.frames, ft); if (src !== I.src) { I.src = src; I.img.src = src; waits.push(I.img.decode().catch(() => {})); } }
+        for (const c of s.captions || []) if (local >= c.at && local < c.until) {
+          const fin = s.cutIn && c.at === 0 ? 1 : (local - c.at) / 0.25, fout = s.cutOut && c.until >= s.length ? 1 : (c.until - local) / 0.25;
+          caption = c.text; capA = clamp(Math.min(fin, fout), 0, 1) * a;
+        }
+        if (s.speed > 1.5) { speed = `${Math.round(s.speed)}× speed`; spA = a; }
+      } else if (s.kind === 'prompt') {
+        const n = Math.round(clamp((local - 0.4) / s.typing, 0, 1) * s.text.length);
+        L.el.querySelector('.typed').textContent = s.text.slice(0, n);
+        L.el.querySelector('.caret').style.opacity = n >= s.text.length ? (Math.floor(local * 2) % 2 ? 0 : 1) : 1;
+      }
+    }
+    const cap = document.getElementById('caption'), sp = document.getElementById('speed');
+    cap.textContent = caption; cap.style.opacity = capA; sp.textContent = speed; sp.style.opacity = spA;
+    await Promise.all(waits); await document.fonts.ready;
+  };
+</script>
