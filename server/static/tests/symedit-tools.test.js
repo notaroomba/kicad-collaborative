@@ -187,6 +187,15 @@ await test("sym-lib-table: parse, LIBRARY_TABLE::Format with (disabled) / (hidde
   const dup = M.verifyLibTable([...rows, { ...blank, uri: "y", nickname: "A" }]); assert.strictEqual(dup.error, "Multiple libraries cannot share the same nickname ('A')."); assert.strictEqual(dup.row, 2);
 });
 
+await test("ARC_TANGENT seed: a polyline end or an arc end gives the direction the next arc leaves it with", () => {
+  const sym = M.node('(symbol "T" (symbol "T_0_1" (polyline (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (fill (type none))) (arc (start 20 0) (mid 25 5) (end 30 0) (stroke (width 0) (type default)) (fill (type none)))))');
+  const n = (v) => { const l = Math.hypot(v[0], v[1]); return [Math.round(v[0] / l * 1e6) / 1e6 + 0, Math.round(v[1] / l * 1e6) / 1e6 + 0]; };
+  assert.deepStrictEqual(n(M.arcTangentSeed(sym, [10, 0])), [1, 0]);
+  assert.deepStrictEqual(n(M.arcTangentSeed(sym, [0, 0])), [-1, 0]);
+  assert.deepStrictEqual(n(M.arcTangentSeed(sym, [30, 0])), [0, -1], "the arc comes down into its end");
+  assert.deepStrictEqual(n(M.arcTangentSeed(sym, [20, 0])), [0, -1], "leaving the start backwards");
+  assert.strictEqual(M.arcTangentSeed(sym, [5, 5]), null);
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();

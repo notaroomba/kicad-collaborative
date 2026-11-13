@@ -18,13 +18,16 @@ import { keyName } from "../keys";
 import { fmtCoord, unitName, messageText, unitsMsg, gridChoiceText, loadUnits, saveUnits } from "../units";
 import { toolCursor } from "../editor/cursors";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
+import { fitMenu } from "../menufit";
 import * as D from "./dialogs";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
 import { mergeSymbolText } from "./merge";
 import { openPreferences } from "../dialogs/preferences";
-import { GRID_PAGE, defaultGrid, gridDefs, prefs, rememberGrid } from "../dialogs/prefs";
+import { GRID_PAGE, clonePrefs, defaultGrid, gridDefs, prefs, rememberGrid, savePrefs } from "../dialogs/prefs";
+import { gridPitchFor, type GridClass } from "../dialogs/logic";
+import { ARC_MODE_ACTIONS, ARC_START_DIR_END, ARC_START_END_CENTER, ARC_START_END_MID, ARC_TANGENT, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, fromNm, toNm, type ArcSol } from "../tools/arc-geom";
 
 export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
@@ -34,12 +37,24 @@ export interface Origin { docId: string; itemId: string; libId: string; ref: str
 export interface Step { label: string; before: string; after: string }
 export interface Tab { lib: string; name: string; origin?: Origin; scratch?: M.Node; modified?: boolean; undo: Step[]; redo: Step[]; unit: number; body: number; sel: Set<string>; view: { s: number; px: number; py: number } | null; fitted?: boolean }
 
-const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
+const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawArcCenter: "arc", drawArcStartEndMid: "arc", drawArcStartEndCenter: "arc", drawArcTangent: "arc", drawArcStartDirEnd: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
 /** The Symbol Editor's grid list: its own window settings (Preferences > Symbol Editor > Grids), 100/50/25/10 mil by default. */
 const symGrids = (): number[] => prefs().grids.sym.sizes;
 const ANCHOR = "#0000FF";   // LAYER_SCHEMATIC_ANCHOR
 
 const K = (): KiCadCanvasApi => window.KiCadCanvas;
+const VIEW_KEY = "kui.symedit.view";
+/** Toolbar buttons that are check items (ACTION_TOOLBAR toggles). */
+const TOGGLES = new Set(["toggleGrid", "toggleGridOverrides", "millimetersUnits", "milsUnits", "inchesUnits", "cursorSmallCrosshairs", "cursorFullCrosshairs", "cursor45Crosshairs",
+  "showElectricalTypes", "showHiddenPins", "showHiddenFields", "togglePinAltIcons", "showLibraryTree", "showProperties", "toggleSyncedPinsMode"]);
+/** ARC_DRAW_MODE, shared with the schematic editor's Draw Arcs (sch-tools arcs.ts SCH_ARC_MODE_KEY). */
+const ARC_MODE_KEY = "kc.sch.arcDrawMode";
+function arcDrawMode(): number { try { const m = Number(localStorage.getItem(ARC_MODE_KEY)); return m >= 0 && m <= 4 ? m : 0; } catch { return 0; } }
+function setArcDrawMode(m: number): void { try { localStorage.setItem(ARC_MODE_KEY, String(m)); } catch { /* no storage */ } }
+function viewPref(k: string, dflt: unknown): unknown { try { const o = JSON.parse(localStorage.getItem(VIEW_KEY) || "{}"); return k in o ? o[k] : dflt; } catch { return dflt; } }
+function saveViewPref(k: string, v: unknown): void { try { const o = JSON.parse(localStorage.getItem(VIEW_KEY) || "{}"); o[k] = v; localStorage.setItem(VIEW_KEY, JSON.stringify(o)); } catch { /* no storage */ } }
+/** EE_GRID_HELPER::GetItemGrid for the symbol editor's items and tools: pins connect, texts are text, the rest graphics. */
+const SYM_GRID_CLASS: Record<string, GridClass> = { pin: "connected", text: "text", textbox: "graphics", text_box: "graphics", rectangle: "graphics", circle: "graphics", ellipse: "graphics", ellipse_arc: "graphics", arc: "graphics", bezier: "graphics", polyline: "graphics", polygon: "graphics", property: "text" };
 const symIdOf = (kind: string, sub: string, j: number) => (kind === "pin" ? "p:" : "g:") + sub + ":" + j;
 /** "p:SUB:J" / "g:SUB:J" / "f:Name" → the node in `sym`. */
 export function nodeOf(sym: M.Node, id: string): M.Node | null {
@@ -59,6 +74,10 @@ export class SymbolEditor {
   cur = -1;
   tool: ToolId = "select";
   showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = true; showTree = true; showProps = true;
+  /** the window's grid.show and cursor shape (COMMON_TOOLS::ToggleGrid, CursorSmall/Full/45Crosshairs), remembered per browser */
+  showGrid = viewPref("grid", true) as boolean; crosshair = viewPref("crosshair", "small") as "small" | "full" | "45";
+  /** ACTION_TOOLBAR groups: the action each group's button shows (SelectToolbarAction) */
+  private groupCurrent: Record<string, string> = {};
   /** grid.last_size of the symbol editor's window settings, in mm */
   gridMm = 50 * M.MIL;
   /** the schematic editor's units while this frame is up: the symbol editor keeps its own (symbol_editor system.units) */
@@ -438,7 +457,15 @@ export class SymbolEditor {
   /** client px → doc mm (Y down). */
   toDoc(cx: number, cy: number): [number, number] { const r = this.cv!.getBoundingClientRect(); const v = this.view(); return [(cx - r.left - v.px) / v.s, (cy - r.top - v.py) / v.s]; }
   /** doc mm → snapped library coordinates (Y up). */
-  snapFile(x: number, y: number): [number, number] { const g = this.gridMm; return [+M.fmt(Math.round(x / g) * g), +M.fmt(-Math.round(y / g) * g)]; }
+  snapFile(x: number, y: number): [number, number] { const g = this.snapGrid(); return [+M.fmt(Math.round(x / g) * g), +M.fmt(-Math.round(y / g) * g)]; }
+  /** The pitch the cursor snaps to: the grid, or the override of the class of what is drawn or carried (Grid Overrides). */
+  snapGrid(): number {
+    const o = prefs().grids.sym.overrides; if (!o.enabled) return this.gridMm;
+    let cls: GridClass = this.tool !== "select" ? SYM_GRID_CLASS[this.tool] || null : null;
+    const t = this.tab, sym = this.symbol();
+    if (!cls && t && sym && t.sel.size) { const id = [...t.sel][0]; const n = nodeOf(sym, id); cls = id.startsWith("f:") ? "text" : n ? SYM_GRID_CLASS[String(n[0])] || null : null; }
+    return gridPitchFor(cls, o, this.gridMm);
+  }
   zoomFit(): void {
     const t = this.tab; const doc = this.kdoc(); if (!t || !this.cv) return;
     const W = this.cv.clientWidth || 800, H = this.cv.clientHeight || 600;
@@ -468,7 +495,7 @@ export class SymbolEditor {
     const v = this.view(); const view = { ppm: 1, zoom: v.s, panX: v.px, panY: v.py, x0: 0, y0: 0, dpr };
     const sel = new Set([...t.sel].filter((id) => doc.items.has(id)));
     // the selection shadow is drawn by the canvas pass, under the items (SCH_PAINTER's LAYER_SELECTION_SHADOWS)
-    K().render(doc, ctx, view, { grid: this.gridMm, gridAxes: true, frame: false, showHiddenPins: this.showHiddenPins, selected: sel.size ? sel : undefined } as KRenderOpts);
+    K().render(doc, ctx, view, { grid: this.showGrid ? this.gridMm : 0, gridAxes: true, frame: false, showHiddenPins: this.showHiddenPins, selected: sel.size ? sel : undefined } as KRenderOpts);
     const s = K().setViewTransform(ctx, view);
     // the symbol anchor (LAYER_SCHEMATIC_ANCHOR cross at the origin)
     const a = 6 * dpr / s; ctx.strokeStyle = ANCHOR; ctx.lineWidth = dpr / s; ctx.beginPath(); ctx.moveTo(-a, 0); ctx.lineTo(a, 0); ctx.moveTo(0, -a); ctx.lineTo(0, a); ctx.stroke();
@@ -477,10 +504,14 @@ export class SymbolEditor {
       ctx.save(); ctx.lineWidth = dpr / s; ctx.strokeStyle = x1 >= x0 ? "#4F9CFF" : "#4FCF6F"; ctx.setLineDash(x1 >= x0 ? [] : [4 / s, 3 / s]);
       ctx.fillStyle = x1 >= x0 ? "rgba(79,156,255,.12)" : "rgba(79,207,111,.12)"; ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)); ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)); ctx.restore();
     }
-    // the cursor (KiCad's small crosshair on the snapped grid point)
+    // the cursor on the snapped grid point (KIGFX::CURSOR): small crosshairs, full-window, or full-window at 45 degrees
     if (this.mouse.in) {
-      const [fx, fy] = this.snapFile(this.mouse.x, this.mouse.y); const cx = fx, cy = -fy, r = 8 * dpr / s;
-      ctx.strokeStyle = K().SCH.cursor || "#000"; ctx.lineWidth = dpr / s; ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
+      const [fx, fy] = this.snapFile(this.mouse.x, this.mouse.y); const cx = fx, cy = -fy;
+      const r = this.crosshair === "small" ? 8 * dpr / s : (c.width + c.height) / s;
+      ctx.strokeStyle = K().SCH.cursor || "#000"; ctx.lineWidth = dpr / s; ctx.beginPath();
+      if (this.crosshair === "45") { ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r); ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r); }
+      else { ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); }
+      ctx.stroke();
     }
   }
 
@@ -561,15 +592,55 @@ export class SymbolEditor {
   }
 
   // toolbars ---------------------------------------------------------------
-  private tbButton(id: string, onTool?: boolean): HTMLElement {
+  private tbButton(id: string, onTool?: boolean, bind = true): HTMLElement {
     const m = meta(id); const A = this.actions(); const run: (() => void) | undefined = A[id];
     const on = this.toggled(id);
-    const b = h("button", { class: "se-btn" + (on ? " on" : "") + (run ? "" : " dim"), "data-act": id, title: m.tip + (m.key ? ` (${keyName(m.key)})` : "") + (run ? "" : " — runs in the KiCad desktop app"), "aria-label": m.label, "aria-pressed": onTool || on ? String(!!on) : undefined }, icon(m.icon));
-    if (run) b.addEventListener("click", () => { run(); }); else (b as HTMLButtonElement).disabled = true;
+    const b = h("button", { class: "se-btn" + (on ? " on" : "") + (run ? "" : " dim"), "data-act": id, title: m.tip + (m.key ? ` (${keyName(m.key)})` : "") + (run ? "" : " — runs in the KiCad desktop app"), "aria-label": m.label, "aria-pressed": onTool || on || TOGGLES.has(id) || TOOL_ACTIONS[id] ? String(!!on) : undefined }, icon(m.icon));
+    if (!run) (b as HTMLButtonElement).disabled = true; else if (bind) b.addEventListener("click", () => { run(); });
     if (run && !this.tbEnabled(id)) { (b as HTMLButtonElement).disabled = true; b.classList.add("dim"); }
     // the grid button's menu (toolbars_symbol_editor.cpp): Edit Grids...
     if (id === "toggleGrid") b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom, [this.act("gridProperties", this.actions().gridProperties, { enabled: () => true })], 0, { below: r, gap: 0 }); });
     return b;
+  }
+  /**
+   * ACTION_TOOLBAR::AddGroup: one button showing the group's current action, a corner triangle, and a palette of the
+   * group's actions (ACTION_TOOLBAR_PALETTE) opened by the triangle or a long press; picking one makes it the
+   * group's button and runs it.  A toggled action of the group (the active tool, the units) is the one shown.
+   */
+  private tbGroup(group: string, ids: string[], dock: "top" | "left" | "right"): HTMLElement {
+    const on = ids.find((id) => this.toggled(id));
+    const cur = on || (ids.includes(this.groupCurrent[group]) ? this.groupCurrent[group] : ids[0]);
+    if (on) this.groupCurrent[group] = on;
+    const wrap = h("div", { class: "se-group", "data-group": group });
+    const btn = this.tbButton(cur);
+    const arrow = h("button", { class: "se-garrow", type: "button", tabindex: -1, title: group, "aria-label": group });
+    arrow.innerHTML = '<svg viewBox="0 0 6 6"><path d="M6 0V6H0z" fill="currentColor"/></svg>';
+    let hold = 0, swallow = false;
+    const open = () => {
+      closeMenus();
+      const pal = h("div", { class: "se-palette" + (dock === "top" ? " col" : ""), role: "menu", "data-group": group });
+      for (const id of ids) {
+        const b = this.tbButton(id, false, false); b.setAttribute("role", "menuitem");
+        const run = this.actions()[id];
+        if (run && !(b as HTMLButtonElement).disabled) b.addEventListener("click", (ev) => { ev.stopPropagation(); close(); this.groupCurrent[group] = id; run(); this.renderToolbars(); });
+        pal.append(b);
+      }
+      document.body.append(pal);
+      const r = wrap.getBoundingClientRect(), w = pal.offsetWidth;
+      // ACTION_TOOLBAR::popupPalette: under a top toolbar, beside a left one, to the left of a right one
+      const at = dock === "left" ? { x: r.right + 6, y: r.top } : dock === "right" ? { x: r.left - w - 6, y: r.top } : { x: r.left - 4, y: r.bottom + 2 };
+      fitMenu(pal, { at });
+      const down = (ev: PointerEvent) => { if (!pal.contains(ev.target as Node)) close(); };
+      const key = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.stopPropagation(); ev.preventDefault(); close(); } };
+      function close() { pal.remove(); document.removeEventListener("pointerdown", down, true); document.removeEventListener("keydown", key, true); }
+      setTimeout(() => document.addEventListener("pointerdown", down, true), 0); document.addEventListener("keydown", key, true);
+    };
+    arrow.addEventListener("click", (ev) => { ev.stopPropagation(); open(); });
+    btn.addEventListener("pointerdown", (ev) => { if (ev.button !== 0) return; swallow = false; clearTimeout(hold); hold = window.setTimeout(() => { swallow = true; open(); }, 500); });
+    btn.addEventListener("pointerup", () => clearTimeout(hold)); btn.addEventListener("pointerleave", () => clearTimeout(hold));
+    btn.addEventListener("click", (ev) => { if (swallow) { swallow = false; ev.stopImmediatePropagation(); ev.preventDefault(); } }, true);
+    wrap.append(btn, arrow);
+    return wrap;
   }
   /** ACTION_CONDITIONS::Enable of the toolbar buttons that have one. */
   private tbEnabled(id: string): boolean {
@@ -577,10 +648,13 @@ export class SymbolEditor {
     return true;
   }
   private toggled(id: string): boolean {
+    const am = ARC_MODE_ACTIONS.indexOf(id); if (am >= 0) return this.tool === "arc" && this.arcMode === am;
     if (TOOL_ACTIONS[id]) return this.tool === TOOL_ACTIONS[id];
     switch (id) {
       case "showElectricalTypes": return this.showETypes; case "showHiddenPins": return this.showHiddenPins; case "showHiddenFields": return this.showHiddenFields; case "togglePinAltIcons": return this.showAltIcons;
-      case "showLibraryTree": return this.showTree; case "showProperties": return this.showProps; case "toggleSyncedPinsMode": return this.synchronizePins(); case "toggleGrid": return true;
+      case "showLibraryTree": return this.showTree; case "showProperties": return this.showProps; case "toggleSyncedPinsMode": return this.synchronizePins(); case "toggleGrid": return this.showGrid;
+      case "toggleGridOverrides": return prefs().grids.sym.overrides.enabled;
+      case "cursorSmallCrosshairs": return this.crosshair === "small"; case "cursorFullCrosshairs": return this.crosshair === "full"; case "cursor45Crosshairs": return this.crosshair === "45";
       case "millimetersUnits": return this.units === "mm"; case "milsUnits": return this.units === "mil"; case "inchesUnits": return this.units === "in";
     }
     return false;
@@ -595,7 +669,7 @@ export class SymbolEditor {
       for (const raw of items as { id?: string; sep?: boolean; group?: string; items?: { id: string }[]; control?: string }[]) {
         if (raw.sep) host.append(h("span", { class: "se-sep" }));
         else if (raw.control) { const c = this.control(raw.control); if (c) host.append(c); }
-        else if (raw.group && raw.items) { for (const it of raw.items) host.append(this.tbButton(it.id)); }
+        else if (raw.group && raw.items) host.append(this.tbGroup(raw.group, raw.items.map((it) => it.id), host === this.el.tbTop ? "top" : host === this.el.tbLeft ? "left" : "right"));
         else if (raw.id) host.append(this.tbButton(raw.id));
       }
     };
@@ -819,7 +893,9 @@ export class SymbolEditor {
       rotateCCW: () => this.transformSel("Rotate", (n, c) => M.rotateNode(n, c[0], c[1], true)), rotateCW: () => this.transformSel("Rotate", (n, c) => M.rotateNode(n, c[0], c[1], false)),
       mirrorV: () => this.transformSel("Mirror", (n, c) => M.mirrorNode(n, c[0], c[1], false)), mirrorH: () => this.transformSel("Mirror", (n, c) => M.mirrorNode(n, c[0], c[1], true)),
       addSymbolToSchematic: () => void D.addToSchematic(this),
-      toggleGrid: () => { /* the grid is always shown in the symbol editor canvas */ },
+      toggleGrid: () => { this.showGrid = !this.showGrid; saveViewPref("grid", this.showGrid); this.renderToolbars(); this.paint(); },
+      toggleGridOverrides: () => { const p = clonePrefs(); p.grids.sym.overrides.enabled = !p.grids.sym.overrides.enabled; savePrefs(p); this.renderToolbars(); this.paint(); },
+      cursorSmallCrosshairs: () => this.setCrosshair("small"), cursorFullCrosshairs: () => this.setCrosshair("full"), cursor45Crosshairs: () => this.setCrosshair("45"),
       millimetersUnits: () => this.setUnits("mm"), milsUnits: () => this.setUnits("mil"), inchesUnits: () => this.setUnits("in"),
       toggleUnits: () => this.setUnits(this.units === "mm" ? (E.lastImperial === "in" ? "in" : "mil") : "mm"),
       properties: () => this.editSelected(), repeatDrawItem: () => this.repeat(),
@@ -840,8 +916,12 @@ export class SymbolEditor {
       deleteLastPoint: () => this.deleteLastPoint(),
     };
     for (const [id, t] of Object.entries(TOOL_ACTIONS)) A[id] = tool(t);
+    // SCH_ACTIONS::drawArcCenter … drawArcStartDirEnd: Draw Arcs in that mode (drawArc keeps the mode last used)
+    ARC_MODE_ACTIONS.forEach((id, m) => { A[id] = () => { this.arcMode = m; setArcDrawMode(m); if (this.draw && this.draw.kind === "arc") { this.draw = null; this.preview = null; this.kcache = null; } this.setTool("arc"); this.renderToolbars(); }; });
     return (this._actions = A);
   }
+  /** COMMON_TOOLS::CursorSmallCrosshairs / CursorFullCrosshairs / Cursor45Crosshairs. */
+  setCrosshair(m: "small" | "full" | "45"): void { this.crosshair = m; saveViewPref("crosshair", m); this.renderToolbars(); this.paint(); }
   /** COMMON_TOOLS::GridNext / GridPrev / GridPreset: the index wraps around the grid list. */
   setGridIdx(i: number): void {
     const l = symGrids(), n = l.length; if (!n) return; const k = ((i % n) + n) % n;
@@ -1217,8 +1297,16 @@ export class SymbolEditor {
     this.edit(c.label, (x) => { x.length = 0; x.push(...M.node(text)); return ids.map((id) => nodeOf(x, id)).filter((n): n is M.Node => !!n); }, { amend: c.amend });
   }
   // drawing tools -----------------------------------------------------------
-  private need(kind: ToolId): number { return kind === "rectangle" || kind === "circle" || kind === "textbox" || kind === "ellipse" ? 2 : kind === "arc" ? 3 : kind === "bezier" || kind === "ellipse_arc" ? 4 : Infinity; }
+  /** ARC_DRAW_MODE of Draw Arcs */
+  arcMode = arcDrawMode();
+  private arcSeed: number[] | null = null;
+  private need(kind: ToolId): number { return kind === "rectangle" || kind === "circle" || kind === "textbox" || kind === "ellipse" ? 2 : kind === "arc" ? (this.arcMode === ARC_TANGENT ? 2 : 3) : kind === "bezier" || kind === "ellipse_arc" ? 4 : Infinity; }
   private drawClick(fx: number, fy: number, dbl: boolean): void {
+    // ARC_TANGENT: the arc continues the line or arc that ends where it starts
+    if (!this.draw && this.tool === "arc" && this.arcMode === ARC_TANGENT) {
+      const t = this.tab, sym = this.symbol(); this.arcSeed = t && sym ? M.arcTangentSeed(sym, [fx, fy], t.unit, t.body) : null;
+      if (!this.arcSeed) { this.infoBarMessage("Click the end of a line or arc to draw a tangent arc", 3000); return; }
+    }
     if (!this.draw) { this.draw = { kind: this.tool, pts: [[fx, fy]] }; this.drawPreview(); this.paint(); return; }
     const d = this.draw; const last = d.pts[d.pts.length - 1];
     if (dbl && (d.kind === "polyline" || d.kind === "polygon")) { this.finishDraw(); return; }
@@ -1236,6 +1324,18 @@ export class SymbolEditor {
       if (kind === "ellipse" || pts.length < 3) return M.ellipseNode(e, kind === "ellipse_arc");
       Object.assign(e, M.ellipseArcAngles(e, pts[2], pts[3]));
       return M.ellipseNode(e, true);
+    }
+    if (kind === "arc" && pts.length >= 2 && this.arcMode !== 0) {
+      // ARC_GEOM_MANAGER's other constructions (tools/arc-geom.ts), in nm as KiCad rounds them
+      const nm = pts.map(toNm); let sol: ArcSol;
+      if (this.arcMode === ARC_TANGENT) sol = this.arcSeed ? arcFromStartTangentEnd(nm[0], this.arcSeed, nm[1]) : { valid: false };
+      else if (pts.length < 3) return null;
+      else if (this.arcMode === ARC_START_END_MID) sol = arcFromStartEndMidDrag(nm[0], nm[1], nm[2]);
+      else if (this.arcMode === ARC_START_END_CENTER) sol = arcFromStartEndCenterDrag(nm[0], nm[1], nm[2], false);
+      else if (this.arcMode === ARC_START_DIR_END) sol = arcFromStartTangentEnd(nm[0], [nm[1][0] - nm[0][0], nm[1][1] - nm[0][1]], nm[2]);
+      else sol = { valid: false };
+      if (!sol.valid) return null;
+      return M.shapeNode("arc", [sol.start, sol.mid, sol.end].map((p) => fromNm(p)).map((p) => [+M.fmt(p[0]), +M.fmt(p[1])]));
     }
     if (kind === "arc" && pts.length >= 2) {
       const [c, s] = pts; const e = pts[2] || s; const r = Math.hypot(s[0] - c[0], s[1] - c[1]); if (r <= 0) return null;

@@ -24,6 +24,12 @@ export const CSS = `
 .se-btn:hover{background:var(--sel-soft)}
 .se-btn.on{background:var(--sel-soft);border-color:var(--sel)}
 .se-btn:disabled,.se-btn.dim{opacity:.38;cursor:default}
+.se-group{position:relative;flex:none;display:inline-flex}
+.se-garrow{position:absolute;right:1px;bottom:1px;width:6px;height:6px;padding:0;border:0;background:none;color:var(--ink);cursor:pointer}
+.se-garrow svg{display:block;width:100%;height:100%}
+.se-group:has(>.se-btn:disabled)>.se-garrow{color:var(--ink-3)}
+.se-palette{position:fixed;z-index:70;display:flex;flex-direction:row;gap:1px;padding:3px;background:var(--bench);border:1px solid var(--line);box-shadow:var(--shadow)}
+.se-palette.col{flex-direction:column}
 .se-sep{width:1px;height:22px;background:var(--line);margin:0 4px;flex:none}
 .se-tbv .se-sep{width:22px;height:1px;margin:4px 0}
 .se-tb k-select{height:24px;max-width:170px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-1,3px);font:inherit}

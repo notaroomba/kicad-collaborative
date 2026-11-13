@@ -821,6 +821,36 @@ export function shapeNode(kind: "rectangle" | "circle" | "arc" | "polyline" | "b
   if (kind === "arc") return node(`(arc (start ${fmt(pts[0][0])} ${fmt(pts[0][1])}) (mid ${fmt(pts[1][0])} ${fmt(pts[1][1])}) (end ${fmt(pts[2][0])} ${fmt(pts[2][1])})${st})`);
   return node(`(${kind} (pts ${pts.map((p) => `(xy ${fmt(p[0])} ${fmt(p[1])})`).join(" ")})${st})`);
 }
+/**
+ * ARC_TANGENT's seed: the direction a line or arc of `sym` leaves the point `p` with (a polyline end or an arc end,
+ * pointing away from the shape, as the next arc continues it), or null when no shape ends at `p`.  File coordinates.
+ */
+export function arcTangentSeed(sym: Node, p: number[], unit = 0, body = 0, eps = 1e-6): number[] | null {
+  const same = (a: number[], b: number[]) => Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
+  const xy = (n: Node | null): number[] | null => (n ? [num(n[1]), num(n[2])] : null);
+  for (const d of drawItems(sym)) {
+    if ((d.unit && unit && d.unit !== unit) || (d.body && body && d.body !== body)) continue;
+    const n = d.node;
+    if (n[0] === "polyline") {
+      const pts = (kid(n, "pts") || []).slice(1).filter(isList).map((q) => xy(q as Node)!) as number[][];
+      if (pts.length < 2) continue;
+      const k = pts.length - 1;
+      if (same(pts[k], p)) return [pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]];
+      if (same(pts[0], p)) return [pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]];
+    } else if (n[0] === "arc") {
+      const a = xy(kid(n, "start")), m = xy(kid(n, "mid")), e = xy(kid(n, "end")); if (!a || !m || !e) continue;
+      // the circle through start, mid, end; travel start -> mid -> end turns with the sign of the cross product
+      const bx = e[0] - a[0], by = e[1] - a[1], cx = m[0] - a[0], cy = m[1] - a[1], dd = 2 * (bx * cy - by * cx); if (!dd) continue;
+      const bb = bx * bx + by * by, cc = cx * cx + cy * cy;
+      const c = [a[0] + (cy * bb - by * cc) / dd, a[1] + (bx * cc - cx * bb) / dd];
+      const turn = Math.sign((m[0] - a[0]) * (e[1] - m[1]) - (m[1] - a[1]) * (e[0] - m[0]));
+      const tan = (q: number[], dir: number) => { const r = [q[0] - c[0], q[1] - c[1]]; return [-r[1] * turn * dir, r[0] * turn * dir]; };
+      if (same(e, p)) return tan(e, 1);
+      if (same(a, p)) return tan(a, -1);
+    }
+  }
+  return null;
+}
 // ---------------------------------------------------------------- ellipses (EDA_SHAPE / ELLIPSE_GEOM_MANAGER)
 /** EDA_UNIT_UTILS::FormatAngle: fmt::format( "{:.10g}", degrees ). */
 export function fmtAngle(deg: number): string {
