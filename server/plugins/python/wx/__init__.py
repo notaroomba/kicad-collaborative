@@ -2845,6 +2845,17 @@ class RadioButton(CheckBox):
                 p._radio_group = f"rg{NewId()}"
                 self.input.checked = True
             self.input.name = p._radio_group
+            self._wx_group = p.__dict__.setdefault("_radio_members", {}).setdefault(p._radio_group, [])
+            self._wx_group.append(self)
+
+    def SetValue(self, v):
+        # one of a group: turning one on turns the others off (a browser does this for inputs that share a name;
+        # said here too so it holds wherever the window is built)
+        if v:
+            for other in getattr(self, "_wx_group", ()):
+                if other is not self:
+                    other.input.checked = False
+        CheckBox.SetValue(self, v)
 
 
 class TextCtrl(Window):
