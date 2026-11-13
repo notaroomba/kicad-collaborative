@@ -6,7 +6,9 @@ export interface TrackEdit { width?: number; netclass?: boolean; viaSize?: numbe
 /** One line of the cleanup report: its code, text and the items. */
 export interface CleanupItem { code: string; text: string; ids: string[] }
 /** TRACKS_CLEANER's options. */
-export interface CleanupOpts { shorts?: boolean; vias?: boolean; merge?: boolean; dangling?: boolean; danglingVias?: boolean; inPads?: boolean }
+export interface CleanupOpts { shorts?: boolean; vias?: boolean; merge?: boolean; dangling?: boolean; danglingVias?: boolean; inPads?: boolean;
+  /** TRACKS_CLEANER::SetFilter: true leaves the item alone (the dialog's net / net class / layer / selection filters) */
+  filter?(it: KItem): boolean }
 /** What cleanupPlan found: the items to remove, those to replace, and the report. */
 export interface CleanupPlan { remove: Set<string>; replace: { item: KItem; node: SNode }[]; items: CleanupItem[] }
 type TrackConductor = Extract<Conductor, { length: number }>;
@@ -65,24 +67,26 @@ export function cleanupPlan(doc: BoardDoc, opts?: CleanupOpts | null): CleanupPl
   opts = Object.assign({ shorts: true, vias: true, merge: true, dangling: true, danglingVias: true, inPads: true }, opts || {});
   const remove = new Set<string>(), replace = new Map<string, SNode>(), items: CleanupItem[] = []; const report = (code: string, text: string, ids: string[]) => items.push({ code, text, ids });
   const alive = (c: Conductor) => !remove.has(c.id);
+  const keep = (c: Conductor) => !!(opts!.filter && c.item && opts!.filter(c.item));   // filtered out: never removed or merged
   let conds = conductors(doc); const tracks = () => conds.filter((c) => (c.kind === "segment" || c.kind === "arc") && alive(c));
   const nodeOf = (c: Conductor) => replace.get(c.id) || c.item.node; const layerOfC = (c: Conductor) => c.layers.values().next().value!;
   const near = (p: Pt, q: Pt) => Math.abs(p[0] - q[0]) < EPS && Math.abs(p[1] - q[1]) < EPS;
   const touchesPt = (p: Pt, layer: string, self: Conductor) => conds.filter(alive).some((c) => c !== self && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS);
   // zero length
-  for (const c of tracks()) if (c.kind === "segment" && c.length < EPS) { remove.add(c.id); report("null_segment", "Remove zero-length track", [c.id]); }
+  for (const c of tracks()) if (c.kind === "segment" && c.length < EPS && !keep(c)) { remove.add(c.id); report("null_segment", "Remove zero-length track", [c.id]); }
   // shorting: a track touching pads of two nets
   if (opts.shorts) for (const c of tracks()) {
+    if (keep(c)) continue;
     const nets = new Set<string>(); for (const o of conds) if (o.kind === "pad" && o.net && alive(o) && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) nets.add(o.net);
-    if (nets.size > 1) { remove.add(c.id); report("shorting_track", `Remove track shorting ${Array.from(nets).join(" and ")}`, [c.id]); }
+    if (nets.size > 1) { remove.add(c.id); report("shorting_track", "Remove track shorting two nets", [c.id]); }
   }
   // redundant vias: same spot, same layers (the later one goes); vias with nothing to connect
   if (opts.vias) {
     const vias = conds.filter((c) => c.kind === "via");
-    for (let i = 0; i < vias.length; i++) for (let j = i + 1; j < vias.length; j++) if (alive(vias[j]) && near(vias[i].anchors[0], vias[j].anchors[0]) && Array.from(vias[i].layers).join() === Array.from(vias[j].layers).join()) { remove.add(vias[j].id); report("redundant_via", "Remove redundant via", [vias[j].id]); }
+    for (let i = 0; i < vias.length; i++) for (let j = i + 1; j < vias.length; j++) if (alive(vias[j]) && !keep(vias[j]) && near(vias[i].anchors[0], vias[j].anchors[0]) && Array.from(vias[i].layers).join() === Array.from(vias[j].layers).join()) { remove.add(vias[j].id); report("redundant_via", "Remove redundant via", [vias[j].id]); }
   }
   // tracks fully inside a pad
-  if (opts.inPads) for (const c of tracks()) if (c.kind === "segment") {
+  if (opts.inPads) for (const c of tracks()) if (c.kind === "segment" && !keep(c)) {
     const [a, b] = c.anchors; const layer = layerOfC(c);
     const inside = (p: Pt) => conds.find((o) => o.kind === "pad" && o.layers.has(layer) && boxesTouch(o.bbox, [p[0], p[1], p[0], p[1]], 0) && coreDist(o.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= shapeOffset(o.shape) + 1e-9);
     const pa = inside(a), pb = inside(b); if (pa && pb && pa === pb) { remove.add(c.id); report("track_in_pad", "Remove track inside pad", [c.id]); }
@@ -93,14 +97,14 @@ export function cleanupPlan(doc: BoardDoc, opts?: CleanupOpts | null): CleanupPl
     while (changed) {
       changed = false; const segs = tracks().filter((c) => c.kind === "segment");
       outer: for (let i = 0; i < segs.length; i++) for (let j = 0; j < segs.length; j++) {
-        if (i === j) continue; const p = segs[i], q = segs[j]; if (layerOfC(p) !== layerOfC(q) || (p.net && q.net && p.net !== q.net)) continue;
+        if (i === j) continue; const p = segs[i], q = segs[j]; if (keep(p) || keep(q)) continue; if (layerOfC(p) !== layerOfC(q) || (p.net && q.net && p.net !== q.net)) continue;
         const pn = nodeOf(p), qn = nodeOf(q); const a = pt(pn, "start")!, b = pt(pn, "end")!, c = pt(qn, "start")!, d = pt(qn, "end")!;
         const dir = [b![0] - a![0], b![1] - a![1]]; const L = Math.hypot(dir[0], dir[1]); if (L < EPS) continue;
         const cross = (r: Pt) => Math.abs((r[0] - a![0]) * dir[1] - (r[1] - a![1]) * dir[0]) / L; const along = (r: Pt) => ((r[0] - a![0]) * dir[0] + (r[1] - a![1]) * dir[1]) / L;
         if (cross(c) > EPS || cross(d) > EPS) continue;   // not collinear
         const tc = along(c), td = along(d), lo = Math.min(tc, td), hi = Math.max(tc, td);
         if (lo >= -EPS && hi <= L + EPS && widthOf(qn, 0.25) <= widthOf(pn, 0.25) + 1e-9) {   // q lies within p (a duplicate when equal)
-          remove.add(q.id); report(Math.abs(lo) < EPS && Math.abs(hi - L) < EPS ? "duplicate_track" : "contained_track", Math.abs(lo) < EPS && Math.abs(hi - L) < EPS ? "Remove duplicate track" : "Remove track contained in another", [q.id]); changed = true; break outer;
+          remove.add(q.id); report(Math.abs(lo) < EPS && Math.abs(hi - L) < EPS ? "duplicate_track" : "contained_track", "Remove duplicate track", [q.id]); changed = true; break outer;
         }
         if (Math.abs(widthOf(pn, 0.25) - widthOf(qn, 0.25)) > 1e-9) continue;
         // share exactly one end that is not a node (nothing else lands there): merge into one segment
@@ -108,7 +112,7 @@ export function cleanupPlan(doc: BoardDoc, opts?: CleanupOpts | null): CleanupPl
         if (Math.abs(along(joint[2]) - along(joint[1])) <= Math.abs(along(joint[0]) - along(joint[1])) + EPS && lo > -EPS && hi < L + EPS) continue;   // folds back on itself
         if (touchesPt(joint[0], layerOfC(p), p) && conds.filter(alive).some((o) => o !== p && o !== q && o.layers.has(layerOfC(p)) && (o.kind !== "segment" ? shapeGap(o.shape, { t: "circle", x: joint[0]![0], y: joint[0]![1], r: 0 }) <= EPS : o.anchors.some((r: Pt) => near(r, joint[0]))))) continue;
         const merged = clone(pn); K.kid(merged, "start")!.splice(1, 2, r6(joint[1]![0]), r6(joint[1]![1])); K.kid(merged, "end")!.splice(1, 2, r6(joint[2]![0]), r6(joint[2]![1]));
-        replace.set(p.id, merged); remove.add(q.id); report("merge_collinear", "Merge collinear tracks", [p.id, q.id]);
+        replace.set(p.id, merged); remove.add(q.id); report("merge_collinear", "Merge co-linear tracks", [p.id, q.id]);
         p.shape = { t: "seg", a: joint[1], b: joint[2], r: (p.shape as { r: number }).r }; p.anchors = [joint[1], joint[2]]; p.bbox = shapeBBox(p.shape); (p as TrackConductor).length = Math.hypot(joint[2]![0] - joint[1]![0], joint[2]![1] - joint[1]![1]);
         changed = true; break outer;
       }
@@ -119,8 +123,8 @@ export function cleanupPlan(doc: BoardDoc, opts?: CleanupOpts | null): CleanupPl
     let again = true;
     while (again) {
       again = false;
-      if (opts.dangling) for (const c of tracks()) { const layer = layerOfC(c); if (c.anchors.some((p: Pt) => !touchesPt(p, layer, c))) { remove.add(c.id); report("dangling_track", "Remove dangling track", [c.id]); again = true; } }
-      if (opts.danglingVias) for (const c of conds) if (c.kind === "via" && alive(c) && !conds.filter(alive).some((o) => o !== c && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) { remove.add(c.id); report("dangling_via", "Remove dangling via", [c.id]); again = true; }
+      if (opts.dangling) for (const c of tracks()) { if (keep(c)) continue; const layer = layerOfC(c); if (c.anchors.some((p: Pt) => !touchesPt(p, layer, c))) { remove.add(c.id); report("dangling_track", "Remove track not connected at both ends", [c.id]); again = true; } }
+      if (opts.danglingVias) for (const c of conds) if (c.kind === "via" && alive(c) && !keep(c) && !conds.filter(alive).some((o) => o !== c && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) { remove.add(c.id); report("dangling_via", "Remove via connected on less than 2 layers", [c.id]); again = true; }
     }
   }
   const replaceOut: { item: KItem; node: SNode }[] = []; for (const [id, node] of replace) if (!remove.has(id)) replaceOut.push({ item: doc.items.get(id)!, node });

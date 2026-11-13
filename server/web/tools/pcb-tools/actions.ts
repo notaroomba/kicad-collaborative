@@ -11,7 +11,26 @@ export type TuneView = ReturnType<typeof tuneSettingsView>;
 export interface RoutingDialogs {
   routerSettings?(ctx: PcbCtx): void; diffPair?(ctx: PcbCtx): void; customTrackVia?(ctx: PcbCtx): void; layerPair?(ctx: PcbCtx): void; sizes?(ctx: PcbCtx): void;
   tuning?(req: { mode: string; settings: TuneView }, done: (v: TuneView) => void): void;
+  /** DIALOG_MOVE_EXACT: `single` picks the item-anchor rotation (EDIT_TOOL::MoveExact), `bbox` the selection's box for the bounds check */
+  moveExact?(req: { single: boolean; bbox: number[] | null }, done: (v: MoveExactResult) => void): void;
+  /** DIALOG_POSITION_RELATIVE: the selection's anchor; done() with the reference position and the offset */
+  positionRelative?(req: { ctx: PcbCtx; selAnchor: Pt }, done: (anchor: Pt, dx: number, dy: number) => void): void;
+  /** DIALOG_SWAP_LAYERS over the enabled copper layers */
+  swapLayers?(req: { copper: string[] }, done: (map: Record<string, string>) => void): void;
+  /** DIALOG_CLEANUP_TRACKS_AND_VIAS */
+  cleanup?(req: CleanupRequest): void;
 }
+/** Move Exactly's answer: a translation, a rotation and what it turns about (an item's anchor, the selection's centre, a point). */
+export interface MoveExactResult { dx: number; dy: number; rotation: number; about: "anchor" | "center" | Pt }
+/** What the Cleanup Tracks and Vias dialog works with: the filter choices, a dry run, the cleanup itself and the focus on an item. */
+export interface CleanupRequest {
+  nets: string[]; netclasses: string[]; copper: string[]; activeLayer: string; highlightNet: string | null; currentNetclass: string;
+  plan(o: CleanupDialogOpts): { text: string; ids: string[] }[];
+  apply(o: CleanupDialogOpts): number;
+  focus(ids: string[] | null): void;
+}
+export interface CleanupDialogOpts { shorts: boolean; vias: boolean; danglingVias: boolean; merge: boolean; dangling: boolean; inPads: boolean; refill: boolean;
+  net: string | null; netclass: string | null; layer: string | null; selectedOnly: boolean }
 /** RequestSelection's options: the client filter, the lock filter (default on), quiet, and the re-run after Clarify Selection. */
 export interface RequestOpts { filter?(it: KItem): boolean; locks?: boolean; quiet?: boolean; rerun?(ctx: PcbCtx): unknown }
 import { root } from "../root";
@@ -26,7 +45,7 @@ import { copperOf, num0, openForm, settingsOf } from "./dialogs";
 import { DIM_TYPE } from "./dimensions";
 import { angleSnapMode, nextLineMode, setAngleSnap, stepDrawWidth } from "./draw-modes";
 import { askText } from "./draw-tools";
-import { drc, mm4 } from "./drc";
+import { drc, mm4, netclassName } from "./drc";
 import { cycleVia, cycleWidth, sizeUnits, stepLayer } from "./edit-commands";
 import { enterGroup, exitGroup, selectedTopGroup } from "./group-edit";
 import { applySelection, expandGroups, groupChanges, groupMembers, groupMembersChanges, groupOf, isLocked, lockChanges, selectedItems, selectionIds, topParentOf, ungroupChanges } from "./groups";
@@ -43,7 +62,7 @@ import { attemptFinish, continueFromEnd, selectLayerAndPlaceVia, setLayer, start
 import { CM_M45, CM_M90, CM_R45, CM_R90, RM_MARK, RM_SHOVE, RM_WALK, setRouterSettings } from "./router-settings";
 import { beginCarryMove, moveTransform } from "./select-move";
 import { K, S, bind, lastCtx } from "./state";
-import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges } from "./track-edit";
+import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges, type CleanupOpts } from "./track-edit";
 import { alignChanges, anchorOf, bboxUnion, distributeChanges, flipChanges, mirrorChanges, moveExactChanges, packChanges, positionRelativeChanges, rotateChanges, swapChanges, topLeftAnchor, transformChanges } from "./transforms";
 import { isTuningPattern, regenerateTuning, tuneStep, tuningPatternInfo } from "./tuning-patterns";
 import { editTuningPattern, selectedTuningPattern, tuningNodeWithSettings } from "./tuning-edit";
@@ -236,10 +255,13 @@ act("move", "Move", "M", (ctx: PcbCtx) => {
   beginCarryMove(ctx, { ids: sel.ids, hover: sel.hover }); return true;
 });
 act("moveExactly", "Move Exactly…", "Shift+M", (ctx: PcbCtx) => {
-  if (!canEdit(ctx)) return true;
+  if (!canEdit(ctx) || S.route) return true;
   const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => runAction("moveExactly", c) }); if (!sel) return true; const ids = sel.ids;
-  return openForm({ title: "Move Item Exactly", fields: [{ k: "dx", label: "Move X (mm)", type: "num", value: 0 }, { k: "dy", label: "Move Y (mm)", type: "num", value: 0 }, { k: "rotation", label: "Rotate (°)", type: "num", value: 0 }, { k: "about", label: "Rotate around", type: "select", value: "center", options: [["center", "Selection center"], ["anchor", "Item anchor"]] }],
-    apply: (v: { dx: number; dy: number; rotation: number; about: string }) => commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about }), "move exactly") });
+  const run = (v: MoveExactResult): void => { commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: v.dx, dy: v.dy, rotation: v.rotation, about: v.about }), "Move Exactly"); if (sel.hover) applySelection(ctx, []); };
+  if (routingDialogs.moveExact) { const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean) as KItem[]; routingDialogs.moveExact({ single: ids.length === 1, bbox: bboxUnion(items) }, run); return true; }
+  return openForm({ title: "Move Item", fields: [{ k: "dx", label: "Move X:", type: "num", value: 0, unit: "mm" }, { k: "dy", label: "Move Y:", type: "num", value: 0, unit: "mm" }, { k: "rotation", label: "Rotate:", type: "num", value: 0, unit: "deg" },
+    { k: "about", label: "", type: "select", value: ids.length > 1 ? "center" : "anchor", options: [[ids.length > 1 ? "center" : "anchor", ids.length > 1 ? "Rotate around selection center" : "Rotate around item anchor"]] }],
+    apply: (v: { dx: number; dy: number; rotation: number; about: string }) => run({ dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about === "anchor" ? "anchor" : "center" }) });
 });
 alias("moveExact", "moveExactly");
 // EDIT_TOOL's other moves (ref-move.ts): a picked reference point, one item at a time, an interactive offset
@@ -302,13 +324,16 @@ export function getAndPlaceRef(ctx: PcbCtx, ref: string): boolean {
 act("positionRelative", "Position Relative To…", "Shift+P", (ctx: PcbCtx) => {
   if (!canEdit(ctx)) return true;
   const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => runAction("positionRelative", c) }); if (!sel) return true; const ids = sel.ids;
-  const fps = Array.from(ctx.doc.items.values()).filter((it) => it.kind === "footprint" && !ids.includes(it.id)).sort((a, b) => (a.ref || "").localeCompare(b.ref || "", undefined, { numeric: true }));
   const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean) as KItem[]; const a = topLeftAnchor(items);
+  // POSITION_RELATIVE_TOOL::RelativeItemSelectionMove: the selection's anchor goes to the reference position plus the offset
+  const run = (ref: Pt, dx: number, dy: number): void => { commitSel(ctx, positionRelativeChanges(ctx.doc, ids, ref, dx, dy), "Position Relative"); if (sel.hover) applySelection(ctx, []); };
+  if (routingDialogs.positionRelative) { routingDialogs.positionRelative({ ctx, selAnchor: [a[0], a[1]] }, run); return true; }
+  const fps = Array.from(ctx.doc.items.values()).filter((it) => it.kind === "footprint" && !ids.includes(it.id)).sort((p, q) => (p.ref || "").localeCompare(q.ref || "", undefined, { numeric: true }));
   return openForm({ title: "Position Relative To Reference Item", fields: [
     { k: "ref", label: "Reference", type: "select", value: "origin", options: [["origin", "Grid origin (0, 0)"], ["point", "Point below"]].concat(fps.map((f) => [f.id, `${f.ref || f.lib} (${fmt(f.x!)}, ${fmt(f.y!)})`])) },
     { k: "px", label: "Point X (mm)", type: "num", value: r6(a[0]) }, { k: "py", label: "Point Y (mm)", type: "num", value: r6(a[1]) },
-    { k: "dx", label: "Offset X (mm)", type: "num", value: 0 }, { k: "dy", label: "Offset Y (mm)", type: "num", value: 0 }],
-    apply: (v: { ref: string; px: number; py: number; dx: number; dy: number }) => { const ref = v.ref === "origin" ? [0, 0] : v.ref === "point" ? [num0(v.px, 0), num0(v.py, 0)] : anchorOf(ctx.doc.items.get(v.ref)!); return commitSel(ctx, positionRelativeChanges(ctx.doc, ids, ref, num0(v.dx, 0), num0(v.dy, 0)), "position relative"); } });
+    { k: "dx", label: "Offset X:", type: "num", value: 0, unit: "mm" }, { k: "dy", label: "Offset Y:", type: "num", value: 0, unit: "mm" }],
+    apply: (v: { ref: string; px: number; py: number; dx: number; dy: number }) => { const ref = v.ref === "origin" ? [0, 0] : v.ref === "point" ? [num0(v.px, 0), num0(v.py, 0)] : anchorOf(ctx.doc.items.get(v.ref)!); run(ref as Pt, num0(v.dx, 0), num0(v.dy, 0)); } });
 });
 for (const [id, mode, label] of [["alignLeft", "left", "Align to Left"], ["alignRight", "right", "Align to Right"], ["alignTop", "top", "Align to Top"], ["alignBottom", "bottom", "Align to Bottom"], ["alignCenterX", "centerX", "Align to Vertical Center"], ["alignCenterY", "centerY", "Align to Horizontal Center"]])
   act(id, label, "", (ctx: PcbCtx) => { const ids = editableOrToast(ctx, "Select two or more items to align"); if (!ids) return true; return commitSel(ctx, alignChanges(ctx.doc, ids, mode, ctx.cursor!), label.toLowerCase()); });
@@ -402,20 +427,35 @@ act("createArray", "Create Array…", "", (ctx: PcbCtx) => {   // DIALOG_CREATE_
     apply: (v: { nx: number; ny: number; dx: number; dy: number }) => { const r = arrayChanges(ctx.doc, ids, { type: "grid", nx: num0(v.nx, 1), ny: num0(v.ny, 1), dx: num0(v.dx, 0), dy: num0(v.dy, 0), offX: 0, offY: 0, stagger: 1, staggerRows: true, centred: false, hThenV: true }); if (!r.changes.length) return; ctx.commit(r.changes, r.label); applySelection(ctx, r.ids); } });
 });
 act("swapLayers", "Swap Layers…", "", (ctx: PcbCtx) => {
-  if (!canEdit(ctx)) return true; const doc = ctx.doc; const copper = copperOf(doc); const layers = copper.concat(gfxLayers(doc).filter((l) => !copper.includes(l)));
-  return openForm({ title: "Swap Layers", width: 380, fields: layers.map((l) => ({ k: l, label: l, type: "select", value: l, options: layers })), apply: (v: Record<string, string>) => {
-    const map: Record<string, string> = {}; for (const l of layers) if (v[l] && v[l] !== l) map[l] = v[l]; if (!Object.keys(map).length) { ctx.toast("No layers swapped"); return; }
-    const ch = transformChanges(doc, Array.from(doc.items.keys()), (n, it: KItem) => {
-      if (it.kind === "footprint" || it.kind === "group") return false; let did = false;
-      const l = K.kid(n, "layer"); if (l && map[K.str(l[1])]) { l[1] = map[K.str(l[1])]; did = true; }
-      const ls = K.kid(n, "layers"); if (ls) for (let i = 1; i < ls.length; i++) if (map[K.str(ls[i])]) { ls[i] = map[K.str(ls[i])]; did = true; }
-      if (it.kind === "zone") for (const fp of K.kids(n, "filled_polygon")) { const fl = K.kid(fp, "layer"); if (fl && map[K.str(fl[1])]) { fl[1] = map[K.str(fl[1])]; did = true; } }
-      if (it.kind === "dimension") { const gt = K.kid(n, "gr_text"); const gl = gt && K.kid(gt, "layer"); if (gl && map[K.str(gl[1])]) { gl[1] = map[K.str(gl[1])]; did = true; } }
-      return did ? undefined : false;
-    });
-    commitSel(ctx, ch, "swap layers");
+  if (!canEdit(ctx)) return true; const doc = ctx.doc; const copper = copperOf(doc);
+  const run = (map: Record<string, string>): void => { const ch = swapLayerChanges(doc, map); if (ch.length) ctx.commit(ch, "Swap Layers"); ctx.requestRender(); };
+  if (routingDialogs.swapLayers) { routingDialogs.swapLayers({ copper }, run); return true; }
+  return openForm({ title: "Swap Layers", width: 380, fields: copper.map((l) => ({ k: l, label: l, type: "select", value: l, options: copper })), apply: (v: Record<string, string>) => {
+    const map: Record<string, string> = {}; for (const l of copper) if (v[l] && v[l] !== l) map[l] = v[l]; run(map);
   } });
 });
+/**
+ * GLOBAL_EDIT_TOOL::SwapLayers: tracks, blind / buried / micro vias (their layer pair), zones and board drawings move
+ * from each copper layer to the one the map gives; through vias, footprints and the tracks of a generator stay.
+ */
+export function swapLayerChanges(doc: BoardDoc, map: Record<string, string>): KChange[] {
+  const m: Record<string, string> = {}; for (const [a, b] of Object.entries(map)) if (b && a !== b) m[a] = b;
+  if (!Object.keys(m).length) return [];
+  const inGenerator = new Set<string>();
+  for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K.groupMemberIds(it.node)) inGenerator.add(id);
+  return transformChanges(doc, Array.from(doc.items.keys()), (n, it: KItem) => {
+    if (it.kind === "footprint" || it.kind === "group") return false;
+    if ((it.kind === "segment" || it.kind === "arc" || it.kind === "via") && inGenerator.has(it.id)) return false;
+    if (it.kind === "via" && !n.includes("blind") && !n.includes("micro") && !n.includes("buried")) return false;   // VIATYPE::THROUGH
+    let did = false;
+    const l = K.kid(n, "layer"); if (l && m[K.str(l[1])]) { l[1] = m[K.str(l[1])]; did = true; }
+    const ls = K.kid(n, "layers");
+    if (ls) { const seen = new Set<string>(); const out: string[] = []; for (let i = 1; i < ls.length; i++) { const v = K.str(ls[i]), w = m[v] || v; if (w !== v) did = true; if (!seen.has(w)) { seen.add(w); out.push(w); } } if (did) ls.splice(1, ls.length - 1, ...out); }
+    if (it.kind === "zone") for (const fp of K.kids(n, "filled_polygon")) { const fl = K.kid(fp, "layer"); if (fl && m[K.str(fl[1])]) { fl[1] = m[K.str(fl[1])]; did = true; } }
+    if (it.kind === "dimension") { const gt = K.kid(n, "gr_text"); const gl = gt && K.kid(gt, "layer"); if (gl && m[K.str(gl[1])]) { gl[1] = m[K.str(gl[1])]; did = true; } }
+    return did ? undefined : false;
+  });
+}
 // tracks and vias
 act("changeTrackWidth", "Change Track Width / Via Size…", "", (ctx: PcbCtx) => {
   const ids = selectionOrToast(ctx, "Select tracks or vias first"); if (!ids) return true; const copper = copperOf(ctx.doc);
@@ -560,10 +600,31 @@ act("drillResetOrigin", "Reset Drill Origin", "", (ctx: PcbCtx) => { if (canEdit
 act("changeTrackLayerNext", "Move Track to Next Layer", "", (ctx: PcbCtx) => { const ids = selectionOrToast(ctx, "Select tracks first"); if (!ids) return true; return commitSel(ctx, trackLayerChanges(ctx.doc, ids, 1), "track layer"); });
 act("changeTrackLayerPrev", "Move Track to Previous Layer", "", (ctx: PcbCtx) => { const ids = selectionOrToast(ctx, "Select tracks first"); if (!ids) return true; return commitSel(ctx, trackLayerChanges(ctx.doc, ids, -1), "track layer"); });
 act("cleanupTracks", "Cleanup Tracks & Vias…", "", (ctx: PcbCtx) => {
-  if (!canEdit(ctx)) return true; const doc = ctx.doc; const preview = cleanupPlan(doc, {});
-  const opts = [["shorts", "Delete tracks connecting different nets"], ["vias", "Delete redundant vias"], ["merge", "Merge co-linear tracks"], ["dangling", "Delete tracks unconnected at one end"], ["danglingVias", "Delete dangling vias"], ["inPads", "Delete tracks fully inside pads"]];
-  return openForm({ title: "Cleanup Tracks and Vias", width: 480, fields: opts.map(([k, label]): FormField => ({ k, label, type: "check", value: true })).concat([{ k: "list", type: "table", columns: [{ label: "Action", width: "1fr" }, { label: "Items", width: "60px" }], rows: preview.items.map((i) => [i.text, i.ids.length]), empty: "Nothing to clean up with every option on.", onRow: (i: number) => highlightIds(ctx, new Set(preview.items[i].ids)) }]),
-    apply: (v: Record<string, boolean>) => { const plan = cleanupPlan(doc, v); const ch = cleanupChanges(doc, plan); highlightIds(ctx, null); if (!ch.length) { ctx.toast("Nothing to clean up"); return; } ctx.commit(ch, "cleanup tracks"); ctx.toast(`Cleanup: ${plural(plan.items.length, "change")}`); } });
+  if (!canEdit(ctx)) return true; const doc = ctx.doc;
+  const settings = settingsOf(ctx), selNow = new Set(expandGroups(doc, Array.from(S.sel)));
+  const netName = (it: KItem): string => netOf(it.node).name;
+  const layerOf = (it: KItem): string => { const l = K.kid(it.node, "layer"); if (l) return K.str(l[1]); const ls = K.kid(it.node, "layers"); return ls ? K.str(ls[1]) : ""; };
+  // DIALOG_CLEANUP_TRACKS_AND_VIAS::doCleanup's filter: true leaves the item alone
+  const opts = (o: CleanupDialogOpts): CleanupOpts => ({ shorts: o.shorts, vias: o.vias, danglingVias: o.danglingVias, merge: o.merge, dangling: o.dangling, inPads: o.inPads,
+    filter: (it: KItem) => (o.selectedOnly && !selNow.has(it.id)) || (o.net !== null && netName(it) !== o.net) || (o.netclass !== null && netclassName(settings, netName(it)) !== o.netclass) || (o.layer !== null && layerOf(it) !== o.layer) });
+  const req: CleanupRequest = {
+    nets: boardNets(doc).map((n) => n.name), netclasses: ["Default", ...Object.keys(settings.netclasses).filter((n) => n !== "Default")], copper: copperOf(doc),
+    activeLayer: ctx.activeLayer || S.layer, highlightNet: typeof S.highlightNet === "string" ? S.highlightNet : null, currentNetclass: "Default",
+    plan: (o) => cleanupPlan(doc, opts(o)).items.map((i) => ({ text: i.text, ids: i.ids })),
+    apply: (o) => {
+      applySelection(ctx, []); highlightIds(ctx, null);
+      const plan = cleanupPlan(doc, opts(o)); const ch = cleanupChanges(doc, plan);
+      if (ch.length) ctx.commit(ch, "Board Cleanup");
+      if (o.refill) runAction("zoneFillAll", ctx);
+      ctx.requestRender(); return plan.items.length;
+    },
+    focus: (ids) => highlightIds(ctx, ids ? new Set(ids) : null) };
+  if (routingDialogs.cleanup) { routingDialogs.cleanup(req); return true; }
+  const all: CleanupDialogOpts = { shorts: true, vias: true, danglingVias: true, merge: true, dangling: true, inPads: false, refill: false, net: null, netclass: null, layer: null, selectedOnly: false };
+  const preview = req.plan(all);
+  const labels: [keyof CleanupDialogOpts, string][] = [["shorts", "Delete tracks connecting different nets"], ["vias", "Delete redundant vias"], ["danglingVias", "Delete vias connected on only one layer"], ["merge", "Merge co-linear tracks"], ["dangling", "Delete tracks unconnected at one end"], ["inPads", "Delete tracks fully inside pads"]];
+  return openForm({ title: "Cleanup Tracks and Vias", width: 480, fields: labels.map(([k, label]): FormField => ({ k, label, type: "check", value: all[k] as boolean })).concat([{ k: "list", type: "table", columns: [{ label: "Action", width: "1fr" }, { label: "Items", width: "60px" }], rows: preview.map((i) => [i.text, i.ids.length]), empty: "No changes.", onRow: (i: number) => req.focus(preview[i].ids) }]),
+    apply: (v: Record<string, boolean>) => { req.apply(Object.assign({}, all, v)); } });
 });
 alias("cleanupTracksAndVias", "cleanupTracks");
 act("breakTrack", "Break Track", "", (ctx: PcbCtx) => { if (!canEdit(ctx)) return true; const seg = selectedItems(ctx).find((it) => it.kind === "segment"); return commitSel(ctx, breakTrackChanges(ctx.doc, cursorPoint(ctx), seg && hitTestItem(ctx.doc, cursorPoint(ctx)[0], cursorPoint(ctx)[1], 0.3) === seg ? seg : null), "break track"); });

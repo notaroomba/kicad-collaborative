@@ -2,6 +2,7 @@
 // Update PCB from Schematic, Edit Footprint Fields, the DRC dialog, Board Statistics, Net Inspector and
 // Clearance Resolution.  Each is a module action on CollabTools.pcb, so the menus (web/actions/tables.ts)
 // and hotkeys find it the way they find every other board command.
+import { installTransformDialogs } from "./transform-dialogs";
 import { openBoardSetup } from "./board-setup";
 import "./find";   // Edit > Find (DIALOG_FIND): registers E.hooks.boardFind / boardFindNext
 import { openFootprintFields } from "./fp-fields";
@@ -34,7 +35,8 @@ export function installPcbDialogs(): void {
   installed = true;
   if (typeof KDialogs !== "undefined" && KDialogs) (KDialogs as KDialogsApi & { pcbItemDialog?: typeof pcbItemDialog }).pcbItemDialog = pcbItemDialog;   // KDialogs.openItem asks it first
   if (typeof KDialogs !== "undefined" && KDialogs) KDialogs.pcbSelectionDialog = (ctx, items) => tracksOnly(items) && trackViaDialog(ctx, items);
-  (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;   // DIALOG_PAD_PROPERTIES in place of the module's short form
+  (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;
+  installTransformDialogs();   // Move Item, Position Relative, Swap Layers, Cleanup Tracks and Vias   // DIALOG_PAD_PROPERTIES in place of the module's short form
   Object.assign(CollabTools.pcb as object, { drcReport, projectNetlist });   // the DRC dialog's run and the project's netlist as data (plugins' kicad-cli)
   const nd = (CollabTools.pcb as ToolModule & { setNewItemDialogs?(d: Record<string, unknown>): void }).setNewItemDialogs;
   if (nd) nd({ gr_text: newTextDialog, gr_text_box: newTextBoxDialog, table: newTableDialog, zone: newZoneDialog });   // Add Text, Draw Text Box and Draw Zone / Rule Area open their properties dialog first

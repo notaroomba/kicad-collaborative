@@ -134,6 +134,15 @@ textarea.pd-text { width: 100%; min-height: 260px; font-family: var(--mono); fon
 .pd-warnicon[hidden] { display: none; }
 .pd-infobar { display: flex; gap: 8px; align-items: center; background: color-mix(in srgb, var(--warn) 18%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); border-radius: var(--r-2); padding: 5px 10px; margin: 0 0 8px; color: var(--ink); }
 .pd-infobar[hidden] { display: none; }
+.pd-form.pd-form4 { grid-template-columns: max-content minmax(90px, 170px) max-content max-content; }
+.pd-form4 > span > input { width: 100%; }
+.pd-bad { color: var(--err) !important; }
+.pd-sep { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
+.pd-layercell { display: inline-flex; gap: 6px; align-items: center; width: 100%; }
+.pd-layercell .sw { width: 12px; height: 12px; border: 1px solid var(--line); border-radius: 2px; flex: none; }
+.pd-layercell k-select { flex: 1; }
+.pd-report .ln.sel { background: var(--sel-soft); }
+.pd-report .ln[tabindex] { cursor: pointer; }
 .pd-infobar .msg { flex: 1; white-space: pre-wrap; }
 .pd-infobar .x { border: 0; background: none; color: var(--ink-2); padding: 0 4px; }
 .pd-grid td.cellsel input[type=text], .pd-grid td.cellsel { background: var(--sel-soft); }

@@ -1032,6 +1032,14 @@ test("align and distribute move by bounding boxes like ALIGN_DISTRIBUTE_TOOL; th
 });
 function pt(n, key) { const k = K.kid(n, key); return [k[1], k[2]]; }
 
+test("swap layers: tracks move between copper layers, through vias and footprints stay (GLOBAL_EDIT_TOOL::SwapLayers)", () => {
+  const doc = fixture();
+  const ch = P.swapLayerChanges(doc, { "F.Cu": "B.Cu", "B.Cu": "F.Cu" });
+  const ids = ch.map((c) => c.id).sort();
+  assert.deepEqual(ids, ["a-1", "s-1", "s-2", "s-3", "s-4"], "the through via and the footprint are left alone");
+  assert.equal(K.kid(node(ch.find((c) => c.id === "s-3")), "layer")[1], "F.Cu");
+  assert.deepEqual(P.swapLayerChanges(doc, { "F.Cu": "F.Cu" }), [], "an identity map changes nothing");
+});
 test("move exactly, position relative, rotate / flip / mirror about the selection centre, swap and pack", () => {
   const doc = fixture();
   const me = P.moveExactChanges(doc, ["s-4"], { dx: 1, dy: 2, rotation: 0 }); assert.deepEqual([pt(node(me[0]), "start"), pt(node(me[0]), "end")], [[131, 52], [136, 52]]);
@@ -1167,8 +1175,8 @@ test("actions: the map carries KiCad's ids and hotkeys; copy / paste / cut / dup
   // R turns a multi-selection about its centre, F flips it; Shift+M moves exactly through the (stubbed) dialog
   ctx.selection = new Set(["s-1", "s-4"]); assert.equal(pcb.onKey("r", ev(), ctx), true); assert.equal(log.commits.at(-1).label, "rotate"); assert.equal(log.commits.at(-1).changes.length, 2); assert.deepEqual(pt(doc.items.get("s-1").node, "start"), [122.5, 62.5]);
   assert.equal(pcb.onKey("Flip", ev(), ctx), true); assert.equal(K.kid(doc.items.get("s-4").node, "layer")[1], "B.Cu");
-  pcb.setForm((spec) => { assert.equal(spec.title, "Move Item Exactly"); spec.apply({ dx: 1, dy: 0, rotation: 0, about: "center" }); return true; });
-  ctx.selection = new Set(["s-3"]); assert.equal(pcb.onKey("M", ev({ shiftKey: true }), ctx), true); assert.equal(log.commits.at(-1).label, "move exactly"); assert.deepEqual(pt(doc.items.get("s-3").node, "start"), [119, 53]);
+  pcb.setForm((spec) => { assert.equal(spec.title, "Move Item"); spec.apply({ dx: 1, dy: 0, rotation: 0, about: "center" }); return true; });
+  ctx.selection = new Set(["s-3"]); assert.equal(pcb.onKey("M", ev({ shiftKey: true }), ctx), true); assert.equal(log.commits.at(-1).label, "Move Exactly"); assert.deepEqual(pt(doc.items.get("s-3").node, "start"), [119, 53]);
   pcb.setForm((spec) => { spec.apply({ ref: "origin", px: 0, py: 0, dx: 5, dy: 6 }); return true; }); assert.equal(pcb.onKey("P", ev({ shiftKey: true }), ctx), true); assert.deepEqual(pt(doc.items.get("s-3").node, "start"), [5, 6]);
   pcb.setForm((spec) => { spec.apply({ netclass: false, width: 0.4, viaSize: 0.9, viaDrill: 0.45, viaType: "through", l0: "F.Cu", l1: "B.Cu" }); return true; });
   ctx.selection = new Set(["s-3", "v-1"]); assert.equal(pcb.runAction("changeTrackWidth", ctx), true); assert.equal(K.kid(doc.items.get("s-3").node, "width")[1], 0.4); assert.equal(K.kid(doc.items.get("v-1").node, "size")[1], 0.9);
