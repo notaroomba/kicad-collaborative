@@ -9,6 +9,7 @@ import { anchorOf, cloneNode, mirrorNode, rotateNode, shiftNode } from "./orient
 import { LINE_KINDS, S, ptsOf } from "./state";
 import { loneLinePivot, orientDrag, rotationCentre, transformNode, transformSelected } from "./transforms";
 import { deep, ghost, modChange, removeChange } from "./util";
+import { isLockedItem, unlockedSelection } from "./lock";
 
 // ---------------------------------------------------------------- edits on the current selection
 export function selectedItem(ctx: SchCtx) { const id = ctx.selected ? ctx.selected.id : S.sel; return id ? ctx.doc.items.get(id) || null : null; }
@@ -19,7 +20,7 @@ export function orientSelected(ctx: SchCtx, op: string) {
   if (S.drag) return orientDrag(ctx, op);                                        // handleMoveToolActions: the move goes on
   const c = S.carry;
   if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node), true); refreshCarry(ctx); return true; }
-  const items = selectedItems(ctx);
+  const items = unlockedSelection(ctx);   // FilterSelectionForLockedItems
   if (items.length > 1) return transformSelected(ctx, op, items);
   const it = items[0]; if (!it) return false;
   if (ctx.viewOnly) return false;
@@ -57,6 +58,7 @@ export function deleteChanges(doc: KDoc, items: KItem | KItem[]) {
 }
 export function deleteSelected(ctx: SchCtx) {
   const it = S.sel ? ctx.doc.items.get(S.sel) : null; if (!it) return false;
+  if (isLockedItem(ctx.doc, it)) return true;   // DoDelete: FilterSelectionForLockedItems
   const changes = deleteChanges(ctx.doc, it);
   S.sel = null; S.hover = null;
   ctx.commit(changes, "delete");
@@ -65,7 +67,7 @@ export function deleteSelected(ctx: SchCtx) {
 }
 // The delete tool's click: whatever is under the cursor goes (symbols and sheets included).
 export function deleteAt(ctx: SchCtx, mm: Pt) {
-  const it = pickAny(ctx, mm); if (!it) return null;
+  const it = pickAny(ctx, mm); if (!it || isLockedItem(ctx.doc, it)) return null;
   const changes = deleteChanges(ctx.doc, it);
   S.sel = null; S.hover = null;
   if (ctx.selected && ctx.selected.id === it.id) ctx.setSelected(null);

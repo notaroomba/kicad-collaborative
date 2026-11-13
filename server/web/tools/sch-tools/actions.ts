@@ -17,6 +17,7 @@ import { schArcDrawMode, schArcPosture, setSchArcDrawMode, showSchArcMode, switc
 const ARC_MODE_LABELS = ["Draw Arc: Center, Start, End", "Draw Arc: Start, End, Midpoint", "Draw Arc: Start, End, Center", "Draw Arc: Tangent", "Draw Arc: Start, Direction, End"];
 import { alignEdges, alignToGrid, breakWire, moveExactly, swapSelection } from "./transforms";
 import { unfoldAction } from "./unfold";
+import { modifyLock } from "./lock";
 
 // ---------------------------------------------------------------- the actions map (ids stable: app.js binds menus and keys to them)
 /** One of the module's commands: app.js binds menus and keys to it; run returns whether it was handled. */
@@ -82,6 +83,10 @@ export const ACTION_LIST = [
   act("fieldsTable", "Symbol Fields Table...", "", (ctx: SchCtx) => openFieldsTable(ctx)),
   act("unfoldBus", "Unfold from Bus", "C", (ctx: SchCtx, opts?: Parameters<typeof unfoldAction>[1]) => unfoldAction(ctx, opts)),
   act("syncSheetPins", "Sync Sheet Pins...", "", (ctx: SchCtx) => syncSheetPins(ctx)),
+  // SCH_EDIT_TOOL::Lock / Unlock / ToggleLock (the Locking submenu)
+  act("lock", "Lock", "", (ctx: SchCtx) => modifyLock(ctx, "on")),
+  act("unlock", "Unlock", "", (ctx: SchCtx) => modifyLock(ctx, "off")),
+  act("toggleLock", "Toggle Lock", "", (ctx: SchCtx) => modifyLock(ctx, "toggle")),
   act("cleanupSheetPins", "Cleanup Sheet Pins", "", (ctx: SchCtx) => cleanupSheetPins(ctx)),
   act("highlightNet", "Highlight Net", "`", (ctx: SchCtx) => highlightNetNow(ctx)),
   act("clearHighlight", "Clear Net Highlighting", "~", (ctx: SchCtx) => { clearHighlight(ctx); return true; }),

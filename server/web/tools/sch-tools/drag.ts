@@ -10,6 +10,7 @@ import { K, POINT_KINDS, S, atOf, kid, kids, num, ptsOf, setAt, setPts } from ".
 import { endBreak } from "./transforms";
 import { addNode, deep, modChange, r4, same, segDist, segs } from "./util";
 import { wireModeChanged } from "./wire";
+import { isLockedItem } from "./lock";
 
 // ---------------------------------------------------------------- drag (KiCad's "drag": attached ends stretch)
 // ---------------------------------------------------------------- connected drag (eeschema/tools/sch_move_tool.cpp)
@@ -145,7 +146,8 @@ export function lineCovers(doc: KDoc, kind: string, a: Pt, b: Pt) {             
 // (a wire between two dragged symbols) is promoted into the moved set so it just moves.
 export function beginDrag(ctx: SchCtx, items: KItem | KItem[], mm: Pt, byPointer?: boolean, opts?: { plain?: boolean }) {
   const doc = ctx.doc, seen = new Set<string>(), list: KItem[] = [], partial: PartialLine[] = [];
-  for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id)) {
+  // SCH_MOVE_TOOL: FilterSelectionForLockedItems first (a pasted or repeated item is new, never locked)
+  for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id) && !isLockedItem(doc, it)) {
     seen.add(it.id);
     // a line selected by one end (STARTPOINT / ENDPOINT): SCH_MOVE_TOOL::moveItem moves that end only
     const e = !(opts && opts.plain) && S.selEnds ? S.selEnds.get(it.id) : undefined, pts = e === 0 || e === 1 ? ptsOf(it.node) : null;

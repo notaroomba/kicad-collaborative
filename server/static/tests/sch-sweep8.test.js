@@ -126,5 +126,29 @@ test("sizeSheet: the sheet keeps its origin, is at least 500 x 150 mil and its c
   assert.deepStrictEqual(_.sheetCorner([100, 50], [100.1, 50.1], 1.27), [113.03, 54.61], "never rounded inside the minimum");
 });
 
+test("Lock writes (locked yes) where SCH_IO_KICAD_SEXPR does, and locked items sit out of rotate, move and delete", () => {
+  const w = '(wire (pts (xy 0 0) (xy 10.16 0)) (stroke (width 0) (type default)) (uuid "w1"))';
+  const sym = '(symbol (lib_id "Device:R") (at 50.8 50.8 0) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (uuid "s1"))';
+  const sh = '(sheet (at 100 50) (size 20 10) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid "h1"))';
+  const ra = '(rule_area (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (polyline (pts (xy 0 0) (xy 5 0) (xy 5 5)) (stroke (width 0) (type dash)) (fill (type none)) (uuid "r1")))';
+  const s = (kind, src) => K.serialize(_.setLockedNode(kind, K.parse(src), true));
+  assert.ok(/\(uuid "w1"\) \(locked yes\)\)$/.test(s("wire", w)), s("wire", w));
+  assert.ok(/\(dnp no\) \(locked yes\) \(fields_autoplaced yes\)/.test(s("symbol", sym)));
+  assert.ok(/\(dnp no\) \(locked yes\) \(fields_autoplaced yes\)/.test(s("sheet", sh)));
+  assert.ok(/^\(rule_area \(locked yes\) \(exclude_from_sim/.test(s("rule_area", ra)));
+  assert.strictEqual(K.serialize(_.setLockedNode("wire", _.setLockedNode("wire", K.parse(w), true), false)), K.serialize(K.parse(w)), "unlock gives the node back");
+  const doc = K.parseDoc(HEAD + w + '(wire (pts (xy 0 10.16) (xy 10.16 10.16)) (stroke (width 0) (type default)) (uuid "w2"))' + ")");
+  const c = makeCtx(doc); c.selection = new Set(["w1"]);
+  assert.strictEqual(sch.runAction("toggleLock", c), true);
+  assert.strictEqual(c.log.length, 1); assert.strictEqual(c.log[0].label, "Lock");
+  assert.ok(_.isLockedNode(doc.items.get("w1").node));
+  const before = K.serialize(doc.items.get("w1").node);
+  c.selection = new Set(["w1"]); sch.runAction("rotateSelection", c);
+  assert.strictEqual(K.serialize(doc.items.get("w1").node), before, "rotate leaves the locked wire");
+  assert.strictEqual(sch.beginDrag(c, doc.items.get("w1"), [5, 0], false), null, "move does not take it");
+  c.selection = new Set(["w1"]); sch.runAction("toggleLock", c);
+  assert.strictEqual(c.log[c.log.length - 1].label, "Unlock"); assert.ok(!_.isLockedNode(doc.items.get("w1").node));
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

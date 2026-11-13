@@ -223,9 +223,13 @@ export function rotateSelected(delta?: unknown) {
   drawSelection(); renderProps();
 }
 
-/** The ids a board edit may touch: locked items sit out unless "Override locks" is on (a schematic has no locks). */
+/** The ids an edit may touch: locked items sit out (a board's unless "Override locks" is on; FilterSelectionForLockedItems). */
 export function unlockedForEdit(ids: string[], quiet = false) {
-  const m = !isSch() && CollabTools.pcb;
+  if (isSch()) {
+    const L = CollabTools.sch && (CollabTools.sch._ as unknown as { isLockedItem?: (d: KDoc, it: KItem) => boolean }).isLockedItem, d = E.kdoc as KDoc | null;
+    return L && d ? ids.filter((id) => { const it = d.items.get(id); return !it || !L(d, it); }) : ids;
+  }
+  const m = CollabTools.pcb;
   if (!m || !m.unlockedIds || !E.kdoc) return ids;
   try { return m.unlockedIds(toolCtx(), ids, quiet); } catch (e) { console.warn(e); return ids; }
 }

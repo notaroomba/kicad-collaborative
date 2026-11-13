@@ -117,7 +117,7 @@ export function startGroupDrag(hit: { id: string; fp?: ItemSummary | { id: strin
     return;
   }
   // board (or a schematic module without group support): move the footprints together
-  const free = isSch() ? null : new Set(unlockedForEdit(its.map((it) => it.id)));
+  const free = new Set(unlockedForEdit(its.map((it) => it.id)));
   const members = its.filter((it) => !free || free.has(it.id)).filter((it) => it.kind === "footprint" || it.kind === "symbol").map((it) => { const f = E.items.find((q: ItemSummary) => q.id === it.id); return f ? { fp: f, ox: f.x, oy: f.y } : null; }).filter(Boolean);
   if (!members.length) return;
   E.drag = { fp, group: members, clickId: hit.id, startMm: mm, grab: snapMm(mm), curMm: [fp.x / E.IU, fp.y / E.IU], moved: false, last: [0, 0] };

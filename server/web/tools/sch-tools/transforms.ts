@@ -12,6 +12,7 @@ import { mmPerPx } from "./snap";
 import { K, LINE_KINDS, POINT_KINDS, S, TEXT_KINDS, atOf, kid, kids, num, ptsOf, setAt, setPts, str } from "./state";
 import { selEndOf } from "./line-ends";
 import { addNode, deep, dropKid, modChange, r4, removeChange, replaceKid, same } from "./util";
+import { unlockedSelection } from "./lock";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- group transforms: rotate / mirror about the selection centre, swap, align, move exactly
@@ -268,7 +269,7 @@ export function swapNodes(items: KItem[]) {
 export function swapChanges(doc: KDoc, items: KItem[]) { if (items.length < 2) return []; const nodes = swapNodes(items); return items.map((it: KItem, i: number) => modChange(doc, it, nodes[i])); }
 export function swapSelection(ctx: SchCtx) {
   if (!editable(ctx)) return false;
-  const items = selectedItems(ctx).filter((it) => DRAG_KINDS.has(it.kind));
+  const items = unlockedSelection(ctx).filter((it) => DRAG_KINDS.has(it.kind));   // FilterSelectionForLockedItems
   if (items.length < 2) { ctx.toast("Select two or more items to swap"); return false; }
   const doc = ctx.doc, nodes = swapNodes(items), changes = items.map((it, i) => modChange(doc, it, nodes[i])), touched: Pt[] = [];
   items.forEach((it, i) => { touched.push(...connPoints(doc, it), ...connPoints(doc, { kind: it.kind, node: nodes[i], id: it.id })); });
