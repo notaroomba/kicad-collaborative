@@ -330,7 +330,10 @@ class Blocks:
                 s._edit({"op": "add_label", "kind": "label", "text": op[1], "x": r(op[2][0]), "y": r(op[2][1]), "rotation": op[3]})
             elif op[0] == "part":
                 spec = self.parts[op[1]]
-                s.place(spec.get("lib"), at=op[2], ref=op[1], value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=op[3])
+                rot, mirror = op[3], None
+                if rot == 180 and not self.plain(op[1]) and all(abs(q[1]) < 1e-6 for q in self.offs(op[1], 0).values()):
+                    rot, mirror = 0, "y"      # a switch or diode turned end for end is flipped, not stood on its head
+                s.place(spec.get("lib"), at=op[2], ref=op[1], value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=rot, mirror=mirror)
                 self.done.add(op[1])
 
     def power_ends(self, ends) -> list:
@@ -369,6 +372,9 @@ class Blocks:
         inline: list = []
         drawn: dict = {}      # what each side's wiring occupies, for the capacitors that hang from the supply rail above
         top_nets = {want(p) for p in sides.get("top", [])}
+        # every supply symbol of the part stands at one height over it and every ground symbol at one depth under it
+        level = {"sup": min(p["y"] for p in sides["top"]) - G - STUB if sides.get("top") else None,
+                 "gnd": max(p["y"] for p in sides["bottom"]) + G + STUB if sides.get("bottom") else None}
         for side in ("left", "right"):
             ps = sorted(sides.get(side, []), key=lambda p: p["y"])
             d = -1 if side == "left" else 1
@@ -429,15 +435,20 @@ class Blocks:
                 return not any(_hit(a, b) for a in plan["rects"] for b, net in soft if net not in mine)
             # a supply or ground on several pins of one side: one bus beside the pins and one symbol, above for a supply, below for ground
             rows = [p["y"] for p in ps]
+            pending = [e[3][1] for e in later]
             for net in dict.fromkeys(e[1] for e in later if not e[5]):
                 mine = [e for e in later if e[1] == net and not e[5]]
                 gnd = self.kind(net) == "gnd"
                 # one ground pin with a few pins under it drops past them the same way, so its symbol covers none of their wires
                 drop = gnd and len(mine) == 1 and mine[0][7] and len([yy for yy in rows if yy > mine[0][3][1]]) <= 3
-                if len(mine) < 2 and not drop:
+                # a lone strap pin runs to that common height too, when at most two wires still to come would cross its way there
+                lvl = level["gnd" if gnd else "sup"]
+                y0 = mine[0][3][1]
+                align = len(mine) == 1 and lvl is not None and abs(lvl - y0) <= 30.0 and len([yy for yy in pending if (yy > y0 if gnd else yy < y0)]) <= 2
+                if len(mine) < 2 and not drop and not align:
                     continue
                 ys = sorted(e[3][1] for e in mine)
-                end = max(rows) + G if gnd else min(rows) - G
+                end = lvl if lvl is not None and (len(mine) > 1 or align) else max(rows) + G if gnd else min(rows) - G
                 for i in range(2, 60):
                     X = ps[0]["x"] + d * i * G
                     rs = [_rect(X - 1.0, min(ys[0], end), X + 1.0, max(ys[-1], end)), self.sym_rect(net, (X, end))]
@@ -573,7 +584,7 @@ class Blocks:
                 net = want(p)
                 near = prev is not None and p["x"] - prev[0] < 2 * G - 1e-3
                 n = 3 if near and prev[1] == 1 else 1
-                E = (p["x"], p["y"] + v * n * G)
+                E = (p["x"], p["y"] + v * (n * G + (STUB if n == 1 else 0)))
                 if natural(net):
                     self.emit([("wire", [(p["x"], p["y"]), E]), ("sym", net, E)])
                 else:                      # a ground pin on top or a supply pin underneath: out, aside, then upright
@@ -633,7 +644,7 @@ class Blocks:
             else:
                 start = next((n for n in nets if n), None)
             if start:
-                plan = self.trunk(g, start, x, y, 1, False, first=ref)
+                plan = self.trunk(g, start, x, y, 1, False, first=ref, lead=2 * G if head else G)
         if plan and ref in plan["refs"]:
             self.emit(head + plan["ops"] + self.power_ends(plan["ends"]))
             return plan["inline"]
