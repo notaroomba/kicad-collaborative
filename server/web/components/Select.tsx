@@ -18,11 +18,14 @@ export interface SelectProps {
   /** give the keyboard back (to the canvas) after a pick, as KiCad's toolbar choices do (m_canvas->SetFocus()) */
   blurOnPick?: boolean;
   data?: Record<string, string>;
+  /** a key pressed on the closed control, before the control's own keys (a grid that dedicates Up / Down to its rows) */
+  onKey?(ev: KeyboardEvent, el: HTMLSelectElement): void;
 }
 
-export function Select({ options, value, onChange, id, className, title, style, disabled, label, blurOnPick, data }: SelectProps) {
+export function Select({ options, value, onChange, id, className, title, style, disabled, label, blurOnPick, data, onKey }: SelectProps) {
   const ref = useRef<HTMLSelectElement | null>(null);
   const cb = useRef(onChange); cb.current = onChange;
+  const kb = useRef(onKey); kb.current = onKey;
   const want = useRef(value); want.current = value;
   // the options are children; set the value once they are in place, and again whenever either changes
   useLayoutEffect(() => { const el = ref.current; if (el && el.value !== value) el.value = value; });
@@ -33,6 +36,12 @@ export function Select({ options, value, onChange, id, className, title, style, 
     const on = (): void => { const v = el.value; if (blurOnPick) el.blur(); if (cb.current) cb.current(v, el); setTimeout(() => { if (ref.current && ref.current.value !== want.current) ref.current.value = want.current; }, 0); };
     el.addEventListener("change", on); return () => el.removeEventListener("change", on);
   }, [blurOnPick]);
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    // capture on the host: the key is seen before the shadow button's own handling; an open list keeps its keys
+    const key = (ev: KeyboardEvent): void => { if (kb.current && !el.hasAttribute("data-popup-open")) kb.current(ev, el); };
+    el.addEventListener("keydown", key, true); return () => el.removeEventListener("keydown", key, true);
+  }, []);
   const attrs: Record<string, unknown> = { ref, id, class: className, title, style, "aria-label": label };
   if (data) for (const [k, v] of Object.entries(data)) attrs["data-" + k] = v;
   const opt = (o: SelectOption | string, i: number) => {
