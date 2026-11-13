@@ -6,7 +6,6 @@ import type { ThemeMode } from "../theme";
 import { $ } from "./dom";
 import { filters } from "./selection";
 import { E } from "./state";
-import { syncErcToggles } from "./ercview";
 import { renderModuleTools } from "./tools";
 import { UNITS, setRadio } from "./util";
 import { isSch, requestRender } from "./view";
@@ -70,7 +69,7 @@ export function setupEditorChrome() {
   setToggles({ toggleGrid: E.gridOn, togglePolarCoords: E.polarCoords, toggleHiddenPins: !!E.renderOpts.showHiddenPins, highContrastMode: !!E.renderOpts.highContrast,
     padDisplayMode: !!E.renderOpts.outlinePads, viaDisplayMode: !!E.renderOpts.outlineVias, trackDisplayMode: !!E.renderOpts.outlineTracks,
     zoneDisplayFilled: !E.renderOpts.zoneOutline, zoneDisplayOutline: !!E.renderOpts.zoneOutline });
-  syncSchModes(); syncErcToggles();
+  syncSchModes();
   store.slice("viewport", { units: E.units, lastImperial: E.lastImperial || "mil", selMode: E.selMode, crosshair: E.crosshairMode, polar: E.polarCoords, renderOpts: Object.assign({}, E.renderOpts), gridPitch: E.gridPitch, zoom: E.zoom, cursor: [0, 0], origin: E.localOrigin.slice() });
   store.slice("tool", { current: E.tool });
 }
