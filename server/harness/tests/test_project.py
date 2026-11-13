@@ -162,12 +162,17 @@ class Blinker(unittest.TestCase):
         board.sync()
         board.flush()
         self.assertGreater(len(board.parts()), 0)
+        self.assertEqual(board.sync()["added"], 0)       # nothing to bring over is a result, not an error
+        sch.page("A2")
         self.assertEqual(board.clear(), len(built and sch.parts()))
         self.assertEqual(board.parts(), [])
         self.assertEqual(board._call("get_items", kinds=["gr_rect", "gr_line", "gr_poly"])["count"] > 0, True)   # the outline stays
         self.assertGreater(sch.clear(), 0)
         self.assertEqual(sch.parts(), [])
         self.assertIsNone(sch.layout(limit=1).get("extent"))
+        again = self._sheet()[1]                          # a cleared sheet is built on the smallest page again
+        self.assertEqual(again["page"], built["page"])
+        self.assertEqual(again["overlaps"], 0)
 
     def test_the_layout_check_finds_what_is_drawn_over_something_else(self):
         sch, built = self._sheet()

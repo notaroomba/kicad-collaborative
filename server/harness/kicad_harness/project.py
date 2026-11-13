@@ -929,7 +929,8 @@ class Schematic(_Doc):
         # ---- 4. the smallest page they fit on, packed in rows in the order given
         used = before.get("extent")
         top = (used[3] + 7.62) if used else None
-        papers = [p for p in _PAPERS if p[1] >= (before.get("page") or [297, 210])[0] - 1] or [_PAPERS[-1]]
+        # a sheet that was empty takes the smallest page the design fits on; one with drawing on it never shrinks
+        papers = ([p for p in _PAPERS if p[1] >= (before.get("page") or [297, 210])[0] - 1] if used else list(_PAPERS)) or [_PAPERS[-1]]
         spots, paper = None, papers[-1]
         orders = [blocks, sorted(blocks, key=lambda b: -b["h"]), sorted(blocks, key=lambda b: -b["w"] * b["h"]), sorted(blocks, key=lambda b: -b["w"])]
         rng = random.Random(1)      # then a fixed set of other orders: packing is cheap, a page size too large is half an empty sheet
@@ -1131,8 +1132,15 @@ class Board(_Doc):
         for d in self.project._open.values():
             if d is not self:
                 d.flush()
+        self.flush()
         self._edit(e)
-        res = self.flush() or {}
+        try:
+            res = self.flush() or {}
+        except HarnessError as err:
+            if "already matches the schematic" not in str(err):
+                raise
+            extra = re.search(r"not in the schematic: (.*)$", str(err))      # nothing to do is a result, not a failure
+            return {"added": 0, "updated": 0, "nets": None, "problems": [], "not_in_schematic": [x.strip() for x in extra.group(1).split(",")] if extra else []}
         d = next((x["update_from_schematic"] for x in res.get("details") or [] if "update_from_schematic" in x), {})
         out = {"added": len(d.get("added", [])), "updated": len(d.get("updated", [])), "nets": d.get("nets"), "problems": d.get("problems") or [], "not_in_schematic": d.get("not_in_schematic") or []}
         self.project.note(f"board: synced from the schematic, {out['added']} added, {out['updated']} updated" + (f", problems: {'; '.join(out['problems'][:5])}" if out["problems"] else ""))
