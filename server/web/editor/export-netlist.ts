@@ -40,16 +40,23 @@ export async function projectSpiceNetlist(options: number, report: (m: string, s
   const sch = CollabTools.sch as (SchToolModule & SchInternals) | undefined, hp = sch && sch._;
   if (!hp) { report("The schematic tools are not loaded.", "error"); return null; }
   const insts = res.netlist.instances || [];
-  let sheets = insts.map((i) => ({ index: i.index, uuidPath: i.uuidPath, doc: (res.files.get(i.file) || { doc: null }).doc as KDoc })).filter((s) => s.doc);
+  // each instance with the sheet symbol that places it (its exclude-from-simulation and fields) and its parent's version
+  const docOf = (f: string): KDoc | null => { const x = res.files.get(f); return x ? (x.doc as KDoc) : null; };
+  const placed = new Map(NK.nlSheets(insts, docOf).map((s) => [s.uuidPath.join("/"), s]));
+  const parentDoc = (u: string[]): KDoc | null => { const p = insts.find((i) => i.uuidPath.length === u.length - 1 && i.uuidPath.every((x, k) => u[k] === x)); return p ? docOf(p.file) : null; };
+  let sheets = insts.map((i) => { const pl = placed.get(i.uuidPath.join("/")), pd = parentDoc(i.uuidPath);
+    return { index: i.index, uuidPath: i.uuidPath, doc: docOf(i.file) as KDoc, sheetNode: pl ? pl.sheetNode : null, parentVersion: pd ? pd.version : undefined }; }).filter((s) => s.doc);
   if (options & SP.OPTION_CUR_SHEET_AS_ROOT) {
     const cur = projectDocs().find((d) => d.docId === state.docId) || null;
     const here = insts.find((i) => cur && i.file === cur.path);
     if (here) sheets = sheets.filter((s) => here.uuidPath.every((u, k) => s.uuidPath[k] === u));
   }
   const variant = currentVariant();
-  if (variant) SP.setVariantView((n, v, path) => symbolViewForVariant(n, v, path));
+  if (variant) SP.setVariantView((n, v, path, ver) => symbolViewForVariant(n, v, path, ver));
+  let textVars: Record<string, string> = {};
+  try { const pro = E.proSettings ? JSON.parse(E.proSettings as string) as Record<string, unknown> : {}; textVars = (pro.text_variables as Record<string, string>) || {}; } catch (e) { textVars = {}; }
   const { symbols, texts, ports } = SP.readHierarchy({ sheets, netMap: res.netlist.netMap || new Map(), symbolPins: hp.symbolPins,
-    isPower: (d, it) => hp.isPowerSymbol(d, String(((KiCadCanvas.kid(it.node, "lib_id") as SNode | null) || [])[1])), variant: variant || undefined });
+    isPower: (d, it) => hp.isPowerSymbol(d, String(((KiCadCanvas.kid(it.node, "lib_id") as SNode | null) || [])[1])), variant: variant || undefined, textVars });
   // every Sim.Library the symbols name, read before the (synchronous) exporter runs
   const files = projectModelFiles(projectDocs()), libs = new Map<string, S.SpiceLibrary | null>();
   const norm = (s: string): string => s.replace(/\\/g, "/").replace(/^\$\{KIPRJMOD\}\//, "").replace(/^\.\//, "");

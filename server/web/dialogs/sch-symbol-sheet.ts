@@ -91,7 +91,7 @@ const currentVariantName = (): string => String((E as { currentVariant?: string 
 export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts = {}): void {
   const variant = currentVariantName(), vpath = variant ? sheetPathNow(ctx.doc).path : null;
   // TransferDataToWindow: the fields show GetFieldText( name, sheet, variant ), the attributes the variant's flags
-  const doc = ctx.doc, ro = !!ctx.viewOnly, staged = L.clone(variant ? VM.symbolViewForVariant(item.node, variant, vpath) : item.node), [ax, ay, rot] = L.atOf(staged), origin: [number, number] = [ax, ay];
+  const doc = ctx.doc, ro = !!ctx.viewOnly, staged = L.clone(variant ? VM.symbolViewForVariant(item.node, variant, vpath, ctx.doc.version) : item.node), [ax, ay, rot] = L.atOf(staged), origin: [number, number] = [ax, ay];
   const libIdN = L.kid(staged, "lib_id"), libId = libIdN ? L.str(libIdN[1]) : "", libNameN = L.kid(staged, "lib_name"), libName = libNameN ? L.str(libNameN[1]) : libId;
   const lib = (KiCadCanvas.resolveLib(doc, libName) || KiCadCanvas.resolveLib(doc, libId)) as SNode | null;
   const ownLib = (doc.lib.get(libName) || doc.lib.get(libId) || null) as SNode | null;   // the (lib_symbols) entry itself (not merged with a parent)
@@ -207,7 +207,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
       setFlag(n, "dnp", (els.dnp as HTMLInputElement).checked);
       P.setPassthrough(n, els.passthrough.value as P.Passthrough);
       if (nBodies < 2) for (const p of pinRows) if ((alt0.get(p.number) || "") !== p.alt) L.setPinAlternate(n, p.number, p.alt);
-      let out = variant ? writeSymbolVariant(n, item.node, variant, here.path) : n;
+      let out = variant ? writeSymbolVariant(n, item.node, variant, here.path, doc.version) : n;
       if (moved) L.drop(out, "fields_autoplaced");
       else if (L.yes(out, "fields_autoplaced")) { const H = SH(); const a = H && H.autoplaceNode(doc, Object.assign({}, item, { node: out }) as KItem); if (a) out = a; }
       // the library copy: the pin maps go onto the shared entry (SyncLibSymbolPinMaps: every symbol using it); pin

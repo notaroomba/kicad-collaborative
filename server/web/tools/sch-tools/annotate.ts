@@ -139,11 +139,15 @@ export function toggleSymbolFlag(ctx: SchCtx, which: string) {
   // with a current variant (the toolbar's) the symbol's instance variant takes the flag (SCH_EDIT_TOOL::SetAttribute
   // per variant); the variant is created from the symbol's own flags and dropped once it differs in nothing
   const variant = String((root.CollabEditor && (root.CollabEditor as { currentVariant?: string }).currentVariant) || "");
+  // the instance on screen (GetCurrentSheet()); a rule area keeps its own flags whatever the variant
+  // (SCH_RULE_AREA::SetDNP … ignore the instance and the variant), and so does a sheet's Exclude from Board
+  // (SCH_SHEET::SetExcludedFromBoard; a sheet variant has no board flag)
+  const ed = root.CollabEditor as { currentSheetPathOf?: () => string | null } | undefined;
+  const path = variant && ed && ed.currentSheetPathOf ? ed.currentSheetPathOf() : null, ver = ctx.doc.version;
   const vf = VARIANT_FLAG[key];
-  const isOn = variant && vf ? (n: SNode) => VM.symbolFlagsForVariant(n, variant)[vf]
-    : (n: SNode) => { const k = kid(n, key); return !!k && str(k[1]) === onVal; };
-  const set = variant && vf ? (n: SNode, on: boolean) => VM.setSymbolVariant(n, variant, { flags: { [vf]: on } })
-    : (n: SNode, on: boolean) => withFlag(n, key, on ? onVal : offVal);
+  const viaVariant = (n: SNode): boolean => !!variant && !!vf && (n[0] === "symbol" || (n[0] === "sheet" && key !== "on_board"));
+  const isOn = (n: SNode): boolean => { if (viaVariant(n)) return VM.symbolFlagsForVariant(n, variant, path, ver)[vf]; const k = kid(n, key); return !!k && str(k[1]) === onVal; };
+  const set = (n: SNode, on: boolean): SNode => (viaVariant(n) ? VM.setSymbolVariant(n, variant, { flags: { [vf]: on } }, path, ver) : withFlag(n, key, on ? onVal : offVal));
   const hook = root.CollabEditor && root.CollabEditor.toggleAttribute;
   if (hook) return hook(ctx, items, isOn, set);
   let on = false; for (const it of items) if (!isOn(it.node)) { on = true; break; }

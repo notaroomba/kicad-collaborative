@@ -161,14 +161,15 @@ function symbolProps(it: KItem, doc: KDoc): PropDef[] {
   const variant = String(E.currentVariant || "");
   if (variant) {
     const inst = currentInstance(), path = inst && inst.uuidPath.length ? "/" + inst.uuidPath.join("/") : null;
-    const view = (x: KItem): SNode => VM.symbolViewForVariant(x.node, variant, path);
-    const put = (n: SNode, patch: VM.SymVariantPatch): void => { const c = VM.setSymbolVariant(n, variant, patch, path); n.length = 0; n.push(...c); };
+    const ver = (doc as KDoc).version;
+    const view = (x: KItem): SNode => VM.symbolViewForVariant(x.node, variant, path, ver);
+    const put = (n: SNode, patch: VM.SymVariantPatch): void => { const c = VM.setSymbolVariant(n, variant, patch, path, ver); n.length = 0; n.push(...c); };
     for (const d of fieldDefs) {
       const name = d.name;
       out.push(name === "Reference" ? d : { ...d, get: (x) => { const f = H().fieldList(view(x)).find((q) => H().str(q[1]) === name); return f ? H().str(f[2]) : null; }, set: (n, v) => { put(n, { fields: { [name]: String(v) } }); } });
     }
     out.push({ group: "Fields", name: "Library Link", type: "text", get: (x) => h.str((h.kid(x.node, "lib_id") || [])[1]) });
-    const vflag = (name: string, f: keyof VM.SymFlags): PropDef => ({ group: "Attributes", name, type: "bool", get: (x) => VM.symbolFlagsForVariant(x.node, variant, path)[f], set: (n, v) => { put(n, { flags: { [f]: !!v } }); } });
+    const vflag = (name: string, f: keyof VM.SymFlags): PropDef => ({ group: "Attributes", name, type: "bool", get: (x) => VM.symbolFlagsForVariant(x.node, variant, path, ver)[f], set: (n, v) => { put(n, { flags: { [f]: !!v } }); } });
     out.push(vflag("Exclude From Simulation", "excludedFromSim"), vflag("Exclude From Bill of Materials", "excludedFromBOM"), vflag("Exclude From Board", "excludedFromBoard"),
       vflag("Exclude From Position Files", "excludedFromPosFiles"), vflag("Do not Populate", "dnp"));
     return out;

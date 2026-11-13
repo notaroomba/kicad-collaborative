@@ -180,13 +180,13 @@ function defaultPinNet(p: PinRef, forceNoConnect: boolean): string {
 const lowerCmp = (a: string, b: string): number => { const x = a.toLowerCase(), y = b.toLowerCase(); return x < y ? -1 : x > y ? 1 : 0; };
 /** NETLIST_EXPORTER_KICAD's per-component (variants …) as KICAD_NETLIST_PARSER reads them back: for each variant
  *  of the symbol's instance, the flags whose value differs from the symbol's and the fields whose text differs. */
-export function componentVariants(sym: SNode, path: string, ref: string): NetVariant[] {
+export function componentVariants(sym: SNode, path: string, ref: string, ver?: number | null): NetVariant[] {
   const inst = symbolInstance(sym, path); if (!inst || str(inst[1]) !== path) return [];
   const base = symbolFlags(sym), out: NetVariant[] = [];
   const fieldText = (k: string): string => { if (k === "Reference") return ref; const p = (kids(sym, "property") as SNode[]).find((q) => str(q[1]) === k); return p ? str(p[2]) : ""; };
   for (const v of kids(inst, "variant") as SNode[]) {
     const name = str(((kid(v, "name") as SNode | null) || [])[1]); if (!name || out.some((o) => o.name.toLowerCase() === name.toLowerCase())) continue;
-    const eff = symbolFlagsForVariant(sym, name, path), st = symbolVariant(sym, name, path);
+    const eff = symbolFlagsForVariant(sym, name, path, ver), st = symbolVariant(sym, name, path, ver);
     const nv: NetVariant = { name, fields: new Map() };
     if (eff.dnp !== base.dnp) nv.dnp = eff.dnp;
     if (eff.excludedFromBOM !== base.excludedFromBOM) nv.excludedFromBOM = eff.excludedFromBOM;
@@ -316,7 +316,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
             for (const p of kids(n, "property") as SNode[]) { const name = str(p[1]); if (name !== "Reference" && name !== "Value" && name !== "Footprint") fields[name] = str(p[2]); }
             comp = { ref, value, footprint: propVal(n, "Footprint"), libId: kidStr(n, "lib_id"), paths: [path], fields, sheetName: inst.human, sheetFile: inst.sheet.file.split("/").pop() || inst.sheet.file,
               dnp: yes(n, "dnp", false), excludeFromBom: !yes(n, "in_bom", true), excludeFromBoard: false, pins: new Map() };
-            const variants = componentVariants(n, "/" + inst.uuidPath.join("/"), ref); if (variants.length) comp.variants = variants;
+            const variants = componentVariants(n, "/" + inst.uuidPath.join("/"), ref, (doc as KDoc).version); if (variants.length) comp.variants = variants;
             components.set(ref, comp); compPins.set(ref, []);
           } else { if (unit === 1) comp.paths.unshift(path); else comp.paths.push(path); if (!comp.footprint) comp.footprint = propVal(n, "Footprint"); }
         }

@@ -53,7 +53,8 @@ export function setFootprintSide(node: SNode, side: string, leftRight?: boolean)
   return true;
 }
 const ATTR_TYPES = ["smd", "through_hole"];
-const ATTR_FLAGS = ["board_only", "exclude_from_pos_files", "exclude_from_bom", "dnp", "allow_missing_courtyard", "allow_soldermask_bridges"] as const;
+// the writer's order (pcb_io_kicad_sexpr.cpp:1924-1951)
+const ATTR_FLAGS = ["board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "allow_missing_courtyard", "dnp", "allow_soldermask_bridges"] as const;
 /** The (attr …) tokens of a footprint: its type, the flags we know and the tokens we don't. */
 export type FootprintAttrs = { type: string; other?: string[] } & { [F in (typeof ATTR_FLAGS)[number]]?: boolean };
 export function footprintAttrs(node: SNode): FootprintAttrs {

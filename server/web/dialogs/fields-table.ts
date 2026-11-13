@@ -8,8 +8,19 @@ import { KD, checkbox, download, h, promptText, select, textInput, type GridApi,
 import { ATTR_FIELDS, BOM_FMT_PRESETS, BOM_PRESETS, ITEM_NO, QTY, bomExport, bomRows, fieldNames, str, symbolRows, withAllFields, type BomField, type BomFmt, type BomPreset, type BomRow, type SymRow } from "./logic";
 import { loadProject, obj, projectDocs, projectName, readDoc, saveProject, sub, submitDocOp, type Json, type JsonObj } from "./project";
 import { variantDocView, variantEditNode } from "./variant-edits";
-import { setCurrentVariant, variantNamesForUI } from "../editor/variant";
-import { addVariant, copyVariant, editVariantDescription, removeVariant, renameVariant } from "../editor/variant-ops";
+import { currentSheetPath, setCurrentVariant, variantNamesForUI } from "../editor/variant";
+import { addVariant, fieldsTableCopyVariant, fieldsTableDeleteVariant, fieldsTableEditVariantDescription, fieldsTableRenameVariant } from "../editor/variant-ops";
+
+// KiCad's small_plus / small_edit / copy / text / small_trash bitmaps (DIALOG_FIELDS_TABLE's variant buttons), drawn
+// in the button's text colour
+const vIcon = (inner: string): SVGSVGElement => { const t = document.createElement("template"); t.innerHTML = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`; return t.content.firstChild as SVGSVGElement; };
+const V_ICONS: Record<string, string> = {
+  plus: '<path d="M8 2v12M14 8H2" stroke-width="2"/>',
+  edit: '<path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="9" rx="1"/><path d="M3.5 10.5h-1v-9h8v1"/>',
+  text: '<path d="M3 3.5h10M8 3.5V14M6 14h4" stroke-width="1.8"/>',
+  trash: '<path d="M4 13.2L3.5 5.5h9l-.5 7.7c-.05.7-.6 1.3-1.3 1.3H5.3c-.7 0-1.2-.6-1.3-1.3z" fill="currentColor" stroke-width="1"/><path d="M13.6 2h-3.2l-.25-.65A.65.65 0 009.6 1H6.5a.65.65 0 00-.58.35L5.67 2H2.43A.43.43 0 002 2.43v1.14c0 .24.2.43.43.43h11.2c.24 0 .43-.19.43-.43V2.43A.43.43 0 0013.6 2z" fill="currentColor" stroke="none"/>',
+};
 
 interface Member { docId: string; id: string }
 interface Row extends SymRow { members: Member[] }
@@ -59,12 +70,15 @@ export function openFieldsTable(exportTab = false): void {
   let fieldGrid: GridApi<BomField> | null = null, grid: GridApi<GRow> | null = null, gridHost: HTMLElement | null = null, previewEl: HTMLTextAreaElement | null = null, presetSel: HTMLSelectElement | null = null, fmtSel: HTMLSelectElement | null = null, countEl: HTMLElement | null = null;
   const fmtInputs: Record<string, HTMLInputElement> = {}; let syncBar: () => void = () => {};
 
+  // the open sheet's symbols read and write the instance on screen (GetCurrentSheet()); another sheet's, its first
+  const herePath = currentSheetPath();
+  const pathOf = (docId: string): string | null => (docId === here ? herePath : null);
   const buildRows = () => {
     const use = scope === "Current Sheet Only" || scope === "Selection" ? new Set([here]) : scope === "Current Sheet and Down" ? sheetAndDown(docs, here) : new Set(docs.keys());
     const byRef = new Map<string, Row>(), out: Row[] = [];
     for (const [docId, d] of docs) {
       if (!use.has(docId)) continue;
-      for (const r of symbolRows(variantDocView(d, variant), docId, !ro)) {
+      for (const r of symbolRows(variantDocView(d, variant, pathOf(docId)), docId, !ro)) {
         if (scope === "Selection" && !r.ids.some((id) => selection.has(id))) continue;
         const prev = r.ref && !/\?$/.test(r.ref) ? byRef.get(r.ref) : undefined; const members = r.ids.map((id) => ({ docId, id }));
         if (prev) { prev.members.push(...members); continue; }
@@ -125,7 +139,7 @@ export function openFieldsTable(exportTab = false): void {
       for (const x of variantEdits.get(docId) || []) {
         const it = d.items.get(x.id); if (!it) continue;
         const prior = ch.get(x.id); const node = (prior && prior.sexpr ? KiCadCanvas.parse(prior.sexpr) : cloneNode(it.node)) as SNode;
-        const nn = variantEditNode(node, x.variant, x.values, x.flags);
+        const nn = variantEditNode(node, x.variant, x.values, x.flags, pathOf(docId), d.version);
         if (nn) ch.set(x.id, KiCadCanvas.replaceChange(d, Object.assign({}, it, { node: nn, geom: [], bbox: null })));
       }
       for (const x of list) {
@@ -182,11 +196,29 @@ export function openFieldsTable(exportTab = false): void {
       const vlist = h("select", { id: "kd-sft-variants", size: 5, style: "width:100%;margin-top:3px" }) as HTMLSelectElement;
       const fillVariants = () => { const names = variantNamesForUI(); vlist.replaceChildren(...names.map((n, i) => h("option", { value: i === 0 ? "" : n }, n))); vlist.value = variant; if (vlist.selectedIndex < 0) vlist.selectedIndex = 0; };
       vlist.addEventListener("change", () => { variant = vlist.value; setCurrentVariant(variant); refreshAll(); });
-      const vbtn = (txt: string, title: string, id: string, fn: () => unknown) => h("button", { class: "btn sm", type: "button", title, id, disabled: ro, onclick: () => { void Promise.resolve(fn()).then(() => setTimeout(() => { variant = String((E as { currentVariant?: string }).currentVariant || ""); fillVariants(); refreshAll(); }, 300)); } }, txt);
+      // the buttons act on the list's selection (DIALOG_SYMBOL_FIELDS_TABLE::onRenameVariant …); copy, rename,
+      // describe and delete are disabled on the default (updateVariantButtonStates)
+      const btns: HTMLButtonElement[] = [];
+      const afterCmd = (sel: string | null) => setTimeout(() => {
+        variant = String((E as { currentVariant?: string }).currentVariant || ""); fillVariants();
+        if (sel !== null) { const i = variantNamesForUI().indexOf(sel); if (i >= 0) vlist.selectedIndex = i; }
+        updateBtns(); refreshAll(); }, 300);
+      const vbtn = (icon: string, title: string, id: string, fn: (names: string[], index: number) => Promise<string | null> | void, needsVariant: boolean) => {
+        const b = h("button", { class: "btn sm", type: "button", title, id, disabled: ro, "data-needs-variant": needsVariant ? "1" : "",
+          onclick: () => { const names = variantNamesForUI(); const r = fn(names, vlist.selectedIndex); if (r) void r.then((sel) => afterCmd(sel)); } }, vIcon(V_ICONS[icon])) as HTMLButtonElement;
+        btns.push(b); return b;
+      };
+      const updateBtns = () => { for (const b of btns) if (b.dataset.needsVariant) b.disabled = ro || vlist.selectedIndex <= 0; };
+      vlist.addEventListener("change", updateBtns);
       left.append(h("div", { style: "margin-top:10px" }, h("label", { style: "color:var(--ink-2)" }, "Schematic variants:"), vlist,
-        h("div", { class: "kd-row", style: "gap:4px;margin-top:3px" }, vbtn("+", "Add a new variant", "kd-sft-addvariant", addVariant), vbtn("✎", "Rename a variant", "kd-sft-renamevariant", renameVariant),
-          vbtn("⧉", "Copy a variant", "kd-sft-copyvariant", copyVariant), vbtn("¶", "Edit a variant's description", "kd-sft-descvariant", editVariantDescription), h("span", { style: "flex:1" }), vbtn("🗑", "Delete a variant", "kd-sft-deletevariant", removeVariant))));
-      fillVariants();
+        h("div", { class: "kd-row", style: "gap:4px;margin-top:3px" },
+          vbtn("plus", "Add a new variant", "kd-sft-addvariant", () => { addVariant((name) => afterCmd(name)); }, false),
+          vbtn("edit", "Rename the selected variant", "kd-sft-renamevariant", fieldsTableRenameVariant, true),
+          vbtn("copy", "Copy the selected variant", "kd-sft-copyvariant", fieldsTableCopyVariant, true),
+          vbtn("text", "Edit the selected variant's description", "kd-sft-descvariant", fieldsTableEditVariantDescription, true),
+          h("span", { style: "flex:1" }),
+          vbtn("trash", "Delete the selected variant", "kd-sft-deletevariant", fieldsTableDeleteVariant, true))));
+      fillVariants(); updateBtns();
 
       // ---- right: Edit / Export
       const right = h("div", { style: "flex:1;min-width:0" });

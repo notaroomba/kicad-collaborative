@@ -12,7 +12,7 @@ export const FLAG_KEYS: [string, keyof VM.SymFlags, boolean][] = [["exclude_from
  *  and the attribute flags go to the symbol instance's variant (SCH_FIELD::SetText( text, path, variant ),
  *  SetDNP( …, variant ) …); the symbol keeps its own (default) texts and flags.  `edited` is the symbol as the dialog
  *  wrote it (its fields and flags holding what the user saw), `base` the symbol before the dialog. */
-export function writeSymbolVariant(edited: SNode, base: SNode, variant: string, path: string | null): SNode {
+export function writeSymbolVariant(edited: SNode, base: SNode, variant: string, path: string | null, ver?: number | null): SNode {
   const n = L.clone(edited), fields: Record<string, string> = {};
   for (const p of L.kids(n, "property")) {
     const name = L.fieldName(p); if (name === "Reference") continue;
@@ -28,26 +28,26 @@ export function writeSymbolVariant(edited: SNode, base: SNode, variant: string, 
     const b = L.kid(base, key), i = n.findIndex((c) => Array.isArray(c) && c[0] === key);
     if (b && i > 0) n[i] = L.clone(b); else if (b) L.put(n, key, [L.str(b[1])], ["fields_autoplaced", "stroke", "uuid", "property"]); else if (i > 0) n.splice(i, 1);
   }
-  return VM.setSymbolVariant(n, variant, { flags, fields }, path);
+  return VM.setSymbolVariant(n, variant, { flags, fields }, path, ver);
 }
 
 /** The SymRow flag names as SCH_SYMBOL's variant flags. */
 const VARIANT_FLAG: Record<string, keyof VM.SymFlags> = { dnp: "dnp", excludeBom: "excludedFromBOM", excludeBoard: "excludedFromBoard", excludeSim: "excludedFromSim", excludePos: "excludedFromPosFiles" };
-/** A document whose symbols show as `variant` has them (FIELDS_EDITOR_GRID_DATA_MODEL with a current variant). */
-export function variantDocView(d: Pick<KDoc, "items">, variant: string): Pick<KDoc, "items"> {
+/** A document whose symbols show as `variant` has them on the instance `path` (null: the first) (FIELDS_EDITOR_GRID_DATA_MODEL with a current variant). */
+export function variantDocView(d: Pick<KDoc, "items"> & { version?: number }, variant: string, path: string | null = null): Pick<KDoc, "items"> {
   if (!variant) return d;
   const items = new Map<string, KItem>();
-  for (const [id, it] of d.items) items.set(id, it.kind === "symbol" ? Object.assign({}, it, { node: VM.symbolViewForVariant(it.node, variant, null) }) : it);
+  for (const [id, it] of d.items) items.set(id, it.kind === "symbol" ? Object.assign({}, it, { node: VM.symbolViewForVariant(it.node, variant, path, d.version) }) : it);
   return { items };
 }
 /** The edits of one symbol written into its instance's variant: field texts (but the Reference, which is not variant
  *  data) and flags.  Returns the new node, or null when nothing changes. */
-export function variantEditNode(node: SNode, variant: string, values: Record<string, string>, flags: Record<string, boolean>): SNode | null {
+export function variantEditNode(node: SNode, variant: string, values: Record<string, string>, flags: Record<string, boolean>, path: string | null = null, ver?: number | null): SNode | null {
   const fields: Record<string, string> = {};
   for (const [k, v] of Object.entries(values)) if (k !== "Reference" && L.kids(node, "property").some((p) => L.fieldName(p) === k)) fields[k] = v;
   const f: Partial<VM.SymFlags> = {}; for (const [k, v] of Object.entries(flags)) if (VARIANT_FLAG[k]) f[VARIANT_FLAG[k]] = v;
   if (!Object.keys(fields).length && !Object.keys(f).length) return null;
-  const out = VM.setSymbolVariant(node, variant, { fields, flags: f }, null);
+  const out = VM.setSymbolVariant(node, variant, { fields, flags: f }, path, ver);
   return JSON.stringify(out) === JSON.stringify(node) ? null : out;
 }
 

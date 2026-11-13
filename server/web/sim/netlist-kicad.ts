@@ -191,7 +191,9 @@ function sheetFlags(sheets: NlSheet[], s: NlSheet, variant = ""): SymFlags {
   // the ancestors of s: the sheets whose uuid path is a prefix
   for (const a of sheets) {
     if (!a.sheetNode || a.uuidPath.length > s.uuidPath.length || !a.uuidPath.every((u, i) => s.uuidPath[i] === u)) continue;
-    const g = variant ? symbolFlagsForVariant(a.sheetNode, variant, "/" + a.uuidPath.slice(0, -1).join("/")) : symbolFlags(a.sheetNode);
+    // the sheet symbol lives in the parent sheet's file (its version gives the variant in_bom's meaning)
+    const parent = sheets.find((p) => p.uuidPath.length === a.uuidPath.length - 1 && p.uuidPath.every((u, i) => a.uuidPath[i] === u));
+    const g = variant ? symbolFlagsForVariant(a.sheetNode, variant, "/" + a.uuidPath.slice(0, -1).join("/"), parent ? parent.doc.version : undefined) : symbolFlags(a.sheetNode);
     f.dnp = f.dnp || g.dnp; f.excludedFromSim = f.excludedFromSim || g.excludedFromSim; f.excludedFromBOM = f.excludedFromBOM || g.excludedFromBOM; f.excludedFromBoard = f.excludedFromBoard || g.excludedFromBoard;
   }
   return f;
@@ -228,7 +230,7 @@ const fieldValue = (n: N, name: string): string => { for (const p of kidsOf(n, "
 function fieldsFor(s: Sym, variant: string): Map<string, string> {
   const m = new Map<string, string>();
   for (const p of kidsOf(s.node, "property")) { const f = fieldParts(p); m.set(f.name, f.name === "Reference" ? s.ref : f.value); }
-  if (variant) { const st = symbolVariant(s.node, variant, s.path); if (st) for (const [k, v] of st.fields) if (m.has(k)) m.set(k, v); }
+  if (variant) { const st = symbolVariant(s.node, variant, s.path, s.sheet.doc.version); if (st) for (const [k, v] of st.fields) if (m.has(k)) m.set(k, v); }
   return m;
 }
 /** GetShownText: ${FIELD}, ${REFERENCE}, ${VALUE}, ${FOOTPRINT}, ${UNIT}, the sheet's fields and the project's
@@ -279,6 +281,14 @@ function rectHitsPoly(r: [number, number, number, number], poly: P[]): boolean {
   if (poly.some((v) => v[0] >= r[0] && v[0] <= r[2] && v[1] >= r[1] && v[1] <= r[3])) return true;
   for (let i = 0; i < poly.length; i++) for (let k = 0; k < 4; k++) if (segsCross(poly[i], poly[(i + 1) % poly.length], corners[k], corners[(k + 1) % 4])) return true;
   return false;
+}
+/** The rule areas whose polygon collides with the item's bounding box (SCH_RULE_AREA::RefreshContainedItemsAndDirectives
+ *  for a symbol or a sheet: the item's m_rule_areas_cache). */
+export function ruleAreasAround(doc: KDoc, item: KItem): KItem[] {
+  if (!item.bbox) return [];
+  const out: KItem[] = [];
+  for (const ra of doc.items.values()) if (ra.kind === "rule_area" && rectHitsPoly(item.bbox, polyOf(ra.node))) out.push(ra);
+  return out;
 }
 /** The "Component Class" values of the directive labels on the border of every rule area around `item`
  *  (RefreshContainedItemsAndDirectives: a label whose connection point is on the polygon's edge). */
@@ -401,13 +411,13 @@ export function kicadNetlist(inp: NlInput): string {
       for (const vn of variantNames) {
         let xv: XN | null = null;
         const put = (c: XN | null): void => { if (!c) return; if (!xv) xv = attr(xn("variant"), "name", vn); xv.kids.push(c); };
-        const ef = symbolFlagsForVariant(sym.node, vn, sym.path), es = sheetFlags(inp.sheets, sym.sheet, vn);
+        const ef = symbolFlagsForVariant(sym.node, vn, sym.path, sym.sheet.doc.version), es = sheetFlags(inp.sheets, sym.sheet, vn);
         const bin = (name: string, base: boolean, eff: boolean): void => { if (base !== eff) { const p = attr(xn("property"), "name", name); attr(p, "value", eff ? "1" : "0"); put(p); } };
         bin("dnp", f.dnp || sf.dnp, ef.dnp || es.dnp);
         bin("exclude_from_bom", f.excludedFromBOM || sf.excludedFromBOM, ef.excludedFromBOM || es.excludedFromBOM);
         bin("exclude_from_sim", f.excludedFromSim || sf.excludedFromSim, ef.excludedFromSim || es.excludedFromSim);
         bin("exclude_from_pos_files", f.excludedFromPosFiles, ef.excludedFromPosFiles);
-        const st = symbolVariant(sym.node, vn, sym.path);
+        const st = symbolVariant(sym.node, vn, sym.path, sym.sheet.doc.version);
         if (st && st.fields.size) {
           let xfs: XN | null = null;
           for (const [k, v] of st.fields) {

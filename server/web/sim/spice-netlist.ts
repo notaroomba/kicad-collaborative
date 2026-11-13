@@ -12,6 +12,7 @@
 // Net names go through ConvertToSpiceMarkup; an unconnected pin is NC-<n> (one counter for the netlist).  Model names
 // KiCad defines with a .model line are made unique with NAME_GENERATOR ("name", "name#1", …).
 import * as S from "../dialogs/sim-model-logic";
+import { ruleAreasAround } from "./netlist-kicad";
 
 export const OPTION_SAVE_ALL_VOLTAGES = 0x0040, OPTION_SAVE_ALL_CURRENTS = 0x0080, OPTION_SAVE_ALL_DISSIPATIONS = 0x0100,
   OPTION_CUR_SHEET_AS_ROOT = 0x0200, OPTION_SIM_COMMAND = 0x0400, OPTION_SAVE_ALL_EVENTS = 0x0800;
@@ -176,7 +177,13 @@ const kidsOf = (n: N | null | undefined, key: string): N[] => (n ? (n.filter((c)
 const sv = (v: unknown): string => (v === undefined || v === null ? "" : String(v));
 const yesOf = (n: N, key: string, dflt: boolean): boolean => { const k = kidOf(n, key); return k ? (k.length < 2 || /^(yes|true)$/.test(sv(k[1]))) : dflt; };
 
-export interface HierarchySheet { index: number; uuidPath: string[]; doc: KDoc }
+export interface HierarchySheet {
+  index: number; uuidPath: string[]; doc: KDoc;
+  /** the (sheet …) that instantiates this sheet, in its parent's file (null / absent for the root) */
+  sheetNode?: N | null;
+  /** the parent file's (version …): the variant in_bom meaning of the sheet symbol */
+  parentVersion?: number;
+}
 export interface HierarchyNetMember { inst: number; id: string; kind: string; pin?: string }
 export interface HierarchyInput {
   sheets: HierarchySheet[];
@@ -187,6 +194,8 @@ export interface HierarchyInput {
   project?: string;
   /** the current variant (field values and exclude-from-simulation through it) */
   variant?: string;
+  /** the project's text variables (.kicad_pro text_variables), for the fields' GetShownText */
+  textVars?: Record<string, string>;
 }
 
 /** StrNumCmp, case-insensitive (CreatePinList's pin order). */
@@ -217,7 +226,46 @@ export function readHierarchy(h: HierarchyInput): { symbols: SpiceSymbol[]; text
     for (const pr of kidsOf(kidOf(n, "instances"), "project")) for (const p of kidsOf(pr, "path")) if (sv(p[1]) === path) { const r = kidOf(p, "reference"); if (r) ref = sv(r[1]); }
     return ref;
   };
-  for (const sh of h.sheets) {
+  const viewOf = (n: N, path: string, ver?: number): N => (h.variant ? symbolViewForVariantAny(n, h.variant, path, ver) : n);
+  // BuildSheetList: a sheet path any of whose sheets is excluded from simulation (for the current variant, on the
+  // instance it is placed on) is not exported
+  const excludedSheet = (sh: HierarchySheet): boolean => h.sheets.some((a) => a.sheetNode && a.uuidPath.length <= sh.uuidPath.length && a.uuidPath.every((u, i) => sh.uuidPath[i] === u)
+    && yesOf(viewOf(a.sheetNode, "/" + a.uuidPath.slice(0, -1).join("/"), a.parentVersion), "exclude_from_sim", false));
+  const sheets = h.sheets.filter((sh) => !excludedSheet(sh));
+  // GetShownText( &sheet, FOR_NETNAME, variant ) of a field: the symbol's fields, ${REFERENCE} / ${UNIT}, the sheet's
+  // fields, the project's text variables and ${REF:FIELD} cross-references (a name nothing defines stays as written)
+  const crossRef = (ref: string, field: string, depth: number): string | undefined => {
+    for (const s2 of sheets) {
+      const p2 = "/" + s2.uuidPath.join("/");
+      for (const u of s2.doc.items.values()) {
+        if (u.kind !== "symbol" || refOf(u.node, p2) !== ref) continue;
+        return fieldShown(viewOf(u.node, p2, s2.doc.version), ref, s2, field, depth + 1);
+      }
+    }
+    return undefined;
+  };
+  const fieldShown = (node: N, ref: string, sh: HierarchySheet, field: string, depth: number): string | undefined => {
+    const up = field.toUpperCase();
+    if (up === "REFERENCE") return ref;
+    const p = kidsOf(node, "property").find((q) => sv(q[1]).toUpperCase() === up);
+    return p ? resolveText(node, ref, sh, sv(p[2]), depth) : undefined;
+  };
+  const resolveText = (node: N, ref: string, sh: HierarchySheet, text: string, depth: number): string => {
+    if (depth > 10 || text.indexOf("${") < 0) return text;
+    const tv = h.textVars || {};
+    return text.replace(/\$\{([^}]+)\}/g, (m, name: string) => {
+      const up = name.toUpperCase();
+      let v: string | undefined;
+      if (up === "UNIT") v = "";
+      const colon = name.indexOf(":");
+      if (v === undefined && colon > 0) v = crossRef(name.slice(0, colon), name.slice(colon + 1), depth);
+      if (v === undefined && colon < 0) v = fieldShown(node, ref, sh, name, depth + 1);
+      if (v === undefined && sh.sheetNode && colon < 0) { const q = kidsOf(sh.sheetNode, "property").find((x) => sv(x[1]).toUpperCase() === up); if (q) v = sv(q[2]); }
+      if (v === undefined && Object.prototype.hasOwnProperty.call(tv, name)) v = tv[name];
+      return v === undefined ? m : resolveText(node, ref, sh, v, depth + 1);
+    });
+  };
+  for (const sh of sheets) {
     const path = "/" + sh.uuidPath.join("/");
     const items = [...sh.doc.items.values()];
     for (const it of items) {
@@ -228,12 +276,14 @@ export function readHierarchy(h: HierarchyInput): { symbols: SpiceSymbol[]; text
       if (h.isPower(sh.doc, it)) continue;
       const ref = refOf(it.node, path);
       if (!ref || ref.startsWith("#") || seen.has(ref)) continue;
-      const node = h.variant ? symbolViewForVariantAny(it.node, h.variant, path) : it.node;
+      const node = viewOf(it.node, path, sh.doc.version);
+      // ResolveExcludedFromSim: the symbol's own flag, or a rule area around it excluded from simulation
       if (yesOf(node, "exclude_from_sim", false)) continue;
+      if (ruleAreasAround(sh.doc, it).some((ra) => yesOf(ra.node, "exclude_from_sim", false))) continue;
       seen.add(ref);
       // every unit of the reference on every sheet instance
       const pins: { number: string; net: string }[] = []; const have = new Set<string>();
-      for (const s2 of h.sheets) {
+      for (const s2 of sheets) {
         const p2 = "/" + s2.uuidPath.join("/");
         for (const u of s2.doc.items.values()) {
           if (u.kind !== "symbol" || refOf(u.node, p2) !== ref) continue;
@@ -241,12 +291,12 @@ export function readHierarchy(h: HierarchyInput): { symbols: SpiceSymbol[]; text
         }
       }
       pins.sort((a, b) => strNumCmpI(a.number, b.number));
-      const fields: S.FieldLike[] = kidsOf(node, "property").map((p) => ({ name: sv(p[1]), value: sv(p[1]) === "Reference" ? ref : sv(p[2]) }));
+      const fields: S.FieldLike[] = kidsOf(node, "property").map((p) => ({ name: sv(p[1]), value: sv(p[1]) === "Reference" ? ref : resolveText(node, ref, sh, sv(p[2]), 0) }));
       symbols.push({ ref, fields, pins });
     }
   }
   return { symbols, texts, ports };
 }
-let symbolViewForVariantAny: (n: N, v: string, path: string) => N = (n) => n;
+let symbolViewForVariantAny: (n: N, v: string, path: string, ver?: number) => N = (n) => n;
 /** The variant view the reader uses (canvas/variant-model symbolViewForVariant), set by the caller's bundle. */
-export function setVariantView(fn: (n: N, v: string, path: string) => N): void { symbolViewForVariantAny = fn; }
+export function setVariantView(fn: (n: N, v: string, path: string, ver?: number) => N): void { symbolViewForVariantAny = fn; }

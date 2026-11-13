@@ -14,6 +14,7 @@ import { E } from "./state";
 import { store } from "./appstore";
 import { requestRender } from "./view";
 import * as VM from "../canvas/variant-model";
+import { currentInstance } from "./schnets";
 
 export const ADD_VARIANT_ENTRY = "Add New Design Variant...";
 export const VARIANT_SEPARATOR = "---";
@@ -106,22 +107,27 @@ export function setCurrentVariant(name: string): void {
 }
 
 // ---------------------------------------------------------------- the display through the variant
-const variantCache = new Map<string, { node: SNode; variant: string; item: KItem }>();
-let lastView: { doc: KDoc; variant: string; items: Map<string, KItem>; view: KDoc } | null = null;
-const instancePathOf = (): string | null => null;   // the open sheet's instance (the first instance; the web opens sheets by file)
+const variantCache = new Map<string, { node: SNode; variant: string; path: string | null; item: KItem }>();
+let lastView: { doc: KDoc; variant: string; path: string | null; items: Map<string, KItem>; view: KDoc } | null = null;
+/** The open sheet's instance path ("/root/…/sheet"): GetCurrentSheet(), the instance whose variant data shows. */
+export function currentSheetPath(): string | null {
+  if (!E.kdoc || E.kdoc.type !== "sch") return null;
+  try { const inst = currentInstance(); return inst && inst.uuidPath.length ? "/" + inst.uuidPath.join("/") : null; } catch (e) { return null; }
+}
+(E as { currentSheetPathOf?: () => string | null }).currentSheetPathOf = currentSheetPath;
 
 /** The item as the variant shows it (the same item when the variant changes nothing). */
-function shownItem(doc: KDoc, it: KItem, variant: string): KItem {
+function shownItem(doc: KDoc, it: KItem, variant: string, path: string | null): KItem {
   if (it.kind !== "footprint" && it.kind !== "symbol") return it;
   const c = variantCache.get(it.id);
-  if (c && c.node === it.node && c.variant === variant) return c.item;
-  const node = it.kind === "footprint" ? VM.footprintViewForVariant(it.node, variant) : VM.symbolViewForVariant(it.node, variant, instancePathOf());
+  if (c && c.node === it.node && c.variant === variant && c.path === path) return c.item;
+  const node = it.kind === "footprint" ? VM.footprintViewForVariant(it.node, variant) : VM.symbolViewForVariant(it.node, variant, path, doc.version);
   let item = it;
   if (node !== it.node) {
     item = Object.assign({}, it, { node, geom: [], bbox: it.bbox }) as KItem;
     try { (KiCadCanvas.buildGeom as (d: KDoc, i: KItem) => void)(doc, item); } catch (e) { item = it; }
   }
-  variantCache.set(it.id, { node: it.node, variant, item });
+  variantCache.set(it.id, { node: it.node, variant, path, item });
   return item;
 }
 
@@ -129,13 +135,14 @@ function shownItem(doc: KDoc, it: KItem, variant: string): KItem {
  *  back while nothing changed, so the painter's layer cache holds. */
 export function variantView(doc: KDoc | null): KDoc | null {
   const v = currentVariant(); if (!doc || !v) return doc;
-  let same = !!lastView && lastView.doc === doc && lastView.variant === v && lastView.items.size === doc.items.size;
+  const path = doc.type === "sch" ? currentSheetPath() : null;
+  let same = !!lastView && lastView.doc === doc && lastView.variant === v && lastView.path === path && lastView.items.size === doc.items.size;
   const items = new Map<string, KItem>();
-  for (const [id, it] of doc.items) { const s = shownItem(doc, it, v); items.set(id, s); if (same && lastView!.items.get(id) !== s) same = false; }
+  for (const [id, it] of doc.items) { const s = shownItem(doc, it, v, path); items.set(id, s); if (same && lastView!.items.get(id) !== s) same = false; }
   if (same) return lastView!.view;
   const view = Object.create(doc) as KDoc & { items: Map<string, KItem> };
   view.items = items;
-  lastView = { doc, variant: v, items, view };
+  lastView = { doc, variant: v, path, items, view };
   return view;
 }
 

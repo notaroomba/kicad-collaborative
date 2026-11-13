@@ -37,6 +37,8 @@ interface KDoc {
   thickness?: number;
   /** set for a footprint opened in the footprint editor (canvas/footprint-doc.ts): its children are the items */
   fpEditor?: boolean;
+  /** the file's (version …) */
+  version?: number;
 }
 
 /** A collaboration op change (the item-level LWW protocol shared with the desktop). */

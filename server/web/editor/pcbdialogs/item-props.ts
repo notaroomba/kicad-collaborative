@@ -487,7 +487,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const attrs = PH().footprintAttrs(node);
     const type = selectField<string>(attrs.type, [["through_hole", "Through hole"], ["smd", "SMD"], ["", "Unspecified"]], { ro, key: "fpType" });
-    const FLAGS: [string, string][] = [["board_only", "Not in schematic"], ["dnp", "Do not populate"], ["exclude_from_bom", "Exclude from bill of materials"], ["exclude_from_pos_files", "Exclude from position files"]];
+    const FLAGS: [string, string][] = [["exclude_from_sim", "Exclude from simulation"], ["board_only", "Not in schematic"], ["dnp", "Do not populate"], ["exclude_from_bom", "Exclude from bill of materials"], ["exclude_from_pos_files", "Exclude from position files"]];
     const vflags = variant ? VM.footprintFlagsForVariant(node, variant) : null;
     const flagOf = (k: string): boolean => (vflags && k in vflags ? vflags[k as keyof VM.FpFlags] : !!attrs[k]);
     const flags = FLAGS.map(([k, l]) => ({ k, f: checkField(flagOf(k), l, { ro, key: k }) }));

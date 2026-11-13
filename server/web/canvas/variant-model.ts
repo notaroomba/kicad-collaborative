@@ -151,6 +151,16 @@ export interface SymFlags { dnp: boolean; excludedFromSim: boolean; excludedFrom
 /** [variant key, SymFlags key, inverted] in the writer's order */
 const SYM_KEYS: [string, keyof SymFlags, boolean][] = [["dnp", "dnp", false], ["exclude_from_sim", "excludedFromSim", false], ["in_bom", "excludedFromBOM", true], ["on_board", "excludedFromBoard", true], ["in_pos_files", "excludedFromPosFiles", true]];
 
+/** The first schematic file version whose variant (in_bom …) is positive (sch_file_versions.h "Variant in_bom
+ *  semantics corrected").  Older files (and the parser reading them, sch_io_kicad_sexpr_parser.cpp:3934-3939) take
+ *  a variant's in_bom value as "excluded from BOM"; the web never bumps the version, so it reads and writes the
+ *  token with the meaning the file's version gives it. */
+export const VARIANT_IN_BOM_POSITIVE_VERSION = 20260306;
+/** True when a variant's (in_bom …) is the positive "in the BOM" in a file of version `ver` (0 / unknown: current). */
+export const variantInBomPositive = (ver?: number | null): boolean => !ver || ver >= VARIANT_IN_BOM_POSITIVE_VERSION;
+/** SYM_KEYS as a variant of a file of version `ver` holds them. */
+const variantKeys = (ver?: number | null): [string, keyof SymFlags, boolean][] => (variantInBomPositive(ver) ? SYM_KEYS : SYM_KEYS.map(([k, f, inv]) => [k, f, k === "in_bom" ? false : inv] as [string, keyof SymFlags, boolean]));
+
 export function symbolFlags(sym: N): SymFlags {
   const out = {} as SymFlags;
   for (const [key, f, inv] of SYM_KEYS) { const k = kid(sym, key); out[f] = inv ? !boolOf(k, true) : boolOf(k, false); }
@@ -171,39 +181,42 @@ export function symbolInstance(sym: N, path?: string | null): N | null {
 const symVariantIn = (inst: N | null, name: string): N | null => kids(inst, "variant").find((v) => str((kid(v, "name") || [])[1]) === name) || null;
 
 export interface SymVariantState { flags: SymFlags; fields: Map<string, string> }
-export function symbolVariant(sym: N, name: string, path?: string | null): SymVariantState | null {
+export function symbolVariant(sym: N, name: string, path?: string | null, ver?: number | null): SymVariantState | null {
   if (isDefaultVariant(name)) return null;
   const v = symVariantIn(symbolInstance(sym, path), name); if (!v) return null;
   const base = symbolFlags(sym), flags = { ...base };
-  for (const [key, f, inv] of SYM_KEYS) { const k = kid(v, key); if (k) flags[f] = inv ? !boolOf(k, true) : boolOf(k, false); }
+  for (const [key, f, inv] of variantKeys(ver)) { const k = kid(v, key); if (k) flags[f] = inv ? !boolOf(k, true) : boolOf(k, false); }
   const fields = new Map<string, string>();
   for (const f of kids(v, "field")) { const nm = str((kid(f, "name") || [])[1]); if (nm) fields.set(nm, str((kid(f, "value") || [])[1])); }
   return { flags, fields };
 }
-export function symbolFlagsForVariant(sym: N, variant: string | null | undefined, path?: string | null): SymFlags {
-  const st = variant ? symbolVariant(sym, variant, path) : null; return st ? st.flags : symbolFlags(sym);
+export function symbolFlagsForVariant(sym: N, variant: string | null | undefined, path?: string | null, ver?: number | null): SymFlags {
+  const st = variant ? symbolVariant(sym, variant, path, ver) : null; return st ? st.flags : symbolFlags(sym);
 }
 
 export interface SymVariantPatch { flags?: Partial<SymFlags>; fields?: Record<string, string> }
 /** The symbol with its instance's variant `name` edited (created when missing, from the symbol's flags), written in
  *  the writer's order; a variant left with no differentials is removed.  Children the web does not edit
  *  ((symbol_override …), pin maps) are kept.  Returns a copy. */
-export function setSymbolVariant(sym: N, name: string, patch: SymVariantPatch, path?: string | null): N {
+export function setSymbolVariant(sym: N, name: string, patch: SymVariantPatch, path?: string | null, ver?: number | null): N {
   if (isDefaultVariant(name)) throw new Error("Variant name cannot be empty or default.");
   const out = clone(sym), inst = symbolInstance(out, path);
   if (!inst) return out;
-  const base = symbolFlags(out), st = symbolVariant(out, name, str(inst[1])) || { flags: { ...base }, fields: new Map<string, string>() };
+  // a sheet's variant holds dnp, exclude_from_sim and in_bom only (sch_io_kicad_sexpr.cpp:1556-1580; SCH_SHEET's
+  // board exclusion is the sheet's own whatever the variant)
+  const keys = out[0] === "sheet" ? variantKeys(ver).filter(([k]) => k !== "on_board" && k !== "in_pos_files") : variantKeys(ver);
+  const base = symbolFlags(out), st = symbolVariant(out, name, str(inst[1]), ver) || { flags: { ...base }, fields: new Map<string, string>() };
   for (const [, f] of SYM_KEYS) if (patch.flags && patch.flags[f] !== undefined) st.flags[f] = !!patch.flags[f];
   const baseField = (k: string): string => { const p = kids(out, "property").find((q) => str(q[1]) === k); return p ? str(p[2]) : ""; };
   // SCH_SYMBOL::SetFieldText( …, variant ): a text equal to the symbol's own is no override (erased)
   if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) { if (v === baseField(k) && kids(out, "property").some((q) => str(q[1]) === k)) st.fields.delete(k); else st.fields.set(k, v); }
   const old = symVariantIn(inst, name);
   const node: N = ["variant", ["name", name]];
-  for (const [key, f, inv] of SYM_KEYS) if (st.flags[f] !== base[f]) node.push([key, (inv ? !st.flags[f] : st.flags[f]) ? "yes" : "no"]);
+  for (const [key, f, inv] of keys) if (st.flags[f] !== base[f]) node.push([key, (inv ? !st.flags[f] : st.flags[f]) ? "yes" : "no"]);
   for (const k of [...st.fields.keys()].sort(cmpCode)) node.push(["field", ["name", k], ["value", st.fields.get(k) as string]]);
   if (old) for (const c of old.slice(1)) if (isList(c) && !["name", "dnp", "exclude_from_sim", "in_bom", "on_board", "in_pos_files", "field"].includes(str(c[0]))) node.push(c);
   // HasDifferentials: a flag differs, a field differs from the symbol's, or an override is held
-  const differs = node.length > 2 && (SYM_KEYS.some(([, f]) => st.flags[f] !== base[f]) || [...st.fields].some(([k, v]) => baseField(k) !== v) || node.slice(2).some((c) => isList(c) && !["field"].includes(str(c[0]))));
+  const differs = node.length > 2 && (keys.some(([, f]) => st.flags[f] !== base[f]) || [...st.fields].some(([k, v]) => baseField(k) !== v) || node.slice(2).some((c) => isList(c) && !["field"].includes(str(c[0]))));
   if (old) { if (differs) inst[inst.indexOf(old)] = node; else inst.splice(inst.indexOf(old), 1); }
   else if (differs) {
     const others = kids(inst, "variant"); const after = others.filter((v) => cmpCode(str((kid(v, "name") || [])[1]), name) < 0).pop();
@@ -214,8 +227,8 @@ export function setSymbolVariant(sym: N, name: string, patch: SymVariantPatch, p
 
 /** A copy of the symbol as the variant shows it on its instance: flags and field texts replaced.  Same node when
  *  nothing changes. */
-export function symbolViewForVariant(sym: N, variant: string | null | undefined, path?: string | null): N {
-  const st = variant ? symbolVariant(sym, variant, path) : null; if (!st) return sym;
+export function symbolViewForVariant(sym: N, variant: string | null | undefined, path?: string | null, ver?: number | null): N {
+  const st = variant ? symbolVariant(sym, variant, path, ver) : null; if (!st) return sym;
   const base = symbolFlags(sym);
   if (!SYM_KEYS.some(([, f]) => st.flags[f] !== base[f]) && ![...st.fields].some(([k, v]) => { const p = kids(sym, "property").find((q) => str(q[1]) === k); return !!p && str(p[2]) !== v; })) return sym;
   const out = clone(sym);
@@ -282,4 +295,45 @@ export function renameSymbolVariants(sym: N, from: string, to: string | null, co
     }
   }
   return changed ? out : sym;
+}
+
+const variantName = (v: N): string => str((kid(v, "name") || [])[1]);
+/** Put `node` among the instance's variants in std::map order (by name). */
+function insertVariantSorted(inst: N, node: N): void {
+  const others = kids(inst, "variant"), name = variantName(node);
+  const after = others.filter((x) => cmpCode(variantName(x), name) < 0).pop();
+  inst.splice(after ? inst.indexOf(after) + 1 : others.length ? inst.indexOf(others[0]) : inst.length, 0, node);
+}
+
+/** The symbol (or sheet) `cur` with its instances' variants named in `names` put back as `snap` holds them (matched
+ *  by instance path); every other variant, field and flag stays as `cur` has it, so a peer's edits made since the
+ *  snapshot survive an undo / redo of a variant command (VARIANT_PROXY_UNDO_ITEM swaps only the variant data).
+ *  The same node when nothing changes. */
+export function restoreSymbolVariants(cur: N, snap: N, names: string[]): N {
+  if (!names.length) return cur;
+  const want = new Set(names), out = clone(cur); let changed = false;
+  const snapInst = new Map<string, N>(); for (const p of symbolInstancePaths(snap)) snapInst.set(str(p[1]), p);
+  for (const inst of symbolInstancePaths(out)) {
+    const src = snapInst.get(str(inst[1]));
+    const wanted = src ? kids(src, "variant").filter((v) => want.has(variantName(v))) : [];
+    const have = kids(inst, "variant").filter((v) => want.has(variantName(v)));
+    if (JSON.stringify(wanted) === JSON.stringify(have)) continue;
+    changed = true;
+    for (const v of have) inst.splice(inst.indexOf(v), 1);
+    for (const v of wanted) insertVariantSorted(inst, clone(v));
+  }
+  return changed ? out : cur;
+}
+
+/** One registry entry before and after a command (undefined: absent). */
+export interface RegistryDelta { name: string; before?: string; after?: string }
+/** The entries a command changed in the registry. */
+export function registryDelta(before: Map<string, string>, after: Map<string, string>): RegistryDelta[] {
+  const out: RegistryDelta[] = [];
+  for (const k of new Set([...before.keys(), ...after.keys()])) if (before.get(k) !== after.get(k) || before.has(k) !== after.has(k)) out.push({ name: k, before: before.get(k), after: after.get(k) });
+  return out;
+}
+/** Apply the command's entries (`which` side) to the registry as it stands now; the other entries (a peer's) stay. */
+export function applyRegistryDelta(reg: Map<string, string>, delta: RegistryDelta[], which: "before" | "after"): void {
+  for (const d of delta) { const v = d[which]; if (v === undefined) reg.delete(d.name); else reg.set(d.name, v); }
 }

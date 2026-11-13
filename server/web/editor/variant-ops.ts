@@ -4,67 +4,97 @@
 //
 // The registry is the .kicad_pro's schematic.variants ([{ "description"?, "name" }], the std::map in name order
 // that SCHEMATIC_SETTINGS writes, nlohmann's sorted keys); the per-symbol data is each instance's (variant …).
-// Each command is one undo step: the open sheet's symbols are one commit, the other sheets are written alongside
-// it, and the registry is restored with them (the entry's undoOthers / redoOthers).
+// Each command is one undo step (the entry's undoOthers / redoOthers) that swaps only the variant data it touched,
+// so a peer's variants and edits made in between survive (see variantCommand).
 import { E } from "./state";
 import { state } from "./appstore";
-import { toolCtx, undoStack, pushUndoFor } from "./tools";
+import { pushUndoFor } from "./tools";
+import { applyChanges } from "./doc";
+import { sendOp } from "./net";
 import { toast } from "./util";
 import { listPick, textEntry } from "./panels/core";
 import { h, openDialog } from "./pcbdialogs/ui";
-import { loadProject, readDoc, saveProject, submitDocOp, type JsonObj } from "../dialogs/project";
+import { loadProject, onProjectChanged, readDoc, saveProject, submitDocOp, type JsonObj } from "../dialogs/project";
 import { sheetList } from "../dialogs/sch-hierarchy";
-import { ADD_VARIANT_ENTRY, VARIANT_SEPARATOR, currentVariant, refreshVariantNames, setCurrentVariant, variantNamesForUI } from "./variant";
+import { ADD_VARIANT_ENTRY, VARIANT_SEPARATOR, currentVariant, refreshVariantNames, setCurrentVariant, variantDescription, variantNamesForUI } from "./variant";
 import * as VM from "../canvas/variant-model";
+
+// a peer's Add / Rename / Remove reaches the .kicad_pro (editor/projectwatch adopts it): the combo follows
+// (UpdateVariantSelectionCtrl), and a current variant that went away falls back to the default
+onProjectChanged(() => { try { refreshVariantNames(); } catch (e) { console.warn(e); } });
 
 /** The registry helpers live with the model (pure, tested under node). */
 const registryOf = (pro: JsonObj): Map<string, string> => VM.variantRegistry(pro as Record<string, unknown>);
 const writeRegistry = (pro: JsonObj, reg: Map<string, string>): void => VM.writeVariantRegistry(pro as Record<string, unknown>, reg);
 
-/** An edit of every symbol and sheet of the hierarchy plus the registry, as one undo step labelled `label`. */
-async function variantCommand(label: string, edit: (node: SNode) => SNode, registry: (reg: Map<string, string>) => void): Promise<void> {
+/** One symbol or sheet a command changed: its node before and after (the variant data the undo swaps). */
+interface Touched { id: string; before: SNode; after: SNode }
+
+/**
+ * An edit of every symbol and sheet of the hierarchy plus the registry, as one undo step labelled `label`.
+ *
+ * KiCad's VARIANT_PROXY_UNDO_ITEM swaps the variant data only.  Here the step keeps, per sheet, each item's node
+ * before and after; an undo (redo) puts back only the instances' variants named in `names` (the ones the command
+ * touched) onto the items as they stand then, and only the registry entries the command changed onto the .kicad_pro
+ * as it stands then: a variant a peer added meanwhile, or a peer's edit of a symbol, is kept.
+ */
+async function variantCommand(label: string, edit: (node: SNode) => SNode, registry: (reg: Map<string, string>) => void, names: string[], undoable = true): Promise<void> {
   if (E.viewOnly) { toast("View-only access"); return; }
-  const ctx = toolCtx() as unknown as ToolCtx;
-  const doc = E.kdoc as KDoc;
-  // the open sheet: one commit
-  const changes: KChange[] = [];
+  const doc = E.kdoc as KDoc, hereId = String(state.docId || "");
+  // the open sheet
+  const here: Touched[] = [], changes: KChange[] = [];
   for (const it of doc.items.values()) {
     if (it.kind !== "symbol" && it.kind !== "sheet") continue;
     const n = edit(it.node); if (n === it.node) continue;
+    here.push({ id: it.id, before: it.node, after: n });
     changes.push(KiCadCanvas.replaceChange(doc, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem));
   }
-  type Hooks = { label?: string; undoOthers?: () => void; redoOthers?: () => void };
-  let entry: Hooks | null = null;
-  if (changes.length) { ctx.commit(changes, label); entry = undoStack[undoStack.length - 1] as unknown as Hooks; }
-  else { const e: Hooks & { changes: KChange[]; inverse: KChange[] } = { label, changes: [], inverse: [] }; pushUndoFor(String(state.docId || ""), e as never); entry = e; }
+  if (changes.length) { applyChanges(changes); sendOp(changes); }
   // the other sheets
-  const others: { docId: string; changes: KChange[]; inverse: KChange[] }[] = [];
+  const others: { docId: string; touched: Touched[] }[] = [];
   let sheets: Awaited<ReturnType<typeof sheetList>> = [];
   try { sheets = await sheetList(); } catch (e) { sheets = []; }
-  const seen = new Set<string>([String(state.docId || "")]);
+  const seen = new Set<string>([hereId]);
   for (const s of sheets) {
     if (seen.has(s.docId)) continue; seen.add(s.docId);
     try {
       const fresh = await readDoc(s.docId, "kicad_sch");
-      const ch: KChange[] = [], inv: KChange[] = [];
+      const ch: KChange[] = [], touched: Touched[] = [];
       for (const it of fresh.items.values()) {
         if (it.kind !== "symbol" && it.kind !== "sheet") continue;
         const n = edit(it.node); if (n === it.node) continue;
-        inv.push(KiCadCanvas.replaceChange(fresh, it)); ch.push(KiCadCanvas.replaceChange(fresh, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem));
+        touched.push({ id: it.id, before: it.node, after: n });
+        ch.push(KiCadCanvas.replaceChange(fresh, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem));
       }
-      if (ch.length) { await submitDocOp(s.docId, ch); others.push({ docId: s.docId, changes: ch, inverse: inv }); }
+      if (ch.length) { await submitDocOp(s.docId, ch); others.push({ docId: s.docId, touched }); }
     } catch (e) { toast(`Could not update '${s.path}'.`); }
   }
   // the registry
-  let before: Map<string, string> | null = null, after: Map<string, string> | null = null;
+  let delta: VM.RegistryDelta[] = [];
   try {
-    const pro = await loadProject(); before = registryOf(pro); after = new Map(before); registry(after);
-    const target = after;
-    await saveProject((p) => writeRegistry(p, target), label);
-  } catch (e) { before = after = null; }
-  const setReg = (reg: Map<string, string> | null) => { if (reg) void saveProject((p) => writeRegistry(p, reg), label).then(() => refreshVariantNames()).catch(() => toast("Could not update the project file.")); };
-  const replay = (which: "changes" | "inverse") => { for (const o of others) submitDocOp(o.docId, o[which]).catch(() => toast("Could not update a sheet.")); };
-  if (entry) Object.assign(entry, { undoOthers: () => { replay("inverse"); setReg(before); }, redoOthers: () => { replay("changes"); setReg(after); } });
+    const pro = await loadProject(); const before = registryOf(pro), after = new Map(before); registry(after);
+    delta = VM.registryDelta(before, after);
+    if (delta.length) await saveProject((p) => { const reg = registryOf(p); VM.applyRegistryDelta(reg, delta, "after"); writeRegistry(p, reg); }, label);
+  } catch (e) { delta = []; toast("Could not update the project file."); }
+  const which = (w: "before" | "after") => () => {
+    // the open sheet (the undo list is per sheet, so it is the one on screen)
+    const d = E.kdoc as KDoc | null;
+    if (d && here.length) {
+      const ch: KChange[] = [];
+      for (const t of here) { const it = d.items.get(t.id); if (!it) continue; const n = VM.restoreSymbolVariants(it.node, t[w], names); if (n !== it.node) ch.push(KiCadCanvas.replaceChange(d, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem)); }
+      if (ch.length) { applyChanges(ch); sendOp(ch); }
+    }
+    for (const o of others) {
+      void readDoc(o.docId, "kicad_sch").then((fresh) => {
+        const ch: KChange[] = [];
+        for (const t of o.touched) { const it = fresh.items.get(t.id); if (!it) continue; const n = VM.restoreSymbolVariants(it.node, t[w], names); if (n !== it.node) ch.push(KiCadCanvas.replaceChange(fresh, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem)); }
+        return ch.length ? submitDocOp(o.docId, ch) : 0;
+      }).catch(() => toast("Could not update a sheet."));
+    }
+    if (delta.length) void saveProject((p) => { const reg = registryOf(p); VM.applyRegistryDelta(reg, delta, w); writeRegistry(p, reg); }, label)
+      .then(() => refreshVariantNames()).catch(() => toast("Could not update the project file."));
+  };
+  if (undoable) pushUndoFor(hereId, { label, changes: [], inverse: [], undoOthers: which("before"), redoOthers: which("after") } as never);
   refreshVariantNames();
 }
 
@@ -92,23 +122,40 @@ function nameDescDialog(title: string, withName: boolean, desc0: string, onOk: (
 }
 
 /** ShowAddVariantDialog ("New Design Variant"), and Tools > Variants > Add Design Variant... */
-export function addVariant(): void {
+export function addVariant(done?: (name: string) => void): void {
   if (E.viewOnly) { toast("View-only access"); return; }
   nameDescDialog("New Design Variant", true, "", (name, desc) => {
     if (!validateNewVariantName(name)) return;
-    void variantCommand("Add Variant", (n) => n, (reg) => { if (!reg.has(name)) reg.set(name, ""); if (desc) reg.set(name, desc); }).then(() => { refreshVariantNames(addedName(name)); setCurrentVariant(name); });
+    void variantCommand("Add Variant", (n) => n, (reg) => { if (!reg.has(name)) reg.set(name, ""); if (desc) reg.set(name, desc); }, []).then(() => { refreshVariantNames(addedName(name)); setCurrentVariant(name); if (done) done(name); });
   });
 }
 const addedName = (name: string): string[] => [...variantNamesForUI(), name];
+
+/** Delete the variant `name` (one "Delete Variant" undo step). */
+export async function removeVariantNamed(name: string): Promise<void> {
+  const wasCurrent = currentVariant() === name;
+  await variantCommand("Delete Variant", (n) => VM.renameSymbolVariants(n, name, null), (reg) => { reg.delete(name); }, [name]);
+  if (wasCurrent) setCurrentVariant("");
+  refreshVariantNames(variantNamesForUI().filter((v) => v !== name));
+}
 
 /** Tools > Variants > Remove Design Variant... */
 export async function removeVariant(): Promise<void> {
   const choices = variantNamesForUI().slice(1);
   const name = await listPick("Remove Design Variant", "Select variant name to remove:", "", choices); if (!name) return;
-  const wasCurrent = currentVariant() === name;
-  await variantCommand("Delete Variant", (n) => VM.renameSymbolVariants(n, name, null), (reg) => { reg.delete(name); });
-  if (wasCurrent) setCurrentVariant("");
-  refreshVariantNames(variantNamesForUI().filter((v) => v !== name));
+  await removeVariantNamed(name);
+}
+
+/** The Edit Description dialog for `name`; SetVariantDescription + OnModify (not an undo step in KiCad). */
+export async function editVariantDescriptionFor(name: string): Promise<void> {
+  if (E.viewOnly) { toast("View-only access"); return; }
+  let desc0 = ""; try { desc0 = registryOf(await loadProject()).get(name) || ""; } catch (e) { desc0 = variantDescription(name); }
+  await new Promise<void>((resolve) => {
+    nameDescDialog(`Edit Description for '${name}'`, false, desc0, (_n, desc) => {
+      void saveProject((p) => { const reg = registryOf(p); reg.set(name, desc); writeRegistry(p, reg); }, "Edit Variant Description")
+        .then(() => refreshVariantNames()).catch(() => toast("Could not update the project file.")).then(() => resolve());
+    });
+  });
 }
 
 /** Tools > Variants > Edit Variant Description... */
@@ -116,10 +163,19 @@ export async function editVariantDescription(): Promise<void> {
   const choices = variantNamesForUI().slice(1);
   if (!choices.length) { toast("No design variants to edit.", 10000); return; }
   const name = await listPick("Edit Variant Description", "Select variant to edit description:", "", choices); if (!name) return;
-  let desc0 = ""; try { desc0 = registryOf(await loadProject()).get(name) || ""; } catch (e) { desc0 = ""; }
-  nameDescDialog(`Edit Description for '${name}'`, false, desc0, (_n, desc) => {
-    void variantCommand("Edit Variant Description", (n) => n, (reg) => { reg.set(name, desc); });
-  });
+  await editVariantDescriptionFor(name);
+}
+
+/** Ask for the new name of `oldName` and rename it (one "Rename Variant" undo step). */
+export async function renameVariantNamed(oldName: string): Promise<void> {
+  const typed = await textEntry("Rename Design Variant", "Enter new variant name:", oldName); if (typed === null) return;
+  const newName = trimWx(typed);
+  if (newName === oldName) return;
+  if (!validateNewVariantName(newName, oldName)) return;
+  const wasCurrent = currentVariant() === oldName;
+  await variantCommand("Rename Variant", (n) => VM.renameSymbolVariants(n, oldName, newName), (reg) => { if (reg.has(oldName)) { reg.set(newName, reg.get(oldName) || ""); reg.delete(oldName); } }, [oldName, newName]);
+  refreshVariantNames(variantNamesForUI().filter((v) => v !== oldName).concat(newName));
+  if (wasCurrent) setCurrentVariant(newName);
 }
 
 /** Tools > Variants > Rename Design Variant... */
@@ -127,14 +183,15 @@ export async function renameVariant(): Promise<void> {
   const choices = variantNamesForUI().slice(1);
   if (!choices.length) { toast("No variants to rename.", 10000); return; }
   const oldName = await listPick("Rename Design Variant", "Select variant to rename:", "", choices); if (!oldName) return;
-  const typed = await textEntry("Rename Design Variant", "Enter new variant name:", oldName); if (typed === null) return;
-  const newName = trimWx(typed);
-  if (newName === oldName) return;
-  if (!validateNewVariantName(newName, oldName)) return;
-  const wasCurrent = currentVariant() === oldName;
-  await variantCommand("Rename Variant", (n) => VM.renameSymbolVariants(n, oldName, newName), (reg) => { if (reg.has(oldName)) { reg.set(newName, reg.get(oldName) || ""); reg.delete(oldName); } });
-  refreshVariantNames(variantNamesForUI().filter((v) => v !== oldName).concat(newName));
-  if (wasCurrent) setCurrentVariant(newName);
+  await renameVariantNamed(oldName);
+}
+
+/** SCHEMATIC::CopyVariant of `src` to `newName`; `undoable` false for the Symbol Fields Table's Copy (KiCad passes no
+ *  commit there). */
+async function copyVariantTo(src: string, newName: string, undoable: boolean): Promise<void> {
+  await variantCommand("Copy Variant", (n) => VM.renameSymbolVariants(n, src, newName, true), (reg) => { if (!reg.has(newName)) reg.set(newName, ""); if (reg.has(src)) reg.set(newName, reg.get(src) || ""); }, [newName], undoable);
+  refreshVariantNames(addedName(newName));
+  setCurrentVariant(newName);
 }
 
 /** Tools > Variants > Copy Design Variant... */
@@ -145,9 +202,47 @@ export async function copyVariant(): Promise<void> {
   const typed = await textEntry("Copy Design Variant", "Enter name for the copied variant:", src + "_copy"); if (typed === null) return;
   const newName = trimWx(typed);
   if (!validateNewVariantName(newName)) return;
-  await variantCommand("Copy Variant", (n) => VM.renameSymbolVariants(n, src, newName, true), (reg) => { if (!reg.has(newName)) reg.set(newName, ""); if (reg.has(src)) reg.set(newName, reg.get(src) || ""); });
-  refreshVariantNames(addedName(newName));
-  setCurrentVariant(newName);
+  await copyVariantTo(src, newName, true);
+}
+
+// ---------------------------------------------------------------- the Symbol Fields Table's variant buttons
+// DIALOG_SYMBOL_FIELDS_TABLE::onDeleteVariant / onRenameVariant / onCopyVariant / onEditVariantDescription act on
+// the list's selection (index 0 is the default); each returns the name the list selects afterwards (null: as is).
+
+/** onDeleteVariant: the entry above the deleted one is selected (and made current). */
+export async function fieldsTableDeleteVariant(names: string[], index: number): Promise<string | null> {
+  if (index <= 0 || index >= names.length) { toast("Cannot delete the default variant.", 10000); return null; }
+  const name = names[index];
+  await variantCommand("Delete Variant", (n) => VM.renameSymbolVariants(n, name, null), (reg) => { reg.delete(name); }, [name]);
+  const sel = index - 1 > 0 ? names[index - 1] : "";
+  refreshVariantNames(variantNamesForUI().filter((v) => v !== name));
+  setCurrentVariant(sel);
+  return sel;
+}
+/** onRenameVariant. */
+export async function fieldsTableRenameVariant(names: string[], index: number): Promise<string | null> {
+  if (index <= 0 || index >= names.length) { toast("Cannot rename the default variant.", 10000); return null; }
+  const oldName = names[index];
+  await renameVariantNamed(oldName);
+  return variantNamesForUI().includes(oldName) ? oldName : null;
+}
+/** onCopyVariant (no undo step, as in KiCad). */
+export async function fieldsTableCopyVariant(names: string[], index: number): Promise<string | null> {
+  if (index <= 0 || index >= names.length) { toast("Cannot copy the default variant.", 10000); return null; }
+  const src = names[index];
+  const typed = await textEntry("Copy Design Variant", "Enter name for the copied variant:", src + "_copy"); if (typed === null) return null;
+  const newName = trimWx(typed);
+  if (!newName) { toast("Variant name cannot be empty.", 10000); return null; }
+  if (names.some((n) => n.toLowerCase() === newName.toLowerCase())) { toast(`Variant '${newName}' already exists.`, 10000); return null; }
+  if (E.viewOnly) { toast("View-only access"); return null; }
+  await copyVariantTo(src, newName, false);
+  return newName;
+}
+/** onEditVariantDescription. */
+export async function fieldsTableEditVariantDescription(names: string[], index: number): Promise<string | null> {
+  if (index <= 0 || index >= names.length) { toast("Cannot edit the default variant description.", 10000); return null; }
+  await editVariantDescriptionFor(names[index]);
+  return names[index];
 }
 
 /** onVariantSelected (both editors' toolbar combo). */
