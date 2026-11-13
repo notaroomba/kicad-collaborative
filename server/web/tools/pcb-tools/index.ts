@@ -185,6 +185,8 @@ export const pcb = {
   },
   /** Every pad picked on its own, as "footprintId#padIndex": the last one picked first. */
   selectedPadKeys() { return selectedPadKeys(); },
+  // PCB_CONTROL::InteractiveDelete brightens the item a click would remove
+  brightenedIds() { return S.modTool === "delete" && S.hover && S.hover.del && S.hover.del.id ? [S.hover.del.id] : []; },
   /** The selected pad as { item, index }, or null. */
   selectedPad(doc: BoardDoc) { const k = S.padSel; if (!k || !doc) return null; const i = k.lastIndexOf("#"); const it = doc.items.get(k.slice(0, i)); return it ? { item: it, index: +k.slice(i + 1) } : null; },
   onSelectDown(ev: PtrEvent, mm: Pt, ctx: PcbCtx) {

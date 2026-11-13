@@ -386,8 +386,10 @@ test("highlight option: the set is drawn brightened with a halo; a board dims ev
   // boards brighten the item's own colour by the highlight factor
   const pcb = K.parseDoc(PCB_HEAD + '(segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 0) (uuid "s1")) (segment (start 0 5) (end 10 5) (width 0.25) (layer "B.Cu") (net 0) (uuid "s2")))');
   ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["s1"]) });
-  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#e49a9a" && o.alpha === 1)); assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#4D7FC4" && o.alpha === 0.25));
-  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#e49a9a" && o.alpha === 0.35), "board halo");
+  // the rest is darkened toward black, opaque (m_layerColorsDark = Darkened(1 − 0.5)); pcbnew draws no halo
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === "#e49a9a" && o.alpha === 1)); assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === K.darkened("#4D7FC4", 0.5) && o.alpha === 1));
+  assert.strictEqual(K.darkened("#4D7FC4", 0.5), "#274062");
+  assert(!ctx.ops.some((o) => o.op === "stroke" && o.alpha < 1), "no translucent halo or dimming on a board");
   // highlight composes with high-contrast dimming and hidden layers
   ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["s1"]), hidden: new Set(["F.Cu"]) }); assert(!ctx.ops.some((o) => o.stroke === "#e49a9a"));
 });
@@ -397,10 +399,11 @@ test("net highlight by pad: \"footprint#pad\" brightens that pad only, the footp
   const view = fitView(pcb, 800, 600);
   const padFills = (ctx) => ctx.ops.filter((o) => o.op === "fill");
   let ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["fp#0"]) });
-  assert(padFills(ctx).some((o) => o.alpha === 1), "pad 1 brightened"); assert(padFills(ctx).some((o) => o.alpha === 0.25), "pad 2 dimmed");
-  assert(ctx.ops.some((o) => o.op === "stroke" && o.alpha === 0.25), "silk dimmed");
+  const cu = K.pcbColor("F.Cu"), silk = K.pcbColor("F.SilkS");
+  assert(padFills(ctx).some((o) => o.fill === K.highlightColor(cu, true)), "pad 1 brightened"); assert(padFills(ctx).some((o) => o.fill === K.darkened(cu, 0.5)), "pad 2 darkened");
+  assert(ctx.ops.some((o) => o.op === "stroke" && o.stroke === K.darkened(silk, 0.5)), "silk darkened");
   ctx = recCtx(800, 600); K.render(pcb, ctx, view, { highlight: new Set(["fp"]) });
-  assert(!padFills(ctx).some((o) => o.alpha === 0.25), "a whole-footprint id still brightens every pad");
+  assert(!padFills(ctx).some((o) => o.fill === K.darkened(cu, 0.5)), "a whole-footprint id still brightens every pad");
 });
 test("selected: a halo for every id in the set; polylines with a fill", () => {
   const doc = K.parseDoc(SCH_HEAD + '(wire (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "w1")) (wire (pts (xy 0 5) (xy 10 5)) (stroke (width 0) (type default)) (uuid "w2")) (wire (pts (xy 0 8) (xy 10 8)) (stroke (width 0) (type default)) (uuid "w3")) (junction (at 5 0) (diameter 0) (color 0 0 0 0) (uuid "j1")))');
@@ -1343,9 +1346,13 @@ test("layer opacity: a full F.Cu pour over inner / back tracks — zone opacity,
   // switching the active layer to B.Cu brings B.Cu above the F.Cu pour (PCB_DRAW_PANEL_GAL::SetTopLayer)
   ops = draw({ activeLayer: "B.Cu" });
   assert(idx(ops, (o) => o.op === "stroke" && o.stroke === bcu) > idx(ops, (o) => o.op === "fill" && o.fill === cu), "B.Cu over F.Cu when B.Cu is active");
-  // inactive layers: dim multiplies HC_DIM in, hide drops them
+  // inactive layers: dim mixes the colour with the background (COLOR4D::Mix, m_hiContrastFactor 0.2), hide drops them
   ops = draw({ activeLayer: "In1.Cu", highContrast: true });
-  assert(Math.abs(pour(ops).alpha - K.ZONE_OPACITY * 0.2) < 1e-6 && ops.find((o) => o.op === "stroke" && o.stroke === in1).alpha === 1, "dim: the pour fades, In1.Cu stays");
+  const cuDim = K.mixColor(cu, K.PCB_BG, 0.2);
+  assert(Math.abs(pour(ops, cuDim).alpha - K.ZONE_OPACITY) < 1e-6 && ops.find((o) => o.op === "stroke" && o.stroke === in1).alpha === 1, "dim: the pour is mixed toward the background, In1.Cu stays");
+  // Preferences ▸ Display ▸ dimming factor
+  ops = draw({ activeLayer: "In1.Cu", highContrast: true, hcDimming: 0.5 });
+  assert(pour(ops, K.mixColor(cu, K.PCB_BG, 0.5)), "the dimming factor sets the mix");
   ops = draw({ activeLayer: "In1.Cu", highContrast: true, inactiveHide: true });
   assert(!pour(ops) && !ops.some((o) => o.op === "stroke" && o.stroke === bcu) && ops.some((o) => o.op === "stroke" && o.stroke === in1), "hide: only In1.Cu is drawn");
 });

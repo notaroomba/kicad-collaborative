@@ -201,7 +201,7 @@ export type Mat = number[];
 /** The view render() draws: css px per mm at zoom 1, the zoom, the pan (css px), the mm origin and the device pixel ratio. */
 export interface View { ppm: number; zoom: number; panX: number; panY: number; x0: number; y0: number; dpr?: number }
 /** A DRC / ERC marker. */
-export interface Marker { x: number; y: number; severity?: string; text?: string; [k: string]: unknown }
+export interface Marker { x: number; y: number; severity?: string; text?: string; selected?: boolean; brightened?: boolean; [k: string]: unknown }
 /** One unrouted connection of the ratsnest (mm). */
 export interface RatsLine { net: number; name?: string; a: number[] | null; b: number[] | null }
 /** The Appearance ▸ Objects state: rows hidden, rows shown (anchors / locked shadow), per-row opacity. */
@@ -214,6 +214,12 @@ export interface RenderOpts {
   showHiddenPins?: boolean; showHiddenText?: boolean; /** eeschema's View > Show Hidden Fields (not pcbnew's hidden text) */ showHiddenFields?: boolean; zoneOutline?: boolean; padNumbers?: boolean;
   outlinePads?: boolean; outlineTracks?: boolean; outlineVias?: boolean;
   highContrast?: boolean; activeLayer?: string | null; inactiveHide?: boolean;
+  /** board: Preferences ▸ Display ▸ "dimming factor for high contrast mode" (appearance.hicontrast_dimming_factor, 0.8) */
+  hcDimming?: number;
+  /** board: items repainted brightened (EDA_ITEM::IsBrightened: Clarify Selection hover, the interactive delete tool) */
+  brightened?: Set<string> | null;
+  /** board: F.SilkS default line width (mm): the locked item shadow margin is 4× it */
+  silkLineWidth?: number;
   ids?: Set<string> | string[] | null; skip?: Set<string> | null;
   netColors?: Map<number, string> | null; netNames?: boolean; zoneFill?: boolean; flip?: boolean;
   ratsnest?: RatsLine[] | null; ratsnestNets?: Set<number> | null; markers?: Marker[] | null;

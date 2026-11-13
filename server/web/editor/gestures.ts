@@ -356,14 +356,14 @@ export function drawHover(ctx: CanvasRenderingContext2D, view: KView): void {
   const d = doc(), id = E.hoverId as string | null; if (!d || !id || !d.items.has(id)) return;
   // neither eeschema nor pcbnew has a rollover look: an item lights up only when it is selected, or while its
   // Clarify Selection row is hovered (the menu brightens the candidate it names)
-  if (!E.hoverPinned) return;
+  // a board item is repainted brightened by the document pass instead (view.ts boardBrightened)
+  if (!E.hoverPinned || !isSch()) return;
   const dpr = view.dpr || 1, s = view.ppm * view.zoom * dpr;
   const drawHalo = KiCadCanvas.drawHalo as (ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden: Set<string>, style: { color: string | ((c: string) => string); alpha: number; extraPx: number; extraMm?: number; strokesOnly?: boolean }) => void;
-  const bright = KiCadCanvas.brightened as (c: string, f: number) => string;
   ctx.save();
   try {
     KiCadCanvas.setViewTransform(ctx, view);
-    drawHalo(ctx, d, new Set([id]), s, dpr, E.hiddenLayers, isSch() ? { color: (KiCadCanvas.SCH as Record<string, string>).selection, alpha: 1, extraPx: 2, extraMm: 2 * 0.0254, strokesOnly: true } : { color: (c: string) => bright(c || "#ffffff", 0.6), alpha: 0.32, extraPx: 3 });
+    drawHalo(ctx, d, new Set([id]), s, dpr, E.hiddenLayers, { color: (KiCadCanvas.SCH as Record<string, string>).selection, alpha: 1, extraPx: 2, extraMm: 2 * 0.0254, strokesOnly: true });
   } catch (e) { console.warn(e); } finally { ctx.restore(); }
 }
 

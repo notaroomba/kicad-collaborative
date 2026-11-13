@@ -140,6 +140,9 @@ export function adoptProjectFile(text: string): void {
   if (pcb && pcb.setDesignSettings) { try { pcb.setDesignSettings(text); } catch (e) { /* module without rules */ } }
   const sizes = (KiCadCanvas as unknown as { pcbSizes?: SizesSink }).pcbSizes;
   if (sizes && sizes.state && sizes.state.load) { try { sizes.state.load(text); if (sizes.state.emit) sizes.state.emit(); } catch (e) { /* older bundle */ } }
+  // the locked item shadow margin is 4× the F.SilkS default line width (PCB_PAINTER m_lockedShadowMargin)
+  try { const j = JSON.parse(text) as { board?: { design_settings?: { defaults?: { silk_line_width?: number } } } }; const w = j.board && j.board.design_settings && j.board.design_settings.defaults && j.board.design_settings.defaults.silk_line_width;
+    (E.renderOpts as { silkLineWidth?: number }).silkLineWidth = typeof w === "number" && w > 0 ? w : undefined; } catch (e) { /* keep what we had */ }
   if (E.kdoc) { try { const j = JSON.parse(text) as { text_variables?: Record<string, string> }; (E.kdoc as { projectVars?: unknown }).projectVars = j.text_variables && Object.keys(j.text_variables).length ? j.text_variables : null; } catch (e) { /* keep what we had */ } }
   requestRender();
 }

@@ -13,7 +13,7 @@ import { adoptProjectFile, canWriteProject, saveProjectFile } from "../projectfi
 import { editProject, type Plain, type ProjectEdit } from "../../canvas/project-file";
 import { loadBoardHeader, openBoardSetup } from "./board-setup";
 
-export interface Marker { code: string; severity: string; x: number; y: number; text: string; ids: string[]; excluded?: boolean; comment?: string }
+export interface Marker { code: string; severity: string; x: number; y: number; text: string; ids: string[]; excluded?: boolean; comment?: string; selected?: boolean }
 interface Settings { severities: Record<string, string>; netclasses: Record<string, { clearance?: number }>; clearance: number; edgeClearance: number; minTrackWidth: number; minThroughDrill: number; boardSetup?: unknown }
 interface NetRow { name: string; code: number; padCount: number; viaCount: number; trackLength: number; zoneCount: number; unconnected: number }
 interface Stats { footprints: { total: number; front: number; back: number; smd: number; tht: number; other: number }; pads: { total: number; smd: number; tht: number; npth: number; connect: number };
@@ -155,6 +155,9 @@ export function openDrc(ctx: ToolCtx): void {
   const rowsOf = (): { m: Marker; row: HTMLElement }[] => { const out: { m: Marker; row: HTMLElement }[] = []; for (const l of lists.slice(0, 3)) for (const r of Array.from(l.querySelectorAll<HTMLElement>(".it[data-i]"))) out.push({ m: last.markers[Number(r.dataset.i)], row: r }); return out; };
   const select = (m: Marker, row: HTMLElement): void => {
     selected = m;
+    // DIALOG_DRC::OnDRCItemSelected selects the marker: it is drawn in LAYER_DRC_HIGHLIGHTED
+    for (const x of last.markers) if (x.selected) delete x.selected;
+    m.selected = true; show();
     for (const l of lists) for (const r of Array.from(l.querySelectorAll(".it.sel"))) r.classList.remove("sel");
     row.classList.add("sel"); row.scrollIntoView({ block: "nearest" });
     if (opts.crossprobe) ctx.setHighlight(m.ids.length ? new Set(m.ids) : null);
@@ -333,7 +336,7 @@ export function openDrc(ctx: ToolCtx): void {
       refresh();
     },
     ok() { void run(); return false; },
-    cancel() { live = null; ctx.setHighlight(null); } });
+    cancel() { live = null; ctx.setHighlight(null); let any = false; for (const x of last.markers) if (x.selected) { delete x.selected; any = true; } if (any) show(); } });
 }
 
 /** Inspect > Clear DRC Markers. */

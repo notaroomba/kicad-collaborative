@@ -186,12 +186,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
     }
   }
   drawStatusPopup(c, px * (view.dpr || 1));
-  // delete tool: what the click would remove
-  if (S.modTool === "delete" && S.hover && S.hover.del) {
-    const it = S.hover.del; c.globalAlpha = 0.9; c.strokeStyle = DEL;
-    if (it.kind === "footprint" || it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") { const b = it.bbox; if (b) { c.lineWidth = 1.5 * px; c.setLineDash([4 * px, 3 * px]); c.strokeRect(b[0] - 0.2, b[1] - 0.2, b[2] - b[0] + 0.4, b[3] - b[1] + 0.4); c.setLineDash([]); } }
-    else for (const g of it.geom) { if (it.kind === "zone" && g.fill) continue; c.lineWidth = ((g as GeomPrim).w || 0) + 3 * px; strokeGeom(c, g as GeomPrim); }
-  }
+  // delete tool: what the click would remove is brightened by the document pass (brightenedIds), as KiCad does
   // a move's magnetic snap (the anchor the cursor was pulled onto)
   if (S.move && S.move.snapAt) { c.globalAlpha = 1; c.strokeStyle = HL; c.lineWidth = 1.5 * px; ring(c, S.move.snapAt, 5 * px); }
   // cursor: the via about to be placed, and the magnetic snap marker

@@ -110,6 +110,14 @@ function schPaintState(selected: Set<string> | null): { dangling?: Set<string>; 
   if (fd && fd.moved) (out.moving || (out.moving = new Set())).add(fd.id + "#field:" + fd.name);
   return out;
 }
+/** Board items repainted brightened (EDA_ITEM::IsBrightened): the Clarify Selection row under the pointer, the delete tool's target. */
+function boardBrightened(): Set<string> | null {
+  if (isSch()) return null;
+  const out = new Set<string>();
+  if (E.hoverPinned && E.hoverId) out.add(E.hoverId as string);
+  const pcb = CollabTools.pcb; if (pcb && pcb.brightenedIds) { try { for (const id of pcb.brightenedIds()) out.add(id); } catch (e) { /* older module */ } }
+  return out.size ? out : null;
+}
 export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
@@ -124,7 +132,7 @@ export function drawCanvas() {
   if (force && E.comments && E.comments.length) drawComments();
   updateMsgPanel();
   const selected = boardSelected();
-  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected, highlight: E.highlightIds, skip: skip || undefined }, schPaintState(selected), E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
+  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected, highlight: E.highlightIds, brightened: boardBrightened(), skip: skip || undefined }, schPaintState(selected), E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off: HTMLCanvasElement = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));

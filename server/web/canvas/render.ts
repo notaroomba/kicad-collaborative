@@ -163,6 +163,27 @@ export function tracePad(ctx: PathSink, g: PadGeom): void {
 export const GRID_MIN_SPACING = 10, GRID_TICK = 10;   // "grid.min_spacing" (px), GAL::SetCoarseGrid( 10 )
 
 export const HC_DIM = 0.2, HL_DIM = 0.25, HIDDEN_TEXT_ALPHA = 0.5;
+   // HC_DIM: 1 − appearance.hicontrast_dimming_factor (0.8); HL_DIM: the schematic's dimming of items a highlight leaves out
+export const HL_FACTOR = 0.5, SELECT_FACTOR = 0.5, HC_EDGE_MIN = 0.3;
+   // RENDER_SETTINGS m_highlightFactor / m_selectFactor; PCB_RENDER_SETTINGS::GetColor's Edge_Cuts floor (dim_factor_Edge_Cuts)
+
+/** COLOR4D::Darkened(f): every channel c → c·(1−f), alpha kept */
+export const DARK_CACHE = new Map<string, string>();
+export function darkened(c: string, f: number): string {
+  const key = f + c; let v = DARK_CACHE.get(key); if (v) return v;
+  const [r, g, b, a] = parseColor(c); v = rgba(Math.round(r * (1 - f)), Math.round(g * (1 - f)), Math.round(b * (1 - f)), a);
+  if (DARK_CACHE.size < 4096) DARK_CACHE.set(key, v); return v;
+}
+/** COLOR4D::Mix: c.Mix(other, f) = other·(1−f) + c·f per channel, c's alpha kept. */
+export const MIX_CACHE = new Map<string, string>();
+export function mixColor(c: string, other: string, f: number): string {
+  const key = f + c + "|" + other; let v = MIX_CACHE.get(key); if (v) return v;
+  const [r, g, b, a] = parseColor(c), [R, G, B] = parseColor(other), m = (x: number, y: number) => Math.round(y * (1 - f) + x * f);
+  v = rgba(m(r, R), m(g, G), m(b, B), a);
+  if (MIX_CACHE.size < 4096) MIX_CACHE.set(key, v); return v;
+}
+/** An item repainted brightened (EDA_ITEM::IsBrightened): PCB_RENDER_SETTINGS::GetColor returns colour.Brightened(m_selectFactor).WithAlpha(0.8). */
+export function brightenedItemColor(c: string): string { const v = brightened(c, SELECT_FACTOR); const [r, g, b] = parseColor(v); return rgba(r, g, b, 0.8); }
 
 export const ZONE_OPACITY = 0.6;
                                         // PCB_DISPLAY_OPTIONS::m_ZoneOpacity ("board.opacity.zones")
@@ -170,6 +191,7 @@ export const RATSNEST_COLOR = "rgba(0,248,255,0.35)", RATSNEST_PX = 0.5, RATSNES
    // LAYER_RATSNEST, m_RatsnestThickness, CROSS_SIZE
 export const MARKER_CORNERS = [[0, 0], [8, 1], [4, 3], [13, 8], [9, 9], [8, 13], [3, 4], [1, 8]];
    // MARKER_BASE::MarkerShapeCorners
+export const DRC_HIGHLIGHTED = "#FF00FF";   // LAYER_DRC_HIGHLIGHTED
 export const MARKER_SCALE: { pcb: number; sch: number } = { pcb: 0.1625, sch: 0.15 };
                  // PCB_MARKER / SCH_MARKER SCALING_FACTOR (mm)
 export const MARKER_COLORS: { pcb: Record<string, string>; sch: Record<string, string> } = {
@@ -320,6 +342,12 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const layerColors = isPcb && opts.layerColors && opts.layerColors.size ? opts.layerColors : null;
   const obj = isPcb && opts.objects ? opts.objects : null, objHide = obj && obj.hide && obj.hide.size ? obj.hide : null, objAlpha = obj && obj.opacity ? obj.opacity : null;
   const hcHide = !!opts.inactiveHide;
+  // PCB_RENDER_SETTINGS::m_hiContrastFactor = 1 − hicontrast_dimming_factor: an inactive layer's colour is mixed with the
+  // background at that factor (Edge.Cuts at 0.3 at least, and still drawn in the Hide mode)
+  const hcF = typeof opts.hcDimming === "number" && opts.hcDimming >= 0 && opts.hcDimming <= 1 ? 1 - opts.hcDimming : HC_DIM;
+  const hcEdgeF = Math.max(hcF, HC_EDGE_MIN);
+  const brightIds = isPcb && opts.brightened && opts.brightened.size ? opts.brightened : null;
+  const brightGeoms = brightIds ? new Set<Geom>() : null;
   // PCB_RENDER_SETTINGS::GetColor: a zone's colour alpha times m_zoneOpacity ("board.opacity.zones", 0.6 by default);
   // the Appearance ▸ Objects ▸ Zones slider sets it outright
   const zoneA = objAlpha && typeof objAlpha.zones === "number" ? Math.max(0, Math.min(1, objAlpha.zones)) : ZONE_OPACITY;
@@ -483,7 +511,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
         if (!vis) continue;
       } else {
         if (hidden.has(g.layer) || (zoneOutline && g.zoneFill)) continue;
-        if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes") continue;   // inactive layers: Hide
+        if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes" && g.layer !== "Edge.Cuts") continue;   // inactive layers: Hide (Edge.Cuts is mixed, not hidden)
       }
       if (noSimMarks && g.simMarker) continue;
       if (busTint && busPinTint(it, g)) (schTint || (schTint = new Map())).set(g, SCH.bus);
@@ -497,6 +525,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || (g.pad && g.t !== "text"))) { const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex!]; if (tc) tint!.set(g, tc); }
       if (isHl || (padHl && (isPcb ? g.padIndex !== undefined : true) && subHl(it, g))) hlGeoms!.add(g);
       if (isSel || (padSel && g.padIndex !== undefined && selPcb!.has(padSel + g.padIndex))) selGeoms!.add(g);
+      if (brightIds && brightIds.has(it.id)) brightGeoms!.add(g);
       if (netNames && g.net! > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
@@ -534,6 +563,12 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const base = [A, 0, 0, s, E, ty]; const viewRect = [fx0, fy0, fx1, fy1];
   const dirty = () => { curStroke = curFill = null; curWidth = -1; curCap = "round"; curAlpha = -1; };
   let ratsDone = !rats, previewIdx = 0;
+  // an unfilled zone's preview takes the colour rules of the fills (net highlight darkening, high-contrast mix)
+  const previewXf = (pg: Geom): ((c: string) => string) | null => {
+    const dark = !!hl && !hlGeoms!.has(pg), lit = !!hl && hlGeoms!.has(pg), dim = !!hcLayer && pg.layer !== hcLayer && !lit && !(selGeoms && selGeoms.has(pg));
+    if (!dark && !lit && !dim) return null;
+    return (c: string) => { let v = lit ? hlColor(c) : dark ? darkened(c, 1 - HL_FACTOR) : c; if (dim) v = mixColor(v, bg || PCB_BG, hcF); return v; };
+  };
   // selection: eeschema draws a selected item's shadow (LAYER_SELECTION_SHADOWS) under it, so the strokes stay on
   // top and only a glow shows around them; pcbnew repaints the item in its selected colour instead (drawOne)
   const anchors = schSel ? fieldAnchors(doc, schSel, hidden, opts.dangling, opts.moving) : null;
@@ -542,7 +577,10 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const drawOne = (g: Geom, lifted: boolean): void => {
     let alpha = g.alpha === undefined ? 1 : g.alpha;
     if (lifted && (g.z || 0) < 0 && ((g.noStroke && g.fill) || g.noShadow)) alpha *= 0.5;
-    if (hcLayer && g.layer !== hcLayer && g.layer !== "holes" && !g.padText) alpha *= HC_DIM;
+    const gSel = !!selGeoms && selGeoms.has(g), gHl = !!hlGeoms && hlGeoms.has(g), gBright = !!brightGeoms && brightGeoms.has(g) && !g.hole;
+    // PCB_RENDER_SETTINGS::GetColor: high contrast leaves selected and net-highlighted items alone; an image cannot be mixed, its alpha drops
+    const hcDim = !!hcLayer && g.layer !== hcLayer && g.layer !== "holes" && !g.padText && !gSel && !gHl && !gBright;
+    if (hcDim && g.t === "image") alpha *= hcF;
     if (g.zoneFill) alpha *= g.teardrop ? trackA : zoneA;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity (m_trackOpacity for a teardrop)
     if (g.hiddenText && isPcb) alpha *= HIDDEN_TEXT_ALPHA;
     let color = g.color, fill = g.fill;
@@ -551,9 +589,21 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     if (netColors && g.net! > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ!.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net!); if (nc) { color = nc; if (fill) fill = nc; } }
     if (tint) { const tc = tint.get(g); if (tc && copperZ!.indexOf(g.layer) >= 0) { color = tc; if (fill) fill = tc; } }
     if (schTint) { const tc = schTint.get(g); if (tc) color = tc; }   // a label on a bus: LAYER_BUS
-    // board selection: the item repainted in its layer's selected colour (PCB_PAINTER::getColor), holes untouched
-    if (selPcb && selGeoms!.has(g) && !g.hole) { color = selectedColor(color!); if (fill) fill = selectedColor(fill); }
-    if (hl) { if (hlGeoms!.has(g)) { color = hlColor(color!); if (fill) fill = isPcb ? hlColor(fill) : highlightFill(g); } else if (isPcb) alpha *= HL_DIM; }
+    if (gBright) {
+      // a brightened item (Clarify Selection hover, the delete tool's target): Brightened(0.5) at alpha 0.8, nothing else applies
+      color = brightenedItemColor(color!); if (fill) fill = brightenedItemColor(fill); alpha = 1;
+    } else {
+      // board selection: the item repainted in its layer's selected colour (PCB_PAINTER::getColor), holes untouched
+      if (gSel && !g.hole) { color = selectedColor(color!); if (fill) fill = selectedColor(fill); }
+      if (hl) {
+        if (gHl) { color = hlColor(color!); if (fill) fill = isPcb ? hlColor(fill) : highlightFill(g); }
+        // the board darkens what the highlight leaves out toward black (m_layerColorsDark, Darkened(1 − 0.5)), opaque;
+        // a selected item keeps its selection colour; an image cannot be darkened, so it fades instead (the schematic
+        // dims nothing)
+        else if (isPcb) { if (g.t === "image") alpha *= HL_FACTOR; else if (!gSel) { color = darkened(color!, 1 - HL_FACTOR); if (fill) fill = darkened(fill, 1 - HL_FACTOR); } }
+      }
+      if (hcDim && g.t !== "image") { const f = g.layer === "Edge.Cuts" ? hcEdgeF : hcF, bgc = bg || PCB_BG; color = mixColor(color!, bgc, f); if (fill) fill = mixColor(fill, bgc, f); }
+    }
     setAlpha(alpha);
     const t = g.t;
     if (t === "text") { drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG); curStroke = curFill = null; curWidth = -1; curCap = "round"; return; }
@@ -611,22 +661,23 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   for (const z of ZS) {
     // overlay passes that sit at this depth
     if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
-    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, ((pg.teardrop ? trackA : zoneA) / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); dirty(); }
+    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY, previewXf(pg)); dirty(); }
     const arr = BUCKETS.get(z);
     if (arr) for (const g of arr) drawOne(g, false);
     const names = NAME_BUCKETS.get(z);
     if (names && names.length) {
       for (const g of names) {
-        let alpha = 1; if (hcLayer && g.layer !== hcLayer) continue;   // PCB_TRACK::ViewGetLOD: no names on dimmed tracks
-        if (hl && !hlGeoms!.has(g)) alpha *= HL_DIM;
-        setAlpha(alpha);
-        if (g.track) drawTrackName(ctx, g, doc, s, sCss, viewRect, base, flip); else drawViaName(ctx, g as ViaRingGeom, doc, s, sCss, base, flip);   // the via rings that carry the label
+        if (hcLayer && g.layer !== hcLayer) continue;   // PCB_TRACK::ViewGetLOD: no names on dimmed tracks
+        // the netname layers darken with the rest of a net highlight (GetColor's m_layerColorsDark)
+        const dark = !!hl && !hlGeoms!.has(g);
+        setAlpha(1);
+        if (g.track) drawTrackName(ctx, g, doc, s, sCss, viewRect, base, flip, dark); else drawViaName(ctx, g as ViaRingGeom, doc, s, sCss, base, flip, dark);   // the via rings that carry the label
       }
       dirty();
     }
   }
   if (!ratsDone) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); }
-  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, ((pg.teardrop ? trackA : zoneA) / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); }
+  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY, previewXf(pg)); }
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
   // the Footprint Editor's footprint sits at the origin: its anchor is the LAYER_ANCHOR cross there
@@ -636,7 +687,8 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     ctx.moveTo(-a, 0); ctx.lineTo(a, 0); ctx.moveTo(0, -a); ctx.lineTo(0, a); ctx.stroke(); ctx.restore();
   }
   // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
-  if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: isPcb ? 3 : SCH_HIGHLIGHT_THICKNESS, strokesOnly: !isPcb });   // skipped items (drawn elsewhere) get none
+  // (pcbnew draws no halo: a highlighted board item is only brightened)
+  if (hl && !isPcb) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: 0.15, extraPx: SCH_HIGHLIGHT_THICKNESS, strokesOnly: true });   // skipped items (drawn elsewhere) get none
   if (schSel) {
     // the selection VIEW_GROUP, over everything else, its layers in SCH_LAYER_ORDER: the backgrounds (bitmaps,
     // shape / symbol / sheet / note fills), then LAYER_SELECTION_SHADOWS, then the items' strokes, then their anchors
@@ -707,7 +759,7 @@ export const ANCHOR_COLOR = "#FF26E2", LOCKED_SHADOW_COLOR = "rgba(255,38,226,0.
 /** The overlay object layers: the locked-item shadow (under the anchors) and the footprint anchors — PCB_PAINTER::draw(FOOTPRINT, LAYER_ANCHOR): a 5 px cross, 1 px pen. */
 export function drawObjectOverlays(ctx: Ctx2D, doc: Doc, obj: ObjectsOpt, opts: RenderOpts, s: number, dpr: number, hidden: Set<string> | null, vr: number[]): void {
   const show = obj.show!, hide = obj.hide || new Set<string>();   // called only when obj.show is set
-  if (show.has("lockedShadow") && opts.lockedIds && opts.lockedIds.size) drawHalo(ctx, doc, opts.lockedIds, s, dpr, hidden, { color: () => "#FF26E2", alpha: 0.5, extraPx: 4 });
+  if (show.has("lockedShadow") && opts.lockedIds && opts.lockedIds.size) drawLockedShadow(ctx, doc, opts.lockedIds, opts, hidden, vr);
   if (show.has("anchors")) {
     const a = 5 * Math.max(1, dpr) / s;
     ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.strokeStyle = ANCHOR_COLOR; ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath();
@@ -720,6 +772,84 @@ export function drawObjectOverlays(ctx: Ctx2D, doc: Doc, obj: ObjectsOpt, opts: 
     }
     ctx.stroke(); ctx.restore();
   }
+}
+
+export const LOCKED_SHADOW_ALPHA = 0.5, DEFAULT_SILK_LINE_WIDTH = 0.1;
+/** PCB_PAINTER m_lockedShadowMargin: four F.SilkS default line widths (mm). */
+export function lockedShadowMargin(silkLineWidth?: number | null): number { return 4 * (silkLineWidth && silkLineWidth > 0 ? silkLineWidth : DEFAULT_SILK_LINE_WIDTH); }
+
+/** A footprint's box without its text (FOOTPRINT::GetBoundingBox( false )), from its drawn geometry. */
+export function footprintBodyBox(it: { geom: Geom[]; bbox?: Box | null }): Box | null {
+  let b: number[] | null = null;
+  for (const g of it.geom) {
+    if (g.t === "text" || g.padText) continue;
+    const bb = g._bb === undefined ? (g._bb = geomBox(g)) : g._bb; if (!bb) continue;
+    if (!b) b = [bb[0], bb[1], bb[2], bb[3]]; else { b[0] = Math.min(b[0], bb[0]); b[1] = Math.min(b[1], bb[1]); b[2] = Math.max(b[2], bb[2]); b[3] = Math.max(b[3], bb[3]); }
+  }
+  return (b as Box | null) || it.bbox || null;
+}
+
+/**
+ * LAYER_LOCKED_ITEM_SHADOW (PCB_PAINTER): in board units, margin = 4 × the silk line width.  A track is drawn
+ * margin wider, a via gets a ring of that width around it, a pad and a shape are grown by half of it, a text's
+ * glyphs are stroked margin wider, and a locked footprint fills its body box plus a margin-wide rounded border.
+ * Tracks and text on layers the high-contrast mode dims, and anything on a hidden layer, have no shadow.  The
+ * shapes are painted opaque on a scratch canvas and composited once at the layer colour's alpha (0.5), so
+ * overlapping shadows (segment joints, pads inside a footprint) read as one.
+ */
+export function drawLockedShadow(ctx: Ctx2D, doc: Doc, ids: Set<string>, opts: RenderOpts, hidden: Set<string> | null, vr: number[]): void {
+  const margin = lockedShadowMargin(opts.silkLineWidth);
+  const hc = opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
+  const m = typeof (ctx as CanvasRenderingContext2D).getTransform === "function" ? (ctx as CanvasRenderingContext2D).getTransform() : null;
+  const base: Mat | null = m ? [m.a, m.b, m.c, m.d, m.e, m.f] as unknown as Mat : null;
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const off = base && !(ctx as unknown as { __plot?: boolean }).__plot ? scratchCanvas(W, H) : null, octx = off ? off.getContext("2d") as Ctx2D | null : null;
+  const t: Ctx2D = octx || ctx;
+  t.save();
+  if (octx) { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, W, H); octx.setTransform(base![0], base![1], base![2], base![3], base![4], base![5]); octx.globalAlpha = 1; }
+  else t.globalAlpha = LOCKED_SHADOW_ALPHA;
+  const color = "#FF26E2";
+  t.fillStyle = color; t.strokeStyle = color; t.lineJoin = "round"; t.lineCap = "round"; t.setLineDash([]);
+  const fpHide = opts.objects && opts.objects.hide;
+  for (const id of ids) {
+    const it = doc.items.get(id); if (!it) continue;
+    const b = it.bbox; if (b && (b[2] < vr[0] - margin || b[0] > vr[2] + margin || b[3] < vr[1] - margin || b[1] > vr[3] + margin)) continue;
+    if (it.kind === "footprint") {
+      if (fpHide && fpHide.has(it.layer && /^B\./.test(it.layer) ? "fpBack" : "fpFront")) continue;
+      const fb = footprintBodyBox(it); if (!fb) continue;
+      // DrawRectangle + four DrawSegments of width margin: the box grown by margin / 2 with round corners
+      t.lineWidth = margin; t.beginPath(); t.rect(fb[0], fb[1], fb[2] - fb[0], fb[3] - fb[1]); t.fill(); t.stroke();
+      // its pads have their own shadow (PAD::ViewGetLayers: a pad of a locked footprint is locked)
+      for (const g of it.geom) if (g.pad && !g.hole && g.t !== "text" && !(hidden && hidden.has(g.layer))) shadowGeom(t, g, margin, base);
+      continue;
+    }
+    for (const g of it.geom) {
+      if (g.hole || (hidden && hidden.has(g.layer))) continue;
+      if (hc && g.layer !== hc && (g.track || g.t === "text")) continue;   // PCB_TRACK / PCB_TEXT::ViewGetLOD
+      shadowGeom(t, g, margin, base);
+    }
+  }
+  t.restore();
+  if (octx) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = LOCKED_SHADOW_ALPHA; ctx.drawImage(off as CanvasImageSource, 0, 0); ctx.restore(); }
+}
+
+/** One geometry's locked shadow, painted in the context's current colour. */
+function shadowGeom(t: Ctx2D, g: Geom, margin: number, base: Mat | null): void {
+  if (g.zoneFill || g.zoneUnfilled || g.t === "image") return;
+  if (g.t === "text") {
+    if (!base) return;
+    const tg = g as unknown as DrawTextG; const pen = tg.w > 0 ? tg.w : tg.size / 8;
+    t.save(); drawTextStroke(t, Object.assign({}, tg, { w: pen + margin, knockout: false }) as DrawTextG, pen + margin, t.strokeStyle as string, base, false); t.restore();
+    return;
+  }
+  if (g.via && g.t === "circle") { t.lineWidth = margin; t.beginPath(); t.arc(g.x, g.y, g.r + margin / 2, 0, Math.PI * 2); t.stroke(); return; }   // a ring around the via
+  if (g.t === "rect") { t.lineWidth = (g.wd || 0) + margin; if (g.fill) t.fillRect(g.x, g.y, g.w, g.h); t.strokeRect(g.x, g.y, g.w, g.h); return; }
+  if (g.t === "poly" && (!g.pts || g.pts.length < 2)) return;
+  const filled = !!g.fill || g.t === "pad" || (g.pad && g.t === "circle");
+  t.lineWidth = (filled && g.pad ? 0 : g.w || 0) + margin;
+  const p = pathOf(g);
+  if (filled) { if (p) t.fill(p); else { t.beginPath(); tracePath(t, g); t.fill(); } }
+  if (p) t.stroke(p); else { t.beginPath(); tracePath(t, g); t.stroke(); }
 }
 
 /** RATSNEST_VIEW_ITEM::ViewDraw: hairlines in LAYER_RATSNEST (or the net colour), a cross where both ends coincide. */
@@ -752,7 +882,8 @@ export function drawMarkers(ctx: Ctx2D, markers: (Marker | null)[], docType: str
     for (let i = 0; i < MARKER_CORNERS.length; i++) { const px = m.x + MARKER_CORNERS[i][0] * scale, py = m.y + MARKER_CORNERS[i][1] * scale; if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
     ctx.closePath();
     if (docType !== "sch") { ctx.strokeStyle = shadow; ctx.lineWidth = scale; ctx.stroke(); }
-    ctx.fillStyle = colors[m.severity as string] || colors.error; ctx.fill();
+    // a selected or brightened board marker takes LAYER_DRC_HIGHLIGHTED (PCB_RENDER_SETTINGS::GetColor)
+    ctx.fillStyle = docType !== "sch" && (m.selected || m.brightened) ? DRC_HIGHLIGHTED : colors[m.severity as string] || colors.error; ctx.fill();
   }
   ctx.restore();
 }
@@ -785,10 +916,10 @@ export function drawLabel(ctx: Ctx2D, x: number, y: number, text: string, size: 
 }
 
 /** PCB_PAINTER::renderNetNameForSegment for a track segment / arc geometry. */
-export function drawTrackName(ctx: Ctx2D, g: Geom, doc: Doc, s: number, sCss: number, vr: number[], base: Mat, flip: boolean): void {
+export function drawTrackName(ctx: Ctx2D, g: Geom, doc: Doc, s: number, sCss: number, vr: number[], base: Mat, flip: boolean, dark?: boolean): void {
   const name = displayNetName(doc.nets.get(g.net!)); if (!name) return;
   const width = g.w || 0; if (width * sCss < TRACK_NETNAME_MM * PX_PER_MM_ZOOM1) return;   // ViewGetLOD: 4 mm at zoom 1
-  const chars = name.length; const size = width * 0.55, pen = width / 12; const color = trackNameColor(g.color!);
+  const chars = name.length; const size = width * 0.55, pen = width / 12; let color = trackNameColor(g.color!); if (dark) color = darkened(color, 1 - HL_FACTOR);
   const vw = vr[2] - vr[0], vh = vr[3] - vr[1];
   if (g.t === "line") {
     const dx = g.x2 - g.x1, dy = g.y2 - g.y1; const len = Math.hypot(dx, dy); if (len < width * chars || len < 1e-9) return;
@@ -812,18 +943,19 @@ export function drawTrackName(ctx: Ctx2D, g: Geom, doc: Doc, s: number, sCss: nu
 }
 
 /** PCB_PAINTER::draw(PCB_VIA) netname layer: the net name (and the layer pair of blind / micro vias) centred on the via. */
-export function drawViaName(ctx: Ctx2D, g: ViaRingGeom, doc: Doc, s: number, sCss: number, base: Mat, flip: boolean): void {
+export function drawViaName(ctx: Ctx2D, g: ViaRingGeom, doc: Doc, s: number, sCss: number, base: Mat, flip: boolean, dark?: boolean): void {
+  const vc = dark ? darkened(VIA_NETNAME_COLOR, 1 - HL_FACTOR) : VIA_NETNAME_COLOR;
   const name = displayNetName(doc.nets.get(g.net!)); const showLayers = g.viaType && g.viaType !== "through";
   if (!name && !showLayers) return;
   if (g.viaSize * sCss < VIA_NETNAME_MM * PX_PER_MM_ZOOM1) return;   // ViewGetLOD: 10 mm at zoom 1
   const size = Math.min(g.viaSize, 10);
   let tsize = Math.min(1.5 * size / Math.max(name.length, showLayers ? 6 : 3), size) * 0.75;
   const both = showLayers && !!name; const dy = both ? tsize * 1.3 / 2 : 0;
-  if (name) drawLabel(ctx, g.x, g.y + dy, name, tsize, 0, VIA_NETNAME_COLOR, tsize / 10, base, flip);
+  if (name) drawLabel(ctx, g.x, g.y + dy, name, tsize, 0, vc, tsize / 10, base, flip);
   if (showLayers) {
     const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
     const idx = (l: string) => { const i = copper.indexOf(l); return i < 0 ? 1 : i + 1; };
-    drawLabel(ctx, g.x, g.y - (both ? dy + tsize * 0.15 : 0), idx(g.viaLayers[0]) + "-" + idx(g.viaLayers[1]), tsize, 0, VIA_NETNAME_COLOR, tsize / 10, base, flip);
+    drawLabel(ctx, g.x, g.y - (both ? dy + tsize * 0.15 : 0), idx(g.viaLayers[0]) + "-" + idx(g.viaLayers[1]), tsize, 0, vc, tsize / 10, base, flip);
   }
 }
 
@@ -832,10 +964,10 @@ export function drawViaName(ctx: Ctx2D, g: ViaRingGeom, doc: Doc, s: number, sCs
  * every other-net obstacle on its layer (pads: the shape inflated by the clearance; tracks: width + 2·clearance;
  * vias / NPTH holes: radius + clearance), cut with destination-out on the scratch canvas, then composited.
  */
-export function drawZonePreview(ctx: Ctx2D, g: Geom, obstacles: Geom[], base: Mat, W: number, H: number, minW: number, netColors: Map<number, string> | null, alphaMul?: number): void {
+export function drawZonePreview(ctx: Ctx2D, g: Geom, obstacles: Geom[], base: Mat, W: number, H: number, minW: number, netColors: Map<number, string> | null, alphaMul?: number, colorXf?: ((c: string) => string) | null): void {
   if (!g.pts || g.pts.length < 3) return;
   const layer = g.layer, net = g.net, c = g.zoneClearance || 0; const alpha = ZONE_OPACITY * (alphaMul === undefined ? 1 : alphaMul);
-  const color = (netColors && net! > 0 && netColors.get(net!)) || g.color;
+  let color = (netColors && net! > 0 && netColors.get(net!)) || g.color; if (colorXf && color) color = colorXf(color);
   const off = scratchCanvas(W, H); const octx = off ? off.getContext("2d") : null;
   const target: Ctx2D = octx || ctx;
   if (octx) { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, W, H); octx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); octx.globalAlpha = 1; }
