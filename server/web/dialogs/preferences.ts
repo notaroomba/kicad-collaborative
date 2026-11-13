@@ -2,10 +2,12 @@
 // that mean something in a browser.  Common > Mouse and Touchpad (common/dialogs/panel_mouse_settings), Hotkeys
 // (panel_hotkeys_editor, read-only here); Schematic Editor > Display Options, Grids, Editing Options, Colors;
 // PCB Editor > Display Options, Grids, Origins & Axes, Editing Options.  Everything is kept in localStorage (prefs.ts) and applied on OK.
+import { trapTab } from "../tools/kicad-dialogs/shell";
 import { E, toast } from "./editor";
 import { keyName } from "../keys";
-import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
-import { KD, checkbox, h, select, textInput } from "./dom";
+import { hotkeysPanel } from "./hotkeys-panel";
+import type { UserHotkeys } from "../menuspec";
+import { KD, checkbox, h, select } from "./dom";
 import { messageBox } from "../editor/pcbdialogs/ui";
 import { messageText } from "../units";
 import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, editorId, gridLabel, savePrefs, scaleOf, type EditorId, type Prefs, type SchThemeId } from "./prefs";
@@ -13,7 +15,6 @@ import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
 import { getInactiveMode, setInactiveMode } from "../editor/panels/appearance";
 
-interface ActionMeta { id: string; label: string; key: string | null }
 const MIL = 0.0254;
 
 const units = (): Units => (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units;
@@ -49,7 +50,7 @@ export function gridSettingsDialog(grid: { mm: number; name: string } | null, ed
     const okB = h("button", { class: "btn primary", type: "button", onclick: () => done(true) }, "OK"), cancel = h("button", { class: "btn", type: "button", onclick: () => done(false) }, "Cancel");
     const dlg = h("div", { class: "kd-dialog", role: "dialog", "aria-label": "Grid Settings", style: "width:360px;min-width:0" }, h("div", { class: "kd-title" }, h("span", null, "Grid Settings")), body, h("div", { class: "kd-foot" }, cancel, okB));
     const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
-    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov); if (ev.key === "Enter") { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
     document.body.append(ov); name.focus();
   });
 }
@@ -58,13 +59,39 @@ export function gridSettingsDialog(grid: { mm: number; name: string } | null, ed
 type ArcEditTools = { arcEditMode(): number; setArcEditMode(m: number): void };
 const pcbTools = (): ArcEditTools | null => { const t = (window as unknown as { PcbTools?: Partial<ArcEditTools> }).PcbTools; return t && t.arcEditMode && t.setArcEditMode ? (t as ArcEditTools) : null; };
 
-/** Preferences…; `page` is a page label or "Section/Page" ("PCB Editor/Grids"). */
-export function openPreferences(page?: string): void {
-  const p: Prefs = clonePrefs();
-  let uiMode: ThemeMode = getThemeMode();
-  let arcEdit = pcbTools() ? pcbTools()!.arcEditMode() : 0;
+/** The edits of an open Preferences dialog, kept when a page is reset (the dialog is rebuilt around them). */
+interface Staged { p: Prefs; uiMode: ThemeMode; arcEdit: number; contrast: ReturnType<typeof getInactiveMode>; hotkeys?: UserHotkeys }
+/** PAGED_DIALOG's g_lastPage: the page the dialog was last closed on, for the next opening in this session. */
+let lastPage: string | null = null;
+/** The defaults a page's Reset to Defaults puts back (RESETTABLE_PANEL::ResetPanel of that page only). */
+export function resetPage(key: string, st: Staged): void {
+  const d = JSON.parse(JSON.stringify(DEFAULT_PREFS)) as Prefs;
+  switch (key) {
+    case "Common/Common": st.uiMode = "system"; st.p.common = d.common; break;
+    case "Common/Mouse and Touchpad": st.p.mouse = d.mouse; break;
+    case "Symbol Editor/Grids": st.p.grids.sym = d.grids.sym; break;
+    case "Schematic Editor/Display Options": st.p.schDisplay = d.schDisplay; break;
+    case "Schematic Editor/Grids": st.p.grids.sch = d.grids.sch; break;
+    case "Schematic Editor/Editing Options": st.p.schEditing = d.schEditing; break;
+    case "Schematic Editor/Colors": st.p.schColors = d.schColors; break;
+    case "Footprint Editor/Grids": st.p.grids.fp = d.grids.fp; break;
+    case "PCB Editor/Display Options": st.p.pcbDisplay = d.pcbDisplay; break;
+    case "PCB Editor/Grids": st.p.grids.pcb = d.grids.pcb; break;
+    case "PCB Editor/Origins & Axes": st.p.pcbOrigin = d.pcbOrigin; break;
+    case "PCB Editor/Editing Options": st.p.pcbEditing = d.pcbEditing; st.arcEdit = 0; break;
+    default: break;
+  }
+}
+
+/** Preferences…; `page` is a page label or "Section/Page" ("PCB Editor/Grids"); without one, the page last used. */
+export function openPreferences(page?: string, staged?: Staged): void {
+  const p: Prefs = staged ? staged.p : clonePrefs();
+  let uiMode: ThemeMode = staged ? staged.uiMode : getThemeMode();
+  let arcEdit = staged ? staged.arcEdit : pcbTools() ? pcbTools()!.arcEditMode() : 0;
   // the inactive layer mode is the open board's project setting (.kicad_prl "board.high_contrast_mode"), not a user preference
-  let contrast = getInactiveMode();
+  let contrast = staged ? staged.contrast : getInactiveMode();
+  let hk: ReturnType<typeof hotkeysPanel> | null = null, body0: HTMLElement | null = null;
+  const pageKey = (): string => { const n = body0 && body0.querySelector<HTMLElement>(".kd-tb-node.child.on"); return (n && n.dataset.page) || ""; };
   // the frame it was opened from: its grid list's selection is the grid in use (the Symbol Editor keeps its own)
   const here: EditorId | null = document.getElementById("symedit") ? null : E.kdoc ? editorId() : null;
   // PANEL_GRID_SETTINGS: the grid list (its selection is the current grid, grid.last_size), Add / Edit / Move / Remove
@@ -117,8 +144,16 @@ export function openPreferences(page?: string): void {
     ob.append(og); KD().staticBox(R, "Grid Display").append(checkbox("Show grid axes", !!g.axes, (on) => { g.axes = on; }, { id: `${pre}-gridaxes` })); fill();
   };
   KD().open({ title: "Preferences", width: 900, cls: "kd-wide kd-flush",
-    extra: [{ label: "Reset to Defaults", fn: () => { savePrefs(JSON.parse(JSON.stringify(DEFAULT_PREFS)) as Prefs); KD().close(); openPreferences(); } }],
+    // PAGED_DIALOG::onResetButton: only the page on show goes back to its defaults, and nothing is saved before OK
+    extra: [{ label: "Reset to Defaults", fn: () => {
+      const key = pageKey();
+      if (key === "Common/Hotkeys") { if (hk) hk.resetToDefaults(); return; }
+      const st: Staged = { p, uiMode, arcEdit, contrast, hotkeys: hk ? hk.staged() : undefined };
+      resetPage(key, st); KD().close(); openPreferences(key, st);
+    } }],
+    cancel() { lastPage = pageKey() || lastPage; },
     build(body) {
+      body0 = body;
       KD().treebook(body, [
         { label: "Common", pages: [
           { label: "Common", build(pg) {
@@ -147,16 +182,7 @@ export function openPreferences(page?: string): void {
             const sg = KD().staticBox(pg, "Scroll Gestures");
             sg.append(h("p", { class: "kd-note", style: "margin:0" }, "Vertical touchpad or scroll wheel movement zooms; the browser's own gestures pan with a middle or right button drag."));
           } },
-          { label: "Hotkeys", build(pg) {
-            const all = (Object.values(SPEC_ACTIONS) as ActionMeta[]).filter((a) => a.key);
-            const seen = new Set<string>(), rows = all.filter((a) => { const k = a.label + "\u0000" + a.key; if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => a.label.localeCompare(b.label));
-            const tb = h("tbody", { id: "kd-pref-hotkeys" });
-            const fill = (q: string) => { const t = q.trim().toLowerCase(); tb.replaceChildren(...rows.filter((a) => !t || a.label.toLowerCase().includes(t) || String(a.key).toLowerCase().includes(t)).map((a) => h("tr", null, h("td", { class: "ro" }, a.label.replace(/\.\.\.$/, "…")), h("td", { class: "ro", style: "width:170px;font-family:var(--mono)" }, String(a.key))))); };
-            pg.append(textInput("", fill, { id: "kd-pref-hotkey-filter", placeholder: "Type filter text", style: "margin-bottom:8px" }),
-              h("div", { class: "kd-grid-wrap", style: "height:340px" }, h("table", { class: "kd-grid" }, h("thead", null, h("tr", null, h("th", null, "Command"), h("th", null, "Hotkey"))), tb)),
-              h("p", { class: "kd-note", style: "margin-top:6px" }, "Hotkeys are KiCad's defaults; they cannot be changed in the web editor."));
-            fill("");
-          } },
+          { label: "Hotkeys", build(pg) { hk = hotkeysPanel(pg, staged && staged.hotkeys); } },
         ] },
         // PANEL_SYM_EDIT_GRIDS: the Symbol Editor's own window settings
         { label: "Symbol Editor", pages: [
@@ -226,7 +252,7 @@ export function openPreferences(page?: string): void {
             misc.append(checkbox("Automatically refill zones", p.pcbEditing.autoRefillZones, (on) => { p.pcbEditing.autoRefillZones = on; }, { id: "kd-pref-autorefill", title: "If checked, zones will be re-filled after each edit operation" }));
           } },
         ] },
-      ], { selected: page || "Mouse and Touchpad" });
+      ], { selected: page || lastPage || "Mouse and Touchpad" });
     },
-    ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
+    ok() { lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
 }

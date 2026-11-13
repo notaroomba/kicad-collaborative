@@ -14,7 +14,7 @@
 //   runSpecHotkey(ev)  from index.ts's keydown handler after the module had its turn: the generic table.
 // Nothing fires while the user types in a field, a dialog or an open menu (typingTarget).
 import { hotkeyKey, shiftedPunctCombo } from "../keys";
-import { hotkeyOwners, type EditorKind } from "../menuspec";
+import { hotkeyOwners, userTouchedKey, type EditorKind } from "../menuspec";
 import { EDITOR_ONLY, FPEDIT_BLOCKED, FPEDIT_ONLY, KICAD_KEY_WINS, MODULE_ALIAS, toolFor } from "../tables";
 import { HANDLERS } from "./actions";
 import { state, store } from "./appstore";
@@ -113,7 +113,13 @@ export function preemptKey(ev: KeyboardEvent): void {
   for (const hook of keyHooks) { let took = false; try { took = hook(ev); } catch (e) { console.warn(e); } if (took) { ev.stopImmediatePropagation(); return; } }
   const combo = comboOf(ev); if (!combo) return;
   if (E.tool === "measure" && combo === "Ctrl+C") return;   // the measure tool takes ACTIONS::copy itself (index.ts)
-  const what = KICAD_KEY_WINS[editorKind()][combo]; if (!what) return;
+  const what = KICAD_KEY_WINS[editorKind()][combo];
+  if (!what) {
+    // a key the user moved in Preferences > Hotkeys: the table decides it before any tool's own binding (and a key
+    // taken off its action does nothing)
+    if (!userTouchedKey(combo)) return;
+    runSpecHotkey(ev); ev.preventDefault(); ev.stopImmediatePropagation(); return;
+  }
   if (what === "spec") runSpecHotkey(ev);
   else if (what.startsWith("key:")) {
     const mod = activeModule() as ToolModule | null; const k = what.slice(4), shift = k.startsWith("Shift+");

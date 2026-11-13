@@ -78,6 +78,9 @@ def parse_actions(mac=False):
                 continue
             a = {"id": name, "label": label, "tip": field("Tooltip"), "icon": icon.group(1) if icon else None,
                  "key": fmt_hotkey(hk.group(1)) if hk else None}
+            nm = re.search(r"\.Name\(\s*\"([^\"]+)\"", body)
+            if nm:
+                a["name"] = nm.group(1)   # the TOOL_ACTION name a user.hotkeys file keys its lines by
             if alt and fmt_hotkey(alt.group(1)):
                 a["alt"] = fmt_hotkey(alt.group(1))
             out[f"{cls}::{name}"] = a
