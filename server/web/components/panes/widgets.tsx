@@ -19,7 +19,7 @@ export function usePanels<T>(selector: (s: PanelsState) => T): T { return select
 export function pdispatch(a: PanelAction): void { const p = panels(); if (p) p.dispatch(a); }
 
 // ---------------------------------------------------------------- context menu
-export type MenuItem = { label: string; run: () => void; disabled?: boolean } | "-";
+export type MenuItem = { label: string; run: () => void; disabled?: boolean; /** why it is dimmed (the row's tooltip) */ title?: string } | "-";
 export interface MenuAt { x: number; y: number; items: MenuItem[] }
 
 /** A wxMenu popped at the pointer: closes on a pick, an outside press or Escape; kept inside the window. */
@@ -45,7 +45,7 @@ export function ContextMenu({ at, onClose }: { at: MenuAt | null; onClose: () =>
       {at.items.map((it, i) => it === "-"
         ? <div key={i} className="my-1 border-t border-line" />
         : <div key={i} role="menuitem" className={cx("px-3 py-[3px] whitespace-nowrap", it.disabled ? "text-ink-3" : "cursor-default hover:bg-accent hover:text-on-accent")}
-            onClick={() => { if (it.disabled) return; onClose(); it.run(); }}>{it.label}</div>)}
+            title={it.title} onClick={() => { if (it.disabled) return; onClose(); it.run(); }}>{it.label}</div>)}
     </div>, document.body);
 }
 /** State for one ContextMenu: `open(ev, items)` from an onContextMenu handler. */

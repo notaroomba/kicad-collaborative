@@ -1,6 +1,6 @@
 // Hierarchy.tsx — the schematic Hierarchy navigator (eeschema/widgets/hierarchy_pane.cpp): the tree of
 // sheets, each "name (page N)", the sheet on screen highlighted.  A click opens the sheet; the right-click
-// menu is KiCad's: Edit Page Number, Rename, Expand All, Collapse All.
+// menu is KiCad's: Edit Page Number, Rename, Delete Top-Level Sheet, New Top-Level Sheet, Expand All, Collapse All.
 import { useState } from "react";
 import type { HierNode } from "../../panels-api";
 import { useApp } from "../../store";
@@ -19,9 +19,16 @@ export function HierarchyPane() {
   const [closed, setClosed] = useState<Set<string>>(() => new Set());
   const menu = useContextMenu();
   const toggle = (p: string) => { const n = new Set(closed); if (n.has(p)) n.delete(p); else n.add(p); setClosed(n); };
+  // HIERARCHY_PANE::onContextMenu: a sheet's own entries (Delete Top-Level Sheet on a top-level one), then New
+  // Top-Level Sheet, then Expand / Collapse All.  A project here has one top-level sheet, its file the project's root
+  // schematic: adding or removing top-level sheets runs in the desktop app.
+  const DESKTOP = "runs in the desktop app";
   const items = (n: HierNode): MenuItem[] => [
     { label: "Edit Page Number", run: () => pdispatch({ t: "hierPage", path: n.path }), disabled: viewOnly || !n.sheetId },
     { label: "Rename", run: () => pdispatch({ t: "hierRename", path: n.path }), disabled: viewOnly || !n.sheetId },
+    ...(n.parentDocId ? [] : [{ label: "Delete Top-Level Sheet", run: () => {}, disabled: true, title: DESKTOP } satisfies MenuItem]),
+    "-",
+    { label: "New Top-Level Sheet", run: () => {}, disabled: true, title: DESKTOP },
     "-",
     { label: "Expand All", run: () => setClosed(new Set()) },
     { label: "Collapse All", run: () => setClosed(new Set(root ? allPaths(root) : [])) },

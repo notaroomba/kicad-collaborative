@@ -71,7 +71,9 @@ function build(): HierNode | null {
         current: !!child && child.docId === cur, children: child ? walk(child, p, depth + 1) : [] };
     });
   };
-  return { path: "/", name: projectName() || stem || "Schematic", page: rootEntry ? rootEntry.page : "1", docId: root.docId, file: root.path.split("/").pop() || "", parentDocId: null, sheetId: null,
+  // the project root itself is hidden (wxTR_HIDE_ROOT): the tree starts at the top-level sheet, named by its file
+  // when it has no sheet name (HIERARCHY_PANE::UpdateHierarchyTree)
+  return { path: "/", name: stem || projectName() || "Schematic", page: rootEntry ? rootEntry.page : "1", docId: root.docId, file: root.path.split("/").pop() || "", parentDocId: null, sheetId: null,
     current: root.docId === cur, children: walk(root, "/", 0) };
 }
 
