@@ -31,7 +31,7 @@ const server = path.resolve(here, "..");
 const shimDir = path.join(server, "plugins", "python");
 const defaultBoard = path.resolve(server, "..", "demos", "ecc83", "ecc83-pp.kicad_pcb");
 const TEXT = /\.(py|pyi|json|txt|md|rst|csv|tsv|xml|xrc|html?|css|js|ya?ml|toml|ini|cfg|conf|fbp|kicad_[a-z]+|svg|po|pot|lua|sh|bat|in|tpl|template|dru|net|cmp|pro|lib|mod|dcm)$/i;
-const MAX_FILE = 3 * 1024 * 1024;
+const MAX_FILE = 4 * 1024 * 1024;
 
 function walk(dir, base = "") {
   const out = [];

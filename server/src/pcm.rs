@@ -45,7 +45,7 @@ const MAX_ZIP_BYTES: usize = 24 * 1024 * 1024;
 /// What one Python plugin may hold once unpacked (plugins.rs enforces the same on install).
 pub const MAX_PY_FILES: usize = 1500;
 pub const MAX_PY_BYTES: usize = 12 * 1024 * 1024;
-const MAX_ONE_FILE: usize = 3 * 1024 * 1024;
+const MAX_ONE_FILE: usize = 4 * 1024 * 1024;
 
 /// The permissions every KiCad Python plugin is given: what `pcbnew` and `wx` need.  One that talks to
 /// web services is offered "network" as well (see `get`).

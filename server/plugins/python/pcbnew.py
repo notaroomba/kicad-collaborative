@@ -1170,6 +1170,14 @@ class BOARD_ITEM(EDA_ITEM):
         self._dirty = False
         self._flags = 0
         self._selected = False
+        if isinstance(parent, BOARD_ITEM) and not isinstance(parent, FOOTPRINT) and isinstance(parent, type(self)):
+            # PCB_TRACK(track): a copy of the item, as the desktop's copy constructor makes; it gets its own id
+            # because two items of one board cannot share one here
+            self._node = _clone(parent._node)
+            self._board = parent._board
+            _set_kid(self._node, "uuid", str(_uuid.uuid4()))
+            self._flags = IS_NEW
+            return
         if isinstance(parent, BOARD):
             self._board = parent
         elif isinstance(parent, FOOTPRINT):
@@ -1252,6 +1260,15 @@ class BOARD_ITEM(EDA_ITEM):
             if me in g._member_ids():
                 return g
         return None
+
+    def SetParentGroup(self, group):
+        current = self.GetParentGroup()
+        if current is group:
+            return
+        if current is not None:
+            current.RemoveItem(self)
+        if group is not None:
+            group.AddItem(self)
 
     def SetParent(self, parent):
         if isinstance(parent, FOOTPRINT):
@@ -1452,6 +1469,8 @@ def _clone(node):
 
 class BOARD_CONNECTED_ITEM(BOARD_ITEM):
     def _net_name(self):
+        if self._board is None and self.__dict__.get("_net_wanted") is not None:
+            return self._net_wanted          # set on an item that is not on a board yet
         k = _kid(self._node, "net")
         if k is None or len(k) < 2:
             return ""
@@ -1482,11 +1501,19 @@ class BOARD_CONNECTED_ITEM(BOARD_ITEM):
 
     def SetNetCode(self, code, *_):
         b = self._board
-        self._write_net(b._net_names.get(int(code), "") if b is not None else "")
+        if b is None:                        # not on a board yet: keep the number as given
+            _set_kid(self._node, "net", int(code))
+            self._net_wanted = None
+            return True
+        self._write_net(b._net_names.get(int(code), ""))
         return True
 
     def _write_net(self, name):
         b = self._board
+        if b is None:                        # no board yet to give the net its number: written when the item is added
+            self._net_wanted = str(name)
+            return
+        self._net_wanted = None
         old = _kid(self._node, "net")
         by_name = (b is not None and b._nets_by_name_only) or (old is not None and len(old) == 2 and not isinstance(old[1], Sym))
         if by_name:
@@ -4112,15 +4139,27 @@ class ZONE(BOARD_CONNECTED_ITEM):
     def NeedRefill(self):
         return not self.IsFilled()
 
-    def GetFilledPolysList(self, layer):
+    def _fill_of(self, layer):
+        """The fill on a layer, read once and kept until the zone's fill changes (a fill is thousands of points and
+        plugins ask about it point by point)."""
+        fills = [fp for fp in _kids(self._node, "filled_polygon")]
+        stamp = (self.__dict__.get("_rev", 0), id(self._node)) + tuple((id(fp), len(fp), id(_kid(fp, "pts"))) for fp in fills)
+        cache = self.__dict__.setdefault("_fill_cache", {})
+        hit = cache.get(int(layer))
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
         s = SHAPE_POLY_SET()
-        for fp in _kids(self._node, "filled_polygon"):
+        for fp in fills:
             lk = _kid(fp, "layer")
             if lk is None or _layer_id(lk[1]) == int(layer):
                 pts = _pts_of(fp, self._to_board)
                 if pts:
                     s._outlines.append([SHAPE_LINE_CHAIN(pts, True)])
+        cache[int(layer)] = (stamp, s)
         return s
+
+    def GetFilledPolysList(self, layer):
+        return SHAPE_POLY_SET(self._fill_of(layer))         # the caller's own copy, as on the desktop
 
     GetFill = GetFilledPolysList
 
@@ -4149,7 +4188,7 @@ class ZONE(BOARD_CONNECTED_ITEM):
         return False
 
     def HitTestFilledArea(self, layer, pos, *_):
-        return self.GetFilledPolysList(layer).Contains(pos)
+        return self._fill_of(layer).Contains(pos)
 
     def HitTestInsideZone(self, pos, *_):
         return self.Outline().Contains(pos)
@@ -4431,6 +4470,15 @@ class PCB_GROUP(BOARD_ITEM):
     def Move(self, *a):
         for it in self.GetItems():
             it.Move(*a)
+
+    # KiCad 10: a group is an EDA_GROUP, its members are named by id
+    def GetGroupMemberIds(self):
+        return [KIID(i) for i in self._member_ids()]
+
+    AsEdaItem = lambda self: self
+
+
+EDA_GROUP = PCB_GROUP
 
 
 class PCB_DIMENSION_BASE(BOARD_ITEM):
@@ -5642,6 +5690,8 @@ class BOARD(EDA_ITEM):
         if uid in self._by_id:
             return
         item._board, item._parent = self, None
+        if item.__dict__.get("_net_wanted") is not None:
+            item._write_net(item._net_wanted)
         if isinstance(item, FOOTPRINT):
             item._kids_cache = None
             if item._pending:                       # a new footprint is written where it was asked to be

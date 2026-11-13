@@ -125,8 +125,7 @@
   "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.cgrassin.kicad-pinout-generator": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Message: Select at least one component!\"). Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.cooked.kimotor": {
   "status": "works"
@@ -144,8 +143,7 @@
   "note": "Its Qt window and its numpy, scipy and matplotlib parts load. Its solver meshes the copper with the Triangle library, which is compiled code that has no build for the browser."
  },
  "com.github.ducky64.SubLayout": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Error: Must select exactly one anchor footprint.\"). Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.easyw.kicad-action-tools": {
   "status": "works"
@@ -232,8 +230,7 @@
   "status": "works"
  },
  "com.github.ozzysv.viafence": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"ViaFence: No tracks or pads selected. Select one or more tracks/arcs and optionally pads to surround.\"). Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.pcbway.PCBWay-Fabrication-Toolkit-for-KiCad": {
   "status": "works"
@@ -243,8 +240,8 @@
   "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.riehlies.kisi": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works",
+  "note": "It builds its viewer page for the open board and hands it over as a download; open the downloaded page in your browser."
  },
  "com.github.sagarHackeD.PlaceBySchKiCad": {
   "status": "works"
@@ -273,8 +270,7 @@
   "note": "It adds no board editor command."
  },
  "com.github.tnaegele.kicad-cut-tracks-at-line": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Cutting line error: Please select exactly one cutting line!\"). Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.tobiglaser.KiPNG": {
   "status": "works"
@@ -287,8 +283,8 @@
   "note": "It is a client for the traces server (traces-serve), which is installed separately from its own source and is not part of this package. A plugin here cannot reach a server on your own computer."
  },
  "com.github.weirdgyn.viastitcher": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Message: Please select a valid area\"). Nobody has checked its result here yet."
+  "status": "works",
+  "note": "Vias are placed over the zone's filled copper. It keeps its settings per zone on a layer it renames; the editor does not follow a layer rename from a plugin, so it opens with its default settings each time."
  },
  "com.github.yaqwsx.kikit": {
   "status": "works"
@@ -352,7 +348,6 @@
   "status": "works"
  },
  "vn.thanhduongvs.fanout-tool": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  }
 }

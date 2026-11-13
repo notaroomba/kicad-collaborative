@@ -1138,6 +1138,14 @@ def run(name, argv, cwd=None):
         return git(list(argv), cwd)
     if base in ("ffmpeg", "ffmpeg.exe"):
         return ffmpeg(list(argv), cwd)
+    if base == "xdg-user-dir":       # where the person's Downloads, Documents, … are: folders of this interpreter's home
+        kind = (list(argv) + ["HOME"])[0].upper()
+        home = os.path.expanduser("~")
+        names = {"DESKTOP": "Desktop", "DOWNLOAD": "Downloads", "DOCUMENTS": "Documents", "PICTURES": "Pictures", "MUSIC": "Music",
+                 "VIDEOS": "Videos", "TEMPLATES": "Templates", "PUBLICSHARE": "Public"}
+        folder = os.path.join(home, names[kind]) if kind in names else home
+        os.makedirs(folder, exist_ok=True)
+        return Result(0, folder + "\n", "")
     if base in ("ngspice", "ngspice.exe", "ngspice_con.exe"):
         import kicad_spice
         try:

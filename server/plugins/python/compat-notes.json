@@ -44,6 +44,14 @@
     "com.github.g200kg.kicad-gerberzipper2": {
       "status": "works",
       "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
+    },
+    "com.github.weirdgyn.viastitcher": {
+      "status": "works",
+      "note": "Vias are placed over the zone's filled copper. It keeps its settings per zone on a layer it renames; the editor does not follow a layer rename from a plugin, so it opens with its default settings each time."
+    },
+    "com.github.riehlies.kisi": {
+      "status": "works",
+      "note": "It builds its viewer page for the open board and hands it over as a download; open the downloaded page in your browser."
     }
   }
 }

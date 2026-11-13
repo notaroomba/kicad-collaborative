@@ -1654,7 +1654,13 @@ def NewEventType():
 
 
 class Event:
-    def __init__(self, source=None, binder=None, eid=None):
+    def __init__(self, source=None, binder=None, eid=None, id=None, commandEventType=None, eventType=None, winid=None, **_more):
+        # wxPython's own spellings: wx.CommandEvent(commandEventType=…, id=…), wx.PyEvent(id=…, eventType=…)
+        if eid is None:
+            eid = id if id is not None else winid
+        kind = commandEventType if commandEventType is not None else eventType
+        if kind is not None and source is None:
+            source = int(kind)
         if isinstance(source, int):           # wx.CommandEvent(eventType, id)
             eid = binder if isinstance(binder, int) else (eid if eid is not None else 0)
             binder = next((b for b in _binders.values() if b.typeId == source), None)
