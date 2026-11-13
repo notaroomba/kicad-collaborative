@@ -268,3 +268,11 @@ await test("library tree menu: symbol_editor_control.cpp order and conditions, p
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();
+
+test("Library Symbol Properties: Derive from symbol choices leave out the symbol and its descendants", () => {
+  const src = '(kicad_symbol_lib (version 20241209) (generator "t") (symbol "A") (symbol "B" (extends "A")) (symbol "C" (extends "B")) (symbol "D") (symbol "E" (extends "D")))';
+  const lib = M.parseLibrary(src);
+  assert.deepStrictEqual(M.parentChoices(lib, "B"), ["A", "D", "E"]);
+  assert.deepStrictEqual(M.parentChoices(lib, "E"), ["A", "B", "C", "D"]);
+  const e = M.clone(lib.symbols.get("E")); M.setParentName(e, "A"); assert.strictEqual(M.parentNameOf(e), "A");
+});

@@ -285,6 +285,12 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
   const jumpers = checkbox("All pins with duplicate numbers are jumpers", hd.jumpers, undefined, { id: "sp-jumpers" });
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
   const ro = se.readOnly();
+  // m_inheritanceSelectCombo: a derived symbol picks its parent among the library's symbols (not itself or its descendants); a root symbol shows "<None>" greyed (syncControlStates)
+  const parentName = M.parentNameOf(sym) || "";
+  const parentOpts = derived ? M.parentChoices(se.libMap(se.libs.get(t.lib) || null), M.symName(sym)) : [];
+  if (parentName && !parentOpts.includes(parentName)) parentOpts.unshift(parentName);
+  const inherit = derived ? select(parentOpts.map((n) => [n, M.unescapeLibId(n)] as [string, string]), parentName, undefined, { id: "sp-parent", disabled: ro })
+    : select([["", "<None>"]], "", undefined, { id: "sp-parent", disabled: true });
   let confirmed = false; let api: { finish(apply: boolean): void } | null = null;
   KD().open({
     title: `Library Symbol Properties`, width: 1000, readOnly: ro,
@@ -296,7 +302,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
           // dialog_lib_symbol_properties_base.cpp: Name … Font (the table's Color and Allow Autoplacement columns hidden), Add / Move up / Move down / Delete
           fgrid = fieldsGrid(box, rows, { readOnly: ro, doc: se.kdoc(), height: 190, shown: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
             newName: (rs) => { let n = 1; const names = new Set(rs.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; } });
-          pg.append(form([["Symbol name:", name], ["Keywords:", keywords], ["Derive from symbol:", h("span", { class: "ro" }, M.parentNameOf(sym) || "<None>")]]));
+          pg.append(form([["Symbol name:", name], ["Keywords:", keywords], ["Derive from symbol:", inherit]]));
           if (!derived) pg.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px" },
             h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Attributes"), power, local, exSim, exBom, exBoard, exPos),
             h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Pin Text Options"), showNum, showName, inside, form([["Position offset:", offset, unitName(units())]], 3))));
@@ -344,6 +350,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
       void bodyGrid;
       const finalRows = curRows();
       const dup = L.duplicateFieldName(finalRows); if (dup) { void messageBox(dup); return false; }
+      if (derived && !inherit.value) { void messageBox("Derived symbol must have a parent selected"); return false; }
       if (!derived) {
         // DIALOG_LIB_SYMBOL_PROPERTIES::Validate
         const seen = new Set<string>();
@@ -378,6 +385,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         M.setMetaField(s, "ki_fp_filters", filters.value.split(/\s+/).filter(Boolean).join(" "));
         // PANEL_SYMBOL_PIN_MAP::ApplyToSymbol (only when the page was edited, so an untouched symbol keeps its text)
         if (pinMaps.dirty) M.setPinMapData(s, harvestPinMaps(pinMaps), pinMaps.assocs);
+        if (derived && inherit.value && inherit.value !== parentName) M.setParentName(s, inherit.value);
         if (!derived) {
           const pw = cb(power) ? (cb(local) ? "local" : "global") : "";
           M.setSymHeader(s, { power: pw as M.SymHeader["power"], showPinNumbers: cb(showNum), showPinNames: cb(showName), pinNameOffset: cb(inside) ? lenOf(offset, M.DEFAULT_PIN_NAME_OFFSET) || 0.0001 : 0,

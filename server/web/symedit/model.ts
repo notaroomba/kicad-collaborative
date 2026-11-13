@@ -146,6 +146,15 @@ const UNESC: Record<string, string> = { dblquote: "\"", quote: "'", lt: "<", gt:
 export function unescapeLibId(src: string): string { return src.indexOf("{") < 0 ? src : src.replace(/(?<![$~^_])\{(dblquote|quote|lt|gt|backslash|slash|bar|comma|colon|space|dollar|tab|return|brace)\}/g, (_m, k: string) => UNESC[k]); }
 export const parentNameOf = (sym: Node): string | null => { const e = kid(sym, "extends"); return e ? str(e[1]) : null; };
 export const isDerived = (sym: Node): boolean => !!kid(sym, "extends");
+/** DIALOG_LIB_SYMBOL_PROPERTIES's "Derive from symbol:" choices: the library's symbols less this one and its descendants (no circular inheritance). */
+export function parentChoices(lib: SymLib | null, name: string): string[] {
+  if (!lib) return [];
+  const desc = new Set<string>([name]);
+  for (let grew = true; grew;) { grew = false; for (const [k, s] of lib.symbols) { const p = parentNameOf(s); if (p && desc.has(p) && !desc.has(k)) { desc.add(k); grew = true; } } }
+  return [...lib.symbols.keys()].filter((k) => !desc.has(k)).sort(numCompare);
+}
+/** LIB_SYMBOL::SetParent on a derived symbol: rewrite its (extends …). */
+export function setParentName(sym: Node, parent: string): void { const e = kid(sym, "extends"); if (e) e[1] = parent; }
 export function subUnitBody(name: string): [number, number] { const m = /_(\d+)_(\d+)$/.exec(name); return m ? [+m[1], +m[2]] : [0, 0]; }
 /** The root a derived symbol resolves to in its library (or itself). */
 export function rootOf(lib: SymLib | null, sym: Node): Node { let cur = sym; const seen = new Set<string>(); while (lib && isDerived(cur)) { const p = parentNameOf(cur)!; if (seen.has(p)) break; seen.add(p); const n = lib.symbols.get(p); if (!n) break; cur = n; } return cur; }
