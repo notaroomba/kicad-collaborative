@@ -178,7 +178,10 @@ export function scopeToEnteredGroup(items: KItem[]): void {
 export function finishBoxSel(ev: { clientX: number; clientY: number }) {
   const b: BoxSel | null = E.boxSel; E.boxSel = null; requestRepaint(); if (!b || !E.kdoc) return;
   const moved = Math.hypot(ev.clientX - b.startClient[0], ev.clientY - b.startClient[1]);
-  if (moved < 4) return;
+  if (moved < 4) {
+    if (b.clickHighlight) { const pm = CollabTools.pcb as unknown as { highlightNetAt?: (c: unknown, at: number[]) => unknown } | undefined; if (pm && pm.highlightNetAt) { pm.highlightNetAt(toolCtx(), b.start); requestRender(); } }
+    return;
+  }
   const picked: KItem[] = [];
   // SelectMultiple: a line is taken by the box as a whole, or (contained mode) by one dangling end inside it
   const schM = isSch() ? (CollabTools.sch as unknown as { boxLineFlags?: (d: KDoc, it: KItem, box: [number, number, number, number], contained: boolean) => "whole" | 0 | 1 | null | undefined; putSelEnd?: (id: string, end: 0 | 1 | null) => void; state?: { selEnds?: Map<string, number> | null } }) : null;

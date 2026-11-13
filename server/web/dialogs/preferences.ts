@@ -79,6 +79,7 @@ export function resetPage(key: string, st: Staged): void {
     case "Schematic Editor/Editing Options": st.p.schEditing = d.schEditing; break;
     case "Schematic Editor/Colors": st.p.schColors = d.schColors; break;
     case "Footprint Editor/Grids": st.p.grids.fp = d.grids.fp; break;
+    case "Footprint Editor/Editing Options": st.p.fpEditing = d.fpEditing; break;
     case "PCB Editor/Display Options": st.p.pcbDisplay = d.pcbDisplay; break;
     case "PCB Editor/Grids": st.p.grids.pcb = d.grids.pcb; break;
     case "PCB Editor/Origins & Axes": st.p.pcbOrigin = d.pcbOrigin; break;
@@ -230,6 +231,23 @@ export function openPreferences(page?: string, staged?: Staged): void {
         // PANEL_FP_GRIDS: the Footprint Editor's own window settings
         { label: "Footprint Editor", pages: [
           { label: "Grids", build: gridsPage("fp") },
+          { label: "Editing Options", build(pg) {
+            // PANEL_EDIT_OPTIONS( isFootprintEditor ): FOOTPRINT_EDITOR_SETTINGS' own rotation step, m_sizerBoardEdit
+            // hidden, and Ctrl only toggles the selection (m_rbHighlightNet hidden); the options book shows the empty fpPage
+            const e = p.fpEditing;
+            const ed = KD().staticBox(pg, "Editing Options");
+            const rot = textInput(String(e.rotationAngle), (v) => { const n = parseFloat(v); if (isFinite(n) && n > 0 && n <= 360) e.rotationAngle = n; }, { id: "kd-pref-fp-rotstep", style: "width:80px" });
+            rot.title = "Set increment (in degrees) for context menu and hotkey rotation.";
+            ed.append(h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 8px;align-items:center" },
+              h("label", { style: "color:var(--ink-2);white-space:nowrap" }, "Step for rotate commands:"), h("div", { class: "kd-row", style: "gap:6px" }, rot, h("span", null, "deg"))));
+            const mod = IS_MAC ? "Cmd" : "Ctrl";
+            const cmds: [string, string][] = [["Click:", "Select item(s)"], ["Long Click:", "Clarify selection from menu"], ["Shift:", "Add item(s) to selection"],
+              [IS_MAC ? "Shift+Cmd:" : "Ctrl+Shift:", "Remove item(s) from selection"], [mod + ":", "Toggle selection"]];
+            if (IS_MAC) cmds.push(["Option:", "Clarify selection from menu"]);
+            KD().staticBox(pg, "Left Click Mouse Commands").append(
+              h("div", { style: "font-style:italic;color:var(--ink-3);font-size:var(--fs-sm);margin-bottom:6px;white-space:pre-line" }, IS_MAC ? "Left click (and drag) actions depend on 3 modifier keys:\nOption, Shift and Cmd" : "Left click (and drag) actions depend on 2 modifier keys:\nShift and Ctrl"),
+              h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;align-items:start" }, ...cmds.flatMap(([k, v]) => [h("span", null, k), h("span", null, v)])));
+          } },
         ] },
         { label: "PCB Editor", pages: [
           { label: "Display Options", build(pg) {
@@ -285,8 +303,10 @@ export function openPreferences(page?: string, staged?: Staged): void {
             lc.append(h("div", { style: "font-style:italic;color:var(--ink-3);font-size:var(--fs-sm);margin-bottom:6px;white-space:pre-line" }, IS_MAC ? "Left click (and drag) actions depend on 3 modifier keys:\nOption, Shift and Cmd" : "Left click (and drag) actions depend on 2 modifier keys:\nShift and Ctrl"),
               h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;align-items:start" }, ...cmds.flatMap(([k, v]) => [h("span", null, k), typeof v === "string" ? h("span", null, v) : v])));
             const rb = KD().staticBox(R, "Ratsnest");
-            const thick = h("input", { type: "number", min: "0.5", max: "100", step: "0.5", value: String(e.ratsnestThickness), id: "kd-pref-ratsthick", style: "width:80px" }) as HTMLInputElement;
-            thick.addEventListener("change", () => { const n = parseFloat(thick.value); if (isFinite(n) && n > 0) e.ratsnestThickness = n; });
+                        // wxSpinCtrlDouble( 0.5, 10, 0.5, 0.5 ) with 1 digit: a typed value is clamped to the range and rounded
+            const thick = h("input", { type: "number", min: "0.5", max: "10", step: "0.5", value: String(e.ratsnestThickness), id: "kd-pref-ratsthick", style: "width:80px" }) as HTMLInputElement;
+            thick.addEventListener("change", () => { const n = parseFloat(thick.value); if (!isFinite(n)) { thick.value = String(e.ratsnestThickness); return; }
+              e.ratsnestThickness = Math.round(Math.max(0.5, Math.min(10, n)) * 10) / 10; thick.value = String(e.ratsnestThickness); });
             rb.append(checkbox("Show ratsnest with curved lines", curved, (on) => { curved = on; }, { id: "kd-pref-curvedrats" }), row("Ratsnest line thickness:", thick));
             const misc = KD().staticBox(R, "Miscellaneous");
             misc.append(checkbox("<ESC> clears net highlighting", e.escClearsNetHighlight, (on) => { e.escClearsNetHighlight = on; }, { id: "kd-pref-escclears" }),

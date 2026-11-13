@@ -333,10 +333,13 @@ export function rotateBy(ctx: PcbCtx, deg: number) {
   const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg); if (ch.length) ctx.commit(ch, "rotate");
   endHover(ctx, sel); ctx.requestRender(); return true;
 }
-/** EDIT_TOOL::Rotate: TOOL_EVT_UTILS::GetEventRotationAngle, the Editing Options' rotation step (90 by default). */
-export const rotationStep = () => (typeof S.rotationAngle === "number" && S.rotationAngle > 0 ? S.rotationAngle : 90);
-act("rotateSelection", "Rotate Counterclockwise", "R", (ctx: PcbCtx) => rotateBy(ctx, rotationStep())); alias("rotateCcw", "rotateSelection");
-act("rotateSelectionCw", "Rotate Clockwise", "", (ctx: PcbCtx) => rotateBy(ctx, -rotationStep())); alias("rotateCw", "rotateSelectionCw");
+/**
+ * EDIT_TOOL::Rotate: TOOL_EVT_UTILS::GetEventRotationAngle, the Editing Options' rotation step (90 by default): the
+ * Footprint Editor's own (FOOTPRINT_EDITOR_SETTINGS m_RotationAngle) there, PCBNEW_SETTINGS' on a board.
+ */
+export const rotationStep = (ctx?: PcbCtx | null) => { const a = ctx && ctx.fpEditor ? S.fpRotationAngle : S.rotationAngle; return typeof a === "number" && a > 0 ? a : 90; };
+act("rotateSelection", "Rotate Counterclockwise", "R", (ctx: PcbCtx) => rotateBy(ctx, rotationStep(ctx))); alias("rotateCcw", "rotateSelection");
+act("rotateSelectionCw", "Rotate Clockwise", "", (ctx: PcbCtx) => rotateBy(ctx, -rotationStep(ctx))); alias("rotateCw", "rotateSelectionCw");
 /**
  * EDIT_TOOL::Flip ("Change Side / Flip"): a lone item about its own position (a rectangle or table about its centre),
  * several about the middle of their box; nothing is said afterwards.

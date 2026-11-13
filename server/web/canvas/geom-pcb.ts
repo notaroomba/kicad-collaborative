@@ -406,7 +406,12 @@ export function buildTextBoxGeom(item: Item, n: SNode, tf: Tf, layer: string, ro
   pcbTextGeom(item, n, anchor[0] + ex[0] / el * ox + ey[0] / yl * oy, anchor[1] + ex[1] / el * ox + ey[1] / yl * oy, linebreakText(unescapeText(str(n[1])), col, ef.sizeX, pen, ef.italic), ang, layer);
 }
 
+/** PCB_DIMENSION_BASE: its geometry, each record tagged as a dimension's (the sketch graphics mode reads it). */
 export function buildDimensionGeom(item: Item, n: SNode): void {
+  const from = item.geom.length; buildDimensionShapes(item, n);
+  for (let i = from; i < item.geom.length; i++) item.geom[i].dim = true;
+}
+function buildDimensionShapes(item: Item, n: SNode): void {
   const typeN = kid(n, "type"); const type = typeN ? str(typeN[1]) : "aligned";
   const layer = layerOf(n, "Dwgs.User"); const color = pcbColor(layer); const z = pcbZ(layer);
   const pts = polyPtsOf(n); if (pts.length < 2) return;

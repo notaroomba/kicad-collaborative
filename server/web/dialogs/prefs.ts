@@ -3,9 +3,10 @@
 import { E, GRID_CHOICES, gridListKey, isSch, requestRender, setToggle, setToggles, store, toolCtx, updateGridStatus } from "./editor";
 import { syncSchModes } from "../editor/panes";
 import { publishUserOrigin } from "../editor/userorigin";
+import { hotkeyCyclePopup } from "../editor/hotkey-popup";
 import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_DEFAULT_GRIDS, PCB_DEFAULT_GRID_IDX, PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
-import { gridChoiceText, type GridDef, type IuScale } from "../units";
+import { gridChoiceText, messageText, type GridDef, type IuScale } from "../units";
 import type { Units } from "../store";
 import { IS_MAC } from "../keys";
 import type { ScrollMod } from "../editor/wheel-model";
@@ -55,6 +56,8 @@ export interface Prefs {
    */
   pcbEditing: { rotationAngle: number; trackDragAction: "move" | "drag" | "dragFree"; ctrlClickHighlight: boolean; ratsnestThickness: number;
     escClearsNetHighlight: boolean; showCourtyardCollisions: boolean; autoRefillZones: boolean };
+  /** Footprint Editor > Editing Options (FOOTPRINT_EDITOR_SETTINGS): m_RotationAngle (degrees), apart from the board's */
+  fpEditing: { rotationAngle: number };
   grids: Record<EditorId, GridPrefs>;
 }
 const MIL = 0.0254;
@@ -74,6 +77,7 @@ export const DEFAULT_PREFS: Prefs = {
   common: { hcDimming: 0.8 },
   pcbOrigin: { origin: "page", invertX: false, invertY: false },
   pcbEditing: { rotationAngle: 90, trackDragAction: "drag", ctrlClickHighlight: false, ratsnestThickness: 0.5, escClearsNetHighlight: true, showCourtyardCollisions: true, autoRefillZones: false },
+  fpEditing: { rotationAngle: 90 },
   grids: {
     // APP_SETTINGS_BASE::DefaultGridSizeList and addParamsForWindow's defaultGridIdx (common/settings/app_settings.cpp):
     // eeschema / symbol_editor 100, 50, 25, 10 mil on 50 mil (index 1); pcbnew / footprint editor the 22 grids from
@@ -189,12 +193,13 @@ export function activeGridPitch(): number {
  * modes (after OK in the dialog, and once when the page's first document opens) — otherwise a toolbar toggle made
  * since would be undone every time a sheet is entered.
  */
-type PcbToolPrefState = { trackClearance?: number; padClearance?: boolean; rotationAngle?: number; trackDragAction?: string; showCourtyardConflicts?: boolean };
+type PcbToolPrefState = { trackClearance?: number; padClearance?: boolean; rotationAngle?: number; fpRotationAngle?: number; trackDragAction?: string; showCourtyardCollisions?: boolean };
 /** The board tools' copies of the preferences (they load lazily: dialogs/index.ts calls this again on "kc-pcb-tools"). */
 export function applyPcbToolPrefs(p: Prefs = prefs()): void {
   const pcbS = CollabTools.pcb && (CollabTools.pcb.state as PcbToolPrefState); if (!pcbS) return;
   pcbS.trackClearance = p.pcbDisplay.trackClearance; pcbS.padClearance = p.pcbDisplay.padClearance !== false;
-  pcbS.rotationAngle = p.pcbEditing.rotationAngle; pcbS.trackDragAction = p.pcbEditing.trackDragAction; pcbS.showCourtyardConflicts = p.pcbEditing.showCourtyardCollisions;
+  pcbS.rotationAngle = p.pcbEditing.rotationAngle; pcbS.fpRotationAngle = p.fpEditing.rotationAngle; pcbS.trackDragAction = p.pcbEditing.trackDragAction;
+  pcbS.showCourtyardCollisions = p.pcbEditing.showCourtyardCollisions;   // not LAYER_CONFLICTS_SHADOW's visibility: that is the Appearance eye's
 }
 export function applyPrefs(full = true): void {
   const p = prefs();
@@ -226,7 +231,7 @@ export function applyPrefs(full = true): void {
     } else {
       E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
       (E.renderOpts as { hcDimming?: number }).hcDimming = p.common.hcDimming;
-      E.renderOpts.ratsnestThickness = p.pcbEditing.ratsnestThickness;
+      E.renderOpts.ratsnestThickness = Math.max(0.5, Math.min(10, +p.pcbEditing.ratsnestThickness || 0.5));   // the spin control's 0.5..10
       E.escClearsHighlight = p.pcbEditing.escClearsNetHighlight; E.ctrlClickHighlight = p.pcbEditing.ctrlClickHighlight;
       applyPcbToolPrefs(p);
       setToggles({ showPadNumbers: p.pcbDisplay.showPadNumbers, showNetNames: p.pcbDisplay.showNetNames });
@@ -246,6 +251,11 @@ export function toggleGridOverrides(): boolean {
 export function fastGrid(n: 1 | 2 | "cycle"): number | null {
   const g = prefs().grids[editorId()];
   if (n === "cycle") { const cur = g.sizes.findIndex((s) => Math.abs(s - E.gridPitch) < 1e-9); n = cur === g.fast1 ? 2 : 1; }
-  const mm = g.sizes[n === 1 ? g.fast1 : g.fast2]; if (!mm) return null;
-  E.gridPitch = mm; rememberGrid(mm); updateGridStatus(); requestRender(); return mm;
+  const idx = n === 1 ? g.fast1 : g.fast2, mm = g.sizes[idx]; if (!mm) return null;
+  E.gridPitch = mm; rememberGrid(mm); updateGridStatus(); requestRender();
+  // GridPreset( idx, aFromHotkey = true ) posts GridChangedByKeyEvent; only eeschema's SCH_EDITOR_CONTROL::GridFeedback
+  // answers it, with the HOTKEY_CYCLE_POPUP "Grid" list of every grid (hotkey_feedback is on by default)
+  // GRID::UserUnitsMessageText: each size in the frame's units only
+  if (editorId() === "sch") { const u = (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units; hotkeyCyclePopup("Grid", g.sizes.map((x) => messageText(x, u, "sch")), idx); }
+  return mm;
 }

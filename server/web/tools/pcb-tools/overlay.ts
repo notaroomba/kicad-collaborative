@@ -342,8 +342,10 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
     const shown = S.hiddenSeverities && S.hiddenSeverities.size ? S.markers.filter((m) => !S.hiddenSeverities!.has(m.severity)) : S.markers;
     if (shown.length) K.drawMarkers(c, shown, "pcb", K.markerScale("pcb", view), K.PCB_BG);
   }
-  // PCB_PAINTER::draw(FOOTPRINT) on LAYER_CONFLICTS_SHADOW: the courtyards of footprints flagged COURTYARD_CONFLICT
-  if (S.move && S.move.moved && S.showCourtyardConflicts !== false) {
+  // PCB_PAINTER::draw(FOOTPRINT) on LAYER_CONFLICTS_SHADOW: the courtyards of footprints flagged COURTYARD_CONFLICT.  The
+  // flags come from DRC_INTERACTIVE_COURTYARD_CLEARANCE, which the move runs only with m_ShowCourtyardCollisions; the
+  // shadow layer has its own eye in the Appearance panel
+  if (S.move && S.move.moved && S.showCourtyardCollisions !== false && S.showCourtyardConflicts !== false) {
     const m = S.move, key = m.last[0] + "," + m.last[1] + (m.xformed ? "x" : "");
     if (!m.conflicts || m.conflicts.key !== key) m.conflicts = { key, fps: courtyardConflicts(doc, new Set(m.ids)) };
     if (m.conflicts.fps.size) { c.globalAlpha = 1; c.fillStyle = CONFLICTS_SHADOW; c.beginPath(); for (const polys of m.conflicts.fps.values()) for (const P of polys) { c.moveTo(P[0][0], P[0][1]); for (let i = 1; i < P.length; i++) c.lineTo(P[i][0], P[i][1]); c.closePath(); } c.fill("nonzero"); }

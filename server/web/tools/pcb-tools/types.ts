@@ -155,6 +155,8 @@ export type PcbState = {
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; netColorMode?: string; trackClearance?: number; padClearance?: boolean; showCourtyardConflicts?: boolean;
   /** PCBNEW_SETTINGS m_RotationAngle (Preferences > Editing Options > Step for rotate commands, degrees; 90) */ rotationAngle?: number;
+  /** FOOTPRINT_EDITOR_SETTINGS m_RotationAngle: the Footprint Editor's own rotate step (90) */ fpRotationAngle?: number;
+  /** PCBNEW_SETTINGS m_ShowCourtyardCollisions (Editing Options): run the interactive courtyard check while moving */ showCourtyardCollisions?: boolean;
   /** PCBNEW_SETTINGS m_TrackDragAction: what a left-drag of tracks does ("move", "drag" = 45 degree, "dragFree"; "drag") */ trackDragAction?: "move" | "drag" | "dragFree"; enteredGroup?: string | null; hiddenSeverities?: Set<string> | null;
   arcMode?: number; arcEditMode?: number; angleSnap?: string; stickyUp?: boolean; startWithVia?: { from: string } | null;
   forceHover?: boolean; dragFree?: boolean; downHandled?: unknown; escCleared?: unknown;

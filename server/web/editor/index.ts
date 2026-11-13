@@ -234,14 +234,21 @@ stage.addEventListener("pointerdown", (ev) => {
   const mod = activeModule();
   if (mod && moduleTool(E.tool) && mod.onPointerDown) { if (E.viewOnly && E.tool !== "highlight") { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   // PCB_SELECTION_TOOL::Main: with "Ctrl+click highlights net" (m_CtrlClickHighlight, not in the Footprint Editor) a
-  // Ctrl+click (no Shift) runs highlightNet at the click instead of toggling the selection
-  if (selModifier(ev) === "toggle" && !isSch() && E.ctrlClickHighlight && E.DOC_TYPE !== "footprint" && E.tool === "select") {
+  // Ctrl+click (no Shift) runs highlightNet at the click instead of toggling the selection.  Only the click does
+  // (evt->IsClick( BUT_LEFT )): m_drag_additive stays Ctrl||Shift, so a Ctrl+drag still draws a toggling box
+  if (selModifier(ev) === "toggle" && !isSch() && E.ctrlClickHighlight && E.DOC_TYPE !== "footprint" && E.tool === "select" && E.kdoc) {
     const pm = CollabTools.pcb as unknown as { highlightNetAt?: (c: unknown, at: number[]) => unknown } | undefined;
-    if (pm && pm.highlightNetAt) { pm.highlightNetAt(toolCtx(), [x, y]); const pst = CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev; requestRender(); ev.preventDefault(); return; }
+    if (pm && pm.highlightNetAt) {
+      const pst = CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev;
+      E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: dragKeeps(ev), mode: dragModifier(ev, false), startClient: [ev.clientX, ev.clientY], clickHighlight: true };
+      stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return;
+    }
   }
   if (E.tool === "select" && E.kdoc && !ev.shiftKey && window.KDialogs) {   // KiCad: a click on a field selects (and drags) the field, not its symbol
     const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
-    if (f && (isSch() || !E.hooks.fieldWins || E.hooks.fieldWins([x, y], f.item.id, f.name))) {
+    const won = f && !isSch() && E.hooks.fieldWins ? E.hooks.fieldWins([x, y], f.item.id, f.name, ev) : "field";
+    if (won === "menu") { const pst = CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev; ev.preventDefault(); return; }   // doSelectionMenu: the pick comes from the menu
+    if (f && won === "field") {
       const wasField = !!(E.selField && E.selField.id === f.item.id && E.selField.name === f.name);   // DRAG_SELECTED: only a selected field drags
       clearSelection(); E.selField = { id: f.item.id, name: f.name };
       const pst = !isSch() && CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev;   // one item per click: the board module does not pick what lies under the field
@@ -647,12 +654,18 @@ document.addEventListener("keydown", (ev) => {
     if (cancelInteraction()) return;
     if (cmtPanel.classList.contains("open")) { closeThread(); return; }
     if (E.tool !== "select") { setTool("select"); return; }
-    // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
-    if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField && !E.selPins.length) CollabTools.sch.exitGroup();
-    if (!isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup && !selectionIds().length && !E.selField && !(CollabTools.pcb.state && (CollabTools.pcb.state.padSel || (CollabTools.pcb.state as { escCleared?: unknown }).escCleared === ev))) CollabTools.pcb.exitGroup(toolCtx());
+    // PCB_SELECTION_TOOL / SCH_SELECTION_TOOL::Main on Esc: a selection is cleared and nothing else; with none, an
+    // entered group is left; only with neither is the net highlight cleared (m_ESCClearsNetHighlight on the board)
+    const hadSel = !!selectionIds().length || !!E.selField || !!E.selPins.length
+      || (!isSch() && !!(CollabTools.pcb && CollabTools.pcb.state && (CollabTools.pcb.state.padSel || (CollabTools.pcb.state as { escCleared?: unknown }).escCleared === ev)));
     // a schematic's net highlighting belongs to the module's Esc (SCH_SELECTION_TOOL: cleared only with nothing selected)
     const schNetHl = isSch() && !!(CollabTools.sch && (CollabTools.sch.state as { highlight?: unknown }).highlight);
-    clearAllSelection(false); if (E.highlightIds && !schNetHl && (isSch() || E.escClearsHighlight)) { E.highlightIds = null; if (CollabTools.pcb && CollabTools.pcb.state) (CollabTools.pcb.state as { highlightNet?: unknown }).highlightNet = null; } dragG.replaceChildren(); selectionChanged(); return; }   // m_ESCClearsNetHighlight
+    let leftGroup = false;
+    if (!hadSel && isSch() && CollabTools.sch && CollabTools.sch.exitGroup) leftGroup = !!CollabTools.sch.exitGroup();
+    if (!hadSel && !isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup) leftGroup = !!CollabTools.pcb.exitGroup(toolCtx());
+    clearAllSelection(false);
+    if (!hadSel && !leftGroup && !schNetHl && E.highlightIds && (isSch() || E.escClearsHighlight)) { E.highlightIds = null; if (CollabTools.pcb && CollabTools.pcb.state) (CollabTools.pcb.state as { highlightNet?: unknown }).highlightNet = null; }
+    dragG.replaceChildren(); selectionChanged(); return; }
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   // a schematic field selected on its own: Delete hides it, M / G carry it (SCH_EDIT_TOOL::DoDelete, SCH_MOVE_TOOL); a board
   // field goes on to the board module (Delete: "Hide Field") and the Move action (gestures.ts startFieldMove)

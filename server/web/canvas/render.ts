@@ -548,8 +548,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
         if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes" && g.layer !== "Edge.Cuts") continue;   // inactive layers: Hide (Edge.Cuts is mixed, not hidden)
       }
       if (noSimMarks && g.simMarker) continue;
-      if (sketched && !g.hole && !g.zoneFill && !g.track && !g.via && !g.pad && g.padIndex === undefined && !g.padText && g.t !== "image" && (it.kind === "footprint" || /^gr_|^fp_/.test(it.kind))) {
-        if (g.t === "text" ? sketchTxt : sketchGfx && it.kind !== "gr_text" && it.kind !== "gr_text_box") sketched.add(g);
+      if (sketched && !g.hole && !g.zoneFill && !g.track && !g.via && !g.pad && g.padIndex === undefined && !g.padText && g.t !== "image" && (it.kind === "footprint" || it.kind === "dimension" || /^gr_|^fp_/.test(it.kind))) {
+        // a dimension's text follows m_DisplayGraphicsFill like its lines (PCB_PAINTER::draw( PCB_DIMENSION_BASE ))
+        if (g.dim ? sketchGfx : g.t === "text" ? sketchTxt : sketchGfx && it.kind !== "gr_text" && it.kind !== "gr_text_box") sketched.add(g);
       }
       if (busTint && busPinTint(it, g)) (schTint || (schTint = new Map())).set(g, SCH.bus);
       if (objHide) {
@@ -685,13 +686,20 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       setStroke(color); setWidth(minW); setCap("butt"); strokeG(g); return;
     }
     if (sketchTracks && g.track) { setStroke(color); setWidth(minW); setCap("butt"); ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); return; }
-    if (sketched && sketched.has(g)) {   // sketch graphics: a stroked line or arc as its outline, any other shape's edge in a hairline, unfilled
+    if (sketched && sketched.has(g)) {
+      // PCB_PAINTER::draw( PCB_SHAPE ) with outline_mode: the outline of the stroke at its thickness, unfilled, in the
+      // outline width — DrawSegment( a, b, thickness ) per rectangle side, DrawSegmentChain( outline, thickness ) for a
+      // polygon or curve, DrawArcSegment for an arc, two circles at r -/+ thickness / 2 for any circle.  A dimension
+      // draws its lines and arrows with DrawLine / DrawCircle in the outline width (hairlines)
       setStroke(color); setWidth(minW); setCap("butt");
-      if ((t === "line" || t === "arc") && (g.w || 0) > 0) { ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); return; }
-      if (t === "circle" && (g.w || 0) > 0 && !g.fill) { const c = g as CircleGeom; ctx.beginPath(); ctx.arc(c.x, c.y, c.r + g.w / 2, 0, Math.PI * 2); ctx.moveTo(c.x + Math.max(0, c.r - g.w / 2), c.y); ctx.arc(c.x, c.y, Math.max(0, c.r - g.w / 2), 0, Math.PI * 2); ctx.stroke(); return; }
-      if (t === "rect") { ctx.strokeRect(g.x, g.y, g.w, g.h); return; }
-      if (t === "poly" && g.pts.length < 2) return;
-      strokeG(g); return;
+      if (g.dim) { if (t === "poly" && g.pts.length < 2) return; strokeG(g); return; }
+      ctx.beginPath();
+      if (t === "line" || t === "arc") traceTrackOutline(ctx, g);
+      else if (t === "circle") { const c = g as CircleGeom, hw = (g.w || 0) / 2; if (hw > 0) { ctx.moveTo(c.x + Math.max(0, c.r - hw), c.y); ctx.arc(c.x, c.y, Math.max(0, c.r - hw), 0, Math.PI * 2); } ctx.moveTo(c.x + c.r + hw, c.y); ctx.arc(c.x, c.y, c.r + hw, 0, Math.PI * 2); }
+      else if (t === "rect") { const w = g.wd || 0, x0 = g.x, y0 = g.y, x1 = g.x + g.w, y1 = g.y + g.h; traceSegChain(ctx, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true, w); }
+      else if (t === "poly") { if (g.pts.length < 2) return; traceSegChain(ctx, g.pts, !!g.close, g.w || 0); }
+      else tracePath(ctx, g);
+      ctx.stroke(); return;
     }
     if (t === "rect") {
       if (fill) { setFill(fill); ctx.fillRect(g.x, g.y, g.w, g.h); }
@@ -1237,6 +1245,18 @@ export function drawZonePreview(ctx: Ctx2D, g: Geom, obstacles: Geom[], base: Ma
   target.globalCompositeOperation = "source-over";
   if (octx) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = alpha; ctx.drawImage(off as CanvasImageSource, 0, 0); ctx.restore(); }
   else ctx.restore();
+}
+
+/**
+ * GAL::DrawSegmentChain( chain, width ) in the outline mode: each segment's own stadium outline (DrawSegment), and a
+ * zero width as the bare chain.
+ */
+export function traceSegChain(ctx: PathSink, pts: ArrayLike<number>[] | number[][], closed: boolean, width: number): void {
+  const n = pts.length; if (n < 2) return;
+  if (!(width > 0)) { ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < n; i++) ctx.lineTo(pts[i][0], pts[i][1]); if (closed) ctx.closePath(); return; }
+  const seg = { t: "line", x1: 0, y1: 0, x2: 0, y2: 0, w: width } as unknown as Geom & { x1: number; y1: number; x2: number; y2: number };
+  const last = closed ? n : n - 1;
+  for (let i = 0; i < last; i++) { const a = pts[i], b = pts[(i + 1) % n]; seg.x1 = a[0]; seg.y1 = a[1]; seg.x2 = b[0]; seg.y2 = b[1]; traceTrackOutline(ctx, seg); }
 }
 
 /** Outline of a track segment (stadium) or track arc (band with round caps) for the sketch display mode. */

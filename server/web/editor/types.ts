@@ -33,7 +33,8 @@ export type { ItemSummary } from "../store";
 export type SheetEntry = import("../store").SheetSummary & { page?: string };
 
 /** A box / lasso selection in progress (E.boxSel). */
-export interface BoxSel { start: number[]; cur: number[]; startClient: number[]; lasso?: boolean; pts: number[][]; add?: boolean; mode?: string }
+export interface BoxSel { start: number[]; cur: number[]; startClient: number[]; lasso?: boolean; pts: number[][]; add?: boolean; mode?: string;
+  /** a Ctrl press with m_CtrlClickHighlight: released without a drag it highlights the net under the press */ clickHighlight?: boolean }
 
 /** One step on the undo / redo lists (tools.ts): what was applied and how to take it back. */
 export interface UndoEntry {

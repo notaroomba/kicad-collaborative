@@ -52,7 +52,7 @@ export function NetInspectorPane() {
       { label: "Group by Net Chain", check: true, checked: s.group_by_net_chain, run: () => cmd({ t: "toggle", key: "group_by_net_chain" }) },
       { sep: true },
       { label: "Add Custom Group...", run: () => cmd({ t: "addGroup" }) },
-      { label: "Remove Selected Custom Group", disabled: !one || !one.group || !one.key.startsWith("custom:"), run: () => one && cmd({ t: "removeGroup", key: one.key }) },
+      { label: "Remove Selected Custom Group", disabled: !one || !one.group, run: () => one && cmd({ t: "removeGroup", key: one.key }) },
       { label: "Remove All Custom Groups", disabled: !s.custom_group_rules.length, run: () => cmd({ t: "removeGroups" }) },
       { sep: true },
       { label: "Show Zero Pad Nets", check: true, checked: s.show_zero_pad_nets, run: () => cmd({ t: "toggle", key: "show_zero_pad_nets" }) },
@@ -88,7 +88,7 @@ export function NetInspectorPane() {
       { sep: true },
       { label: "Add Net...", run: () => cmd({ t: "addNet" }) },
       { sep: true },
-      { label: "Remove Selected Custom Group", disabled: !one || !one.group || !one.key.startsWith("custom:"), run: () => one && cmd({ t: "removeGroup", key: one.key }) },
+      { label: "Remove Selected Custom Group", disabled: !one || !one.group, run: () => one && cmd({ t: "removeGroup", key: one.key }) },
     ]);
   };
   const click = (ev: RMouseEvent, row: NetInspRow) => {

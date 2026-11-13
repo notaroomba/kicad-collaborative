@@ -78,6 +78,8 @@ export type GeomFlags = {
   pinNo?: string;
   /** a schematic's excluded-from-simulation marker (drawn under markSimExclusions) */
   simMarker?: boolean;
+  /** a PCB_DIMENSION_BASE's lines and text: the sketch graphics mode draws them as hairlines (PCB_PAINTER outline_mode) */
+  dim?: boolean;
   /** hatch fill lines: no selection shadow of their own */
   noShadow?: boolean;
 };

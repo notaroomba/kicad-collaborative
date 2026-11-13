@@ -336,7 +336,7 @@ function describe(it: KItem | string): string {
  * The candidates under the cursor, as ids: on a board a pad under the cursor is its own candidate
  * ("footprintId#padIndex", ahead of its footprint), as PCB_SELECTION_TOOL's collector lists PCB_PAD_T.
  */
-function candidatesAt(mm: Mm): string[] {
+function candidatesAt(mm: Mm, withFields = false): string[] {
   const hits = hitsAt(mm); const ids = hits.map((it) => it.id);
   if (isSch() || !E.kdoc) return ids;
   // FOOTPRINT::HitTest: a footprint is hit inside its bounding hull, not only on its drawn shapes (as a left click's pickAt)
@@ -347,10 +347,19 @@ function candidatesAt(mm: Mm): string[] {
   try { pad = (KiCadCanvas.padAt as (d: KDoc, x: number, y: number) => { item?: KItem; index?: number } | null)(E.kdoc as KDoc, mm[0], mm[1]); } catch { pad = null; }
   const f = store.get().filter as Record<string, boolean>;
   if (pad && pad.item && pad.index !== undefined && f.pads !== false) { const i = ids.indexOf(pad.item.id); const key = `${pad.item.id}#${pad.index}`; if (i >= 0) ids.splice(i, 0, key); else ids.unshift(key); }
+  // GENERAL_COLLECTOR collects the PCB_FIELD under the cursor too ("fpId@field:Name"); the menus list it, the board
+  // module's hover selection takes fields through its own requestField
+  const fld = withFields && E.hooks.fieldAt ? E.hooks.fieldAt(mm) : null, fid = fld ? fieldId(fld.id, fld.name) : null;
+  if (fid && !ids.includes(fid)) ids.unshift(fid);
   return ids;
 }
-/** Select one candidate: a pad key goes to the board module's pad selection. */
+const fieldId = (fpId: string, name: string): string => `${fpId}@field:${name}`;   // pcb-tools guess.ts fieldCandidateId
+/** The item a candidate row brightens: a pad's or a field's footprint. */
+const candidateHover = (id: string): string => (id.includes("#") ? id.slice(0, id.indexOf("#")) : id.includes("@field:") ? id.slice(0, id.indexOf("@field:")) : id);
+/** Select one candidate: a pad key goes to the board module's pad selection, a field key selects that field alone. */
 function selectCandidate(id: string): void {
+  const fi = id.indexOf("@field:");
+  if (fi > 0 && !isSch()) { E.selField = { id: id.slice(0, fi), name: id.slice(fi + 7) }; requestRender(); return; }
   const hash = id.indexOf("#");
   if (hash > 0 && !isSch()) { const ps = pcbState() as unknown as { padSel?: string | null } | null; if (ps) ps.padSel = id; requestRender(); return; }
   selectItemId(id);
@@ -361,8 +370,8 @@ function selectCandidate(id: string): void {
  * a via on a track, two pads) stay ambiguous.
  */
 type Guess = (d: KDoc, ids: string[], where: Mm, o: { px: number; hidden: Set<string>; viewport: [number, number] }) => string[];
-function ambiguousAt(mm: Mm): string[] {
-  const ids = candidatesAt(mm); if (isSch() || !E.kdoc) return ids;
+function ambiguousAt(mm: Mm, withFields = false): string[] {
+  const ids = candidatesAt(mm, withFields); if (isSch() || !E.kdoc) return ids;
   const P = (window as unknown as { PcbTools?: { guessCandidates?: Guess } }).PcbTools;
   if (P && P.guessCandidates) {
     const ppm = Math.max(1e-6, pxPerMm()), r = stage.getBoundingClientRect();
@@ -379,19 +388,23 @@ E.hooks.candidatesAt = (mm: Mm): string[] => (E.kdoc ? ambiguousAt(mm) : []);
 /**
  * A left click on a footprint field: GENERAL_COLLECTOR collects the PCB_FIELD beside the tracks, pads and footprints
  * under the cursor, and GuessSelectionCandidates weighs them together (exact hits, a small item within a much larger
- * one, the active layer).  False when the field loses (a track on the active copper layer under a silkscreen
- * reference, say), so the click picks what won instead.
+ * one, the active layer).  "field" when the field alone is left, "other" when it lost (a track on the active copper
+ * layer under a silkscreen reference, say) so the click picks what won instead, and "menu" when more than one
+ * candidate is left: selectPoint then opens doSelectionMenu (Clarify Selection, with Show More Choices over all).
  */
-E.hooks.fieldWins = (mm: Mm, fpId: string, name: string): boolean => {
-  if (isSch() || !E.kdoc) return true;
+E.hooks.fieldWins = (mm: Mm, fpId: string, name: string, ev?: { clientX: number; clientY: number }): "field" | "other" | "menu" => {
+  if (isSch() || !E.kdoc) return "field";
   const P = (window as unknown as { PcbTools?: { guessCandidates?: Guess; fieldCandidateId?: (id: string, n: string) => string } }).PcbTools;
-  if (!P || !P.guessCandidates || !P.fieldCandidateId) return true;
+  if (!P || !P.guessCandidates || !P.fieldCandidateId) return "field";
   const fid = P.fieldCandidateId(fpId, name);
-  const ids = candidatesAt(mm).filter((id) => id !== fid); if (!ids.length) return true;
+  const ids = candidatesAt(mm).filter((id) => id !== fid); if (!ids.length) return "field";
   ids.unshift(fid);
   const ppm = Math.max(1e-6, pxPerMm()), r = stage.getBoundingClientRect();
-  let kept: string[]; try { kept = P.guessCandidates(E.kdoc as KDoc, ids, mm, { px: 1 / ppm, hidden: E.hiddenLayers as Set<string>, viewport: [r.width / ppm, r.height / ppm] }); } catch (e) { console.warn(e); return true; }
-  return kept.includes(fid);
+  let kept: string[]; try { kept = P.guessCandidates(E.kdoc as KDoc, ids, mm, { px: 1 / ppm, hidden: E.hiddenLayers as Set<string>, viewport: [r.width / ppm, r.height / ppm] }); } catch (e) { console.warn(e); return "field"; }
+  if (!kept.includes(fid)) return "other";
+  if (kept.length === 1) return "field";
+  if (!ev) return "field";
+  E.lastCursorMm = mm; clarifyPopup(ev, kept, null, ids); return "menu";
 };
 /**
  * The footprint field (PCB_FIELD) RequestSelection's collector keeps at a point, or null: the field's text quad is
@@ -421,14 +434,14 @@ function footprintHullHit(it: KItem, mm: Mm): boolean {
 E.hooks.clarify = (ids: string[], then: () => void): void => {
   const c = (E.lastClient as [number, number] | null) || [window.innerWidth / 2, window.innerHeight / 2];
   const mm = E.lastCursorMm as Mm | null;
-  clarifyPopup({ clientX: c[0], clientY: c[1] }, ids, then, mm && !isSch() ? candidatesAt(mm) : null);
+  clarifyPopup({ clientX: c[0], clientY: c[1] }, ids, then, mm && !isSch() ? candidatesAt(mm, true) : null);
 };
 /** KiCad's "Clarify Selection" list: offered when the click could have meant more than one item. */
 function clarifyRows(mm: Mm): CtxItem | null {
-  const ids = candidatesAt(mm).slice(0, 12); if (ids.length < 2) return null;
+  const ids = candidatesAt(mm, true).slice(0, 12); if (ids.length < 2) return null;
   const sel = new Set(selectionIds()); const ps = pcbState() as unknown as { padSel?: string | null } | null;
   return { label: "Clarify Selection", icon: "cursor", sub: ids.map((id): CtxItem => ({
-    label: describe(id), check: true, checked: sel.has(id) || (!!ps && ps.padSel === id), hover: id.includes("#") ? id.slice(0, id.indexOf("#")) : id,
+    label: describe(id), check: true, checked: sel.has(id) || (!!ps && ps.padSel === id) || (!!E.selField && fieldId(E.selField.id, E.selField.name) === id), hover: candidateHover(id),
     run: runRow(() => { clearAllSelection(false); selectCandidate(id); selectionChanged(); if (anchor) show(anchor.x, anchor.y, anchor.mm, false); }),
   })) };
 }
@@ -441,7 +454,7 @@ function clarifyRows(mm: Mm): CtxItem | null {
 export function openClarifyMenu(ev: { clientX: number; clientY: number }): boolean {
   if (!E.kdoc || state.view !== "editor" || (E.tool !== "select" && E.tool !== "highlight") || interactionBusy()) return false;
   const mm = worldMm(ev); E.lastCursorMm = mm;
-  const ids = candidatesAt(mm).slice(0, 100); if (ids.length < 2) return false;
+  const ids = candidatesAt(mm, true).slice(0, 100); if (ids.length < 2) return false;
   clarifyPopup(ev, ids, null); return true;
 }
 /** BOARD_ITEM::GetMenuImage for a board candidate id (a pad key, a field key or an item id); undefined on a schematic. */
@@ -479,7 +492,7 @@ function menuImage(id: string): string | undefined {
 function clarifyPopup(ev: { clientX: number; clientY: number }, ids: string[], then: (() => void) | null, all?: string[] | null): void {
   runners = new Map(); anchor = null;
   ids = ids.slice(0, 100);
-  const hoverOf = (id: string) => (id.includes("#") ? id.slice(0, id.indexOf("#")) : id.includes("@field:") ? id.slice(0, id.indexOf("@field:")) : id);
+  const hoverOf = candidateHover;
   const pick = (list: string[]): void => { clearAllSelection(false); for (const id of list) selectCandidate(id); selectionChanged(); if (then) then(); };
   const items: CtxItem[] = ids.map((id, i): CtxItem => ({ label: i < 9 && !IS_MAC ? `${i + 1}  ${describe(id)}` : describe(id), key: i < 9 ? String(i + 1) : undefined, icon: menuImage(id), hover: hoverOf(id), run: runRow(() => pick([id])) }));
   items.push({ sep: true }, { label: "Select All", key: "A", run: runRow(() => pick(ids.filter((id) => !id.includes("#")))) });
@@ -523,7 +536,7 @@ export function startLongPress(ev: PointerEvent): void {
     const g = E.drag as { moved?: boolean } | null; if (g && g.moved) return;
     const ps = pcbState() as unknown as { drag?: { moved?: boolean } | null; move?: unknown; pending?: unknown } | null;
     if (ps && ((ps.drag && ps.drag.moved) || ps.move)) return;
-    if (candidatesAt(worldMm({ clientX: at.x, clientY: at.y } as PointerEvent)).length < 2) return;
+    if (candidatesAt(worldMm({ clientX: at.x, clientY: at.y } as PointerEvent), true).length < 2) return;
     // the press becomes the disambiguation: whatever it started (a box, a pending drag) is dropped
     E.boxSel = null; if (g) E.drag = null; if (ps) ps.pending = null; E.fdrag = null;
     openClarifyMenu({ clientX: at.x, clientY: at.y });
@@ -575,9 +588,9 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
     } else if (!selectionIds().length && !(pcbState() as unknown as { padSel?: string | null } | null)?.padSel) {
       // PCB_SELECTION_TOOL::selectPoint on a right-click with nothing selected: more than one candidate left after the
       // heuristics opens the stand-alone Clarify Selection popup, and the context menu follows the pick
-      const amb = isSch() ? [] : ambiguousAt(mm);
-      if (amb.length > 1) { clarifyPopup(ev, amb.slice(0, 100), () => show(ev.clientX, ev.clientY, mm, false), candidatesAt(mm)); return; }
-      if (amb.length === 1 && amb[0].includes("#")) { clearAllSelection(false); selectCandidate(amb[0]); selectionChanged(); }
+      const amb = isSch() ? [] : ambiguousAt(mm, true);
+      if (amb.length > 1) { clarifyPopup(ev, amb.slice(0, 100), () => show(ev.clientX, ev.clientY, mm, false), candidatesAt(mm, true)); return; }
+      if (amb.length === 1 && (amb[0].includes("#") || amb[0].includes("@field:"))) { clearAllSelection(false); selectCandidate(amb[0]); selectionChanged(); }
       else if (amb.length || isSch()) selectAt(mm);
     }
     else {

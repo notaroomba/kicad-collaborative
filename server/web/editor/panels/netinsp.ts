@@ -184,7 +184,8 @@ export function netInspectorCmd(c: NetInspCmd): void {
     case "column": s.col_hidden = Object.assign({}, s.col_hidden, { [c.col]: !s.col_hidden[c.col] }); save(); return;
     case "expand": s.expanded_rows = s.expanded_rows.includes(c.key) ? s.expanded_rows.filter((k) => k !== c.key) : [...s.expanded_rows, c.key]; save(); return;
     case "addGroup": void addGroup(); return;
-    case "removeGroup": { const rule = c.key.replace(/^custom:/, ""); s.custom_group_rules = s.custom_group_rules.filter((r) => r !== rule); save(); return; }
+    // onRemoveSelectedGroup: any group row; the first custom rule whose pattern is the group's name goes, if there is one
+    case "removeGroup": { const name = c.key.slice(c.key.indexOf(":") + 1), at = s.custom_group_rules.indexOf(name); if (at < 0) return; s.custom_group_rules.splice(at, 1); save(); return; }
     case "removeGroups": s.custom_group_rules = []; save(); return;
     case "highlight": highlight(c.nets); return;
     case "clearHighlight": { tctx().setHighlight(null); const P = pcbTools(); if (P) P.state.highlightNet = null; bump(); return; }

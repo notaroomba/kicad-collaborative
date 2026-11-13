@@ -67,6 +67,18 @@ export const netnameMsg = (net: NetRef) => (net && net.name ? `[${unescapeName(n
  */
 export function itemDescription(doc: BoardDoc, id: string, units: string) {
   const V = (v: number) => msgValue(v, units), L = (l: string) => boardLayerName(doc, l);
+  const fi = String(id).indexOf("@field:");
+  if (fi > 0) {
+    // PCB_FIELD::GetItemDescription( aFull = false ): the field's text through KIUI::EllipsizeMenuText
+    const fp = doc.items.get(String(id).slice(0, fi)); if (!fp) return "";
+    const name = String(id).slice(fi + 7), ref = fp.ref || "";
+    const prop = (fp.node as unknown[]).find((c) => Array.isArray(c) && c[0] === "property" && String(c[1]) === name) as unknown[] | undefined;
+    const raw = unescapeName(prop ? String(prop[2] ?? "") : name === "Value" ? fp.value || "" : "").replace(/[\n\r\t]/g, " ");
+    const content = raw.length > 36 ? raw.slice(0, 34) + "..." : raw;
+    if (name === "Reference") return `Reference field of ${ref}`;
+    if (name === "Value" || name === "Footprint" || name === "Datasheet") return `${name} field of ${ref} (${content})`;
+    return name ? `${name} field of ${ref} (${content})` : `Field of ${ref} (${content})`;
+  }
   const hash = String(id).indexOf("#"), it = doc.items.get(hash > 0 ? String(id).slice(0, hash) : id); if (!it) return "";
   const n = it.node;
   if (hash > 0 && it.kind === "footprint") {

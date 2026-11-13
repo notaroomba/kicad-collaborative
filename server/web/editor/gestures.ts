@@ -490,9 +490,10 @@ function onDownCapture(ev: PointerEvent): void {
   if (t.closest && (t.closest("#cmtPanel") || t.closest("#signinOverlay") || t.closest("#pcbChip") || t.closest("[data-schtools]"))) return;
   if (ev.button === 1) {
     ev.preventDefault(); ev.stopImmediatePropagation();
-    // PCB_SELECTION_TOOL / SCH_SELECTION_TOOL: a middle double click is Zoom to Fit, with Ctrl Zoom to Objects
+    // PCB_SELECTION_TOOL / SCH_SELECTION_TOOL: a middle double click is Zoom to Fit, with Ctrl Zoom to Objects.  Only
+    // the selection tools' loops take IsDblClick( BUT_MIDDLE ): in the router, a drawing tool or a move it only pans
     const now = performance.now(), m = midDown; midDown = { t: now, x: ev.clientX, y: ev.clientY };
-    if (m && now - m.t < DBL_CLICK_MS && Math.hypot(ev.clientX - m.x, ev.clientY - m.y) < DRAG_THRESHOLD_PX) {
+    if (m && E.tool === "select" && !interactionBusy() && now - m.t < DBL_CLICK_MS && Math.hypot(ev.clientX - m.x, ev.clientY - m.y) < DRAG_THRESHOLD_PX) {
       midDown = null; const hk = E.hotkeys as { runKicadAction?: (id: string) => boolean } | undefined;
       if (hk && hk.runKicadAction) hk.runKicadAction(ev.ctrlKey || ev.metaKey ? "zoomFitObjects" : "zoomFitScreen");
       return;
