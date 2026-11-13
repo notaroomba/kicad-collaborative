@@ -32,7 +32,13 @@ export function netKind(net: string, paired = /(\+|-|_P|_N)\)?$/.test(net)): Net
 export interface DomainReport { kinds: Record<string, NetKind>; quiet: number; noisy: number; relaxed: string[] }
 /** Ground vias set beside a net's tracks (a fence) and beside its layer changes (return vias). */
 export interface FenceReport { net: string; ground: string; fence: number; returns: number; spacing: number; note?: string }
+/** The rim of the board: how far in from the edge it reaches, how much of a route may lie in it for nothing (the
+ *  approach to an edge connector's pad), and what each further mm costs, in mm of ordinary track. */
+const RIM_MM = 1.3, RIM_FREE_MM = 4, RIM_COST = 3;
+
 export interface RouteOptions {
+  /** true lets tracks run along the board edge at no extra cost (by default a long run in the rim is priced up). */
+  edgeRuns?: boolean;
   /** Ground vias for high-frequency nets.  A fence: vias down both sides of every track of an RF net (and of the
    *  nets named in `nets`), `spacing` mm apart (default 2 mm, about a twentieth of a wavelength at 2.4 GHz on FR4),
    *  wherever the ground pour lies on two layers and the rules leave room.  Return vias: one ground via beside each
@@ -123,7 +129,7 @@ interface NetInfo { key: string; obj: any; cls: RuleClass; conns: Conn[]; cluste
 const r6 = (v: number) => { const x = +(+v).toFixed(6); return x === 0 ? 0 : x; };
 
 export class Router {
-  G!: Grid; nets: NetInfo[] = []; conns: Conn[] = []; pref: number[] = []; W: Weights; allowVias: boolean; s: any;
+  G!: Grid; rim: Uint8Array | null = null; nets: NetInfo[] = []; conns: Conn[] = []; pref: number[] = []; W: Weights; allowVias: boolean; s: any;
   stopped = false; zoneCovered = 0; dropped: any[] = []; stat: Record<string, number> = { noSoft: 0, noBlockers: 0, tooMany: 0, ripped: 0, ripLimit: 0 };
   constructor(public K: any, public P: any, public doc: any, settings: any, public opts: RouteOptions = {}) {
     // the weights were fitted to how people route; a via is then charged double, because a board with few layer changes is what is asked for
@@ -183,6 +189,12 @@ export class Router {
     const G: Grid = this.G = { g: pg.g, ox: pg.ox, oy: pg.oy, W, H, layers: copper, routable, noVia: new Uint16Array(W * H), thru: new Uint8Array(W * H), outside: null, keep: copper.map(() => null),
       edgeClr: Math.max(s.edgeClearance || 0, 0), margin: pg.g * pg.g / (4 * Math.max(rmin, 0.05)) + 0.002, obstacles, classes: new Map(), weights: this.W };
     if (outline) { const out = G.outside = new Uint8Array(W * H).fill(1); fillPoly(G, outline, (x0, x1, iy) => out.fill(0, iy * W + x0, iy * W + x1 + 1)); }
+    // The rim: cells within a header pitch of the board edge.  A track may reach a pad there, but a long run along
+    // the edge (out past a pin row and down the side of the board) is priced so that a way through the board wins.
+    { const r = Math.max(1, Math.round(RIM_MM / pg.g)); const out = G.outside; const rim = this.rim = new Uint8Array(W * H);
+      const off = (ix: number, iy: number) => ix < 0 || iy < 0 || ix >= W || iy >= H || (out ? out[iy * W + ix] === 1 : false);
+      let front: number[] = []; for (let iy = 0; iy < H; iy++) for (let ix = 0; ix < W; ix++) { if (off(ix, iy)) continue; if (off(ix - 1, iy) || off(ix + 1, iy) || off(ix, iy - 1) || off(ix, iy + 1)) { rim[iy * W + ix] = 1; front.push(iy * W + ix); } }
+      for (let d = 1; d < r && front.length; d++) { const next: number[] = []; for (const i of front) { const ix = i % W, iy = (i - ix) / W; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const x = ix + dx, y = iy + dy; if (off(x, y)) continue; const j = y * W + x; if (!rim[j]) { rim[j] = 1; next.push(j); } } } front = next; } }
     for (const sh of smd) stamp(G, G.noVia, sh, 0, 1);
     // rule areas
     const zoneLayers = (n: any): number[] => { const l = K.kid(n, "layer"), ls = K.kid(n, "layers"); const names: string[] = l ? [K.str(l[1])] : ls ? ls.slice(1).map(K.str) : []; const out = new Set<number>(); for (const nm of names) { if (nm === "*.Cu" || nm === "F&B.Cu") all.forEach((i) => out.add(i)); else { const i = copper.indexOf(nm); if (i >= 0) out.add(i); } } return Array.from(out); };
@@ -773,6 +785,11 @@ export class Router {
       if (soft && !collect) {   // looking through this run's routes: prefer the way that disturbs the fewest of them
         const full = conn.cls.full, plan = extra;
         extra = (nodes) => { let hit = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const m = full[a.l]; for (let k = 0; k <= n; k++) if (m[(a.iy + sy * k) * G.W + a.ix + sx * k]) hit++; } return hit * G.g * 12 * this.W.length + (plan ? plan(nodes) : 0); };
+      }
+      if (!collect && this.rim && this.opts.edgeRuns !== true) {   // mm run along the board edge beyond a short approach to a pad there
+        const rim = this.rim, before = extra;
+        extra = (nodes) => { let run = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const step = Math.hypot(sx, sy) * G.g; for (let k = 0; k < n; k++) if (rim[(a.iy + sy * k) * G.W + a.ix + sx * k] && rim[(a.iy + sy * (k + 1)) * G.W + a.ix + sx * (k + 1)]) run += step; }
+          return Math.max(0, run - RIM_FREE_MM) * RIM_COST * this.W.length + (before ? before(nodes) : 0); };
       }
       let used = 0; for (const c of net.conns) if (c.nodes && c !== conn && c.feat) used += c.feat.vias;
       const perConn = this.opts.maxViasPerConnection; const maxVias = Math.min(gd.maxVias - used, this.viaCap, perConn === undefined || perConn === null ? Infinity : Math.max(0, +perConn));

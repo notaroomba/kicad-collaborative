@@ -47313,6 +47313,9 @@ function netKind(net, paired = /(\+|-|_P|_N)\)?$/.test(net)) {
   if (paired && pairName(net) || /(CLK|SCK|LRCK|CLOCK)\d*(_\w+)?$/i.test(n2) || /(^|[_\-.])CK\d*$/i.test(n2)) return "fast";
   return "digital";
 }
+var RIM_MM = 1.3;
+var RIM_FREE_MM = 4;
+var RIM_COST = 3;
 function pairName(net) {
   const m = /^(.*?)(\+|-|_P|_N|DP|DM|P|N)(\)?)$/.exec(net);
   if (!m || !m[1] || isSupply(net) || /(^|[\/_(])V$/i.test(m[1])) return null;
@@ -47330,6 +47333,7 @@ var Router = class _Router {
     this.P = P;
     this.doc = doc;
     this.opts = opts;
+    this.rim = null;
     this.nets = [];
     this.conns = [];
     this.pref = [];
@@ -47482,6 +47486,36 @@ var Router = class _Router {
     if (outline) {
       const out = G2.outside = new Uint8Array(W7 * H).fill(1);
       fillPoly(G2, outline, (x0, x1, iy) => out.fill(0, iy * W7 + x0, iy * W7 + x1 + 1));
+    }
+    {
+      const r = Math.max(1, Math.round(RIM_MM / pg.g));
+      const out = G2.outside;
+      const rim = this.rim = new Uint8Array(W7 * H);
+      const off = (ix, iy) => ix < 0 || iy < 0 || ix >= W7 || iy >= H || (out ? out[iy * W7 + ix] === 1 : false);
+      let front = [];
+      for (let iy = 0; iy < H; iy++) for (let ix = 0; ix < W7; ix++) {
+        if (off(ix, iy)) continue;
+        if (off(ix - 1, iy) || off(ix + 1, iy) || off(ix, iy - 1) || off(ix, iy + 1)) {
+          rim[iy * W7 + ix] = 1;
+          front.push(iy * W7 + ix);
+        }
+      }
+      for (let d = 1; d < r && front.length; d++) {
+        const next = [];
+        for (const i of front) {
+          const ix = i % W7, iy = (i - ix) / W7;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const x = ix + dx, y = iy + dy;
+            if (off(x, y)) continue;
+            const j = y * W7 + x;
+            if (!rim[j]) {
+              rim[j] = 1;
+              next.push(j);
+            }
+          }
+        }
+        front = next;
+      }
     }
     for (const sh of smd) stamp(G2, G2.noVia, sh, 0, 1);
     const zoneLayers = (n2) => {
@@ -48609,6 +48643,20 @@ var Router = class _Router {
             for (let k = 0; k <= n2; k++) if (m[(a.iy + sy * k) * G2.W + a.ix + sx * k]) hit3++;
           }
           return hit3 * G2.g * 12 * this.W.length + (plan ? plan(nodes) : 0);
+        };
+      }
+      if (!collect && this.rim && this.opts.edgeRuns !== true) {
+        const rim = this.rim, before = extra;
+        extra = (nodes) => {
+          let run = 0;
+          for (let i = 0; i + 1 < nodes.length; i++) {
+            const a = nodes[i], b = nodes[i + 1];
+            if (a.l !== b.l) continue;
+            const n2 = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy);
+            const step = Math.hypot(sx, sy) * G2.g;
+            for (let k = 0; k < n2; k++) if (rim[(a.iy + sy * k) * G2.W + a.ix + sx * k] && rim[(a.iy + sy * (k + 1)) * G2.W + a.ix + sx * (k + 1)]) run += step;
+          }
+          return Math.max(0, run - RIM_FREE_MM) * RIM_COST * this.W.length + (before ? before(nodes) : 0);
         };
       }
       let used = 0;
