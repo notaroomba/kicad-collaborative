@@ -7,6 +7,8 @@
 // ratios, the rule severities and the pin conflicts map; the other values are stored for the desktop.
 import { E, toast } from "./editor";
 import { KD, checkbox, h, select, textInput, type GridApi } from "./dom";
+import { PIN_MAP_BMP } from "./pinmap-bitmaps";
+import { effectiveTheme } from "../theme";
 import { DEFAULT_PIN_MAP, ERC_RULES, PIN_TYPE_NAMES, defaultSeverity, type Severity } from "./erc-rules";
 import { schParamInRange, str } from "./logic";
 import { loadProject, obj, proDoc, saveProject, sub, type Json, type JsonObj } from "./project";
@@ -62,7 +64,7 @@ function build(pro: JsonObj, page?: string): void {
   const bomFmts: NameRow[] = (Array.isArray(sch.bom_fmt_presets) ? sch.bom_fmt_presets as JsonObj[] : []).map((p) => ({ name: str(p.name) }));
   const sev: Record<string, Severity> = {}; const stored = obj(erc.rule_severities);
   for (const r of ERC_RULES) if (r[1]) { const s = stored[r[1]]; sev[r[1]] = s === "error" || s === "warning" || s === "ignore" ? s : defaultSeverity(r[1]); }
-  const pinMap: number[][] = DEFAULT_PIN_MAP.map((row, i) => row.map((v, j) => { const pm = erc.pin_map as number[][] | undefined; const x = Array.isArray(pm) && Array.isArray(pm[i]) ? pm[i][j] : undefined; return x === 0 || x === 1 || x === 2 ? x : v; }));
+  const pinMap: number[][] = DEFAULT_PIN_MAP.map((row, i) => row.map((v, j) => { const pm = erc.pin_map as number[][] | undefined; const x = Array.isArray(pm) && Array.isArray(pm[i]) ? pm[i][j] : undefined; return x === 0 || x === 1 || x === 2 || x === 3 ? x : v; }));   // ERC_SETTINGS takes OK .. UNCONNECTED
   const classes: NetClassRow[] = (Array.isArray(net.classes) ? net.classes as JsonObj[] : [{ name: "Default", wire_width: 6, bus_width: 12, line_style: 0, schematic_color: "rgba(0, 0, 0, 0.000)" }]).map((c) => ({ name: str(c.name), wire: numOf(c.wire_width, 6) + " mils", bus: numOf(c.bus_width, 12) + " mils", color: str(c.schematic_color || "rgba(0, 0, 0, 0.000)"), style: LINE_STYLES[numOf(c.line_style, 0)] || "Solid", src: c }));
   const patterns: PatternRow[] = (Array.isArray(net.netclass_patterns) ? net.netclass_patterns as JsonObj[] : []).map((p) => ({ pattern: str(p.pattern), netclass: str(p.netclass) }));
   const aliases: { name: string; members: NameRow[] }[] = Object.entries(obj(sch.bus_aliases)).map(([name, m]) => ({ name, members: (Array.isArray(m) ? m : []).map((x) => ({ name: str(x) })) }));
@@ -139,19 +141,37 @@ function build(pro: JsonObj, page?: string): void {
             pg.append(g);
           } },
           { label: "Pin Conflicts Map", build(pg) {
-            const COL = ["var(--wire)", "var(--warn)", "var(--err)"], TIP = ["No error or warning", "Generate warning", "Generate error"], GLYPH = ["", "!", "✕"];
-            const g = h("div", { id: "kd-ss-pinmap", style: "display:grid;grid-template-columns:max-content repeat(12, 26px);gap:3px;align-items:center" });
-            const paint = (b: HTMLElement, v: number) => { b.style.background = COL[v]; b.textContent = GLYPH[v]; b.title = TIP[v]; };
+            // PANEL_SETUP_PINMAP::reBuildMatrixPanel: a lower-triangular matrix of bitmap buttons, row titles right-aligned
+            // on the left, each column title written above its diagonal cell with a "|" callout; a click cycles OK →
+            // warning → error (changeErrorLevel, % 3) and sets both [row][col] and [col][row] on OK
+            const dark = effectiveTheme() === "dark", BMP = ["erc_green", "ercwarn", "ercerr"], TIP = ["No error or warning", "Generate warning", "Generate error"];
+            const BW = 24, BH = 24, PX = 8, PY = 6, CH = 17, top = CH * 2;   // bitmapSize, text_padding, charSize.y
+            const paint = (b: HTMLElement, v: number) => {
+              // setDRCMatrixButtonState: PIN_ERROR::UNCONNECTED has no bitmap of its own and keeps the one it was built with
+              const k = v >= 0 && v <= 2 ? v : 0, set = PIN_MAP_BMP[BMP[k]][dark ? "dark" : "light"], img = b.firstElementChild as HTMLImageElement;
+              if (v >= 0 && v <= 2) { img.src = set[0]; img.srcset = `${set[0]} 1x, ${set[1]} 2x`; b.title = TIP[v]; b.dataset.bitmap = BMP[k]; }
+              else if (!img.src) { img.src = set[0]; img.srcset = `${set[0]} 1x, ${set[1]} 2x`; b.dataset.bitmap = BMP[0]; }
+              b.dataset.level = String(v);
+            };
+            const wrap = h("div", { id: "kd-ss-pinmap", style: "display:flex;align-items:flex-start" });
+            const labels = h("div", { style: `padding-top:${top}px;padding-left:5px;padding-right:5px;text-align:right;white-space:nowrap` });
+            const box = h("div", { style: `position:relative;width:${12 * (BW + PX) + 140}px;height:${top + 12 * (BH + PY)}px` });
             for (let i = 0; i < 12; i++) {
-              g.append(h("div", { style: "text-align:right;padding-right:8px;white-space:nowrap" }, PIN_TYPE_NAMES[i]));
-              for (let j = 0; j < 12; j++) {
-                if (j > i) { g.append(j === i + 1 ? h("div", { style: "grid-column:span " + (11 - i) + ";padding-left:6px;white-space:nowrap;color:var(--ink-2);font-size:11px" }, PIN_TYPE_NAMES[i]) : h("span", { style: "display:none" })); continue; }
-                const b = h("button", { type: "button", disabled: ro, style: "width:24px;height:22px;border:1px solid var(--line);border-radius:var(--r-2);color:#fff;font-weight:700;font-size:12px;padding:0;cursor:pointer" }); b.dataset.cell = `${i},${j}`; paint(b, pinMap[i][j]);
-                b.addEventListener("click", () => { const v = (pinMap[i][j] + 1) % 3; pinMap[i][j] = pinMap[j][i] = v; paint(b, v); }); g.append(b);
+              labels.append(h("div", { style: `height:${BH + PY}px;line-height:${BH + PY}px` }, PIN_TYPE_NAMES[i]));
+              const y = top + i * (BH + PY);
+              for (let j = 0; j <= i; j++) {
+                const x = j * (BW + PX);
+                if (i === j) box.append(h("div", { style: `position:absolute;left:${x + Math.round((BW + PX) / 2)}px;top:${y - CH * 2}px;white-space:nowrap;line-height:${CH}px` }, PIN_TYPE_NAMES[i]),
+                  h("div", { style: `position:absolute;left:${x + Math.round((BW + PX) / 2)}px;top:${y - CH}px;line-height:${CH}px` }, "|"));
+                const b = h("button", { type: "button", class: "kd-bmpbtn", disabled: ro, style: `position:absolute;left:${x}px;top:${y}px;width:${BW + PX}px;height:${BH + PY}px;padding:0;border:0;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer` }, h("img", { width: "16", height: "16", alt: "" }));
+                b.dataset.cell = `${i},${j}`; paint(b, pinMap[i][j]);
+                b.addEventListener("click", () => { const v = (pinMap[i][j] + 1) % 3; pinMap[i][j] = pinMap[j][i] = v; paint(b, v); }); box.append(b);
               }
             }
-            pg.append(g, h("div", { class: "kd-row", style: "margin-top:12px;gap:16px;color:var(--ink-2)" }, ...[0, 1, 2].map((v) => h("span", { class: "kd-row", style: "gap:5px" }, h("span", { style: `display:inline-block;width:14px;height:14px;border-radius:var(--r-1);background:${COL[v]}` }), TIP[v])),
-              h("button", { class: "btn sm", type: "button", disabled: ro, style: "margin-left:auto", onclick: () => { for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) pinMap[i][j] = DEFAULT_PIN_MAP[i][j]; g.querySelectorAll<HTMLElement>("button[data-cell]").forEach((b) => { const [i, j] = b.dataset.cell!.split(",").map(Number); paint(b, pinMap[i][j]); }); } }, "Reset to Defaults")));
+            wrap.append(labels, box);
+            // m_ResetMatrixButton under the matrix
+            pg.append(wrap, h("div", { class: "kd-row", style: "margin-top:8px" },
+              h("button", { class: "btn sm", type: "button", disabled: ro, onclick: () => { for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) pinMap[i][j] = DEFAULT_PIN_MAP[i][j]; box.querySelectorAll<HTMLElement>("button[data-cell]").forEach((b) => { const [i, j] = b.dataset.cell!.split(",").map(Number); paint(b, pinMap[i][j]); }); } }, "Reset to Defaults")));
           } },
         ] },
         { label: "Project", pages: [

@@ -8,6 +8,7 @@
 import { footprintModels } from "../viewer3d/models";
 import { modelNames } from "./library";
 import { silkBoxes } from "./silkscreen";
+import { applySeverities } from "../dialogs/erc-rules";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const W = window as any;
@@ -252,10 +253,18 @@ export async function geometry(input: { doc?: string; silk?: boolean }): Promise
   return { document: path, type: "board", outline: isFinite(x0) ? [r3(x0), r3(y0), r3(x1), r3(y1)] : null, copper_layers: doc.copper.slice(), parts, silk: input.silk ? silkBoxes(doc) : undefined };
 }
 
+/** The ERC as the editor's Run ERC runs it: the project's Pin Conflicts Map and rule severities (Schematic Setup > Electrical Rules). */
+export function projectErc(doc: any, extra?: Record<string, unknown>): any[] {
+  const s = SCH(); if (!s || !s.ercCheck) throw new ToolError("The ERC is not available.");
+  let erc: any = {}; try { const pro = ED().proSettings ? JSON.parse(ED().proSettings) : null; erc = (pro && pro.erc) || {}; } catch { erc = {}; }
+  const marks = s.ercCheck(doc, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined }, extra || {}));
+  return applySeverities(marks, erc.rule_severities && typeof erc.rule_severities === "object" ? erc.rule_severities : null);
+}
+
 export async function runChecks(input: { doc?: string }): Promise<unknown> {
   const { doc, path } = await resolveDoc(input.doc);
   let markers: any[];
-  if (doc.type === "sch") { const s = SCH(); if (!s || !s.ercCheck) throw new ToolError("The ERC is not available."); markers = s.ercCheck(doc, {}); }
+  if (doc.type === "sch") markers = projectErc(doc);
   else { const P = PCB(); if (!P || !P.drc) throw new ToolError("The DRC is not available."); markers = P.drc(doc, P.designSettings(ED().proSettings || null), {}); }
   const refs = (ids: string[]) => Array.from(new Set((ids || []).map((id) => doc.items.get(id)).filter(Boolean).map((it: any) => it.ref).filter(Boolean)));
   const rows = markers.map((m) => ({ severity: m.severity, code: m.code, message: m.text, x: r3(m.x), y: r3(m.y), refs: refs(m.ids) }));

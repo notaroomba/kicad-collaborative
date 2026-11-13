@@ -8,7 +8,7 @@
 // well and whether the usual mistakes are in it.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { ED, K, ToolError, fieldsOf, resolveDoc, schNets } from "./design";
+import { ED, K, ToolError, fieldsOf, projectErc, resolveDoc, schNets } from "./design";
 import { checkLayout } from "./layout";
 import { PHYSICS_MANUAL, PHYSICS_RULES, PHYSICS_SOURCE, physicsPlan, reviewPhysics } from "./review-physics";
 import { CIRCUIT_MANUAL, CIRCUIT_RULES, reviewCircuit } from "./review-circuit";
@@ -386,7 +386,7 @@ export async function reviewSchematic(doc: any, path: string): Promise<any> {
 
   // ---- ERC and the bill of materials
   {
-    try { const marks: any[] = s.ercCheck(doc, {}); const e = marks.filter((m) => m.severity === "error"), w = marks.filter((m) => m.severity !== "error" && !(/^pin_to_pin/.test(String(m.code)) && /#FLG\d/.test(JSON.stringify([m.message, m.text, m.items, m.refs]))));      // a strap pin on a rail that carries a PWR_FLAG: the flag's doing, not the design's
+    try { const marks: any[] = projectErc(doc); const e = marks.filter((m) => m.severity === "error"), w = marks.filter((m) => m.severity !== "error" && !(/^pin_to_pin/.test(String(m.code)) && /#FLG\d/.test(JSON.stringify([m.message, m.text, m.items, m.refs]))));      // a strap pin on a rail that carries a PWR_FLAG: the flag's doing, not the design's
       if (e.length) add("erc", "error", `The ERC reports ${e.length} error${e.length > 1 ? "s" : ""} (sch.check() lists them).`, Array.from(new Set(e.map((m) => m.code))));
       if (w.length) add("erc", "warning", `The ERC reports ${w.length} warning${w.length > 1 ? "s" : ""}. Fix each, or write beside it why it is accepted.`, Array.from(new Set(w.map((m) => m.code))));
     } catch { /* no ERC here */ }

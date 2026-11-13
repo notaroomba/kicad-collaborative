@@ -1272,8 +1272,9 @@ test("ERC pin conflicts: KiCad's pin matrix (two outputs, output to power output
   assert.ok(all.length === 2 && all.some((x) => x.ids.includes(pi.id)) && all.some((x) => x.ids.includes(pi3.id)), JSON.stringify(all.map((x) => x.text)));
   place(c, "power:PWR_FLAG", [114.3, 152.4], "#FLG1"); ms = sch.ercCheck(d); assert.ok(!ms.some((x) => x.code === "power_pin_not_driven"), "PWR_FLAG drives it");
   // a power symbol's net without a power output: only a warning here, the flag may live on another sheet
-  const pi2 = place(c, "T:PWRI", [101.6, 165.1], "U8"); place(c, "power:VCC", [127, 165.1], "#PWR1"); K.createItem(d, _.lineNode("wire", [101.6, 165.1], [127, 165.1]));
-  ms = sch.ercCheck(d); m = ms.find((x) => x.code === "power_pin_not_driven"); assert.ok(m && m.severity === "warning" && /no driver on this sheet/.test(m.text) && m.ids.includes(pi2.id));
+  // (erc.cpp marks powerInPinsNeedingDrivers.front(): pins sort by reference, so #PWR1's power input before U8's)
+  const pi2 = place(c, "T:PWRI", [101.6, 165.1], "U8"), vcc = place(c, "power:VCC", [127, 165.1], "#PWR1"); K.createItem(d, _.lineNode("wire", [101.6, 165.1], [127, 165.1]));
+  ms = sch.ercCheck(d); m = ms.find((x) => x.code === "power_pin_not_driven"); assert.ok(m && m.severity === "warning" && /no driver on this sheet/.test(m.text) && m.ids.includes(vcc.id), JSON.stringify(m)); assert.ok(pi2);
   // an input with nothing driving it, and a hierarchical label that hides the driver on another sheet
   const i2 = place(c, "T:IN", [101.6, 177.8], "U9"); place(c, "T:IN", [127, 177.8], "U10"); K.createItem(d, _.lineNode("wire", [101.6, 177.8], [127, 177.8]));
   ms = sch.ercCheck(d); assert.ok(ms.some((x) => x.code === "pin_not_driven" && x.severity === "error" && x.ids.includes(i2.id)));

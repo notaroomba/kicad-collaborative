@@ -20,6 +20,38 @@ export const PIN_MATRIX = [
   [0, 2, 1, 2, 0, 0, 1, 0, 2, 2, 2, 2], [0, 2, 0, 1, 0, 0, 1, 0, 2, 0, 0, 2], [0, 2, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2], [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]];
 export const DRIVING = new Set(["output", "power_out", "passive", "tri_state", "bidirectional"]), DRIVEN = new Set(["input", "power_in"]);
 export const pinTypeIndex = (t: string) => { const i = PIN_TYPES.indexOf(t); return i < 0 ? 6 : i; };
+/** ERC_SETTINGS m_PinTypeWeights (SM_HEURISTICS, the default sorting metric of pin conflicts). */
+export const PIN_TYPE_WEIGHT: Record<string, number> = { free: 11, unspecified: 10, passive: 9, open_collector: 8, open_emitter: 7, input: 6, tri_state: 5, bidirectional: 4, output: 3, power_in: 2, power_out: 1, no_connect: 0 };
+/** PIN_ERROR of a pin map entry (OK 0, WARNING 1, PP_ERROR 2, UNCONNECTED 3); anything else reads as OK, as ERC_SETTINGS' loader skips it. */
+export function pinErrorAt(map: number[][], a: string, b: string): number {
+  const row = Array.isArray(map) ? map[pinTypeIndex(a)] : null, v = Array.isArray(row) ? row[pinTypeIndex(b)] : 0;
+  return Number.isInteger(v) && v >= 0 && v <= 3 ? v : PIN_MATRIX[pinTypeIndex(a)][pinTypeIndex(b)];
+}
+/** ercErrorCode: only PIN_ERROR::WARNING is a warning, every other non-OK value is ERCE_PIN_TO_PIN_ERROR. */
+export const pinErrorSeverity = (e: number): "error" | "warning" => (e === 1 ? "warning" : "error");
+/** SCH_PIN::IsStacked: pins of one symbol at one position with one name, of the same type or one of them passive / free. */
+export function stackedPins(a: { item: KItem; p: Pt; pin: SymPin }, b: { item: KItem; p: Pt; pin: SymPin }): boolean {
+  const loose = (t: string) => t === "passive" || t === "free";
+  return a.item === b.item && ptKey(a.p) === ptKey(b.p) && a.pin.name === b.pin.name && (a.pin.type === b.pin.type || loose(a.pin.type) || loose(b.pin.type));
+}
+/** StrNumCmp (case sensitive): runs of digits compare as numbers. */
+export function strNumCmp(a: string, b: string): number {
+  let i = 0, j = 0; const digit = (c: string): boolean => c >= "0" && c <= "9";
+  while (i < a.length && j < b.length) {
+    let c1 = a[i], c2 = b[j];
+    if (digit(c1) && digit(c2)) {
+      let n1 = 0, n2 = 0;
+      do { n1 = n1 * 10 + (a.charCodeAt(i) - 48); i++; } while (i < a.length && digit(a[i]));
+      do { n2 = n2 * 10 + (b.charCodeAt(j) - 48); j++; } while (j < b.length && digit(b[j]));
+      if (n1 !== n2) return n1 < n2 ? -1 : 1;
+      c1 = i < a.length ? a[i] : "\0"; c2 = j < b.length ? b[j] : "\0";
+    }
+    if (c1 !== c2) return c1 < c2 ? -1 : 1;
+    if (i < a.length) i++;
+    if (j < b.length) j++;
+  }
+  return i < a.length ? 1 : j < b.length ? -1 : 0;
+}
 export const ptKey = (p: Pt) => r4(p[0]) + "," + r4(p[1]);
 /** A terminal of an ERC net: a symbol pin, a sheet pin or an item's connection point; attached once it touches another. */
 export interface ErcTerm { item: KItem; p: Pt; net: string; key?: string; pin?: SymPin; power?: boolean; sheetPin?: string; attached?: boolean }
@@ -116,25 +148,51 @@ export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
       if (t.pin.type === "no_connect" || (noConnectAt(doc, t.p) && net.terms.some((u) => u !== t && u.item !== t.item)))
         mark("no_connect_connected", "warning", t.p, `A pin with a "no connection" flag is connected: ${pinLabel(t)}`, [t.item.id], [pinItemRef(t)]);
     }
-    const visible = pins.filter((t) => !t.pin.hidden || t.power);
-    let hasDriver = false, isPower = visible.some((t) => t.pin.type === "power_in"), needs: (typeof pins)[number] | null = null, needAll: (typeof pins)[number][] = [], worst: { e: number; a: (typeof pins)[number]; b: (typeof pins)[number] } | null = null;
-    for (let i = 0; i < visible.length; i++) {
-      const a = visible[i];
+    // TestPinToPin: every pin of the net, sorted by reference then pin number (StrNumCmp)
+    const all = pins.slice().sort((a, b) => strNumCmp(a.item.ref || "", b.item.ref || "") || strNumCmp(a.pin.number, b.pin.number));
+    const isPower = all.some((t) => t.pin.type === "power_in"), pinMap = opts.pinMap || PIN_MATRIX;
+    let hasDriver = false, needs: (typeof pins)[number] | null = null;
+    const needAll: (typeof pins)[number][] = [], mismatches: [number, number, number][] = [], weight = new Map<number, number>();
+    for (let i = 0; i < all.length; i++) {
+      const a = all[i];
+      if (DRIVEN.has(a.pin.type)) {
+        // needsDriver is the pin the report shows: upgraded to a visible one, and to a power input on a power net
+        needAll.push(a);
+        if (!needs || (needs.pin.hidden && !a.pin.hidden) || (isPower !== (needs.pin.type === "power_in") && isPower === (a.pin.type === "power_in"))) needs = a;
+      }
       if (isPower ? a.pin.type === "power_out" : DRIVING.has(a.pin.type)) hasDriver = true;
-      if (DRIVEN.has(a.pin.type)) { needAll.push(a); if (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in")) needs = a; }
-      for (let j = i + 1; j < visible.length; j++) {
-        const b = visible[j]; if (a.item === b.item && a.pin.number === b.pin.number) continue;
-        const e = (opts.pinMap || PIN_MATRIX)[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];   // the project's Pin Conflicts Map when given
-        if (e && (!worst || e > worst.e)) worst = { e, a, b };
+      for (let j = i + 1; j < all.length; j++) {
+        const b = all[j];
+        if (stackedPins(a, b)) continue;   // SCH_PIN::IsStacked on the same sheet
+        const e = pinErrorAt(pinMap, a.pin.type, b.pin.type);
+        if (!e) continue;
+        mismatches.push([i, j, e]);
+        // ERC_PIN_SORTING_METRIC::SM_HEURISTICS: the count is the pin type's weight
+        weight.set(i, PIN_TYPE_WEIGHT[a.pin.type] ?? 10); weight.set(j, PIN_TYPE_WEIGHT[b.pin.type] ?? 10);
       }
     }
-    if (worst) mark("pin_to_pin", worst.e === 2 ? "error" : "warning", worst.a.p, `Pins of type ${PIN_TYPE_TEXT[worst.a.pin.type]} and ${PIN_TYPE_TEXT[worst.b.pin.type]} are connected: ${pinLabel(worst.a)} and ${pinLabel(worst.b)}`, [worst.a.item.id, worst.b.item.id], [pinItemRef(worst.a), pinItemRef(worst.b)]);
-    if (needs && !hasDriver && visible.length > 1 && !net.terms.some((t) => t.pin && noConnectAt(doc, t.p))) {
+    // pins_dsc: heaviest first (ties keep the sorted order); each pin takes its nearest conflicting pin and the
+    // pairs it was part of are used up
+    const order = Array.from(weight.entries()).sort((x, y) => y[1] - x[1] || x[0] - y[0]);
+    for (const [pi] of order) {
+      if (!mismatches.length) break;
+      const a = all[pi]; let near = -1, best = Infinity, err = 0;
+      for (let k = mismatches.length - 1; k >= 0; k--) {
+        const [i, j, e] = mismatches[k]; const other = i === pi ? j : j === pi ? i : -1; if (other < 0) continue;
+        mismatches.splice(k, 1);
+        const d = Math.hypot(all[other].p[0] - a.p[0], all[other].p[1] - a.p[1]);
+        if (d < best || (d === best && other < near)) { best = d; near = other; err = e; }
+      }
+      if (near < 0) continue;
+      const b = all[near];
+      mark("pin_to_pin", pinErrorSeverity(err), a.p, `Pins of type ${PIN_TYPE_TEXT[a.pin.type]} and ${PIN_TYPE_TEXT[b.pin.type]} are connected: ${pinLabel(a)} and ${pinLabel(b)}`, [a.item.id, b.item.id], [pinItemRef(a), pinItemRef(b)]);
+    }
+    if (needs && !hasDriver && all.length > 1 && !net.terms.some((t) => t.pin && noConnectAt(doc, t.p))) {
       const leavesSheet = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label");
       // TestPinToPin: one marker on the chosen pin, or with Show all errors one on every pin that needs a driver
       // (the power inputs on a power net, else the pins not on power symbols, else all of them)
       const powerIns = needAll.filter((t) => t.pin.type === "power_in"), nonPower = needAll.filter((t) => !t.power);
-      const flagged = !opts.showAllErrors ? [needs] : isPower && powerIns.length ? powerIns : nonPower.length ? nonPower : needAll;
+      const flagged = !opts.showAllErrors ? [isPower && powerIns.length ? powerIns[0] : needs] : isPower && powerIns.length ? powerIns : nonPower.length ? nonPower : needAll;
       if (!leavesSheet) for (const t of flagged) mark(isPower ? "power_pin_not_driven" : "pin_not_driven", leaves ? "warning" : "error", t.p,
         (isPower ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(t) + (leaves ? " (no driver on this sheet)" : ""), [t.item.id], [pinItemRef(t)]);
     }
