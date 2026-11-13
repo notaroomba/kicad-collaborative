@@ -15,6 +15,7 @@ import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
 import { getInactiveMode, setInactiveMode } from "../editor/panels/appearance";
 import { wakatimePage, type WakaPage } from "./wakatime";
+import { assignScrollMod, type ScrollMod } from "../editor/wheel-model";
 
 const MIL = 0.0254;
 
@@ -171,20 +172,7 @@ export function openPreferences(page?: string, staged?: Staged): void {
             dim.addEventListener("change", () => { const v = Math.max(0, Math.min(1, +dim.value)); if (isFinite(v)) { p.common.hcDimming = v; dim.value = String(v); } });
             ap.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "High-contrast mode dimming factor:"), dim));
           } },
-          { label: "Mouse and Touchpad", build(pg) {
-            const pz = KD().staticBox(pg, "Pan and Zoom");
-            const slider = h("input", { type: "range", min: "1", max: "10", step: "1", value: String(p.mouse.zoomSpeed), id: "kd-pref-zoomspeed", disabled: p.mouse.autoZoomSpeed, style: "width:220px", title: "How far to zoom in for each rotation of the mouse wheel" });
-            slider.addEventListener("input", () => { p.mouse.zoomSpeed = +slider.value; });
-            pz.append(checkbox("Center and warp cursor on zoom", p.mouse.centerOnZoom, (on) => { p.mouse.centerOnZoom = on; }, { title: "Center the cursor on screen when zooming.", disabled: true }),
-              h("div", { class: "kd-row", style: "margin-top:6px" }, h("label", { style: "color:var(--ink-2)" }, "Zoom speed:"), slider, checkbox("Automatic", p.mouse.autoZoomSpeed, (on) => { p.mouse.autoZoomSpeed = on; slider.disabled = on; }, { id: "kd-pref-zoomauto", title: "Pick the zoom speed automatically" })));
-            const dg = KD().staticBox(pg, "Drag Gestures");
-            dg.append(h("div", { style: "display:grid;grid-template-columns:max-content 200px;gap:6px 10px;align-items:center" },
-              h("label", null, "Left button drag:"), select(["Draw selection rectangle"], "Draw selection rectangle", undefined, { disabled: true }),
-              h("label", null, "Middle button drag:"), select([["pan", "Pan"], ["none", "None"]], p.mouse.middleDrag, (v) => { p.mouse.middleDrag = v as "pan" | "none"; }, { id: "kd-pref-middle" }),
-              h("label", null, "Right button drag:"), select([["pan", "Pan"], ["none", "None"]], p.mouse.rightDrag, (v) => { p.mouse.rightDrag = v as "pan" | "none"; }, { id: "kd-pref-right" })));
-            const sg = KD().staticBox(pg, "Scroll Gestures");
-            sg.append(h("p", { class: "kd-note", style: "margin:0" }, "Vertical touchpad or scroll wheel movement zooms; the browser's own gestures pan with a middle or right button drag."));
-          } },
+          { label: "Mouse and Touchpad", build(pg) { mousePage(pg, p); } },
           { label: "Hotkeys", build(pg) { hk = hotkeysPanel(pg, staged && staged.hotkeys); } },
           // not a KiCad panel: Junction's WakaTime heartbeats (the desktop app has the same page)
           { label: "WakaTime", build(pg) { waka = wakatimePage(pg, (host, title) => KD().staticBox(host, title)); } },
@@ -275,6 +263,81 @@ export function openPreferences(page?: string, staged?: Staged): void {
         ] },
       ], { selected: page || lastPage || "Mouse and Touchpad" });
     },
-    ok() { lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved");
+    ok() {
+      // PANEL_MOUSE_SETTINGS::TransferDataFromWindow: one modifier per vertical scroll action
+      if (!scrollModsValid(p.mouse)) { toast("Only one action can be assigned to each vertical scroll setting", 4000); return false; }
+      lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved");
       if (waka) waka.apply().catch((e) => toast(`WakaTime settings were not saved: ${e instanceof Error ? e.message : String(e)}`)); } });
+}
+
+/** isScrollModSetValid: zoom, pan left / right and pan up / down each on a different modifier. */
+export function scrollModsValid(m: Prefs["mouse"]): boolean { return m.zoomMod !== m.panHMod && m.panHMod !== m.panVMod && m.panVMod !== m.zoomMod; }
+
+/**
+ * PANEL_MOUSE_SETTINGS (common/dialogs/panel_mouse_settings_base.cpp): Pan and Zoom, Drag Gestures and Scroll
+ * Gestures, with the radio grid of modifiers per vertical-scroll action and the two reset buttons.
+ */
+function mousePage(pg: HTMLElement, p: Prefs): void {
+  const m = p.mouse;
+  const pz = KD().staticBox(pg, "Pan and Zoom");
+  const zoomSlider = h("input", { type: "range", min: "1", max: "10", step: "1", value: String(m.zoomSpeed), id: "kd-pref-zoomspeed", disabled: m.autoZoomSpeed, style: "width:160px" }) as HTMLInputElement;
+  zoomSlider.addEventListener("input", () => { m.zoomSpeed = +zoomSlider.value; });
+  const panSlider = h("input", { type: "range", min: "1", max: "10", step: "1", value: String(m.autoPanSpeed), id: "kd-pref-autopanspeed", style: "width:160px" }) as HTMLInputElement;
+  panSlider.addEventListener("input", () => { m.autoPanSpeed = +panSlider.value; });
+  // wxGridBagSizer: (0,0) center, (0,2) auto pan, (1,0..2) acceleration, (2,0) zoom speed, (2,2) auto pan speed
+  pz.append(h("div", { style: "display:grid;grid-template-columns:max-content 30px max-content;gap:4px 0;align-items:center" },
+    checkbox("Center and warp cursor on zoom", m.centerOnZoom, (on) => { m.centerOnZoom = on; }, { id: "kd-pref-centerzoom" }), h("span"),
+    checkbox("Automatically pan while moving object", m.autoPan, (on) => { m.autoPan = on; }, { id: "kd-pref-autopan" }),
+    h("div", { style: "grid-column:1 / span 3" }, checkbox("Use zoom acceleration", m.zoomAccel, (on) => { m.zoomAccel = on; }, { id: "kd-pref-zoomaccel" })),
+    h("div", { class: "kd-row", style: "margin-top:6px" }, h("label", { style: "color:var(--ink-2)" }, "Zoom speed:"), zoomSlider,
+      checkbox("Automatic", m.autoZoomSpeed, (on) => { m.autoZoomSpeed = on; zoomSlider.disabled = on; }, { id: "kd-pref-zoomauto" })), h("span"),
+    h("div", { class: "kd-row", style: "margin-top:6px" }, h("label", { style: "color:var(--ink-2)" }, "Auto pan speed:"), panSlider)));
+  const dg = KD().staticBox(pg, "Drag Gestures");
+  const drag3: [string, string][] = [["pan", "Pan"], ["zoom", "Zoom"], ["none", "None"]];
+  dg.append(h("div", { style: "display:grid;grid-template-columns:max-content 340px;gap:6px 10px;align-items:center" },
+    h("label", null, "Left button drag:"), select([["select", "Draw selection rectangle"], ["dragSelected", "Drag selected objects; otherwise draw selection rectangle"], ["dragAny", "Drag any object (selected or not)"]],
+      m.leftDrag, (v) => { m.leftDrag = v as Prefs["mouse"]["leftDrag"]; }, { id: "kd-pref-left" }),
+    h("label", null, "Middle button drag:"), select(drag3, m.middleDrag, (v) => { m.middleDrag = v as Prefs["mouse"]["middleDrag"]; }, { id: "kd-pref-middle" }),
+    h("label", null, "Right button drag:"), select(drag3, m.rightDrag, (v) => { m.rightDrag = v as Prefs["mouse"]["rightDrag"]; }, { id: "kd-pref-right" }),
+    h("label", null, "Pan on mouse movement with key:"), select([["", "None"], ["alt", "Alt"], ["ctrl", "Ctrl"], ["shift", "Shift"]], m.motionPanMod, (v) => { m.motionPanMod = v as ScrollMod; }, { id: "kd-pref-motionpan" })));
+  const sg = KD().staticBox(pg, "Scroll Gestures");
+  const touch = select([["native", "Native gestures (recommended)"], ["scroll", "Configurable scroll gestures"]], m.touchpadMode, (v) => { m.touchpadMode = v as "native" | "scroll"; }, { id: "kd-pref-touchpad" });
+  sg.append(h("div", { class: "kd-row" }, h("label", { style: "white-space:nowrap" }, "Touchpad navigation:"), touch),
+    h("p", { class: "kd-note", style: "margin:4px 0 8px" }, "Native gestures use two-finger movement to pan and pinch to zoom. Mouse wheel mappings remain active in both modes."),
+    h("div", { style: "margin-bottom:4px" }, "Vertical touchpad or scroll wheel movement:"));
+  const warn = h("div", { class: "kd-note", id: "kd-pref-scrollwarn", style: "color:var(--err);display:none" }, "Only one action can be assigned to each column");
+  const grid = h("div", { id: "kd-pref-scrollgrid", style: "display:grid;grid-template-columns:max-content repeat(4, 42px) max-content;gap:4px 0;align-items:center;justify-items:center" });
+  const MODS: [ScrollMod, string][] = [["", "--"], ["ctrl", "Ctrl"], ["shift", "Shift"], ["alt", "Alt"]];
+  const radios: Record<string, HTMLInputElement[]> = {};
+  const reverse: Record<string, HTMLInputElement> = {};
+  const rowKey = { zoom: "zoomMod", panv: "panVMod", panh: "panHMod" } as const;
+  const sync = () => {
+    for (const [row, key] of Object.entries(rowKey)) radios[row]!.forEach((r, i) => { r.checked = m[key] === MODS[i]![0]; });
+    reverse.zoom!.checked = m.reverseZoom; reverse.panh!.checked = m.reversePanH; hzPan.checked = m.horizontalPan;
+    warn.style.display = scrollModsValid(m) ? "none" : "";
+  };
+  grid.append(h("span"), ...MODS.map(([, l]) => h("label", { style: "color:var(--ink-2)" }, l)), h("span"));
+  for (const [row, label] of [["zoom", "Zoom:"], ["panv", "Pan up/down:"], ["panh", "Pan left/right:"]] as const) {
+    radios[row] = MODS.map(([mod]) => {
+      const r = h("input", { type: "radio", name: `kd-pref-scroll-${row}`, "data-mod": mod || "none", id: `kd-pref-${row}-${mod || "none"}` }) as HTMLInputElement;
+      r.addEventListener("change", () => {
+        const cur = { zoom: m.zoomMod, panh: m.panHMod, panv: m.panVMod }; const next = assignScrollMod(cur, row, mod);
+        m.zoomMod = next.zoom; m.panHMod = next.panh; m.panVMod = next.panv; sync();
+      });
+      return r;
+    });
+    let rev: Node = h("span");
+    if (row !== "panv") { const cb = h("input", { type: "checkbox", id: `kd-pref-${row}-reverse` }) as HTMLInputElement; reverse[row] = cb;
+      cb.addEventListener("change", () => { if (row === "zoom") m.reverseZoom = cb.checked; else m.reversePanH = cb.checked; }); rev = h("label", { class: "kd-chk", style: "justify-self:start;margin-left:8px" }, cb, "Reverse"); }
+    grid.append(h("label", { style: "justify-self:end;padding-right:8px" }, label), ...radios[row]!, rev);
+  }
+  const hzPan = h("input", { type: "checkbox", id: "kd-pref-hpan" }) as HTMLInputElement;
+  hzPan.addEventListener("change", () => { m.horizontalPan = hzPan.checked; });
+  // onMouseDefaults / onTrackpadDefaults
+  const setMods = (zoom: ScrollMod, panh: ScrollMod, panv: ScrollMod, hpan: boolean) => { m.zoomMod = zoom; m.panHMod = panh; m.panVMod = panv; m.reverseZoom = false; m.reversePanH = false; m.horizontalPan = hpan; sync(); };
+  sg.append(grid, warn, h("label", { class: "kd-chk", style: "margin-top:8px" }, hzPan, "Pan left/right with horizontal movement"),
+    h("div", { class: "kd-row", style: "margin-top:10px;gap:8px" },
+      h("button", { class: "btn", type: "button", id: "kd-pref-mousedefaults", onclick: () => setMods("", "ctrl", "shift", false) }, "Reset to Mouse Defaults"),
+      h("button", { class: "btn", type: "button", id: "kd-pref-trackpaddefaults", onclick: () => { m.touchpadMode = "scroll"; touch.value = "scroll"; setMods("ctrl", "shift", "", true); } }, "Reset to Configurable Touchpad Defaults")));
+  sync();
 }

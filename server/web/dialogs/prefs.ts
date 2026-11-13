@@ -7,6 +7,8 @@ import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_DEFAULT_GRIDS, PCB_DEFAULT_GRID_IDX, PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
 import { gridChoiceText, type GridDef, type IuScale } from "../units";
 import type { Units } from "../store";
+import { IS_MAC } from "../keys";
+import type { ScrollMod } from "../editor/wheel-model";
 
 /** The KiCad frame whose window settings keep a grid list: eeschema, pcbnew, the symbol editor and the footprint editor each have their own. */
 export type EditorId = "sch" | "pcb" | "sym" | "fp";
@@ -19,7 +21,15 @@ export type SchThemeId = "default" | "classic" | "dark";
  */
 export interface GridPrefs { sizes: number[]; names?: string[]; last?: number; fast1: number; fast2: number; overrides: GridOverrides; axes?: boolean }
 export interface Prefs {
-  mouse: { autoZoomSpeed: boolean; zoomSpeed: number; middleDrag: "pan" | "none"; rightDrag: "pan" | "none"; centerOnZoom: boolean };
+  /**
+   * COMMON_SETTINGS m_Input (common/settings/common_settings.cpp:245-318), Preferences > Common > Mouse and Touchpad:
+   * center_on_zoom, auto_pan / auto_pan_acceleration, zoom_acceleration, zoom_speed / zoom_speed_auto, mouse_left /
+   * middle / right, motion_pan_modifier, touchpad_mode, scroll_modifier_zoom / pan_h / pan_v, reverse_scroll_zoom /
+   * pan_h and horizontal_pan
+   */
+  mouse: { autoZoomSpeed: boolean; zoomSpeed: number; middleDrag: "pan" | "zoom" | "none"; rightDrag: "pan" | "zoom" | "none"; centerOnZoom: boolean;
+    autoPan: boolean; autoPanSpeed: number; zoomAccel: boolean; leftDrag: "select" | "dragSelected" | "dragAny"; motionPanMod: ScrollMod;
+    touchpadMode: "native" | "scroll"; zoomMod: ScrollMod; panHMod: ScrollMod; panVMod: ScrollMod; reverseZoom: boolean; reversePanH: boolean; horizontalPan: boolean };
   schDisplay: { showHiddenPins: boolean; showHiddenFields: boolean; showPageLimits: boolean };
   /** EESCHEMA_SETTINGS (panel_eeschema_editing_options): drawing.line_mode, input.drag_is_move (inverted),
    *  drawing.auto_start_wires, input.esc_clears_net_highlight, annotation.automatic, drawing.default_repeat_offset_x / _y
@@ -43,12 +53,15 @@ export interface Prefs {
   grids: Record<EditorId, GridPrefs>;
 }
 const MIL = 0.0254;
+const IS_WIN = typeof navigator !== "undefined" && /Win/.test(navigator.platform || navigator.userAgent || "");
 function schGrids(): GridPrefs { return { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], names: ["", "", "", ""], last: 1, fast1: 1, fast2: 2, overrides: { ...SCH_GRID_OVERRIDES }, axes: false }; }
 function pcbGrids(): GridPrefs { return { sizes: PCB_GRID_SIZES.slice(), names: Array(PCB_GRID_SIZES.length).fill(""), last: PCB_DEFAULT_GRID_IDX, fast1: PCB_DEFAULT_GRID_IDX, fast2: PCB_DEFAULT_GRID_IDX + 1, overrides: { ...PCB_GRID_OVERRIDES }, axes: false }; }
 /** APP_SETTINGS_BASE::DefaultGridSizeList for pcbnew and the footprint editor: 1000 mil down to 1 mil, then 5 mm down to 0.01 mm. */
 const PCB_GRID_SIZES = PCB_DEFAULT_GRIDS;
 export const DEFAULT_PREFS: Prefs = {
-  mouse: { autoZoomSpeed: true, zoomSpeed: 5, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true },
+  mouse: { autoZoomSpeed: true, zoomSpeed: IS_MAC ? 5 : 1, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true, autoPan: false, autoPanSpeed: 5, zoomAccel: false, leftDrag: "dragSelected", motionPanMod: "",
+    // TOUCHPAD_MODE: native gestures by default on Windows only
+    touchpadMode: IS_WIN ? "native" : "scroll", zoomMod: "", panHMod: "ctrl", panVMod: "shift", reverseZoom: false, reversePanH: false, horizontalPan: true },
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true, autoStartWires: true, escClearsNetHighlight: true, repeatX: 0, repeatY: 100 * 0.0254, repeatIncrement: 1 },
   schColors: { theme: "default", followDark: false },
@@ -169,9 +182,14 @@ export function activeGridPitch(): number {
  */
 export function applyPrefs(full = true): void {
   const p = prefs();
-  // KiCad's zoom speed slider is 1..10; "automatic" is the wheel factor the web editor has always used
-  E.zoomStep = p.mouse.autoZoomSpeed ? 1.0018 : 1.0006 + 0.0004 * Math.max(1, Math.min(10, p.mouse.zoomSpeed));
-  E.middleDragPan = p.mouse.middleDrag !== "none"; E.rightDragPan = p.mouse.rightDrag !== "none";
+  // WX_VIEW_CONTROLS::LoadSettings: the wheel routing and the zoom controller (editor/wheel-model.ts) read these
+  const m = p.mouse;
+  E.wheel = { zoomMod: m.zoomMod, panHMod: m.panHMod, panVMod: m.panVMod, reverseZoom: m.reverseZoom, reversePanH: m.reversePanH, horizontalPan: m.horizontalPan,
+    zoomAcceleration: m.zoomAccel, zoomSpeed: Math.max(1, Math.min(10, m.zoomSpeed)), zoomSpeedAuto: m.autoZoomSpeed, centerOnZoom: m.centerOnZoom, touchpadMode: m.touchpadMode };
+  E.zoomController = null;
+  E.middleDragPan = m.middleDrag !== "none"; E.rightDragPan = m.rightDrag !== "none";
+  E.middleDrag = m.middleDrag; E.rightDrag = m.rightDrag; E.leftDrag = m.leftDrag; E.motionPanMod = m.motionPanMod;
+  E.autoPan = m.autoPan; E.autoPanSpeed = m.autoPanSpeed;
   E.gridFor = activeGridPitch;
   applyColorTheme(p);
   E.pcbOrigin = p.pcbOrigin; publishUserOrigin();

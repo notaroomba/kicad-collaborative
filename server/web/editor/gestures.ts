@@ -26,6 +26,8 @@ import { E } from "./state";
 import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
 import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, requestZoomEnd, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
 import { toast } from "./util";
+import { DEFAULT_WHEEL, makeZoomController, wheelAction, type WheelSettings } from "./wheel-model";
+import { IS_MAC } from "../keys";
 
 // typed faces of the untyped editor modules this file leans on
 type Mm = [number, number];
@@ -435,60 +437,51 @@ function onWheel(ev: WheelEvent): void {
   ev.preventDefault();
   const r = stage.getBoundingClientRect(), unit = ev.deltaMode === 1 ? 33 : ev.deltaMode === 2 ? r.height : 1;
   const dx = ev.deltaX * unit, dy = ev.deltaY * unit, mm = worldMm(ev);
-  // a pinch arrives as ctrl+wheel with no Ctrl key held
-  const pinch = ev.ctrlKey && !ctrlHeld;
-  if (pinch) { zoomBy(Math.pow(1.01, -dy), ev.clientX - r.left, ev.clientY - r.top); return; }
-  const mods = (ev.shiftKey ? 1 : 0) + (ev.ctrlKey ? 1 : 0) + (ev.altKey ? 1 : 0);
-  if (mods > 1) return;                                                      // KiCad forwards multi-modifier scrolls to the tools
-  // browsers turn Shift+wheel into a horizontal delta: read whichever axis carries the rotation
-  const rot = dy !== 0 ? dy : dx;
-  if (ev.shiftKey) { panBy(0, -rot * 0.0012 * r.height, mm); return; }      // 0.001 × 120 units a notch ≈ 12 % of the screen
-  if (ev.ctrlKey) { panBy(-rot * 0.0012 * r.width, 0, mm); return; }
-  if (ev.altKey) return;
-  if (dx !== 0 && Math.abs(dx) > Math.abs(dy)) { panBy(-dx, 0, mm); return; } // horizontal wheel / two-finger sideways
-  wheelZoom(Math.pow(E.zoomStep || 1.0018, -dy), ev.clientX - r.left, ev.clientY - r.top);
+  const s: WheelSettings = Object.assign({}, DEFAULT_WHEEL, E.wheel || {});
+  // a pinch arrives as ctrl+wheel with no Ctrl key held: a native zoom gesture (WX_VIEW_CONTROLS::onMagnify)
+  if (ev.ctrlKey && !ctrlHeld) { zoomAtPointer(Math.pow(1.01, -dy), ev, r, s); return; }
+  // "Native gestures": two-finger movement on a touchpad pans (a pixel-precise delta on both axes, or a fraction)
+  if (s.touchpadMode === "native" && ev.deltaMode === 0 && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && (dx !== 0 && dy !== 0 || dy % 1 !== 0 || dx % 1 !== 0)) { panBy(-dx, -dy, mm); return; }
+  const act = wheelAction({ deltaX: dx, deltaY: dy, shiftKey: ev.shiftKey, ctrlKey: ev.ctrlKey, altKey: ev.altKey }, s, r.width, r.height);
+  if (!act) return;                                                          // KiCad forwards multi-modifier scrolls to the tools
+  if (act.kind === "pan") { panBy(act.dx, act.dy, mm); return; }
+  if (!E.zoomController || E.zoomControllerFor !== E.wheel) { E.zoomController = makeZoomController(s, IS_MAC ? "mac" : /Win/.test(navigator.platform || navigator.userAgent || "") ? "win" : "linux"); E.zoomControllerFor = E.wheel; }
+  // macOS reports a scroll distance rather than notches (wheelDelta 0); elsewhere a notch is 120
+  const factor = (E.zoomController as (r: number, d: number, t: number) => number)(act.rotation, IS_MAC ? 0 : 120, performance.now());
+  zoomAtPointer(factor, ev, r, s);
 }
 
-// ---------------------------------------------------------------- smooth wheel zoom
-// KiCad's GAL eases a wheel zoom in over a few frames instead of jumping; the first step lands on the very next
-// frame (no added lag), the rest follow an ease-out over ZOOM_EASE_MS.  Notches that arrive while it runs retarget
-// it from where the view is now, so fast scrolling accelerates rather than queues.  Off with E.smoothZoom === false
-// or the OS "reduce motion" setting.
-const ZOOM_EASE_MS = 110;
-interface ZoomAnim { from: number; to: number; cx: number; cy: number; t0: number; raf: number }
-const reducedMotion = (): boolean => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
-function wheelZoom(factor: number, cx: number, cy: number): void {
-  const prev = E.zoomAnim as ZoomAnim | null;
-  if (E.smoothZoom === false || reducedMotion()) { zoomBy(factor, cx, cy); return; }
-  const [lo, hi] = (zoomLimits as unknown as () => [number, number])();
-  const base = prev ? prev.to : E.zoom as number;
-  const to = Math.min(Math.max(hi, E.zoom), Math.max(Math.min(lo, E.zoom), base * factor));
-  if (prev) cancelAnimationFrame(prev.raf);
-  const a: ZoomAnim = { from: E.zoom, to, cx, cy, t0: performance.now(), raf: 0 };
-  E.zoomAnim = a;
-  const step = (now: number): void => {
-    if (E.zoomAnim !== a) return;
-    const p = Math.min(1, Math.max(0, (now - a.t0) / ZOOM_EASE_MS)), e = 1 - Math.pow(1 - p, 3);
-    const z = a.from * Math.pow(a.to / a.from, p >= 1 ? 1 : Math.max(e, 0.35));
-    if (p >= 1) E.zoomAnim = null;
-    if (z !== E.zoom) zoomBy(z / E.zoom, a.cx, a.cy);
-    if (p >= 1) requestZoomEnd(); else a.raf = requestAnimationFrame(step);
-  };
-  a.raf = requestAnimationFrame(step);
+/**
+ * WX_VIEW_CONTROLS::onWheel's zoom: with "Center and warp cursor on zoom" (IsCursorWarpingEnabled) the view first
+ * centres on the cursor (CenterOnCursor) and zooms about the centre, and the cursor is warped there.  The browser
+ * cannot move the pointer, so the crosshair is drawn at the centre instead, and further notches with the pointer
+ * still where it was zoom about the centre again until the pointer moves.  Otherwise the zoom is about the pointer.
+ */
+function zoomAtPointer(factor: number, ev: { clientX: number; clientY: number }, r: DOMRect, s: WheelSettings): void {
+  if (!s.centerOnZoom) { zoomBy(factor, ev.clientX - r.left, ev.clientY - r.top); requestZoomEnd(); return; }
+  const cx = r.width / 2, cy = r.height / 2;
+  const warped = E.wheelWarp && E.wheelWarp[0] === ev.clientX && E.wheelWarp[1] === ev.clientY;
+  if (!warped) { E.viewTouched = true; E.panX += cx - (ev.clientX - r.left); E.panY += cy - (ev.clientY - r.top); breakFollow(); applyView(); }
+  zoomBy(factor, cx, cy); requestZoomEnd();
+  E.wheelWarp = [ev.clientX, ev.clientY];
+  const at = worldMm({ clientX: r.left + cx, clientY: r.top + cy } as PointerEvent);
+  E.lastCursorMm = at; const c = placeCrosshair(at); if (c) store.slice("viewport", { cursor: [c[0]!, c[1]!] });
 }
 
 // ---------------------------------------------------------------- right / middle button
 type OpenMenu = (ev: PointerEvent) => void;
 let openMenu: OpenMenu = () => {};
-function startPan(ev: PointerEvent, fromX: number, fromY: number): void {
+function startPan(ev: PointerEvent, fromX: number, fromY: number, zoom = false): void {
   E.pan = { x: fromX - E.panX, y: fromY - E.panY };
+  // MOUSE_DRAG_ACTION::ZOOM (WX_VIEW_CONTROLS::onMotion): a vertical drag zooms about where it started
+  if (zoom) { const r = stage.getBoundingClientRect(); E.pan.zoom = { cx: fromX - r.left, cy: fromY - r.top, lastY: fromY }; }
   stage.classList.add("panning"); E.hoverId = null;
   try { stage.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
 }
 function onDownCapture(ev: PointerEvent): void {
   const t = ev.target as Element;
   if (t.closest && (t.closest("#cmtPanel") || t.closest("#signinOverlay") || t.closest("#pcbChip") || t.closest("[data-schtools]"))) return;
-  if (ev.button === 1) { ev.preventDefault(); ev.stopImmediatePropagation(); if (E.middleDragPan !== false) startPan(ev, ev.clientX, ev.clientY); return; }   // Preferences > Mouse and Touchpad
+  if (ev.button === 1) { ev.preventDefault(); ev.stopImmediatePropagation(); if (E.middleDragPan !== false) startPan(ev, ev.clientX, ev.clientY, E.middleDrag === "zoom"); return; }   // Preferences > Mouse and Touchpad
   if (ev.button === 2) {
     ev.preventDefault(); ev.stopImmediatePropagation();
     E.rdown = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
@@ -514,7 +507,7 @@ function onDownCapture(ev: PointerEvent): void {
 }
 function onMoveCapture(ev: PointerEvent): void {
   if (buttonLost(ev)) { cancelInteraction(); }
-  if (E.rdown && !E.pan && E.rightDragPan !== false && Math.hypot(ev.clientX - E.rdown.x, ev.clientY - E.rdown.y) > DRAG_THRESHOLD_PX) { const r = E.rdown; E.rdown = null; startPan(ev, r.x, r.y); }
+  if (E.rdown && !E.pan && E.rightDragPan !== false && Math.hypot(ev.clientX - E.rdown.x, ev.clientY - E.rdown.y) > DRAG_THRESHOLD_PX) { const r = E.rdown; E.rdown = null; startPan(ev, r.x, r.y, E.rightDrag === "zoom"); }
   queueHover(ev);
 }
 function onUpCapture(ev: PointerEvent): void {

@@ -16,7 +16,7 @@ export interface EditorState {
   kdoc: (KDoc & { schSettings?: { junctionDiameter: number }; paper?: string; portrait?: boolean; titleBlock?: Record<string, string>; sheetCount?: number; pageNumber?: string }) | null;
   viewOnly: boolean; DOC_TYPE: string; units: string; tool: string; zoom: number; viewTouched: boolean; gridPitch: number; proSettings: string | null; druText: string | null;
   selection: Set<string>; selected: { id: string } | null; drag: { fp?: { id: string } } | null; fdrag: unknown; renderOpts: Record<string, unknown>; pcbOrigin?: { origin: "page" | "aux" | "grid"; invertX: boolean; invertY: boolean };
-  zoomStep?: number; middleDragPan?: boolean; rightDragPan?: boolean; gridFor?: () => number; gridDefault?: () => number; gridPicked?: (mm: number) => void; lastImperial?: string; dialogs?: unknown;
+  zoomStep?: number; middleDragPan?: boolean; rightDragPan?: boolean; wheel?: unknown; zoomController?: unknown; middleDrag?: string; rightDrag?: string; leftDrag?: string; motionPanMod?: string; autoPan?: boolean; autoPanSpeed?: number; gridFor?: () => number; gridDefault?: () => number; gridPicked?: (mm: number) => void; lastImperial?: string; dialogs?: unknown;
 }
 export const E = state.E as EditorState;
 export const toolCtx = tools.toolCtx as unknown as (extra?: Record<string, unknown>) => DialogCtx;

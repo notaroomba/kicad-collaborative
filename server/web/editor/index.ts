@@ -55,6 +55,8 @@ import { deleteSelectedField } from "./fieldops";
 import { selectionCount } from "./menu-actions";
 import { installTableCells } from "./tablecells";   // last: its imports must not reorder the modules above
 import { fontCommitObserver, initFonts } from "./fonts";
+import { installViewSwitcher } from "./view-switcher";
+import "./title";
 window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el), selectionCount };
 
 
@@ -107,6 +109,7 @@ function liveGhost(mod: GhostModule | null | undefined) {
 // wheel, middle / right button, hover and lost-release recovery: KiCad's mouse model (gestures.ts).
 // Installed before every other stage listener so it sees each event first.
 installGestures(openContextMenu);
+installViewSwitcher();   // Ctrl+Tab / Shift+Tab: the board's Preset and Viewport switcher (editor/view-switcher.ts)
 installTableCells();   // table cells as selectable items and the table edit tool (editor/tablecells.ts)
 
    // until the user pans/zooms, resizes just refit
@@ -429,7 +432,19 @@ function stagePointerMove(ev: PointerEvent, mm: [number, number]): void {
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); boxSelModifiers(ev); drawBoxSel(); return; }
   if (E.measure && E.measure.set) { measureMove(snapMm(mm), ev.shiftKey); }
+  if (E.pan && E.pan.zoom) {   // MOUSE_DRAG_ACTION::ZOOM: scale = exp( dy × zoom_speed × 0.001 ), up zooms in
+    const z = E.pan.zoom, d = z.lastY - ev.clientY; z.lastY = ev.clientY;
+    const speed = E.wheel && E.wheel.zoomSpeed ? E.wheel.zoomSpeed : 1;
+    if (d) { zoomBy(Math.exp(d * speed * 0.001), z.cx, z.cy); breakFollow(); sendPresence(mm); }
+    return;
+  }
   if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
+  // "Pan on mouse movement with key" (input.motion_pan_modifier): moving with the key held pans the view
+  if (E.motionPanMod && (E.motionPanMod === "alt" ? ev.altKey : E.motionPanMod === "ctrl" ? ev.ctrlKey || ev.metaKey : ev.shiftKey) && !(ev.buttons & 1)) {
+    if (E.metaPan) { E.viewTouched = true; E.panX += ev.clientX - E.metaPan[0]; E.panY += ev.clientY - E.metaPan[1]; breakFollow(); applyView(); }
+    E.metaPan = [ev.clientX, ev.clientY]; return;
+  }
+  E.metaPan = null;
   const modM = activeModule();
   if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, liveGhost(modM)); return; }
   if (E.fdrag) {

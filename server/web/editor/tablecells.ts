@@ -149,11 +149,12 @@ function onMove(ev: PointerEvent): void {
 let lastClient: Pt = [0, 0], panRaf = 0, panT = 0;
 /** WX_VIEW_CONTROLS::onTimer while AUTO_PANNING: the cursor in the border pans the view, and the range follows the cursor. */
 function autoPan(): void {
-  if (panRaf) return;
+  // m_autoPanEnabled && m_autoPanSettingEnabled: Preferences > Mouse and Touchpad "Automatically pan while moving object" (off by default)
+  if (panRaf || !E.autoPan) return;
   const tick = (t: number) => {
     panRaf = 0; const p = press; if (!p || !p.dragging) return;
     const r = stage.getBoundingClientRect();
-    const [dx, dy] = KiCadCanvas.autoPanStep(lastClient[0] - r.left, lastClient[1] - r.top, r.width, r.height);
+    const [dx, dy] = KiCadCanvas.autoPanStep(lastClient[0] - r.left, lastClient[1] - r.top, r.width, r.height, E.autoPanSpeed || 5);
     if (!dx && !dy) { panT = 0; return; }
     const ticks = panT ? Math.min(12, Math.max(0, t - panT) / KiCadCanvas.AUTOPAN_TICK_MS) : 1; panT = t;
     E.viewTouched = true; E.panX -= dx * ticks; E.panY -= dy * ticks; breakFollow(); applyView();
