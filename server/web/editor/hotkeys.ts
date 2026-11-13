@@ -13,7 +13,7 @@
 //                      where a module binds a key KiCad uses for something else (tables.ts KICAD_KEY_WINS);
 //   runSpecHotkey(ev)  from index.ts's keydown handler after the module had its turn: the generic table.
 // Nothing fires while the user types in a field, a dialog or an open menu (typingTarget).
-import { hotkeyKey } from "../keys";
+import { hotkeyKey, shiftedPunctCombo } from "../keys";
 import { hotkeyOwners, type EditorKind } from "../menuspec";
 import { EDITOR_ONLY, FPEDIT_BLOCKED, FPEDIT_ONLY, KICAD_KEY_WINS, MODULE_ALIAS, toolFor } from "../tables";
 import { HANDLERS } from "./actions";
@@ -95,16 +95,6 @@ export function kicadActionAvailable(id: string): boolean {
   return !!tid && ((store.get().tool.appTools as string[]).includes(tid) || !!moduleTool(tid));
 }
 
-const PUNCT_CODES: Record<string, string> = { Period: ".", Comma: ",", Slash: "/", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Minus: "-", Equal: "=", Backquote: "`" };
-/**
- * KiCad names a shifted punctuation hotkey by the unshifted key ("Ctrl+Shift+." is Ctrl with Shift and the full stop
- * key, which types ">"): the combination spelled that way, from the physical key, or "" when it is not one.
- */
-export function shiftedPunctCombo(ev: KeyboardEvent): string {
-  if (!ev.shiftKey || !ev.code || !PUNCT_CODES[ev.code]) return "";
-  const mods: string[] = []; if (ev.ctrlKey || ev.metaKey) mods.push("Ctrl"); mods.push("Shift"); if (ev.altKey) mods.push("Alt");
-  return [...mods, PUNCT_CODES[ev.code]].join("+");
-}
 /** The generic table: the first action KiCad binds to this key that the web implements. */
 export function runSpecHotkey(ev: KeyboardEvent): boolean {
   if (!E.kdoc) return false;

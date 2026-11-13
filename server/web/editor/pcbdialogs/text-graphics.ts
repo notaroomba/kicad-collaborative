@@ -46,7 +46,7 @@ export function openTextAndGraphics(ctx: ToolCtx): void {
   const checks = new Map<string, Field<boolean>>();
   const layers = Array.from(doc.layers.keys()) as string[];
   const layerSelect = (withLeave: boolean, key: string, value: string): HTMLSelectElement => {
-    const s = h("select", { "data-k": key }) as HTMLSelectElement;
+    const s = h("k-select", { "data-k": key }) as HTMLSelectElement;
     if (withLeave) s.append(h("option", { value: "" }, LEAVE));
     for (const l of layers) s.append(h("option", { value: l }, PT().boardLayerName(doc, l)));
     s.value = value; return s;
@@ -84,7 +84,7 @@ export function openTextAndGraphics(ctx: ToolCtx): void {
       const visible = triField("Visible  (fields only)", "visible");
       const lineW = lenInput("lineWidth");
       // FONT_CHOICE: KiCad Font, then the faces (those the board's text already uses and the common system faces)
-      const fontSel = h("select", { "data-k": "font" }, h("option", { value: "" }, LEAVE), h("option", { value: "kicad" }, "KiCad Font"),
+      const fontSel = h("k-select", { "data-k": "font" }, h("option", { value: "" }, LEAVE), h("option", { value: "kicad" }, "KiCad Font"),
         ...boardFontFaces(doc).map((f) => h("option", { value: "face:" + f }, f))) as HTMLSelectElement;
       const bold = triField("Bold", "bold"), italic = triField("Italic", "italic"), upright = triField("Keep upright", "keepUpright");
       const textW = lenInput("textWidth"), textH = lenInput("textHeight"), thick = lenInput("thickness");

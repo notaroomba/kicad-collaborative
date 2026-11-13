@@ -75,6 +75,16 @@ const PUNCT_CODES: Record<string, [string, string]> = {
 };
 
 /**
+ * KiCad names a shifted punctuation hotkey by the unshifted key ("Ctrl+Shift+." is Ctrl with Shift and the full stop
+ * key, which types ">"): the combination spelled that way, from the physical key, or "" when it is not one.
+ */
+export function shiftedPunctCombo(ev: { code?: string; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): string {
+  const p = ev.shiftKey && ev.code ? PUNCT_CODES[ev.code] : undefined; if (!p) return "";
+  const mods: string[] = []; if (ev.ctrlKey || ev.metaKey) mods.push("Ctrl"); mods.push("Shift"); if (ev.altKey) mods.push("Alt");
+  return [...mods, p[0]].join("+");
+}
+
+/**
  * The key a hotkey names for this event.  Option (Alt) composes another character on a Mac and on some layouts:
  * Option+S types "ß", Option+/ "÷", and Option+` is a dead key ("Dead").  wx matches the key code of the physical
  * key, so this does too: letters and digits always by their code while Alt is held, punctuation when the key
