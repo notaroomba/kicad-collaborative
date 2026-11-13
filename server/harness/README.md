@@ -87,7 +87,7 @@ a net leaves its block. A net wired inside its block has no label (KiCad names i
 Board (`project.board()`): `sync`, `outline`, `rules`, `zone`, `autoplace`, `place`, `move`, `rotate`,
 `flip`, `group`, `layers`, `route`, `fill`, `fix_thermals`, `pad_connection`, `connect`, `track`, `via`,
 and to read: `refs`, `parts`, `pads`, `pad`, `nets`, `unrouted`, `info`, `check`. `layers(4, planes=["In1.Cu"])`
-makes a four layer board. `route()` reports `left` (connections still open by net) instead of failing on a
+makes a four layer board. `courtyards()` gives each part's size as placed and `clashes()` lists the pairs that sit on top of each other (with by how much), so a floorplan is checked in seconds before `route()`, the slow step. `route()` reports `left` (connections still open by net) instead of failing on a
 blocked net, lays tracks where the filled pour leaves a pad open, and joins a pad with a starved thermal
 relief solidly. `check(kind="clearance")` lists one kind of violation. Net names are the schematic's:
 `"SW"` finds the board's `"/SW"`.

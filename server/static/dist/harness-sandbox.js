@@ -1255,6 +1255,35 @@ class Board(_Doc):
                 return [{"ref": p["ref"], "number": q[0], "x": q[1], "y": q[2], "net": q[3]} for q in p["pads"]]
         raise HarnessError(f"There is no footprint {ref} on the board.")
 
+    def courtyards(self, refs=None) -> dict:
+        """ref -> [x0, y0, x1, y1, side]: the box each part's courtyard takes up as placed (the pad box when the footprint
+        draws no courtyard). Read it after \`sync()\` to plan a floorplan from real sizes instead of guessing."""
+        want = {r.lower() for r in ([refs] if isinstance(refs, str) else refs)} if refs else None
+        out = {}
+        for p in self.geometry()["parts"]:
+            if want is not None and p["ref"].lower() not in want:
+                continue
+            box = p.get("courtyard")
+            if not box:
+                xs = [q[1] for q in p["pads"]] or [p["x"]]; ys = [q[2] for q in p["pads"]] or [p["y"]]
+                box = [min(xs) - 0.5, min(ys) - 0.5, max(xs) + 0.5, max(ys) + 0.5]
+            out[p["ref"]] = [round(v, 2) for v in box] + [p["side"]]
+        return out
+
+    def clashes(self, gap: float = 0.0) -> list:
+        """Pairs of parts on the same side whose courtyards overlap or sit closer than \`gap\` mm:
+        [[a, b, overlap_x_mm, overlap_y_mm], ...]. Moving one of the two by the smaller figure (plus the gap) clears it.
+        An empty list is a floorplan DRC will accept; check it before routing, which is the slow step."""
+        cy = list(self.courtyards().items()); out = []
+        for i, (a, A) in enumerate(cy):
+            for b, B in cy[i + 1:]:
+                if A[4] != B[4]:
+                    continue
+                ox = min(A[2], B[2]) - max(A[0], B[0]) + gap; oy = min(A[3], B[3]) - max(A[1], B[1]) + gap
+                if ox > 1e-6 and oy > 1e-6:
+                    out.append([a, b, round(ox, 2), round(oy, 2)])
+        return out
+
     def pad(self, spec: str) -> dict:
         ref, _, num = spec.partition(".")
         for q in self.pads(ref):
@@ -4498,7 +4527,7 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var d=require("node:fs"),q=globalThis,F=d.constants;process.binding=e=>{if(e==="constants")return{fs:F};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete q[e]}catch{}var O=new(require("node:string_decoder")).StringDecoder("utf8"),k=new Int32Array(new SharedArrayBuffer(4)),a="";function x(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
+`;var d=require("node:fs"),I=globalThis,F=d.constants;process.binding=e=>{if(e==="constants")return{fs:F};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete I[e]}catch{}var O=new(require("node:string_decoder")).StringDecoder("utf8"),k=new Int32Array(new SharedArrayBuffer(4)),a="";function x(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
 `);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(k,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=O.write(e.subarray(0,n))}}function p(e){let s=Buffer.from(JSON.stringify(e)+`
 `,"utf8"),n=0;for(;n<s.length;)try{n+=d.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(k,0,0,4);continue}throw t}}var R=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",m],["kicad_harness/transport.py",u],["kicad_harness/sheet.py",h],["kicad_harness/parts/__init__.py",g],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",b],["kicad_harness/parts/search.py",y],["kicad_harness/parts/symbol.py",w]],z=`
 import json, sys, traceback

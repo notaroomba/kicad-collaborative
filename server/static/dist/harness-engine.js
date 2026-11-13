@@ -61483,6 +61483,19 @@ async function geometry(input) {
       y1 = Math.max(y1, it.bbox[3]);
     }
     if (it.kind !== "footprint") continue;
+    let cb;
+    try {
+      const cy = P.courtyards({ node: it.node });
+      let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+      for (const k2 of Object.keys(cy)) for (const loop of cy[k2]) for (const q of loop) {
+        a = Math.min(a, q[0]);
+        b = Math.min(b, q[1]);
+        c = Math.max(c, q[0]);
+        d = Math.max(d, q[1]);
+      }
+      if (a <= c) cb = [r33(a), r33(b), r33(c), r33(d)];
+    } catch {
+    }
     parts.push({
       ref: it.ref || "",
       id: it.id,
@@ -61493,6 +61506,7 @@ async function geometry(input) {
       rotation: it.rot || 0,
       side: it.layer === "B.Cu" ? "back" : "front",
       box: it.bbox ? it.bbox.map(r33) : void 0,
+      courtyard: cb,
       pads: P.padsOf(it).map((p) => [p.number, r33(p.x), r33(p.y), NT.key(p.net) || ""])
     });
   }

@@ -1168,6 +1168,35 @@ class Board(_Doc):
                 return [{"ref": p["ref"], "number": q[0], "x": q[1], "y": q[2], "net": q[3]} for q in p["pads"]]
         raise HarnessError(f"There is no footprint {ref} on the board.")
 
+    def courtyards(self, refs=None) -> dict:
+        """ref -> [x0, y0, x1, y1, side]: the box each part's courtyard takes up as placed (the pad box when the footprint
+        draws no courtyard). Read it after `sync()` to plan a floorplan from real sizes instead of guessing."""
+        want = {r.lower() for r in ([refs] if isinstance(refs, str) else refs)} if refs else None
+        out = {}
+        for p in self.geometry()["parts"]:
+            if want is not None and p["ref"].lower() not in want:
+                continue
+            box = p.get("courtyard")
+            if not box:
+                xs = [q[1] for q in p["pads"]] or [p["x"]]; ys = [q[2] for q in p["pads"]] or [p["y"]]
+                box = [min(xs) - 0.5, min(ys) - 0.5, max(xs) + 0.5, max(ys) + 0.5]
+            out[p["ref"]] = [round(v, 2) for v in box] + [p["side"]]
+        return out
+
+    def clashes(self, gap: float = 0.0) -> list:
+        """Pairs of parts on the same side whose courtyards overlap or sit closer than `gap` mm:
+        [[a, b, overlap_x_mm, overlap_y_mm], ...]. Moving one of the two by the smaller figure (plus the gap) clears it.
+        An empty list is a floorplan DRC will accept; check it before routing, which is the slow step."""
+        cy = list(self.courtyards().items()); out = []
+        for i, (a, A) in enumerate(cy):
+            for b, B in cy[i + 1:]:
+                if A[4] != B[4]:
+                    continue
+                ox = min(A[2], B[2]) - max(A[0], B[0]) + gap; oy = min(A[3], B[3]) - max(A[1], B[1]) + gap
+                if ox > 1e-6 and oy > 1e-6:
+                    out.append([a, b, round(ox, 2), round(oy, 2)])
+        return out
+
     def pad(self, spec: str) -> dict:
         ref, _, num = spec.partition(".")
         for q in self.pads(ref):
