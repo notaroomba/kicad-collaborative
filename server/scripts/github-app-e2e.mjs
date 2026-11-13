@@ -101,6 +101,7 @@ try {
   r = await browse(alice, `${BASE}/admin/github-app`);
   const action = unescape((r.text.match(/action="([^"]+)"/) || [])[1] || '');
   const manifest = JSON.parse(unescape((r.text.match(/name="manifest" id="manifest" value="([^"]+)"/) || [])[1] || '{}'));
+  check('the default app name is KiCAD Junction', /value="KiCAD Junction"/.test(r.text));
   check('the administrator gets the registration form', r.status === 200 && action.startsWith(`${GH}/settings/apps/new?state=`), action);
   check('the manifest asks for contents, metadata and pull requests only',
     JSON.stringify(manifest.default_permissions) === JSON.stringify({ contents: 'write', metadata: 'read', pull_requests: 'write' }),
@@ -201,6 +202,14 @@ try {
   c = await browse(alice, `${BASE}/auth/github/connect?next=/github`);
   check('the app grant is refused for a different GitHub account', c.status === 400 && /not the account/.test(c.text), `${c.status}`);
   await ctl('browser', { login: 'gh-alice' });
+
+  // ============================================================ the app renamed on GitHub
+  await ctl('rename', { name: 'KiCAD Junction', slug: 'kicad-junction' });
+  await new Promise((ok) => setTimeout(ok, 61_000));   // the server asks GitHub again after a minute
+  r = await call(alice, 'GET', '/api/github');
+  check('a renamed app is picked up from GitHub (GET /app with the app\'s key)', r.j.app?.slug === 'kicad-junction' && r.j.app?.name === 'KiCAD Junction', JSON.stringify(r.j.app));
+  c = await browse(alice, `${BASE}/auth/github/install?next=/github`);
+  check('…and "Choose repositories" goes to the new install page', c.hops.includes('/apps/kicad-junction/installations/new') && c.url === `${BASE}/github`, c.hops.join(' > '));
 
   // ============================================================ disconnect
   r = await call(alice, 'DELETE', '/api/github');

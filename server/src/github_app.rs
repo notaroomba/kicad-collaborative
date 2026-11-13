@@ -46,23 +46,31 @@ pub struct AppCreds {
     pub client_secret: String,
 }
 
-/// The registered app: `GITHUB_APP_SLUG` + `GITHUB_APP_CLIENT_ID` + `GITHUB_APP_CLIENT_SECRET`
-/// when set (for a server whose app was made by hand), otherwise the one registered from
-/// /admin/github-app.
+/// The registered app.  Set by hand on the server (`GITHUB_APP_CLIENT_ID` +
+/// `GITHUB_APP_CLIENT_SECRET`, with `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` and/or
+/// `GITHUB_APP_SLUG`), otherwise the one registered from /admin/github-app.  Its slug and
+/// name are asked of GitHub whenever the app's private key is known, so a renamed app (or
+/// a mistyped slug) never sends people to an install page that does not exist.
 pub async fn creds(state: &AppState) -> AppResult<Option<AppCreds>> {
-    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    if let (Some(slug), Some(client_id), Some(client_secret)) =
-        (env("GITHUB_APP_SLUG"), env("GITHUB_APP_CLIENT_ID"), env("GITHUB_APP_CLIENT_SECRET"))
-    {
-        return Ok(Some(AppCreds {
-            html_url: format!("{}/apps/{slug}", state.cfg.github_web_url),
-            name: env("GITHUB_APP_NAME").unwrap_or_else(|| slug.clone()),
-            slug,
-            client_id,
-            client_secret,
-        }));
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty()).map(|v| v.trim().to_string());
+    if let (Some(client_id), Some(client_secret)) = (env("GITHUB_APP_CLIENT_ID"), env("GITHUB_APP_CLIENT_SECRET")) {
+        let key = env("GITHUB_APP_PRIVATE_KEY").map(|k| k.replace("\\n", "\n"));
+        let live = match (env("GITHUB_APP_ID"), key) {
+            (Some(id), Some(pem)) => identity(state, &id, &pem).await,
+            _ => None,
+        };
+        let Some((slug, name, html_url)) = live.or_else(|| {
+            env("GITHUB_APP_SLUG").map(|slug| {
+                let html = format!("{}/apps/{slug}", state.cfg.github_web_url);
+                (slug.clone(), env("GITHUB_APP_NAME").unwrap_or(slug), html)
+            })
+        }) else {
+            tracing::warn!("github app: set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY (or GITHUB_APP_SLUG) with the client id");
+            return Ok(None);
+        };
+        return Ok(Some(AppCreds { slug, name, html_url, client_id, client_secret }));
     }
-    let row = sqlx::query("SELECT slug, name, html_url, client_id, client_secret FROM github_app WHERE id = 1")
+    let row = sqlx::query("SELECT app_id, slug, name, html_url, client_id, client_secret, private_key FROM github_app WHERE id = 1")
         .fetch_optional(&state.pool)
         .await?;
     let Some(row) = row else { return Ok(None) };
@@ -70,13 +78,57 @@ pub async fn creds(state: &AppState) -> AppResult<Option<AppCreds>> {
         tracing::warn!("github app: client secret sealed under another JWT_SECRET; register the app again");
         return Ok(None);
     };
-    Ok(Some(AppCreds {
+    let mut app = AppCreds {
         slug: row.get("slug"),
         name: row.get("name"),
         html_url: row.get("html_url"),
         client_id: row.get("client_id"),
         client_secret,
-    }))
+    };
+    if let Some(pem) = unseal_str(state, &row.get::<Vec<u8>, _>("private_key")) {
+        if let Some((slug, name, html_url)) = identity(state, &row.get::<i64, _>("app_id").to_string(), &pem).await {
+            app = AppCreds { slug, name, html_url, ..app };
+        }
+    }
+    Ok(Some(app))
+}
+
+/// The app's slug, name and page as GitHub has them now (GET /app, signed with the app's
+/// private key), kept for a minute.  None when GitHub can't be asked.
+async fn identity(state: &AppState, app_id: &str, pem: &str) -> Option<(String, String, String)> {
+    type Cached = (std::time::Instant, String, (String, String, String));
+    static CACHE: std::sync::Mutex<Option<Cached>> = std::sync::Mutex::new(None);
+    if let Some((at, id, v)) = CACHE.lock().ok()?.as_ref() {
+        if id == app_id && at.elapsed() < std::time::Duration::from_secs(60) {
+            return Some(v.clone());
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    let key = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes())
+        .map_err(|e| tracing::warn!("github app: private key unreadable: {e}"))
+        .ok()?;
+    let jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &json!({ "iat": now - 60, "exp": now + 540, "iss": app_id }),
+        &key,
+    )
+    .ok()?;
+    let r = http()
+        .ok()?
+        .get(format!("{}/app", state.cfg.github_api_url))
+        .bearer_auth(jwt)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .ok()?;
+    if !r.status().is_success() {
+        tracing::warn!("github app: GET /app answered {}", r.status());
+        return None;
+    }
+    let v: Value = r.json().await.ok()?;
+    let got = (v["slug"].as_str()?.to_string(), v["name"].as_str()?.to_string(), v["html_url"].as_str()?.to_string());
+    *CACHE.lock().ok()? = Some((std::time::Instant::now(), app_id.to_string(), got.clone()));
+    Some(got)
 }
 
 fn http() -> AppResult<reqwest::Client> {
@@ -379,13 +431,13 @@ pub async fn admin_page(State(state): State<AppState>, headers: HeaderMap, jar: 
     } else {
         let key = auth::random_token();
         pending_put(&state, KIND_MANIFEST, &key, &PendingManifest { user_id: user.id }).await?;
-        let m = manifest(&state, &origin, "Junction");
+        let m = manifest(&state, &origin, "KiCAD Junction");
         format!(
             r#"<form id="reg" method="post" action="{web}/settings/apps/new?state={key}">
 <div class="body"><h1>Register the GitHub App</h1>
 <p>Repository sync will use a GitHub App instead of the <code>repo</code> scope, so people choose which repositories Junction can see. It asks for file contents (read and write) and pull requests only.</p>
 <p>Press <b>Register on GitHub</b>, then <b>Create GitHub App</b> on GitHub's page. GitHub sends the app's keys straight back to this server; nothing has to be copied.</p>
-<label class="field"><span>App name (must be unused on GitHub)</span><input id="appName" class="input" value="Junction" maxlength="34" required></label>
+<label class="field"><span>App name (must be unused on GitHub)</span><input id="appName" class="input" value="KiCAD Junction" maxlength="34" required></label>
 <label class="field"><span>Owner organization (leave empty for your own account)</span><input id="appOrg" class="input" placeholder="your account" maxlength="39"></label>
 <input type="hidden" name="manifest" id="manifest" value="{m}">
 </div>
@@ -398,7 +450,7 @@ pub async fn admin_page(State(state): State<AppState>, headers: HeaderMap, jar: 
   var f = document.getElementById("reg"), m = document.getElementById("manifest");
   var base = {mj};
   f.addEventListener("submit", function () {{
-    var name = document.getElementById("appName").value.trim() || "Junction";
+    var name = document.getElementById("appName").value.trim() || "KiCAD Junction";
     var org = document.getElementById("appOrg").value.trim();
     base.name = name; m.value = JSON.stringify(base);
     f.action = {webj} + (org ? "/organizations/" + encodeURIComponent(org) : "") + "/settings/apps/new?state={key}";

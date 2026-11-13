@@ -1885,12 +1885,18 @@ pub async fn pull(
 
 /// The GitHub page: `/github` (bring a repository online) and `/p/{id}/github`
 /// (one project's sync).  One self-contained document; web/github/index.ts draws it.
-pub async fn page() -> Html<String> {
-    Html(
+pub async fn page() -> Response {
+    // The script is asked for with its own content hash, so a browser (or a proxy that
+    // adds its own max-age) never runs an older copy against this server.
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let page = PAGE.get_or_init(|| {
+        let v = format!("{:x}", Sha256::digest(include_str!("../static/dist/github.js").as_bytes()));
         include_str!("../static/github.html")
             .replace("{{THEME}}", crate::pages::THEME_CSS)
-            .replace("{{MARK}}", crate::pages::MARK),
-    )
+            .replace("{{MARK}}", crate::pages::MARK)
+            .replace("\"/static/github.js\"", &format!("\"/static/github.js?v={}\"", &v[..16]))
+    });
+    ([(header::CACHE_CONTROL, "no-cache")], Html(page.clone())).into_response()
 }
 
 /// The theme's tokens only (static/theme.css up to its components marker): for a page that

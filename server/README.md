@@ -273,8 +273,10 @@ File → GitHub Sync… in the web editor).
   manifest (callback `PUBLIC_URL/auth/github/callback`, setup URL
   `PUBLIC_URL/auth/github/installed`, no webhook) and hands its id, client
   secret and private key straight back, sealed into the `github_app` table.
-  `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`
-  override it for an app made by hand. Without an app, connecting falls back
+  For an app made by hand, `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`
+  with `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` (or just `GITHUB_APP_SLUG`)
+  override it. Whenever the private key is known the slug and name are read
+  from GitHub (`GET /app`, cached a minute), so renaming the app is safe. Without an app, connecting falls back
   to the OAuth app's `repo` / `public_repo` scope.
 - **Old grants.** Someone connected with the old `repo` scope keeps syncing
   with it; the page offers "Switch to chosen repositories", which installs the

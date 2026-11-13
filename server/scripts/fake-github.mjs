@@ -188,7 +188,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (what === 'install-choice') { installChoice = body.repos; return send(res, 200, { ok: true }); }
     if (what === 'installations') return send(res, 200, [...installations.values()].map((i) => ({ ...i, repos: [...i.repos] })));
-    if (what === 'app') return send(res, 200, ghApp);
+    if (what === 'app') return send(res, 200, ghApp && { ...ghApp, publicKey: undefined });
+    if (what === 'rename') { ghApp.name = body.name; ghApp.slug = body.slug; return send(res, 200, { ok: true }); }
     if (what === 'tokens') return send(res, 200, [...tokens.entries()].map(([k, v]) => ({ token: k, login: v.login, app: !!v.app, scopes: [...v.scopes] })));
     if (what === 'revoke') { for (const [t, v] of tokens) if (v.login === body.login) tokens.delete(t); return send(res, 200, { ok: true }); }
     if (what === 'access') {
@@ -218,14 +219,16 @@ const server = http.createServer(async (req, res) => {
     manifestCodes.delete(am[1]);
     if (!got) return notFound(res);
     const slug = got.manifest.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     ghApp = { id: 4242, slug, name: got.manifest.name, client_id: 'Iv23test' + slug, client_secret: crypto.randomBytes(20).toString('hex'),
-              manifest: got.manifest };
+              manifest: got.manifest, publicKey: keys.publicKey,
+              pem: keys.privateKey.export({ type: 'pkcs1', format: 'pem' }) };
     return send(res, 201, { id: ghApp.id, slug, name: ghApp.name, owner: { login: got.owner }, html_url: `${ORIGIN}/apps/${slug}`,
                             client_id: ghApp.client_id, client_secret: ghApp.client_secret, webhook_secret: 'whsec',
-                            pem: '-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n', permissions: got.manifest.default_permissions });
+                            pem: ghApp.pem, permissions: got.manifest.default_permissions });
   }
   if ((am = path.match(/^\/apps\/([^/]+)\/installations\/new$/))) {
-    if (!ghApp || am[1] !== ghApp.slug) return notFound(res);
+    if (!ghApp || am[1] !== ghApp.slug) { res.writeHead(404); return res.end('no such app'); }
     if (!browserUser) { res.writeHead(400); return res.end('nobody is signed in to the fake github'); }
     let inst = [...installations.values()].find((i) => i.account === browserUser);
     const action = inst ? 'update' : 'install';
@@ -248,6 +251,17 @@ const server = http.createServer(async (req, res) => {
     if (!t) return send(res, 404, { message: 'Not Found' });
     for (const [k, v] of tokens) if (v.login === t.login && !!v.app === okApp) tokens.delete(k);
     res.writeHead(204); return res.end();
+  }
+
+  // ---- GET /app, signed by the app's own JWT (RS256 with its private key)
+  if (path === '/app' && req.method === 'GET') {
+    calls.push('GET /app');
+    const jwt = (req.headers.authorization || '').replace(/^Bearer /, '');
+    const [h, b, sig] = jwt.split('.');
+    const ok = ghApp && sig && crypto.verify('RSA-SHA256', Buffer.from(`${h}.${b}`), ghApp.publicKey, Buffer.from(sig, 'base64url'))
+      && String(JSON.parse(Buffer.from(b, 'base64url')).iss) === String(ghApp.id);
+    if (!ok) return send(res, 401, { message: 'A JSON web token could not be decoded' });
+    return send(res, 200, { id: ghApp.id, slug: ghApp.slug, name: ghApp.name, html_url: `${ORIGIN}/apps/${ghApp.slug}` });
   }
 
   // ---- OAuth web flow (github.com)
