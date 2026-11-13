@@ -80963,7 +80963,7 @@ var Router = class _Router {
       const key3 = pr.cp.id + "/" + pr.cn.id;
       const why = this.layPair(pr);
       if (why) this.pairReports.set(key3, { p: pr.p.key, n: pr.n.key, coupled: false, reason: why });
-      if (why && Math.max(pr.cp.len, pr.cn.len) <= 3) {
+      if (why && Math.max(pr.cp.len, pr.cn.len) <= 6) {
         pr.cp.pairOnly = pr.cn.pairOnly = void 0;
         pr.cp.partner = pr.cn;
         pr.cn.partner = pr.cp;

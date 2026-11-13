@@ -568,8 +568,8 @@ export class Router {
     for (const pr of this.pairList) {
       if (pr.cp.nodes || pr.cn.nodes) continue; const key = pr.cp.id + "/" + pr.cn.id;
       const why = this.layPair(pr); if (why) this.pairReports.set(key, { p: pr.p.key, n: pr.n.key, coupled: false, reason: why });
-      // a short hop (pads a few millimetres apart, as from a connector to the ESD part beside it) is too short to need coupling: each line goes straight, the second along the first
-      if (why && Math.max(pr.cp.len, pr.cn.len) <= 3) { pr.cp.pairOnly = pr.cn.pairOnly = undefined; pr.cp.partner = pr.cn; pr.cn.partner = pr.cp; }
+      // a short hop (pads up to 6 mm apart, as from a connector to the ESD part beside it) is too short to need coupling: each line goes straight, the second along the first
+      if (why && Math.max(pr.cp.len, pr.cn.len) <= 6) { pr.cp.pairOnly = pr.cn.pairOnly = undefined; pr.cp.partner = pr.cn; pr.cn.partner = pr.cp; }
       else pr.cp.pairOnly = pr.cn.pairOnly = why || undefined;
     }
   }
