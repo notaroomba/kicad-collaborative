@@ -31,6 +31,7 @@ export function loadPanes(ed: "sch" | "pcb") {
   return out;
 }
 
+(E.hooks as Record<string, unknown>).showPane = (name: string, show?: unknown): void => showPane(name, show);   // dialogs/find.ts's "Show search panel"
 export function showPane(name: string, show?: unknown) {
   const ed = editorId();
   if (!PANE_NAMES.includes(name) || (PANE_EDITOR_ONLY[name] && PANE_EDITOR_ONLY[name] !== ed) || (name === "libtree" && E.DOC_TYPE !== "footprint")) return;

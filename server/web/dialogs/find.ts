@@ -6,6 +6,7 @@ import { E, appState, applyView, centerOn, openDocId, pushUndoFor, toolCtx, clon
 import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
 import { findHits, replaceInNode, str, type FindHit, type FindOpts } from "./logic";
 import { projectDocs, readDoc, submitDocOp } from "./project";
+import { keyName } from "../keys";
 
 interface FindState extends FindOpts { replacement: string; backward: boolean; currentSheetOnly: boolean }
 const F: FindState = { query: "", replacement: "", backward: false, matchCase: false, wholeWord: false, regex: false, pins: false, hiddenFields: false, currentSheetOnly: false, selectionOnly: false, replaceRefs: false, netNames: false };
@@ -37,7 +38,8 @@ function whenDocOpen(docId: string): Promise<boolean> {
   return new Promise((resolve) => { const t0 = Date.now(); const tick = () => { if (S.docId === docId && E.kdoc && E.kdoc.items.size) resolve(true); else if (Date.now() - t0 > 8000) resolve(false); else setTimeout(tick, 100); }; tick(); });
 }
 export async function findNext(reverse = false): Promise<FindHit | null> {
-  if (!F.query) { setStatus(""); return null; }
+  // SCH_FIND_REPLACE_TOOL::FindNext with nothing to look for: FindAndReplace( ACTIONS::find )
+  if (!F.query) { setStatus(""); if (!findIsOpen()) openFind(false); return null; }
   const dir: 1 | -1 = F.backward !== reverse ? -1 : 1, hits = hitsHere();
   let i = last && last.docId === S.docId ? hits.findIndex((x) => keyOf(x) === last!.key) : -1;
   let next = i < 0 ? (dir > 0 ? 0 : hits.length - 1) : i + dir;
@@ -98,13 +100,12 @@ export function openFind(replace: boolean): void {
       const q = textInput(F.query, (v) => { F.query = v; last = null; }, { id: "kd-find-q" });
       q.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); F.query = q.value; void findNext(ev.shiftKey); } });
       const rw = textInput(F.replacement, (v) => { F.replacement = v; }, { id: "kd-find-r", disabled: ro });
-      const radio = (label: string, back: boolean) => { const r = h("input", { type: "radio", name: "kd-find-dir", checked: F.backward === back, id: back ? "kd-find-back" : "kd-find-fwd" }); r.addEventListener("change", () => { if ((r as HTMLInputElement).checked) F.backward = back; }); return h("label", { class: "kd-chk" }, r, label); };
       const opt = (label: string, key: keyof FindState, id: string) => checkbox(label, !!F[key], (on) => { (F as unknown as Record<string, boolean>)[key] = on; last = null; }, { id });
       const fields = h("div", { class: "kv", style: "margin-bottom:10px" }, h("label", null, "Search for:"), q);
       if (replace) fields.append(h("label", null, "Replace with:"), rw);
       const left = h("div", { style: "flex:1;min-width:0" }, fields,
-        h("div", { style: "display:flex;gap:28px" },
-          h("div", null, h("div", { style: "color:var(--ink-2);margin-bottom:4px" }, "Direction:"), radio("Forward", false), radio("Backward", true)),
+        // DIALOG_SCH_FIND hides m_staticDirection and the Forward / Backward radios (F3 / Shift+F3 pick the way)
+        h("div", null,
           h("div", null, opt("Match case", "matchCase", "kd-find-case"), opt("Whole words only", "wholeWord", "kd-find-word"), opt("Regular Expression", "regex", "kd-find-regex"),
             opt("Search pin names and numbers", "pins", "kd-find-pins"), opt("Include hidden fields", "hiddenFields", "kd-find-hidden"), opt("Search the current sheet only", "currentSheetOnly", "kd-find-sheet"),
             opt("Search the current selection only", "selectionOnly", "kd-find-sel"), replace ? opt("Replace matches in reference designators", "replaceRefs", "kd-find-refs") : null, opt("Search net names", "netNames", "kd-find-nets"))));
@@ -114,7 +115,11 @@ export function openFind(replace: boolean): void {
         replace ? btn("Replace All", "kd-find-replaceall", () => { F.query = q.value; F.replacement = rw.value; void replaceAll(); }, false, ro) : null,
         btn("Close", "kd-find-close", () => a.finish(false)));
       statusEl = h("div", { id: "kd-find-status", style: "margin-top:8px;min-height:16px;color:var(--ink-2)" });
-      body.append(h("div", { style: "display:flex;gap:16px" }, left, right), statusEl);
+      // m_searchPanelLink: "Show search panel (Ctrl+G)" under a rule, at the right (ACTIONS::showSearch's hotkey)
+      const link = h("a", { href: "#", id: "kd-find-panel", style: "color:var(--accent);white-space:nowrap" }, "Show search panel (" + keyName("Ctrl+G") + ")");
+      link.addEventListener("click", (ev) => { ev.preventDefault(); const sp = (E as unknown as { hooks: { showPane?: (n: string, s?: boolean) => void } }).hooks.showPane; if (sp) sp("search", true); a.close(); setTimeout(() => { const b = document.getElementById("searchBox") as HTMLInputElement | null; if (b) b.focus(); }, 50); });
+      body.append(h("div", { style: "display:flex;gap:16px" }, left, right), statusEl,
+        h("div", { style: "border-top:1px solid var(--line);margin-top:8px;padding-top:6px;text-align:right" }, link));
     },
     cancel() { api = null; statusEl = null; } });
 }
