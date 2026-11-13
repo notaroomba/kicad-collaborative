@@ -10,7 +10,7 @@ import { installSchItemDialogs } from "./sch-items";
 import { installSimModel } from "./sim-model";
 import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
-import { openErc } from "./erc";
+import { ercNextMarker, ercPrevMarker, openErc } from "./erc";
 import { applySeverities } from "./erc-rules";
 import { openFieldsTable } from "./fields-table";
 import { openFind } from "./find";
@@ -75,6 +75,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     schematicSetup: needDoc(() => openSchematicSetup(), true),
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
     runERC: needDoc(openErc, true),
+    prevMarker: ercPrevMarker as Handler, nextMarker: ercNextMarker as Handler,   // the schematic's; the board's are the module's (EDITOR_ONLY)
     annotate: needDoc(openAnnotate, true),
     // DIALOG_CHANGE_SYMBOLS: Edit > Change Symbols…, Tools > Update Symbols from Library…, the symbol context menu
     changeSymbols: needDoc(() => openChangeSymbols("change"), true), changeSymbol: needDoc(() => openChangeSymbols("change"), true),

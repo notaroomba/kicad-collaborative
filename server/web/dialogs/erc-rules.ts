@@ -40,3 +40,13 @@ export function applySeverities<T extends ErcMarker>(markers: T[], severities: R
   }
   return out;
 }
+
+/**
+ * RC_TREE_MODEL::PrevMarker / NextMarker over the listed rows: Next with nothing picked takes the first, Prev the last;
+ * at either end nothing changes.  Returns the row to pick, or null.
+ */
+export function stepMarker(shown: number[], current: number, dir: 1 | -1): number | null {
+  const pos = shown.indexOf(current);
+  if (dir > 0) { const n = pos < 0 ? shown[0] : shown[pos + 1]; return n === undefined ? null : n; }
+  const p = pos < 0 ? shown[shown.length - 1] : shown[pos - 1]; return p === undefined ? null : p;
+}

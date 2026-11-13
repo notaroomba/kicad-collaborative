@@ -5,7 +5,7 @@
 // Markers" clear them and "Run ERC" (the default button) runs the checks with the project's rule severities.
 import { E, applyView, centerOn, toolCtx } from "./editor";
 import { KD, checkbox, h, type DlgApi } from "./dom";
-import { ERC_RULES, defaultSeverity } from "./erc-rules";
+import { ERC_RULES, defaultSeverity, stepMarker } from "./erc-rules";
 import { obj, projectJson } from "./project";
 
 export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[] }
@@ -30,6 +30,10 @@ const sch = (): SchModule | null => ((window as unknown as { CollabTools?: { sch
 const markers = (): ErcViolation[] => ((E as unknown as { markers?: ErcViolation[] }).markers || []).filter((m) => m && typeof m.code === "string");
 
 let api: DlgApi | null = null;   // the dialog this module opened last (KDialogs keeps one dialog at a time)
+/** The open dialog's marker stepping (SCH_INSPECTION_TOOL::PrevMarker / NextMarker reach DIALOG_ERC only while it exists). */
+let live: { step(dir: 1 | -1): void } | null = null;
+export function ercPrevMarker(): void { if (live) live.step(-1); }
+export function ercNextMarker(): void { if (live) live.step(1); }
 const show = { errors: true, warnings: true };
 
 export function openErc(): void {
@@ -55,6 +59,13 @@ export function openErc(): void {
     if (E.zoom < 2) { E.zoom = 3; E.viewTouched = true; applyView(); }
     centerOn(m.x, m.y);
   };
+  const shownRows = () => markers().map((m, i) => [m, i] as const).filter(([m]) => (m.severity === "error" ? show.errors : show.warnings)).map(([, i]) => i);
+  live = { step(dir) {
+    if (!list || !list.isConnected) { live = null; return; }   // another dialog took its place
+    const i = stepMarker(shownRows(), current, dir); const m = i === null ? null : markers()[i]; if (i === null || !m) return;
+    current = i; focus(m); refresh();
+    const row = list.querySelector<HTMLElement>(`[data-erc-row="${i}"]`); if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+  } };
   const run = () => { const s = sch(); const a = s && s.actions && s.actions.runERC; if (!a) return; a.run(toolCtx()); current = -1; refresh(); };
   api = KD().open({
     title: "Electrical Rules Checker", width: 640, modeless: true,
@@ -81,6 +92,7 @@ export function openErc(): void {
       if (tabs[1]) tabs[1].textContent = `Ignored Tests (${ignoredTests(obj(obj(projectJson().erc).rule_severities) as Record<string, unknown>).length})`;
     },
     buttons: [{ label: "Run ERC", primary: true, isDefault: true, fn: run, id: "kd-erc-run" }, { label: "Close", close: true }],
+    cancel() { live = null; },
   });
   function syncBoxes(): void {
     const set = (id: string, on: boolean) => { const e = api && api.body.querySelector<HTMLInputElement>("#" + id); if (e) e.checked = on; };

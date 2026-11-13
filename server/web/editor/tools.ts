@@ -8,6 +8,7 @@ import { toolChanging } from "./gestures";
 import { sendOp } from "./net";
 import { cycleFollow } from "./peers";
 import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, scopeToEnteredGroup, selFilter } from "./selection";
+import { applyMarkers } from "./ercview";
 import { E } from "./state";
 import { api, toast } from "./util";
 import type { CommitOpts, ItemSummary, UndoEntry } from "./types";
@@ -35,7 +36,7 @@ export function toolCtx(extra?: Record<string, unknown>) {
     setHighlight(ids: Set<string> | null) { E.highlightIds = ids && ids.size ? new Set(ids) : null; requestRender(); },
     cursor: E.lastCursorMm, clipboard: appClipboard, designSettings: E.proSettings, customRules: E.druText,
     setSelection(ids: Iterable<string> | null) { E.selection = new Set([...(ids || [])].filter((id) => E.kdoc && E.kdoc.items.has(id))); E.selected = null; E.selField = null; E.selPins = []; for (const id of E.selection) { const f = E.items.find((x: ItemSummary) => x.id === id); if (f) { E.selected = f; break; } } store.slice("selection", { ids: [...E.selection], primary: E.selected ? E.selected.id : null, version: (state.selection ? state.selection.version || 0 : 0) + 1 }); drawSelection(); renderProps(); renderObjects(); requestRender(); },
-    setMarkers(list: unknown) { E.markers = Array.isArray(list) ? list : []; E.renderOpts.markers = E.markers.length ? E.markers : undefined; store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); if (E.markers.length) toast(`${E.markers.length} marker${E.markers.length === 1 ? "" : "s"}`); },
+    setMarkers(list: unknown) { E.markers = Array.isArray(list) ? list : []; applyMarkers(); if (E.markers.length) toast(`${E.markers.length} marker${E.markers.length === 1 ? "" : "s"}`); },
     setSelected(fp: { id: string } | null) { E.selected = fp ? (E.items.find((f: ItemSummary) => f.id === fp.id) || fp) : null; drawSelection(); renderProps(); renderObjects(); requestRender(); },
     // opts.amend folds the change into the previous undo step (a paste and the move that places it are one step)
     commit(changes: KChange[], label?: string, opts?: CommitOpts) { commitChanges(changes, label, opts); },

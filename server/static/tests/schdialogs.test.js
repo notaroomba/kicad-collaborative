@@ -121,4 +121,12 @@ test("dialog widgets are exported", () => {
   require(path.join(__dirname, "..", "props.js")); require(path.join(__dirname, "..", "kicad-dialogs.js"));
   for (const k of ["open", "notebook", "treebook", "grid", "staticBox"]) assert.strictEqual(typeof globalThis.KDialogs[k], "function", k);
 });
+test("ERC Previous / Next Marker (RC_TREE_MODEL::PrevMarker / NextMarker): first / last with none picked, stops at the ends", () => {
+  const rows = [0, 2, 5];
+  assert.strictEqual(R.stepMarker(rows, -1, 1), 0); assert.strictEqual(R.stepMarker(rows, -1, -1), 5);
+  assert.strictEqual(R.stepMarker(rows, 0, 1), 2); assert.strictEqual(R.stepMarker(rows, 2, 1), 5); assert.strictEqual(R.stepMarker(rows, 5, 1), null);
+  assert.strictEqual(R.stepMarker(rows, 2, -1), 0); assert.strictEqual(R.stepMarker(rows, 0, -1), null);
+  assert.strictEqual(R.stepMarker([], -1, 1), null);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0);

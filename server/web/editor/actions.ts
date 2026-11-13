@@ -22,6 +22,7 @@ import { openGendrill } from "./pcbdialogs/gendrill";
 import { openPosFile } from "./pcbdialogs/posfile";
 import { openPlotSchematic } from "../dialogs/plot-schematic";
 import { printDialog } from "./print";
+import { toggleErc } from "./ercview";
 import type { AppAction } from "../store";
 import type { ActionAnchor, ActionHandler } from "./types";
 // ---- actions (the home menu's entries and the collab items of the editor menus) ----
@@ -98,6 +99,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   cursorSmallCrosshairs: () => setCrosshair("small", "cursorSmallCrosshairs"), cursorFullCrosshairs: () => setCrosshair("full", "cursorFullCrosshairs"), cursor45Crosshairs: () => setCrosshair("45", "cursor45Crosshairs"),
   togglePolarCoords: () => { E.polarCoords = !E.polarCoords; setToggle("togglePolarCoords", E.polarCoords); store.slice("viewport", { polar: E.polarCoords }); },
   toggleHiddenPins: () => toggleRenderOpt("showHiddenPins", "toggleHiddenPins"),
+  toggleERCErrors: () => toggleErc("errors"), toggleERCWarnings: () => toggleErc("warnings"), toggleERCExclusions: () => toggleErc("exclusions"),
   highContrastMode: () => toggleRenderOpt("highContrast", "highContrastMode"),
   padDisplayMode: () => toggleRenderOpt("outlinePads", "padDisplayMode"), viaDisplayMode: () => toggleRenderOpt("outlineVias", "viaDisplayMode"), trackDisplayMode: () => toggleRenderOpt("outlineTracks", "trackDisplayMode"),
   zoneDisplayFilled: () => { E.renderOpts.zoneOutline = false; setToggles({ zoneDisplayFilled: true, zoneDisplayOutline: false }); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); },
