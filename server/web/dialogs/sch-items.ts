@@ -12,8 +12,10 @@
 //
 // kicad-dialogs.js asks KDialogs.schItemDialog / schFieldDialog first (openItem / openNew / openField), so the
 // double-click, E and the tools' creation paths all reach these.  The document edits are in sch-items-logic.ts.
+import { trapTab } from "../tools/kicad-dialogs/shell";
 import { schTableDialog } from "../editor/tabledialogs";
 import { keyName } from "../keys";
+import { syntaxHelp } from "../editor/syntax-help";
 import { E, toast, toolCtx } from "./editor";
 import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
 import { facesUsed, fontPicker, type FontPickerEl } from "./font-picker";
@@ -44,7 +46,7 @@ export function messageBox(message: string, title = "Error"): Promise<void> {
     const ok = h("button", { class: "btn primary", onclick: done }, "OK");
     const dlg = h("div", { class: "kd-dialog", style: "width:380px;min-width:0" }, h("div", { class: "kd-title" }, h("span", null, title)), h("div", { class: "kd-body" }, h("p", { id: "kd-msgbox-text", style: "margin:4px 0;white-space:pre-wrap" }, message)), h("div", { class: "kd-foot" }, h("span", { class: "spacer" }), ok));
     const ov = h("div", { class: "kd-overlay kd-prompt kd-msgbox", style: "z-index:80" }, dlg);
-    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter" || ev.key === "Escape") { ev.preventDefault(); done(); } });
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov); if (ev.key === "Enter" || ev.key === "Escape") { ev.preventDefault(); done(); } });
     document.body.append(ov); ok.focus();
   });
 }
@@ -81,8 +83,8 @@ function initialFocus(el: HTMLInputElement | HTMLTextAreaElement | null): void {
   setTimeout(() => window.removeEventListener("pointerup", up, { capture: true }), 1500);
 }
 const isOn = (b: HTMLElement): boolean => b.classList.contains("on");
-function radioGroup(name: string, opts: [string, string][], value: string, onPick?: (v: string) => void): HTMLElement {
-  const box = h("div", { style: "display:grid;grid-template-columns:repeat(2,max-content);gap:3px 18px" });
+function radioGroup(name: string, opts: [string, string][], value: string, onPick?: (v: string) => void, columns = 2): HTMLElement {
+  const box = h("div", { style: `display:grid;grid-template-columns:repeat(${columns},max-content);gap:3px 18px` });
   for (const [v, label] of opts) {
     const r = h("input", { type: "radio", name, value: v, checked: v === value, id: name + "-" + v, style: "width:auto;margin:0" });
     if (onPick) r.addEventListener("change", () => { if ((r as HTMLInputElement).checked) onPick(v); });
@@ -151,7 +153,7 @@ export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readO
   const g = KD().grid<GRow>(host, visible(), rows, {
     readOnly: opts.readOnly, height: opts.height || 170,
     onChange(row, key) { if (key === "sizeT" || key === "xT" || key === "yT") { fromG(row); toG(row); g.refresh(); } },
-    buttons: { add: () => toG(L.newRow(opts.newName(rows), [0, 0])), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true, canRemove: (r) => { if (r.mandatory) { toast(`The first ${rows.filter((x) => x.mandatory).length} fields are mandatory.`); return false; } return true; } },
+    buttons: { add: () => toG(L.newRow(opts.newName(rows), [0, 0])), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true, canRemove: (r) => { if (r.mandatory) { void messageBox(L.mandatoryFieldsMessage(rows.filter((x) => x.mandatory).length)); return false; } return true; } },
   });
   g.el.style.maxWidth = "100%";
   if (opts.shown) g.el.addEventListener("contextmenu", (ev) => {
@@ -195,15 +197,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
   let fontSel: FontPickerEl | null = null, sizeIn: HTMLInputElement | null = null, boldB: HTMLButtonElement | null = null, italB: HTMLButtonElement | null = null, autoCb: HTMLInputElement | null = null;
   const spins: HTMLButtonElement[] = [];
   let color: Swatch | null = null, body: HTMLElement | null = null;
-  const help = (): void => {
-    KD().open({ title: "Syntax Help", width: 520, modeless: true, okLabel: "Close", build(b) {
-      b.append(h("div", { class: "kd-help" },
-        h("p", null, "Net names may contain any characters but ", h("code", null, "{"), " and ", h("code", null, "}"), " which are used for bus syntax, and spaces, which are replaced by underscores."),
-        h("p", null, "Bus definitions: ", h("code", null, "D[0..7]"), " (vector bus) or ", h("code", null, "{SCL SDA}"), " / ", h("code", null, "USB{DP DM}"), " (group bus)."),
-        h("p", null, "Overbar: ", h("code", null, "~{RESET}"), "   Subscript: ", h("code", null, "V_{CC}"), "   Superscript: ", h("code", null, "x^{2}")),
-        h("p", null, "Text variables: ", h("code", null, "${PROJECTNAME}"), ", ", h("code", null, "${SHEETNAME}"), ", ", h("code", null, "${R1:VALUE}"))));
-    } });
-  };
+  const help = (): void => syntaxHelp(false);   // SCH_TEXT::ShowSyntaxHelp: a child window beside the still-open dialog
   KD().open({
     title: opts.title || L.labelTitle(kind), width: 820, readOnly: ro, cancel: opts.cancel,
     build(b) {
@@ -217,22 +211,25 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         const host = h("div", { style: "flex:1;min-width:0" }, single, dl);
         textEl = single;
         const showMulti = (on: boolean): void => { host.replaceChildren(on ? area : single, dl); if (on) area.value = single.value; else single.value = area.value.split("\n")[0] || ""; textEl = on ? area : single; textEl.focus(); };
-        const row = h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, h("label", { style: "padding-top:4px" }, "Label:"), host,
-          h("a", { href: "#", class: "kd-note", style: "padding-top:4px;white-space:nowrap", onclick: (ev: Event) => { ev.preventDefault(); help(); } }, "Syntax help"));
-        b.append(row);
-        if (isNew && kind !== "hierarchical_label" || (isNew && kind === "hierarchical_label")) {
+        b.append(h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, h("label", { style: "padding-top:4px;min-width:38px" }, "Label:"), host));
+        // m_textEntrySizer's last row (bSizer7): the multiple-label checkbox, then "Syntax help" aligned right
+        const link = h("a", { href: "#", "data-k": "syntax-help", title: "Show syntax help window", style: "white-space:nowrap", onclick: (ev: Event) => { ev.preventDefault(); help(); } }, "Syntax help");
+        const row7 = h("div", { style: "display:flex;gap:8px;align-items:center;margin:4px 5px 0 46px" });
+        if (isNew) {
           const cbRow = checkbox("Multiple label input", labelMem.multi, (on) => { labelMem.multi = on; showMulti(on); }, { id: "kd-lbl-multicb" });
-          multiCb = cbRow.querySelector("input") as HTMLInputElement; b.append(h("div", { style: "margin:4px 0 0 46px" }, cbRow));
+          multiCb = cbRow.querySelector("input") as HTMLInputElement; row7.append(cbRow);
           if (labelMem.multi) showMulti(true);
         }
+        row7.append(h("span", { style: "flex:1" }), link); b.append(row7);
       }
-      // Fields
-      const fHost = h("div", { style: "margin-top:8px" }); b.append(fHost);
+      // Fields (sbFields)
+      const fOuter = h("div", { style: "margin-top:8px" }); b.append(fOuter);
+      const fHost = KD().staticBox(fOuter, "Fields"); fHost.dataset.k = "fields-box";
       grid = fieldsGrid(fHost, L.fieldRows(staged, origin, mandatory), { readOnly: ro, doc, newName: nextFieldName, height: 150, shown: [0, 1, 2, 3, 4, 5, 6, 7] });
       // Shape + Formatting
       const bottom = h("div", { style: "display:flex;gap:12px;align-items:stretch;margin-top:4px" });
       const shapes = L.labelShapes(kind);
-      if (shapes.length) { const sh = h("div"); const box = KD().staticBox(sh, "Shape"); box.append(radioGroup("kd-lbl-shape", shapes, st.shape)); bottom.append(sh); }
+      if (shapes.length) { const sh = h("div"); const box = KD().staticBox(sh, "Shape"); box.append(radioGroup("kd-lbl-shape", shapes, st.shape, undefined, 1)); bottom.append(sh); }   // m_shapeSizer is wxVERTICAL
       const fm = h("div", { style: "flex:1" }); const fbox = KD().staticBox(fm, "Formatting");
       const grd = h("div", { class: "kd-fmt" });
       boldB = toggle("B", "Bold", st.bold, "kd-lbl-bold", "font-weight:700"); italB = toggle("I", "Italic", st.italic, "kd-lbl-italic", "font-style:italic");
@@ -240,21 +237,23 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       const spinGlyph = ["→", "←", "↑", "↓"];
       // m_spin0..3: RIGHT, LEFT, UP, BOTTOM (SPIN_STYLE 0, 2, 1, 3)
       const spinVal = [0, 2, 1, 3] as const;
+      // m_iconBar: separator, bold, italic, separator, the four spin buttons, Auto, separator
       const bar = h("span", { style: "display:inline-flex;gap:2px;align-items:center" });
-      if (!dir) bar.append(boldB, italB, h("span", { class: "kd-sep" }));
+      if (!dir) bar.append(h("span", { class: "kd-sep" }), boldB, italB, h("span", { class: "kd-sep" }));
       spinVal.forEach((sv, i) => { const btn = toggle(spinGlyph[i], spinNames[i], st.spin === sv, "kd-lbl-spin" + i); btn.dataset.group = "spin"; btn.dataset.spin = String(sv); spins.push(btn); bar.append(btn); });
+      if (kind === "global_label" || kind === "hierarchical_label") {
+        const S = CollabTools.sch ? CollabTools.sch.state as { lastAutoRotate?: boolean } : {};
+        const a = checkbox("Auto", isNew ? !!S.lastAutoRotate : st.autoRotate, undefined, { id: "kd-lbl-auto", title: "Automatically rotate the label to face away from the wire or pin it is placed on" });
+        a.style.margin = "0 5px"; autoCb = a.querySelector("input") as HTMLInputElement; bar.append(a);
+      }
+      if (!dir) bar.append(h("span", { class: "kd-sep" }));
       color = swatch(st.color, "kd-lbl-color", undefined, ro);
       if (dir) grd.append(h("label", null, "Orientation:"), bar, h("span"));
       else { fontSel = fontPicker(doc, st.font, { id: "kd-lbl-font", style: "width:200px", disabled: ro }); grd.append(h("label", null, "Font:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, fontSel, bar), h("span")); }
       sizeIn = lenBox(st.size, "kd-lbl-size");
-      grd.append(h("label", null, dir ? "Pin length:" : "Text size:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, sizeIn, units()), h("span"));
-      grd.append(h("label", null, "Color:"), color.el, h("span"));
+      // bSizer71: size, units, then (15 px on) "Color:" and the swatch
+      grd.append(h("label", null, dir ? "Pin length:" : "Text size:"), h("span", { style: "display:flex;gap:3px;align-items:center" }, sizeIn, units(), h("label", { style: "margin-left:15px;margin-right:2px" }, "Color:"), color.el), h("span"));
       fbox.append(grd);
-      if (kind === "global_label" || kind === "hierarchical_label") {
-        const S = CollabTools.sch ? CollabTools.sch.state as { lastAutoRotate?: boolean } : {};
-        const a = checkbox("Auto", isNew ? !!S.lastAutoRotate : st.autoRotate, undefined, { id: "kd-lbl-auto", title: "Automatically rotate the label to face away from the wire or pin it is placed on" });
-        autoCb = a.querySelector("input") as HTMLInputElement; fbox.append(a);
-      }
       bottom.append(fm); b.append(bottom);
       // a directive label starts in the first field's value (SetInitialFocus( m_grid ), m_delayedFocusRow 0)
       initialFocus(dir ? b.querySelector(".kd-grid tbody tr input[data-col=value]") as HTMLInputElement | null : textEl);

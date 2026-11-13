@@ -156,6 +156,8 @@ export function tidyRows(rows: FieldRow[]): FieldRow[] {
   return out;
 }
 /** FIELDS_GRID_TABLE's name check: "Field name '%s' already in use." for the first clash. */
+/** What deleting a mandatory row says (DIALOG_LABEL_PROPERTIES::OnDeleteField, DIALOG_SHEET_PROPERTIES::OnDeleteField). */
+export function mandatoryFieldsMessage(n: number): string { return n <= 1 ? "The first field is mandatory." : `The first ${n} fields are mandatory.`; }
 export function duplicateFieldName(rows: FieldRow[]): string | null {
   const seen = new Set<string>();
   for (const r of rows) { if (!r.name) continue; if (seen.has(r.name)) return `Field name '${r.name}' already in use.`; seen.add(r.name); }
