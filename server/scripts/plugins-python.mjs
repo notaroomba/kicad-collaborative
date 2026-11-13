@@ -98,6 +98,18 @@ function library(what, a) {
       }
       return { library: a.lib, name: a.name, fpid: `${a.lib}:${a.name}`, footprint: fs.readFileSync(f, "utf8") };
     }
+    if (what === "model") {      // KiCad's 3D model library (kicad-packages3D publishes STEP only), kept beside the footprints
+      if (!safe(a.lib) || !safe(a.name)) return { error: "not a model name" };
+      const f = path.join(process.env.KC_MODELS || path.join(server, "node_modules", ".cache", "kicad-packages3D"), a.lib + ".3dshapes", a.name + ".step");
+      if (!fs.existsSync(f)) {
+        if (process.env.KC_MODELS || fs.existsSync(f + ".missing")) return {};
+        const buf = curl(`https://gitlab.com/api/v4/projects/kicad%2Flibraries%2Fkicad-packages3D/repository/files/${encodeURIComponent(`${a.lib}.3dshapes/${a.name}.step`)}/raw?ref=master`);
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        if (!buf || !buf.subarray(0, 12).toString("latin1").startsWith("ISO-10303-21")) { fs.writeFileSync(f + ".missing", ""); return {}; }
+        fs.writeFileSync(f, buf);
+      }
+      return { library: a.lib, name: a.name, step: fs.readFileSync(f, "utf8") };
+    }
     const list = (p) => {
       const f = path.join(cache, ".index", (p || "root") + ".json"); if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, "utf8"));
       if (process.env.KC_FOOTPRINTS) return fs.readdirSync(p ? path.join(cache, p) : cache);

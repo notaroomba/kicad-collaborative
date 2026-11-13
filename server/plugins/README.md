@@ -252,6 +252,11 @@ How it works:
   `.pretty/*.kicad_mod` footprint behind, the editor asks to add them to the project's libraries
   (`project.addLibraryFiles`, needs `design:write`) instead of handing them over as downloads. 3D models written
   with them are added too.
+- **3D models.** `FOOTPRINT.Models()` is the footprint's own list (pop, push_back and a changed `m_Filename` change
+  the footprint). KiCad's 3D model library is there as files under `${KICAD9_3DMODEL_DIR}` (STEP only, fetched when
+  a plugin opens or copies one). A model file a plugin puts in the project folder that a footprint of the board
+  then names (`${KIPRJMOD}/packages3D/R_0603.step`) is offered to the project like a library file, and the 3D
+  viewer reads it from there; a footprint may name the `.wrl` where the project keeps the `.step`.
 - **A schematic a plugin rewrites as a file is carried into the project.** Desktop plugins that change the
   schematic write the `.kicad_sch` file. The server works out what really changed, item by item, however the
   plugin laid the file out (`POST /api/docs/{id}/rewrite`, `merge::in_layout_of`), the editor lists it and asks,

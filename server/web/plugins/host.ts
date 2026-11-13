@@ -443,7 +443,7 @@ const NEEDS: Record<string, string | null> = {
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
   "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write",
-  "libs.libraries": null, "libs.footprints": null, "libs.footprint": null,
+  "libs.libraries": null, "libs.footprints": null, "libs.footprint": null, "libs.model": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
   "storage.get": null, "storage.set": null, "storage.remove": null, "storage.keys": null,
@@ -524,7 +524,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
 
 // ---------------------------------------------------------------- libraries a plugin imports
 
-const LIBRARY_FILE = /^(?:[^/]+\/)*(?:[^/]+\.kicad_sym|[^/]+\.pretty\/[^/]+\.kicad_mod|[^/]+\.3dshapes\/[^/]+\.(?:step|stp|wrl))$/i;
+const LIBRARY_FILE = /^(?:[^/]+\/)*(?:[^/]+\.kicad_sym|[^/]+\.pretty\/[^/]+\.kicad_mod|[^/]+\.(?:step|stp|wrl))$/i;
 /**
  * A plugin that imports parts writes symbol libraries, footprints and 3D models into the project folder.  On the
  * desktop they are then in the project; here the person is asked, and on a yes they become documents of the project

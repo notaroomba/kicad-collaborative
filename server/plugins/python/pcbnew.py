@@ -3460,6 +3460,9 @@ class FP_3DMODEL:
     @m_Filename.setter
     def m_Filename(self, v):
         self._node[1] = str(v)
+        fp = getattr(self, "_fp", None)
+        if fp is not None:
+            fp._touch()
 
     def _vec(self, name, default):
         k = _kid(self._node, name)
@@ -3471,6 +3474,55 @@ class FP_3DMODEL:
     m_Rotation = property(lambda self: self._vec("rotate", (0, 0, 0)))
     m_Show = property(lambda self: not _flag(self._node, "hide"))
     m_Opacity = property(lambda self: _f((_kid(self._node, "opacity") or [0, 1])[1], 1.0))
+
+
+class _ModelList(list):
+    """A footprint's 3D models as KiCad hands them out: the footprint's own list, so taking one out, putting one in or
+    clearing it changes the footprint (plugins pop every model, change its path and push it back)."""
+
+    def __init__(self, fp):
+        list.__init__(self, fp._kids()["models"])
+        self._fp = fp
+
+    def _sync(self):
+        fp, node = self._fp, self._fp._node
+        keep = [m._node for m in self]
+        at = [i for i, k in enumerate(node) if isinstance(k, list) and k and str(k[0]) == "model"]
+        where = at[0] if at else len(node)
+        node[:] = [k for k in node[:where] if not (isinstance(k, list) and k and str(k[0]) == "model")] + keep + \
+                  [k for k in node[where:] if not (isinstance(k, list) and k and str(k[0]) == "model")]
+        fp._kids_cache = None
+        fp._touch()
+
+    def _changing(name):
+        def call(self, *a, **k):
+            out = getattr(list, name)(self, *a, **k)
+            self._sync()
+            return out
+        call.__name__ = name
+        return call
+
+    for _m in ("append", "pop", "clear", "remove", "insert", "extend", "reverse", "__setitem__", "__delitem__"):
+        locals()[_m] = _changing(_m)
+    del _m, _changing
+
+    def push_back(self, model):
+        self.append(model)
+
+    def pop_back(self):
+        self.pop()
+
+    def size(self):
+        return len(self)
+
+    def empty(self):
+        return not self
+
+    def front(self):
+        return self[0]
+
+    def back(self):
+        return self[-1]
 
 
 _FP_ATTR = {"through_hole": FP_THROUGH_HOLE, "smd": FP_SMD, "exclude_from_pos_files": FP_EXCLUDE_FROM_POS_FILES,
@@ -3609,7 +3661,9 @@ class FOOTPRINT(BOARD_ITEM):
                 elif t == "zone":
                     c["zones"].append(ZONE._wrap(n, self._board, self))
                 elif t == "model":
-                    c["models"].append(FP_3DMODEL(n))
+                    m = FP_3DMODEL(n)
+                    m._fp = self
+                    c["models"].append(m)
             self._kids_cache = c
         return c
 
@@ -3648,7 +3702,10 @@ class FOOTPRINT(BOARD_ITEM):
         return list(self._kids()["zones"])
 
     def Models(self):
-        return list(self._kids()["models"])
+        return _ModelList(self)
+
+    def Add3DModel(self, model):
+        self.Models().push_back(model)
 
     def Groups(self):
         return []

@@ -16,8 +16,8 @@ export type V3 = [number, number, number];
 export interface ModelRef {
   /** where the STEP file is read from; also the key the tessellated mesh is kept under */
   url: string;
-  /** "kicad" for KiCad's 3D library, "vendor" for a vendor part's model */
-  source: "kicad" | "vendor";
+  /** "kicad" for KiCad's 3D library, "vendor" for a vendor part's model, "project" for a model file kept in the project */
+  source: "kicad" | "vendor" | "project";
   /** Library/Name as the footprint wrote it, for messages */
   name: string;
   offset: V3; scale: V3; rotate: V3;
@@ -38,6 +38,18 @@ function fieldOf(node: SNode, name: string): string {
   return "";
 }
 
+/**
+ * A model file kept in the project (a part import, or the models archived into the project folder): the footprint names
+ * it ${KIPRJMOD}/<path>.  The page that knows the project says where such a file is read from, through
+ * globalThis.KiCadProjectModel(path without extension) -> URL or null; a footprint may name the .wrl where the project
+ * keeps the .step, as with KiCad's own library.
+ */
+function projectModel(path: string): string | null {
+  const m = /^\$[{(]KIPRJMOD[})][\/\\](.+)\.(?:step|stp|wrl)$/i.exec(path); if (!m || m[1].includes("..")) return null;
+  const fn = (globalThis as { KiCadProjectModel?: (stem: string) => string | null }).KiCadProjectModel;
+  try { return typeof fn === "function" ? fn(m[1].replace(/\\/g, "/")) || null : null; } catch { return null; }
+}
+
 /** The models a footprint names, in file order; hidden ones and paths that name no library file are left out. */
 export function footprintModels(node: SNode): ModelRef[] {
   const out: ModelRef[] = [];
@@ -45,6 +57,8 @@ export function footprintModels(node: SNode): ModelRef[] {
     if (!Array.isArray(c) || c[0] !== "model") continue;
     const hide = kid(c as SNode, "hide"); if (hide && String(hide[1]) !== "no") continue;
     const path = String(c[1] ?? "");
+    const own = projectModel(path);
+    if (own) { out.push({ name: path.replace(/^\$[{(]KIPRJMOD[})][\/\\]/i, ""), offset: xyzOf(c as SNode, "offset", 0), scale: xyzOf(c as SNode, "scale", 1), rotate: xyzOf(c as SNode, "rotate", 0), source: "project", url: own }); continue; }
     const m = /([^\/\\${}]+)\.3dshapes[\/\\]([^\/\\]+)\.(?:step|stp|wrl)$/i.exec(path); if (!m) continue;
     const ref = { name: `${m[1]}/${m[2]}`, offset: xyzOf(c as SNode, "offset", 0), scale: xyzOf(c as SNode, "scale", 1), rotate: xyzOf(c as SNode, "rotate", 0) };
     if (/KICAD_COLLAB_3DMODELS/.test(path)) {

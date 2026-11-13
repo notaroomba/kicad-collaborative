@@ -44,8 +44,8 @@
   "status": "works"
  },
  "com.github.MitjaNemec.Archive3DModels": {
-  "status": "opens",
-  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+  "status": "works",
+  "note": "Runs here. Checked on a board that names models of KiCad's 3D library: each was copied into packages3D as a STEP file, the footprints were pointed at the copies, the copies joined the project (the 3D viewer reads them from there), and a model the project does not have was named in the end report. KiCad's library publishes STEP only, so no .wrl copies are made; a model over 8 MB is handed over as a download instead."
  },
  "com.github.MitjaNemec.PlaceFootprints": {
   "status": "works",

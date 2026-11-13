@@ -62611,6 +62611,16 @@ function fieldOf2(node, name) {
   for (const c of node) if (Array.isArray(c) && c[0] === "property" && String(c[1]).toLowerCase() === name.toLowerCase()) return String(c[2] ?? "").trim();
   return "";
 }
+function projectModel(path2) {
+  const m = /^\$[{(]KIPRJMOD[})][\/\\](.+)\.(?:step|stp|wrl)$/i.exec(path2);
+  if (!m || m[1].includes("..")) return null;
+  const fn = globalThis.KiCadProjectModel;
+  try {
+    return typeof fn === "function" ? fn(m[1].replace(/\\/g, "/")) || null : null;
+  } catch {
+    return null;
+  }
+}
 function footprintModels(node) {
   const out = [];
   for (const c of node) {
@@ -62618,6 +62628,11 @@ function footprintModels(node) {
     const hide = kid3(c, "hide");
     if (hide && String(hide[1]) !== "no") continue;
     const path2 = String(c[1] ?? "");
+    const own = projectModel(path2);
+    if (own) {
+      out.push({ name: path2.replace(/^\$[{(]KIPRJMOD[})][\/\\]/i, ""), offset: xyzOf(c, "offset", 0), scale: xyzOf(c, "scale", 1), rotate: xyzOf(c, "rotate", 0), source: "project", url: own });
+      continue;
+    }
     const m = /([^\/\\${}]+)\.3dshapes[\/\\]([^\/\\]+)\.(?:step|stp|wrl)$/i.exec(path2);
     if (!m) continue;
     const ref = { name: `${m[1]}/${m[2]}`, offset: xyzOf(c, "offset", 0), scale: xyzOf(c, "scale", 1), rotate: xyzOf(c, "rotate", 0) };
@@ -63909,7 +63924,7 @@ async function boardInfo() {
   };
 }
 async function boardModels(doc) {
-  let parts = 0, kicad = 0, vendor = 0, unchecked = 0;
+  let parts = 0, kicad = 0, vendor = 0, own = 0, unchecked = 0;
   const missing = [];
   for (const it of doc.items.values()) {
     if (it.kind !== "footprint") continue;
@@ -63931,6 +63946,11 @@ async function boardModels(doc) {
         vendor++;
         break;
       }
+      if (r.source === "project") {
+        found = true;
+        own++;
+        break;
+      }
       const [lib, name] = r.name.split("/");
       const names = await modelNames(lib);
       if (!names) unknown = true;
@@ -63949,6 +63969,7 @@ async function boardModels(doc) {
     parts,
     from_kicad_library: kicad,
     from_vendor: vendor,
+    from_project: own || void 0,
     not_checked: unchecked || void 0,
     without_model: missing,
     note: unchecked ? "KiCad's 3D library could not be listed from here, so those parts were not checked." : missing.length ? "Parts without a model are drawn as a plain stand-in shape in the 3D view." : void 0

@@ -481,6 +481,12 @@ const libGet = async (path: string): Promise<any> => {
 export const libs: Record<string, (a: any) => Promise<unknown>> = {
   libraries: async () => { const j = await libGet("/api/libs/footprints"); return { libraries: (j && Array.isArray(j.libraries) ? j.libraries : []).map((l: any) => String(l.name || "")).filter(Boolean) }; },
   footprints: async (a) => { const lib = libName(a.lib); const j = await libGet(`/api/libs/footprints/${encodeURIComponent(lib)}`); return { library: lib, footprints: (j && Array.isArray(j.footprints) ? j.footprints : []).map((f: any) => String(f.n || "")).filter(Boolean) }; },
+  // KiCad's 3D model library: the STEP file of <lib>.3dshapes/<name>, as the 3D viewer reads it
+  model: async (a) => {
+    const lib = libName(a.lib), name = libName(a.name); const r = await fetch(`/api/kicad-lib/model?lib=${encodeURIComponent(lib)}&name=${encodeURIComponent(name)}`, { credentials: "same-origin" });
+    if (r.status === 404) return {}; if (!r.ok) throw new ApiError(`The 3D model library could not be read (the server answered ${r.status}).`, "not_found");
+    return { library: lib, name, step: await r.text() };
+  },
   footprint: async (a) => { const lib = libName(a.lib), name = libName(a.name); const j = await libGet(`/api/libs/footprints/${encodeURIComponent(lib)}/${encodeURIComponent(name)}`); return j && typeof j.footprint === "string" ? { library: lib, name, fpid: `${lib}:${name}`, footprint: j.footprint } : {}; },
 };
 

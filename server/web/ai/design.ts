@@ -289,7 +289,7 @@ export async function boardInfo(): Promise<unknown> {
  * for a vendor part) and that library has it.  The rest are drawn as a plain stand-in shape and are listed with the reason.
  */
 async function boardModels(doc: any): Promise<unknown> {
-  let parts = 0, kicad = 0, vendor = 0, unchecked = 0; const missing: { ref: string; footprint: string; reason: string }[] = [];
+  let parts = 0, kicad = 0, vendor = 0, own = 0, unchecked = 0; const missing: { ref: string; footprint: string; reason: string }[] = [];
   for (const it of doc.items.values()) {
     if (it.kind !== "footprint") continue;
     let pads = 0; for (const c of it.node) if (Array.isArray(c) && c[0] === "pad") pads++;
@@ -301,6 +301,7 @@ async function boardModels(doc: any): Promise<unknown> {
     let found = false, unknown = false, why = "";
     for (const r of refs) {
       if (r.source === "vendor") { found = true; vendor++; break; }
+      if (r.source === "project") { found = true; own++; break; }
       const [lib, name] = r.name.split("/"); const names = await modelNames(lib);
       if (!names) unknown = true; else if (names.has(name)) { found = true; kicad++; break; } else why = `KiCad's 3D library has no ${lib}.3dshapes/${name}`;
     }
@@ -308,7 +309,7 @@ async function boardModels(doc: any): Promise<unknown> {
     if (unknown) unchecked++; else missing.push({ ref: it.ref || "?", footprint: it.lib || "", reason: why });
   }
   missing.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
-  return { parts, from_kicad_library: kicad, from_vendor: vendor, not_checked: unchecked || undefined, without_model: missing,
+  return { parts, from_kicad_library: kicad, from_vendor: vendor, from_project: own || undefined, not_checked: unchecked || undefined, without_model: missing,
     note: unchecked ? "KiCad's 3D library could not be listed from here, so those parts were not checked." : missing.length ? "Parts without a model are drawn as a plain stand-in shape in the 3D view." : undefined };
 }
 

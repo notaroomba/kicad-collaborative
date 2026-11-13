@@ -1050,10 +1050,13 @@ def boot(identifier, files, bridge=None, name=""):
     for v in ("", "6", "7", "8", "9", "10"):
         os.environ.setdefault("KICAD%s_FOOTPRINT_DIR" % v, pcbnew.FOOTPRINT_DIR)
         os.environ.setdefault("KICAD%s_SYMBOL_DIR" % v, "/usr/share/kicad/symbols")
-        os.environ.setdefault("KICAD%s_3DMODEL_DIR" % v, "/usr/share/kicad/3dmodels")
+        os.environ.setdefault("KICAD%s_3DMODEL_DIR" % v, MODEL_DIR)
+    os.environ.setdefault("KISYS3DMOD", MODEL_DIR)
+    os.environ.setdefault("KIPRJMOD", PROJECT_DIR)
     if bridge is not None:
         pcbnew._Host.library = _library
         _install_library_files()
+        _install_model_files()
         _install_fabrication()
     import kicad_net
     kicad_net.install((lambda request: _call("net.fetch", request)) if bridge is not None else None)
@@ -1252,6 +1255,64 @@ def _install_library_files():
         return check
     for name in real:
         setattr(os.path, name, looking(name))
+
+
+MODEL_DIR = "/usr/share/kicad/3dmodels"
+
+
+def _install_model_files():
+    """KiCad's 3D model library as the files a desktop installation has under its 3dmodels folder: a plugin that
+    opens, copies or looks for <library>.3dshapes/<name>.step there gets the model, fetched through the editor the
+    first time.  The library publishes STEP files only, so the .wrl of the same name is not there."""
+    import builtins
+    root = MODEL_DIR
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError:
+        return
+    real_exists = os.path.exists          # (already looks up footprint library files)
+    missing = set()
+
+    def fetch(path):
+        try:
+            p = os.fspath(path)
+        except TypeError:
+            return
+        if not isinstance(p, str) or not p.startswith(root + "/") or p in missing:
+            return
+        parts = p[len(root) + 1:].split("/")
+        if len(parts) != 2 or not parts[0].endswith(".3dshapes") or not parts[1].endswith(".step") or real_exists(p):
+            return
+        lib, name = parts[0][:-len(".3dshapes")], parts[1][:-len(".step")]
+        try:
+            text = (_library("model", {"lib": lib, "name": name}) or {}).get("step")
+            if text:
+                os.makedirs(os.path.join(root, parts[0]), exist_ok=True)
+                with real_open(p, "w", encoding="utf-8", newline="") as f:
+                    f.write(text)
+                return
+        except Exception as e:                       # the library cannot be reached: the file is not there
+            log.warning("3D model library files: %s", e)
+        missing.add(p)
+
+    real_open = builtins.open
+
+    def open_(file, *a, **k):
+        if isinstance(file, (str, os.PathLike)):
+            fetch(file)
+        return real_open(file, *a, **k)
+    open_.__name__ = "open"
+    open_.__doc__ = real_open.__doc__
+    builtins.open = open_
+
+    def looking(name, real):
+        def check(path):
+            fetch(path)
+            return real(path)
+        check.__name__ = name
+        return check
+    for name in ("isfile", "exists"):
+        setattr(os.path, name, looking(name, getattr(os.path, name)))
 
 
 def _library(what, args):
@@ -1725,15 +1786,37 @@ def _export_outputs():
 _LIBRARY_FILE = re.compile(r"^(?:[^/]+/)*(?:[^/]+\.kicad_sym|[^/]+\.pretty/[^/]+\.kicad_mod|[^/]+\.3dshapes/[^/]+\.(?:step|stp|wrl))$", re.I)
 
 
+def _models_named():
+    """The model files in the project folder that the board's footprints name (${KIPRJMOD}/packages3D/R_0603.step), as
+    paths from the project folder without the extension (a footprint may name the .wrl where the file is the .step).  A plugin that copies the models into the project and points the footprints at
+    the copies has made them part of the project."""
+    out = set()
+    board = pcbnew._Host.board
+    if board is None:
+        return out
+    try:
+        for fp in board.GetFootprints():
+            for m in fp._kids()["models"]:
+                hit = re.match(r"^\$[{(]KIPRJMOD[})][/\\](.+\.(?:step|stp|wrl))$", m.m_Filename, re.I)
+                if hit and ".." not in hit.group(1):
+                    out.add(os.path.splitext(hit.group(1).replace("\\", "/"))[0])
+    except Exception as e:
+        log.warning("3D models named by the board: %s", e)
+    return out
+
+
 def _offer_libraries(fresh):
     """Symbol libraries, footprints and 3D models a plugin wrote into the project folder (a part import) are offered to
     the project's own libraries, as they would simply be part of the project on the desktop.  Returns the files that
     were not taken (the person said no, a viewer, a file that is not text), which are handed over as a download."""
     offer = []
+    named, wanted = _models_named(), False
     for p in fresh:
         rel = os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/")
-        if not _LIBRARY_FILE.match(rel):
+        is_model = rel.lower().endswith((".step", ".stp", ".wrl")) and os.path.splitext(rel)[0] in named
+        if not _LIBRARY_FILE.match(rel) and not is_model:
             continue
+        wanted = wanted or is_model
         try:
             with open(p, "rb") as fh:
                 data = fh.read(8_000_001)
@@ -1741,8 +1824,8 @@ def _offer_libraries(fresh):
                 offer.append((p, {"path": rel, "text": data.decode("utf-8")}))
         except (OSError, UnicodeDecodeError):
             pass
-    if not any(f["path"].lower().endswith((".kicad_sym", ".kicad_mod")) for _p, f in offer):
-        return fresh                              # models alone are an output, not a library
+    if not any(f["path"].lower().endswith((".kicad_sym", ".kicad_mod")) for _p, f in offer) and not wanted:
+        return fresh                              # models alone, that no footprint of the board names, are an output
     try:
         out = _call("project.addLibraryFiles", {"files": [f for _p, f in offer]}) or {}
     except Exception as e:

@@ -592,4 +592,11 @@ async function importLibraryFiles(files: { path: string; text: string }[]): Prom
   if (models.added.length && project) store.set({ project: Object.assign({}, project) });
   return { added: [...sym.added, ...fp.added, ...models.added], updated: [...sym.updated, ...fp.updated, ...models.updated], failed: [...sym.failed, ...fp.failed, ...models.failed] };
 }
+// A 3D model kept in the project, for the 3D viewer and the model report (viewer3d/models.ts): the project path a
+// footprint names, without its extension, to where that document's text is read.
+(globalThis as { KiCadProjectModel?: (stem: string) => string | null }).KiCadProjectModel = (stem) => {
+  const docs = state.project ? state.project.docs : [];
+  const hit = [".step", ".stp"].map((ext) => docs.find((d) => d.docType === "model3d" && d.path.toLowerCase() === (stem + ext).toLowerCase())).find(Boolean);
+  return hit ? `/api/docs/${hit.docId}/content` : null;
+};
 E.api = { importLibraryFiles, HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, startMove, state, store, toolCtx, undoLast, worldMm };

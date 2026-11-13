@@ -157,6 +157,22 @@ class Dialog(pcbnew.ActionPlugin):
                 f.write(FOOTPRINT)
             dlg.Destroy()
             return
+        if dlg.text.GetValue().startswith("models:"):
+            # archiving 3D models: a model file copied into the project folder, and a footprint pointed at the copy
+            here = os.path.dirname(board.GetFileName())
+            os.makedirs(os.path.join(here, "packages3D"), exist_ok=True)
+            with open(os.path.join(here, "packages3D", "PyBox.step"), "w") as f:
+                f.write("ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n")
+            fp = sorted(board.GetFootprints(), key=lambda x: x.GetReference())[0]
+            models = fp.Models()
+            while len(models):
+                models.pop()
+            m = pcbnew.FP_3DMODEL()
+            m.m_Filename = "$" + "{KIPRJMOD}/packages3D/PyBox.wrl"
+            models.push_back(m)
+            print("PYTOOL models", fp.GetReference(), len(fp.Models()))
+            dlg.Destroy()
+            return
         if dlg.text.GetValue().startswith("sch:"):
             # a plugin that edits the schematic as a file, written back its own way (everything on one line)
             import re
@@ -1019,6 +1035,27 @@ await idle(a, ID);
   check('and both libraries are in the project\'s library tables', /\(name "PyLib"\)/.test(await content('sym-lib-table')) && /\(name "PyLib"\)/.test(await content('fp-lib-table')), (await content('sym-lib-table')).slice(0, 200) + ' | ' + (await content('fp-lib-table')).slice(0, 200));
   check('nothing was handed over as a download instead', noDownload.length === 0, noDownload.join());
   void docsOf;
+}
+
+// ---- 3D models archived into the project: the copies become project files and the 3D viewer reads them
+{
+  await run(a, await act(a, 'Py: dialog'));
+  await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+  const d4 = inner(a); await d4.waitForSelector('input[type="text"]');
+  await d4.fill('input[type="text"]', 'models:');
+  await d4.locator('button', { hasText: /^OK$/ }).click();
+  await a.waitForSelector('#pluginPrompt', { timeout: 30000 });
+  const asked = await a.locator('#pluginPrompt').innerText();
+  check('a model a footprint now names in the project folder is offered to the project', /1 3D model/.test(asked) && /packages3D\/PyBox\.step/.test(asked), asked.slice(0, 300));
+  await a.click('#pluginPromptOk');
+  await idle(a, ID);
+  const got = await a.evaluate(async () => {
+    const st = window.CollabEditor.api.state; const doc = st.project.docs.find((d) => d.path === 'packages3D/PyBox.step');
+    const url = window.KiCadProjectModel('packages3D/PyBox'); const text = url ? await (await fetch(url)).text() : '';
+    let named = ''; for (const it of window.CollabEditor.kdoc.items.values()) if (it.kind === 'footprint') for (const c of it.node) if (Array.isArray(c) && c[0] === 'model' && /PyBox/.test(String(c[1]))) named = String(c[1]);
+    return { docType: doc && doc.docType, url, head: text.slice(0, 12), named, other: window.KiCadProjectModel('packages3D/Nope') };
+  });
+  check('it is a document of the project that the 3D viewer reads for that footprint', got.docType === 'model3d' && /^\/api\/docs\/[0-9a-f-]+\/content$/.test(got.url || '') && got.head === 'ISO-10303-21' && got.named === '${KIPRJMOD}/packages3D/PyBox.wrl' && got.other === null, JSON.stringify(got));
 }
 
 // ---- a schematic rewritten as a file is carried into the project's schematic

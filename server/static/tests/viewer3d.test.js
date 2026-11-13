@@ -208,6 +208,16 @@ test("a footprint's 3D models: KiCad's library by library and name, a vendor par
   assert.strictEqual(v[0].source, "vendor"); assert.strictEqual(v[0].url, "/api/parts/model.step?vendor=lcsc&id=C318884");
   assert.strictEqual(G.footprintModels(first(fp(`(model "\${KICAD10_3DMODEL_DIR}/A.3dshapes/B.step" (hide yes))`)).node).length, 0, "a hidden model is not drawn");
   assert.strictEqual(G.footprintModels(first(fp("")).node).length, 0);
+  // a model kept in the project: the page says where the file is read from; the .wrl name finds the .step kept
+  const own = `(model "\${KIPRJMOD}/packages3D/R_0603.wrl" (offset (xyz 1 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))`;
+  assert.strictEqual(G.footprintModels(first(fp(own)).node).length, 0, "without a project the path names nothing");
+  globalThis.KiCadProjectModel = (stem) => (stem === "packages3D/R_0603" ? "/api/docs/abc/content" : null);
+  try {
+    const p = G.footprintModels(first(fp(own)).node);
+    assert.strictEqual(p.length, 1); assert.strictEqual(p[0].source, "project"); assert.strictEqual(p[0].url, "/api/docs/abc/content"); assert.deepStrictEqual(p[0].offset, [1, 0, 0]);
+    assert.strictEqual(G.footprintModels(first(fp(`(model "\${KIPRJMOD}/packages3D/Other.step")`)).node).length, 0, "a file the project does not keep");
+    assert.strictEqual(G.footprintModels(first(fp(`(model "\${KIPRJMOD}/../x/R_0603.step")`)).node).length, 0);
+  } finally { delete globalThis.KiCadProjectModel; }
   const body = G.boardBodies(fp(`(model "\${KICAD10_3DMODEL_DIR}/A.3dshapes/B.step")`))[0];
   assert.strictEqual(body.models.length, 1); near(body.x, 10); near(body.rot, 90);
 });
