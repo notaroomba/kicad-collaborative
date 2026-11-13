@@ -100,6 +100,9 @@ class Ask(wx.Dialog):
         box.Add(row, 0, wx.EXPAND | wx.ALL, 8)
         self.via = wx.CheckBox(self, label="Also add a via")
         box.Add(self.via, 0, wx.ALL, 8)
+        self.page = wx.html.HtmlWindow(self, size=(260, 70))
+        self.page.SetPage("<h1 id='r'>Report</h1><p>two <b>vias</b></p><script>document.getElementById('r').textContent = 'script ran'</script>")
+        box.Add(self.page, 0, wx.EXPAND | wx.ALL, 8)
         box.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(box)
         self.SetDropTarget(Dropped(self))
@@ -928,6 +931,13 @@ const dlg = inner(a);
 await dlg.waitForSelector('input[type="text"]');
 check('ShowModal opens the dialog as a KiCad dialog over the editor', (await a.locator('#pluginWindow .kd-title').innerText()).includes('Py tool') && (await a.locator('#pluginWindow .plg-from').innerText()).includes('Py Tool'));
 check('its widgets are there with their values', (await dlg.locator('input[type="text"]').inputValue()) === 'from python' && (await dlg.locator('select option').count()) === 2 && (await dlg.locator('input[type="checkbox"]').count()) === 1 && (await dlg.locator('button').count()) === 2);
+// a page of HTML (wx.html.HtmlWindow, wx.html2.WebView): shown, never run
+const pageEl = await dlg.locator('iframe.wx-html').evaluate((el) => ({ sandbox: el.getAttribute('sandbox'), srcdoc: el.srcdoc, w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height })).catch((e) => ({ error: String(e) }));
+const pageFrame = a.frames().find((f) => f.parentFrame() === dlg);
+const pageText = pageFrame ? await pageFrame.locator('h1').innerText({ timeout: 4000 }).catch((e) => 'unreadable: ' + String(e).slice(0, 80)) : 'no frame';
+check('a plugin\'s HTML page is shown in its window', pageEl.sandbox === '' && /<h1 id='r'>Report<\/h1>/.test(pageEl.srcdoc || '') && pageEl.w > 100 && pageEl.h > 40 && !!pageFrame, JSON.stringify({ ...pageEl, srcdoc: (pageEl.srcdoc || '').length }));
+check('and its scripts do not run', pageText === 'Report' || /unreadable/.test(pageText), pageText);
+console.log('    html page text: ' + pageText);
 await a.waitForTimeout(300);
 await shot(a, 'py-04-dialog');
 await dlg.fill('input[type="text"]', 'PY-LABEL');

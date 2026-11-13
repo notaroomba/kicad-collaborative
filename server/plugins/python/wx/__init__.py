@@ -11,6 +11,7 @@
 
 import base64 as _b64
 import os as _os
+import re as _re
 import sys as _sys
 
 try:
@@ -1955,6 +1956,7 @@ _CSS = """
 .wx-popup{position:fixed;z-index:40;background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 button.primary{background:var(--blue);border-color:var(--blue);color:var(--on-accent,#fff)}
 .wx-stub{border:1px dashed var(--line);border-radius:3px;color:var(--ink-3);padding:4px 6px;font-size:11px}
+.wx-html{border:1px solid var(--line);border-radius:3px;width:100%;min-height:140px;flex:1 1 auto;color-scheme:light;background:Canvas}
 .wx-stdbtns{display:flex;justify-content:flex-end;gap:6px;align-self:stretch;padding-top:6px}
 textarea{resize:vertical;min-height:60px}
 select[multiple]{min-height:70px}
@@ -6574,6 +6576,78 @@ class PopupWindow(Panel):
         return True
 
 
+
+# ----------------------------------------------------------------------------- pages of HTML
+#
+# wx.html.HtmlWindow and wx.html2.WebView: a plugin's own HTML (a rendered note, a report, a help page), shown in a
+# frame that displays and never runs: no scripts, no forms, nothing fetched from the network, links inert.
+
+_HTML_GUARD = ("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; "
+               "style-src 'unsafe-inline'; font-src data:\"><style>a{pointer-events:none}</style>")
+
+
+class HtmlWindow(Window):
+    _TAG, _CLS = "iframe", "wx-html"
+
+    def _wx_build(self, kw):
+        self.el.setAttribute("sandbox", "")
+        self.el.setAttribute("referrerpolicy", "no-referrer")
+        self._wx_html, self._wx_url, self._wx_title = "", "", ""
+
+    def SetPage(self, html, base_url=""):
+        self._wx_html = str(html if html is not None else "")
+        m = _re.search(r"<title[^>]*>(.*?)</title>", self._wx_html, _re.I | _re.S)
+        self._wx_title = m.group(1).strip() if m else ""
+        self.el.srcdoc = _HTML_GUARD + self._wx_html
+        self._wx_fire(_binder("EVT_WEBVIEW_LOADED"))
+        return True
+
+    def AppendToPage(self, html):
+        return self.SetPage(self._wx_html + str(html))
+
+    def LoadURL(self, url):
+        """A file of the plugin's is shown; an address on the web is named, not loaded."""
+        url = str(url or "")
+        self._wx_url = url
+        path = url[7:] if url.startswith("file://") else url
+        if _os.path.isfile(path):
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                return self.SetPage(fh.read())
+        import html as _h
+        return self.SetPage("<p>This page is on the web and is not loaded inside a plugin's window:</p><p><b>%s</b></p>" % _h.escape(url))
+
+    LoadPage = LoadFile = LoadURL
+
+    def GetPageSource(self):
+        return self._wx_html
+
+    def GetPageText(self):
+        import html as _h
+        return _h.unescape(_re.sub(r"<[^>]+>", "", _re.sub(r"(?is)<(script|style)[^>]*>.*?</\\1>", "", self._wx_html)))
+
+    ToText = SelectionToText = GetPageText
+    GetCurrentURL = GetOpenedPage = lambda self: self._wx_url
+    GetCurrentTitle = GetOpenedPageTitle = lambda self: self._wx_title
+    RunScript = lambda self, *a, **k: (False, "")
+    RunScriptAsync = AddScriptMessageHandler = AddUserScript = RemoveAllUserScripts = lambda self, *a, **k: False
+    CanGoBack = CanGoForward = IsBusy = IsEditable = HistoryCanBack = HistoryCanForward = HistoryBack = HistoryForward = lambda self, *a: False
+    Reload = Stop = GoBack = GoForward = ClearHistory = EnableHistory = EnableContextMenu = EnableAccessToDevTools = SetEditable = lambda self, *a, **k: None
+    SetStandardFonts = SetFonts = SetBorders = SetRelatedFrame = SetRelatedStatusBar = SetZoom = SetZoomType = SetZoomFactor = SetUserAgent = lambda self, *a, **k: None
+    GetZoom = GetZoomFactor = lambda self: 1
+    Print = lambda self, *a: None
+
+    @classmethod
+    def New(cls, parent=None, id=ID_ANY, url="", pos=DefaultPosition, size=DefaultSize, backend="", style=0, name="", **kw):
+        w = cls(parent, id, pos, size, style, name)
+        if url:
+            w.LoadURL(url)
+        return w
+
+    IsBackendAvailable = staticmethod(lambda *a: True)
+    GetBackendVersionInfo = staticmethod(lambda *a: "web")
+
+
+WebView = HtmlWindow
 
 
 class StyledTextCtrl(TextCtrl):

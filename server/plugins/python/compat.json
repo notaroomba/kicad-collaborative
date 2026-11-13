@@ -3,8 +3,8 @@
   "status": "works"
  },
  "com.ahmedmikatonik.kisidian": {
-  "status": "opens",
-  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+  "status": "works",
+  "note": "Runs here. Notes are written in Markdown with a live preview and kept with the project in this browser. Links in the preview cannot be clicked."
  },
  "com.alsoknownasfoo.spinrender": {
   "status": "works"
