@@ -142,8 +142,8 @@
   "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
  },
  "com.github.drandyhaas.kicadroutingtools": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "unsupported",
+  "note": "Its window opens, but routing is done by its own compiled Rust core (grid_router), which the package ships only for Windows, macOS and Linux. Its source is in the package; it has not been built for the browser yet."
  },
  "com.github.drewsum.kipi": {
   "status": "unsupported",

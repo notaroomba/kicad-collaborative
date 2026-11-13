@@ -3935,7 +3935,7 @@ class ToolTip:
         return self._text
 
     SetTip = lambda self, t: setattr(self, "_text", str(t))
-    Enable = SetDelay = SetAutoPop = staticmethod(lambda *a: None)
+    Enable = SetDelay = SetAutoPop = SetReshow = SetMaxWidth = staticmethod(lambda *a: None)
 
 
 class _Picker(Window):
