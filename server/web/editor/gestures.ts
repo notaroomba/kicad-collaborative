@@ -482,10 +482,24 @@ function startPan(ev: PointerEvent, fromX: number, fromY: number, zoom = false):
   stage.classList.add("panning"); E.hoverId = null;
   try { stage.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
 }
+/** The last middle-button press, for the double click (wxWidgets' double-click interval, about 500 ms). */
+let midDown: { t: number; x: number; y: number } | null = null;
+const DBL_CLICK_MS = 500;
 function onDownCapture(ev: PointerEvent): void {
   const t = ev.target as Element;
   if (t.closest && (t.closest("#cmtPanel") || t.closest("#signinOverlay") || t.closest("#pcbChip") || t.closest("[data-schtools]"))) return;
-  if (ev.button === 1) { ev.preventDefault(); ev.stopImmediatePropagation(); if (E.middleDragPan !== false) startPan(ev, ev.clientX, ev.clientY, E.middleDrag === "zoom"); return; }   // Preferences > Mouse and Touchpad
+  if (ev.button === 1) {
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    // PCB_SELECTION_TOOL / SCH_SELECTION_TOOL: a middle double click is Zoom to Fit, with Ctrl Zoom to Objects
+    const now = performance.now(), m = midDown; midDown = { t: now, x: ev.clientX, y: ev.clientY };
+    if (m && now - m.t < DBL_CLICK_MS && Math.hypot(ev.clientX - m.x, ev.clientY - m.y) < DRAG_THRESHOLD_PX) {
+      midDown = null; const hk = E.hotkeys as { runKicadAction?: (id: string) => boolean } | undefined;
+      if (hk && hk.runKicadAction) hk.runKicadAction(ev.ctrlKey || ev.metaKey ? "zoomFitObjects" : "zoomFitScreen");
+      return;
+    }
+    if (E.middleDragPan !== false) startPan(ev, ev.clientX, ev.clientY, E.middleDrag === "zoom");   // Preferences > Mouse and Touchpad
+    return;
+  }
   if (ev.button === 2) {
     ev.preventDefault(); ev.stopImmediatePropagation();
     E.rdown = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
