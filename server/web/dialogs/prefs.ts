@@ -4,7 +4,7 @@ import { E, GRID_CHOICES, gridListKey, isSch, requestRender, setToggle, setToggl
 import { syncSchModes } from "../editor/panes";
 import { publishUserOrigin } from "../editor/userorigin";
 import { effectiveTheme, subscribeTheme } from "../theme";
-import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
+import { PCB_DEFAULT_GRIDS, PCB_DEFAULT_GRID_IDX, PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
 import { gridChoiceText, type GridDef, type IuScale } from "../units";
 import type { Units } from "../store";
 
@@ -40,9 +40,9 @@ export interface Prefs {
 }
 const MIL = 0.0254;
 function schGrids(): GridPrefs { return { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], names: ["", "", "", ""], last: 1, fast1: 1, fast2: 2, overrides: { ...SCH_GRID_OVERRIDES }, axes: false }; }
-function pcbGrids(): GridPrefs { return { sizes: PCB_GRID_SIZES.slice(), names: Array(22).fill(""), last: 15, fast1: 15, fast2: 16, overrides: { ...PCB_GRID_OVERRIDES }, axes: false }; }
+function pcbGrids(): GridPrefs { return { sizes: PCB_GRID_SIZES.slice(), names: Array(PCB_GRID_SIZES.length).fill(""), last: PCB_DEFAULT_GRID_IDX, fast1: PCB_DEFAULT_GRID_IDX, fast2: PCB_DEFAULT_GRID_IDX + 1, overrides: { ...PCB_GRID_OVERRIDES }, axes: false }; }
 /** APP_SETTINGS_BASE::DefaultGridSizeList for pcbnew and the footprint editor: 1000 mil down to 1 mil, then 5 mm down to 0.01 mm. */
-const PCB_GRID_SIZES = [1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 2, 1].map((m) => m * MIL).concat([5, 2.5, 1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.025, 0.01]);
+const PCB_GRID_SIZES = PCB_DEFAULT_GRIDS;
 export const DEFAULT_PREFS: Prefs = {
   mouse: { autoZoomSpeed: true, zoomSpeed: 5, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true },
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },

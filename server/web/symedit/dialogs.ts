@@ -682,7 +682,7 @@ function importSelectDialog(file: string, src: M.SymLib, mgr: M.SymbolImportMana
     search.addEventListener("input", () => { state.filter = search.value.toLowerCase(); renderList(); });
     unit.addEventListener("change", preview);
     KD().open({
-      title: `Import Symbols from ${file}`, width: 820, cls: "kd-wide", okLabel: "Import",
+      title: `Import Symbols from ${file}`, geomKey: "Import Symbols", width: 820, cls: "kd-wide", okLabel: "Import",
       build(body, api) {
         const allB = h("button", { class: "btn sm", id: "imp-all", onclick: () => { mgr.selectAll(matches); renderList(); refreshButtons(); } }, "Select All");
         const noneB = h("button", { class: "btn sm", id: "imp-none", onclick: () => { mgr.deselectAll(matches); renderList(); refreshButtons(); } }, "Select None");

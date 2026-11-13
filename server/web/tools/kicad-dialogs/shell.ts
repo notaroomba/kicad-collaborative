@@ -21,23 +21,32 @@ if (typeof document !== "undefined") document.addEventListener("keydown", (ev) =
 }, true);
 // ---------------------------------------------------------------- DIALOG_SHIM's window geometry
 // A dialog is centred on its parent the first time; after the person moves or resizes it, the next opening of the
-// same dialog (KiCad keys the map by the dialog's class; here by its title) comes back where and as big as it was.
-// Browser storage is a per-viewer convenience, as the desktop's window-geometry settings are per user.
+// same dialog comes back where it was, and (wxRESIZE_BORDER) at least as big as it was.  KiCad keys the map by
+// m_hash_key, else by the title without a trailing " (...)" (getDialogKeyFromTitle); the web's titles that name the
+// edited item after " — " drop that part too.  Browser storage is a per-viewer convenience, as the desktop's
+// window-geometry settings are per user.
 interface Geometry { left: number; top: number; width?: number; height?: number }
-const GEOM_KEY = (title: string): string => "kd.geom." + title;
+/** getDialogKeyFromTitle: the title up to its last '(' (trailing spaces trimmed), and up to " — " (the web's item suffix). */
+export function dialogKeyFromTitle(title: string): string {
+  let t = String(title);
+  const dash = t.indexOf(" \u2014 "); if (dash > 0) t = t.slice(0, dash);
+  const paren = t.lastIndexOf("("); if (paren > 0) t = t.slice(0, paren).replace(/ +$/, "");
+  return t;
+}
+const GEOM_KEY = (key: string): string => "kd.geom." + key;
 /** Take the dialog out of the centring flexbox at its current place, so it can move and resize. */
 function detach(dlg: HTMLElement): void {
   if (dlg.style.position === "fixed") return;
   const r = dlg.getBoundingClientRect();
   dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = r.left + "px"; dlg.style.top = r.top + "px";
 }
-function saveGeometry(title: string, dlg: HTMLElement, sized: boolean): void {
+function saveGeometry(key: string, dlg: HTMLElement, sized: boolean): void {
   const r = dlg.getBoundingClientRect();
-  let prev: Geometry | null = null; try { prev = JSON.parse(localStorage.getItem(GEOM_KEY(title)) || "null"); } catch (e) { prev = null; }
+  let prev: Geometry | null = null; try { prev = JSON.parse(localStorage.getItem(GEOM_KEY(key)) || "null"); } catch (e) { prev = null; }
   const g: Geometry = { left: Math.round(r.left), top: Math.round(r.top) };
   if (sized) { g.width = Math.round(r.width); g.height = Math.round(r.height); }
   else if (prev && prev.width) { g.width = prev.width; g.height = prev.height; }
-  try { localStorage.setItem(GEOM_KEY(title), JSON.stringify(g)); } catch (e) { /* no storage: nothing remembered */ }
+  try { localStorage.setItem(GEOM_KEY(key), JSON.stringify(g)); } catch (e) { /* no storage: nothing remembered */ }
 }
 /** The geometry clamped to the window (the screen may have shrunk since). */
 export function clampGeometry(g: Geometry, vw: number, vh: number): Geometry {
@@ -45,10 +54,20 @@ export function clampGeometry(g: Geometry, vw: number, vh: number): Geometry {
   const w = width || 240, h = height || 120;
   return { left: Math.max(0, Math.min(g.left, vw - Math.min(w, vw))), top: Math.max(0, Math.min(g.top, vh - Math.min(h, vh))), width, height };
 }
-function restoreGeometry(title: string, dlg: HTMLElement): void {
-  let g: Geometry | null = null; try { g = JSON.parse(localStorage.getItem(GEOM_KEY(title)) || "null"); } catch (e) { g = null; }
+/**
+ * The geometry a dialog opens with: the saved position, and for a resizable dialog std::max( calculated size,
+ * saved size ) so it never comes back smaller than its content needs; a fixed-size one keeps its calculated size.
+ */
+export function restoredGeometry(saved: Geometry, natural: { width: number; height: number }, resizable: boolean): Geometry {
+  const out: Geometry = { left: saved.left, top: saved.top };
+  if (resizable && saved.width && saved.height) { out.width = Math.max(natural.width, saved.width); out.height = Math.max(natural.height, saved.height); }
+  return out;
+}
+function restoreGeometry(key: string, dlg: HTMLElement, resizable: boolean): void {
+  let g: Geometry | null = null; try { g = JSON.parse(localStorage.getItem(GEOM_KEY(key)) || "null"); } catch (e) { g = null; }
   if (!g || typeof g.left !== "number" || typeof g.top !== "number") return;
-  const c = clampGeometry(g, window.innerWidth, window.innerHeight);
+  const r = dlg.getBoundingClientRect();
+  const c = clampGeometry(restoredGeometry(g, { width: Math.ceil(r.width), height: Math.ceil(r.height) }, resizable), window.innerWidth, window.innerHeight);
   dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = c.left + "px"; dlg.style.top = c.top + "px";
   if (c.width) { dlg.style.width = c.width + "px"; dlg.style.maxWidth = "none"; }
   if (c.height) { dlg.style.height = c.height + "px"; dlg.style.maxHeight = "none"; }
@@ -86,9 +105,10 @@ export function open(spec: DlgSpec): DlgApi {
   let dragFrom: [number, number] | null = null;
   tt.addEventListener("pointerdown", (ev) => { if ((ev.target as Element).classList.contains("kd-x")) return; const r = dlg.getBoundingClientRect(); dragFrom = [ev.clientX - r.left, ev.clientY - r.top]; detach(dlg); tt.setPointerCapture(ev.pointerId); });
   tt.addEventListener("pointermove", (ev) => { if (!dragFrom) return; dlg.style.left = Math.max(0, ev.clientX - dragFrom[0]) + "px"; dlg.style.top = Math.max(0, ev.clientY - dragFrom[1]) + "px"; });
-  tt.addEventListener("pointerup", () => { if (dragFrom) saveGeometry(spec.title, dlg, false); dragFrom = null; });
+  const geomKey = spec.geomKey || dialogKeyFromTitle(spec.title), resizable = !spec.fixedSize;
+  tt.addEventListener("pointerup", () => { if (dragFrom) saveGeometry(geomKey, dlg, false); dragFrom = null; });
   // wxRESIZE_BORDER: a grip in the bottom-right corner resizes the dialog
-  const grip = el("div", "kd-grip"); grip.title = "Resize"; dlg.appendChild(grip);
+  const grip = el("div", "kd-grip"); grip.title = "Resize"; if (resizable) dlg.appendChild(grip);
   let sizeFrom: [number, number, number, number] | null = null;
   grip.addEventListener("pointerdown", (ev) => { ev.preventDefault(); const r = dlg.getBoundingClientRect(); detach(dlg); sizeFrom = [ev.clientX, ev.clientY, r.width, r.height]; grip.setPointerCapture(ev.pointerId); });
   grip.addEventListener("pointermove", (ev) => {
@@ -98,12 +118,12 @@ export function open(spec: DlgSpec): DlgApi {
     dlg.style.height = Math.max(120, Math.min(window.innerHeight - r.top, sizeFrom[3] + ev.clientY - sizeFrom[1])) + "px";
     dlg.style.maxWidth = "none"; dlg.style.maxHeight = "none";
   });
-  grip.addEventListener("pointerup", () => { if (sizeFrom) saveGeometry(spec.title, dlg, true); sizeFrom = null; });
+  grip.addEventListener("pointerup", () => { if (sizeFrom) saveGeometry(geomKey, dlg, true); sizeFrom = null; });
   current = { ov, dlg, body, spec, finish };
   ensureCss();
   const api: DlgApi = { body, close, dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector<HTMLInputElement>(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
   spec.build(body, api);
-  restoreGeometry(spec.title, dlg);
+  restoreGeometry(geomKey, dlg, resizable);
   const first = body.querySelector<HTMLInputElement>("input:not([type=checkbox]), k-select, textarea, input"); if (first && !spec.readOnly && !first.disabled) { first.focus(); if (first.select && first.type === "text") first.select(); }
   if (!dlg.contains(document.activeElement)) dlg.focus();
   return api;

@@ -24,10 +24,11 @@ import { state, store } from "./appstore";
 import { closeThread, placeComment } from "./comments";
 import { noteModifiers, refreshCursor } from "./cursors";
 import { followHypertext } from "./hypertext-follow";
+import { dragModifier, selModifier } from "./selmodes";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
-import { cancelInteraction, clearAllSelection, rotateFieldMove, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
+import { DRAG_THRESHOLD_PX, cancelInteraction, clearAllSelection, rotateFieldMove, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -166,13 +167,33 @@ window.addEventListener("pointerdown", (ev) => {
   if (openClarifyMenu(ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
 }, true);
 
-// SCH_SELECTION_TOOL: a click on hypertext under the cursor (HasHoveredHypertext) follows it instead of selecting
+// SCH_SELECTION_TOOL: a click (IsClick: press and release without a drag) on hypertext under the cursor
+// (HasHoveredHypertext) follows it and leaves the selection as it was (selCancelled); a drag that starts on it
+// selects and moves the item like any other (IsDrag), so the press is not swallowed.
+let hyperPress: { href: string; x: number; y: number; id: number; sel: Set<string>; selected: unknown; selField: unknown; selPins: unknown } | null = null;
 window.addEventListener("pointerdown", (ev) => {
+  hyperPress = null;
   const hh = E.hyperHover as { id: string; href: string } | null;
   if (!hh || ev.button !== 0 || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || E.tool !== "select" || !isSch() || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
   const sch = CollabTools.sch; if (sch && (sch.state.drag || sch.state.carry || sch.state.wire)) return;
-  ev.stopImmediatePropagation(); ev.preventDefault(); cancelLongPress();
-  followHypertext(hh.href, ev);
+  hyperPress = { href: hh.href, x: ev.clientX, y: ev.clientY, id: ev.pointerId, sel: new Set(E.selection), selected: E.selected, selField: E.selField, selPins: E.selPins };
+}, true);
+window.addEventListener("pointermove", (ev) => {
+  if (hyperPress && ev.pointerId === hyperPress.id && Math.hypot(ev.clientX - hyperPress.x, ev.clientY - hyperPress.y) > DRAG_THRESHOLD_PX) hyperPress = null;   // IsDrag
+}, true);
+window.addEventListener("pointercancel", () => { hyperPress = null; }, true);
+window.addEventListener("pointerup", (ev) => {
+  const hp = hyperPress; hyperPress = null;
+  if (!hp || ev.button !== 0 || ev.pointerId !== hp.id || Math.hypot(ev.clientX - hp.x, ev.clientY - hp.y) > DRAG_THRESHOLD_PX) return;
+  cancelLongPress();
+  // after the stage's own release handling (a press that did not move drops its drag / box): put the selection back
+  setTimeout(() => {
+    E.boxSel = null; E.drag = null;
+    clearSelection(); for (const id of hp.sel) E.selection.add(id);
+    E.selected = hp.selected as typeof E.selected; E.selField = hp.selField as typeof E.selField; E.selPins = hp.selPins as typeof E.selPins;
+    drawSelection(); renderProps(); renderObjects(); requestRender();
+    followHypertext(hp.href, ev);
+  }, 0);
 }, true);
 
 stage.addEventListener("pointerdown", (ev) => {
@@ -319,28 +340,13 @@ function selectPinOnly(pin: { id: string; number: string }): void {
   clearSelection(); E.selPins = [pin]; drawSelection(); renderProps(); renderObjects(); requestRender();
 }
 
-/** SELECTION_TOOL::setModifiersState: Shift adds, Ctrl (Cmd on macOS) toggles, Ctrl+Shift removes; null replaces. */
 const smodeOf = (ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => selModifier(ev);
-function selModifier(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): "add" | "toggle" | "remove" | null {
-  const c = ev.ctrlKey || ev.metaKey; return c && ev.shiftKey ? "remove" : c ? "toggle" : ev.shiftKey ? "add" : null;
-}
 /** PCB_SELECTION_TOOL::selectMultiple re-reads the modifiers on every event: Shift / Ctrl pressed or let go mid-drag change the mode. */
 function boxSelModifiers(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): void {
   const b = E.boxSel as { add?: boolean; mode?: string | null } | null; if (!b) return;
   const m = dragModifier(ev, isSch()); b.mode = m; b.add = !!m;
 }
 for (const t of ["keydown", "keyup"]) window.addEventListener(t, (ev) => { const k = (ev as KeyboardEvent).key; if (E.boxSel && (k === "Shift" || k === "Control" || k === "Meta")) { boxSelModifiers(ev as KeyboardEvent); drawBoxSel(); } });
-/**
- * SELECTION_TOOL::setModifiersState for a box or lasso drag.  Eeschema calls SelectMultiple( area, m_drag_subtractive,
- * false ) with m_drag_additive = Ctrl || Shift, so a Ctrl drag adds like Shift.  Pcbnew calls SelectMultiple( area,
- * m_subtractive, m_exclusive_or ): Ctrl alone toggles (m_exclusive_or = Ctrl && !Shift), Ctrl+Shift removes.
- */
-export function dragModifier(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey?: boolean }, sch = true): "add" | "remove" | "toggle" | null {
-  const c = ev.ctrlKey || ev.metaKey;
-  if (!sch) return c && ev.shiftKey ? "remove" : c ? "toggle" : ev.shiftKey ? "add" : null;
-  if (ev.altKey) return null;   // && !aAltState
-  return c && ev.shiftKey ? "remove" : c || ev.shiftKey ? "add" : null;
-}
 /** DRAG_SELECTED on an item that was not selected: the press picked it (the board module's own pick), a drag draws a box. */
 function startModuleBox(ev: PointerEvent, x: number, y: number): void {
   if (E.tool !== "select" || !E.kdoc) return;

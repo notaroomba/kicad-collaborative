@@ -8,6 +8,10 @@ export interface DlgSpec {
   title: string; width?: number; cls?: string; modeless?: boolean; readOnly?: boolean; okLabel?: string; cancelLabel?: string;
   build(body: HTMLElement, api: DlgApi): void; ok?(): boolean | void; cancel?(): void;
   extra?: { label: string; fn: () => void }[]; buttons?: DlgButton[];
+  /** DIALOG_SHIM::m_hash_key: the name its remembered geometry is kept under, when the title carries per-item text. */
+  geomKey?: string;
+  /** A dialog without wxRESIZE_BORDER: no resize grip, and only its position is remembered. */
+  fixedSize?: boolean;
 }
 export interface DlgApi { body: HTMLElement; dlg: HTMLElement; foot: HTMLElement; close(): void; finish(apply: boolean): void; refocus(key?: string): void }
 export interface NotebookTab { label: string; build(page: HTMLElement): void }

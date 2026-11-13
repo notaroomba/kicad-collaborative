@@ -147,7 +147,7 @@ function symbolProps(it: KItem, doc: KDoc): PropDef[] {
   const units = h.libUnitCount(doc, it.node);
   const unitChoices: [string, string][] = []; for (let u = 1; u <= Math.max(1, units); u++) unitChoices.push([String(u), u <= 26 ? String.fromCharCode(64 + u) : String(u)]);
   out.push({ group: BASIC, name: "Unit", type: "enum", choices: unitChoices, get: (x) => { const k = h.kid(x.node, "unit"); return String(k ? h.num(k[1], 1) : 1); }, set: (n, v) => { h.setSymbolUnit(n, +(v as string)); } });
-  out.push(...fieldProps(it));
+  out.push(...fieldProps(it).map((d) => (SYM_MANDATORY.includes(d.name) ? d : Object.assign(d, { key: "field" as const }))));
   out.push({ group: "Fields", name: "Library Link", type: "text", get: (x) => h.str((h.kid(x.node, "lib_id") || [])[1]) });
   out.push(flag("Attributes", "Exclude From Simulation", "exclude_from_sim", false, false), flag("Attributes", "Exclude From Bill of Materials", "in_bom", true, true),
     flag("Attributes", "Exclude From Board", "on_board", true, true), flag("Attributes", "Exclude From Position Files", "in_pos_files", true, true), flag("Attributes", "Do not Populate", "dnp", false, false));
@@ -192,7 +192,9 @@ function schProps(it: KItem, doc: KDoc): PropDef[] {
     case "bus_entry": return [atProp("Position X", 1), atProp("Position Y", 2), ...strokeProps(BASIC, "Wire Style", true)];
     case "sheet": {
       const fld = (name: string, label: string, ro: boolean): PropDef => ({ group: "Fields", name: label, type: "text", get: (x) => { const p = h.kids(x.node, "property").find((q) => h.str(q[1]) === name); return p ? h.str(p[2]) : null; }, set: ro ? undefined : (n, v) => { h.setField(n, name, String(v)); } });
-      return [atProp("Position X", 1), atProp("Position Y", 2), fld("Sheetname", "Sheet Name", false), fld("Sheetfile", "Sheet File", true),
+      const user = h.kids(it.node, "property").map((p) => h.str(p[1])).filter((nm) => !SHEET_MANDATORY.includes(nm))
+        .map((nm): PropDef => Object.assign(fld(nm, nm, false), { key: "field" as const }));
+      return [atProp("Position X", 1), atProp("Position Y", 2), fld("Sheetname", "Sheet Name", false), fld("Sheetfile", "Sheet File", true), ...user,
         { group: BASIC, name: "Border Width", type: "length", get: (x) => h.strokeWidth(x.node), set: (n, v) => { h.setStrokeWidth(n, Math.max(0, v as number)); } },
         flag("Attributes", "Exclude From Simulation", "exclude_from_sim", false, false), flag("Attributes", "Exclude From Bill of Materials", "in_bom", true, true),
         flag("Attributes", "Exclude From Board", "on_board", true, true), flag("Attributes", "Do not Populate", "dnp", false, false)];
@@ -230,6 +232,10 @@ const padIndexOf = new Map<string, number>();   // footprint id -> the pad the P
 
 /** FIELD_T's mandatory footprint fields (PCB_FIELD::IsMandatory): never renamed or removed from the panel. */
 const FP_MANDATORY = ["Reference", "Value", "Footprint", "Datasheet", "Description"];
+/** SCH_FIELD::IsMandatory of a symbol (the same five FIELD_Ts) and of a sheet (SHEET_NAME, SHEET_FILENAME). */
+const SYM_MANDATORY = FP_MANDATORY, SHEET_MANDATORY = ["Sheetname", "Sheetfile"];
+/** The fields of a footprint / symbol / sheet node the panel may rename or remove (isKeyEditable), or null for an item without them. */
+function mandatoryOf(n: SNode): string[] | null { return n[0] === "footprint" ? FP_MANDATORY : n[0] === "symbol" ? SYM_MANDATORY : n[0] === "sheet" ? SHEET_MANDATORY : null; }
 /** A field written (property private "Name" …) (PCB_FIELD::IsPrivate). */
 function privateField(n: SNode, name: string): boolean { const h = H(); return h.kids(n, "property").some((p) => p[1] === "private" && h.str(p[2]) === name); }
 
@@ -542,7 +548,7 @@ function show(def: PropDef, raw: Raw): string {
     default: return String(raw);
   }
 }
-function defsOf(it: KItem, doc: KDoc, single: boolean): PropDef[] { try { return isSchDoc() ? schProps(it, doc) : pcbProps(it, doc, single).concat(it.kind === "generated" ? [] : customPropDefs(it)); } catch (e) { console.warn(e); return []; } }
+function defsOf(it: KItem, doc: KDoc, single: boolean): PropDef[] { try { return isSchDoc() ? schProps(it, doc).concat(customPropDefs(it)) : pcbProps(it, doc, single).concat(it.kind === "generated" ? [] : customPropDefs(it)); } catch (e) { console.warn(e); return []; } }
 const defId = (d: PropDef) => d.group + "/" + d.name;
 
 interface Resolved { items: KItem[]; defs: Map<string, PropDef>[]; shared: PropDef[] }
@@ -580,14 +586,16 @@ export function propGrid(): PropGrid {
     let g = groups.find((x) => x.name === d.group); if (!g) { g = { name: d.group, rows: [] }; groups.push(g); }
     g.rows.push(row);
   }
-  // PROPERTIES_PANEL::rebuildProperties: the Custom Properties group always shows on the board (its "+" button is
-  // the way to add one); the category buttons are PCB_PROPERTIES_PANEL's "Add Custom Property" and "Add Field"
-  if (!isSchDoc() && !(items.length === 1 && items[0]!.kind === "generated")) {
+  // PROPERTIES_PANEL::rebuildProperties: the Custom Properties group always shows (its "+" button is the way to add
+  // one); the category buttons are PCB_PROPERTIES_PANEL's / SCH_PROPERTIES_PANEL's "Add Custom Property" and "Add
+  // Field" (a field goes on the selected footprints, or the selected symbols and sheets)
+  if (!(items.length === 1 && items[0]!.kind === "generated")) {
     if (!groups.some((g) => g.name === CUSTOM_GROUP)) groups.push({ name: CUSTOM_GROUP, rows: [] });
+    const fieldKinds = isSchDoc() ? ["symbol", "sheet"] : ["footprint"];
     for (const g of groups) {
       if (ro) break;
       if (g.name === CUSTOM_GROUP) g.add = "Add Custom Property";
-      else if (g.name === "Fields" && items.some((it) => it.kind === "footprint")) g.add = "Add Field";
+      else if (g.name === "Fields" && items.some((it) => fieldKinds.includes(it.kind))) g.add = "Add Field";
     }
   }
   const kinds = new Set(items.map(friendly));
@@ -696,7 +704,7 @@ export function renamePropKey(id: string, newName: string, pending: boolean): bo
   const h = H();
   return commitEach("Rename Property", (n) => {
     if (group === "Fields") {
-      if (n[0] !== "footprint" || FP_MANDATORY.includes(oldName)) return false;
+      const mand = mandatoryOf(n); if (!mand || mand.includes(oldName)) return false;
       const f = h.kids(n, "property").find((p) => h.str(p[1]) === oldName); if (!f) return false; f[1] = name; return true;
     }
     const kv = customProps(n).find((q) => q[0] === oldName); if (!kv) return false;
@@ -707,10 +715,17 @@ export function renamePropKey(id: string, newName: string, pending: boolean): bo
 export function removePropKey(id: string): boolean {
   const slash = id.indexOf("/"); const group = id.slice(0, slash), name = id.slice(slash + 1); const h = H();
   if (group === "Fields") return commitEach("Remove Field", (n) => {
-    if (n[0] !== "footprint" || FP_MANDATORY.includes(name)) return false;
+    const mand = mandatoryOf(n); if (!mand || mand.includes(name)) return false;
     const i = n.findIndex((c) => Array.isArray(c) && c[0] === "property" && h.str(c[1]) === name); if (i < 0) return false; n.splice(i, 1); return true;
   });
   return commitEach("Remove Custom Property", (n) => removeCustomProp(n, name));
+}
+/** A new field goes after the item's last field (m_fields.push_back), else ahead of its pins, instances and custom properties. */
+function insertSchField(n: SNode, f: SNode): void {
+  const props = H().kids(n, "property"); const last = props[props.length - 1];
+  if (last) { n.splice(n.indexOf(last) + 1, 0, f); return; }
+  const at = n.findIndex((c, i) => i > 0 && Array.isArray(c) && (c[0] === "pin" || c[0] === "instances" || c[0] === "custom_property"));
+  if (at > 0) n.splice(at, 0, f); else n.push(f);
 }
 /** The first free placeholder: GetUserFieldName( n ) = "Field<n>" for a field, "Property<n>" for a custom property. */
 export function freeKeyName(taken: (name: string) => boolean, kind: "field" | "custom"): string {
@@ -724,9 +739,15 @@ export function freeKeyName(taken: (name: string) => boolean, kind: "field" | "c
 export function addPropKey(kind: "field" | "custom"): string | null {
   const { items } = resolve(); if (!items.length || E.viewOnly) return null; const h = H();
   if (kind === "field") {
-    const fps = items.filter((it) => it.kind === "footprint"); if (!fps.length) return null;
+    const sch = isSchDoc(), kinds = sch ? ["symbol", "sheet"] : ["footprint"];
+    const fps = items.filter((it) => kinds.includes(it.kind)); if (!fps.length) return null;
     const name = freeKeyName((nm) => fps.some((it) => h.kids(it.node, "property").some((p) => h.str(p[1]) === nm)), "field");
     const ok = commitEach("Add Field", (n) => {
+      if (sch) {   // SCH_FIELD( parent, USER / SHEET_USER, name ) with SetVisible( false ): at the origin, the default text size
+        if (n[0] !== "symbol" && n[0] !== "sheet") return false;
+        insertSchField(n, ["property", name, "", ["at", 0, 0, 0], ["hide", "yes"], ["effects", ["font", ["size", 1.27, 1.27]]]]);
+        return true;
+      }
       if (n[0] !== "footprint") return false;
       const back = h.str((h.kid(n, "layer") || [])[1]) === "B.Cu";
       const font: SNode = ["font", ["size", 1.27, 1.27]];

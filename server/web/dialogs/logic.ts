@@ -277,10 +277,11 @@ export interface GridOverrides { enabled: boolean; connected: boolean; connected
 const MIL = 0.0254;
 /** APP_SETTINGS_BASE's schematic defaults: connected items and wires on 50 mil, text on 10 mil, graphics (off) on 25 mil. */
 export const SCH_GRID_OVERRIDES: GridOverrides = { enabled: true, connected: true, connectedMm: 50 * MIL, wires: true, wiresMm: 50 * MIL, text: true, textMm: 10 * MIL, graphics: false, graphicsMm: 25 * MIL, vias: false, viasMm: 100 * MIL };
-/**
- * pcbnew's (and the footprint editor's): all off, on the list's indices 16, 19, 18, 18 and 15 of DefaultGridSizeList
- * (connected 0.25 mm, wires 0.05 mm, text 0.1 mm, vias 0.1 mm, graphics 0.5 mm).
- */
+/** APP_SETTINGS_BASE::DefaultGridSizeList for pcbnew and the footprint editor, in its order (mm). */
+export const PCB_DEFAULT_GRIDS: number[] = [1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 2, 1].map((mil) => +(mil * MIL).toFixed(6)).concat([5, 2.5, 1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.025, 0.01]);
+/** grid.last_size / fast_grid_1's default index into it (0.5 mm). */
+export const PCB_DEFAULT_GRID_IDX = 15;
+/** The board's override defaults (all off): connected 16 (0.25 mm), text 18 (0.1 mm), wires 19 (0.05 mm), vias 18, graphics 15. */
 export const PCB_GRID_OVERRIDES: GridOverrides = { enabled: true, connected: false, connectedMm: 0.25, wires: false, wiresMm: 0.05, text: false, textMm: 0.1, graphics: false, graphicsMm: 0.5, vias: false, viasMm: 0.1 };
 export type GridClass = "connected" | "wires" | "text" | "graphics" | "vias" | null;
 /** EE_GRID_HELPER::GetItemGrid by item kind. */
