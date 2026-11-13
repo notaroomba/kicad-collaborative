@@ -25,11 +25,104 @@
 #include <oauth/oauth_loopback_server.h>
 #include <oauth/oauth_pkce.h>
 #include <oauth/secure_token_store.h>
+#include <paths.h>
 
 #include <wx/datetime.h>
+#include <wx/file.h>
+#include <wx/filename.h>
 #include <wx/log.h>
 #include <wx/uri.h>
 #include <wx/utils.h>
+
+
+#ifdef __WXOSX__
+/**
+ * Keeps the sign-in in a file only the user can read instead of the login keychain.
+ *
+ * A keychain item is tied to the code signature of the application that wrote it.  Junction
+ * is signed ad hoc, so every build has a different signature and macOS asks for the keychain
+ * password again after each update, whatever was answered before ("Always Allow" included).
+ */
+// ponytail: plain file with mode 0600, the same protection gh and npm give their tokens;
+// go back to PLATFORM_SECRET_BACKEND once the application is signed with a Developer ID.
+class FILE_SECRET_BACKEND : public OAUTH_SECRET_BACKEND
+{
+public:
+    bool StoreSecret( const wxString& aService, const wxString& aKey,
+                      const wxString& aSecret ) override
+    {
+        nlohmann::json all = read();
+        all[id( aService, aKey )] = aSecret.ToStdString( wxConvUTF8 );
+        return write( all );
+    }
+
+    bool GetSecret( const wxString& aService, const wxString& aKey,
+                    wxString& aSecret ) const override
+    {
+        nlohmann::json all = read();
+        auto           it = all.find( id( aService, aKey ) );
+
+        if( it == all.end() || !it->is_string() )
+            return false;
+
+        aSecret = wxString::FromUTF8( it->get<std::string>() );
+        return true;
+    }
+
+    bool DeleteSecret( const wxString& aService, const wxString& aKey ) override
+    {
+        nlohmann::json all = read();
+        return all.erase( id( aService, aKey ) ) == 0 || write( all );
+    }
+
+private:
+    static std::string id( const wxString& aService, const wxString& aKey )
+    {
+        return ( aService + wxS( "/" ) + aKey ).ToStdString( wxConvUTF8 );
+    }
+
+    static wxString path()
+    {
+        return wxFileName( PATHS::GetUserSettingsPath(), wxS( "junction-session.json" ) ).GetFullPath();
+    }
+
+    static nlohmann::json read()
+    {
+        wxString text;
+        wxFile   file;
+
+        if( wxFileExists( path() ) && file.Open( path() ) && file.ReadAll( &text ) )
+        {
+            nlohmann::json parsed = nlohmann::json::parse( text.ToStdString( wxConvUTF8 ), nullptr, false );
+
+            if( parsed.is_object() )
+                return parsed;
+        }
+
+        return nlohmann::json::object();
+    }
+
+    static bool write( const nlohmann::json& aAll )
+    {
+        wxFile file;
+
+        // An existing file keeps the mode it was created with, which is this one.
+        return file.Create( path(), true, wxS_IRUSR | wxS_IWUSR )
+               && file.Write( wxString::FromUTF8( aAll.dump() ) );
+    }
+};
+#endif
+
+
+/// Where the sign-in for a collaboration server is kept on this platform.
+static SECURE_TOKEN_STORE tokenStore()
+{
+#ifdef __WXOSX__
+    return SECURE_TOKEN_STORE( std::make_unique<FILE_SECRET_BACKEND>() );
+#else
+    return SECURE_TOKEN_STORE();
+#endif
+}
 
 
 COLLAB_AUTH::COLLAB_AUTH()
@@ -159,7 +252,7 @@ void COLLAB_AUTH::onLoopbackResult( wxCommandEvent& aEvent )
     tokens.token_type = wxS( "bearer" );
     tokens.expires_at = wxDateTime::Now().GetTicks() + expiresIn;
 
-    SECURE_TOKEN_STORE store;
+    SECURE_TOKEN_STORE store = tokenStore();
     store.StoreTokens( ProviderId(), accountIdFor( m_serverUrl ), tokens );
 
     if( completion )
@@ -177,7 +270,7 @@ wxString COLLAB_AUTH::StoredToken( const wxString& aServerUrl )
     if( wxGetEnv( wxS( "KICAD_COLLAB_TOKEN" ), &envToken ) && !envToken.IsEmpty() )
         return envToken;
 
-    SECURE_TOKEN_STORE store;
+    SECURE_TOKEN_STORE store = tokenStore();
 
     auto usable = []( const OAUTH_TOKEN_SET& aTokens )
     {
@@ -215,12 +308,26 @@ wxString COLLAB_AUTH::StoredToken( const wxString& aServerUrl )
         }
     }
 
+#ifndef __WXOSX__
+    // Sign-ins made before the rename to Junction sit under the old name.  Not on macOS: reading
+    // that keychain item is what raises the password prompt this store exists to avoid.
+    if( std::optional<OAUTH_TOKEN_SET> tokens =
+                store.LoadTokens( wxS( "kicad-collab" ), accountIdFor( aServerUrl ) ) )
+    {
+        if( usable( *tokens ) )
+        {
+            store.StoreTokens( ProviderId(), accountIdFor( aServerUrl ), *tokens );
+            return tokens->access_token;
+        }
+    }
+#endif
+
     return wxEmptyString;
 }
 
 
 void COLLAB_AUTH::ForgetToken( const wxString& aServerUrl )
 {
-    SECURE_TOKEN_STORE store;
+    SECURE_TOKEN_STORE store = tokenStore();
     store.DeleteTokens( ProviderId(), accountIdFor( aServerUrl ) );
 }

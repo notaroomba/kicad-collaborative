@@ -57,7 +57,7 @@ public:
 
     static void ForgetToken( const wxString& aServerUrl );
 
-    static wxString ProviderId() { return wxS( "kicad-collab" ); }
+    static wxString ProviderId() { return wxS( "junction" ); }
 
 private:
     void onLoopbackResult( wxCommandEvent& aEvent );
