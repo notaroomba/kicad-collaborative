@@ -13,6 +13,7 @@ import { createArrayDialog } from "./array";
 import { padPropertiesDialog } from "./pad-props";
 import { openExchangeFootprints } from "./exchange";
 import { openGlobalDeletions } from "./global-delete";
+import { openTextAndGraphics } from "./text-graphics";
 import { openUpdatePcb, projectNetlist, updatePcbFromSchematicEditor } from "./update-pcb";
 import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
 import { commitObservers, toolCtx } from "../tools";
@@ -42,6 +43,7 @@ export function installPcbDialogs(): void {
   action("updateFootprints", "Update Footprints from Library...", "", (ctx) => { openExchangeFootprints(ctx, "updateFootprints"); });
   action("changeFootprint", "Change Footprint...", "", (ctx) => { openExchangeFootprints(ctx, "changeFootprint"); });
   action("changeFootprints", "Change Footprints...", "", (ctx) => { openExchangeFootprints(ctx, "changeFootprints"); });
+  action("editTextAndGraphics", "Edit Text & Graphics Properties...", "", openTextAndGraphics);   // GLOBAL_EDIT_TOOL::EditTextAndGraphics
   action("globalDeletions", "Global Deletions...", "", openGlobalDeletions);   // GLOBAL_EDIT_TOOL::GlobalDeletions
   action("editFootprintFields", "Bulk Edit Footprint Fields...", "", openFootprintFields);
   action("runDRC", "Design Rules Checker", "", openDrc);

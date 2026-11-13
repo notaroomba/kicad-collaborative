@@ -41,7 +41,9 @@ export function useFootprintEditorDefaults(on: boolean) {
   if (on) { Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0); Object.assign(LINE_W, LINE_W0); for (const [k, v] of Object.entries(TEXT_STYLE0)) TEXT_STYLE[k] = v.slice(); }
 }
 /** Take the project's per-layer-class defaults (board.design_settings.defaults) for new graphics and text. */
+let rawDefaults: DesignDefaults = {};
 export function layerDefaults(d: DesignDefaults) {
+  rawDefaults = fpEditorDefaults ? {} : (d || {});
   if (fpEditorDefaults) { useFootprintEditorDefaults(true); return; }
   Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0);
   const dd = d.dimensions || {}, int = (v: unknown, lo: number, hi: number) => (typeof v === "number" && v >= lo && v <= hi ? Math.round(v) : null);
@@ -57,6 +59,19 @@ export function layerDefaults(d: DesignDefaults) {
     const w = d[stem + "_line_width"]; if (typeof w === "number" && w > 0) LINE_W[cls] = w;
     const sz = d[stem + "_text_size_h"], th = d[stem + "_text_thickness"]; if (typeof sz === "number" && sz > 0) TEXT_STYLE[cls] = [sz, typeof th === "number" && th > 0 ? th : TEXT_STYLE[cls][1]];
   }
+}
+/**
+ * BOARD_DESIGN_SETTINGS::GetLineThickness / GetTextSize / GetTextThickness / GetTextItalic / GetTextUpright for a layer:
+ * the layer class's defaults (the project's, or KiCad's when it has none).
+ */
+export function layerStyle(layer: string): { line: number; w: number; h: number; thick: number; italic: boolean; upright: boolean } {
+  const cls = layerClass(layer);
+  const stem = ({ silk: "silk", copper: "copper", edges: "board_outline", courtyard: "courtyard", fab: "fab", others: "other" } as Record<string, string>)[cls];
+  const d = rawDefaults as Record<string, unknown>;
+  const [size, thick] = TEXT_STYLE[cls];
+  const v = d[stem + "_text_size_v"];
+  return { line: LINE_W[cls], w: size, h: typeof v === "number" && v > 0 ? v : size, thick, italic: d[stem + "_text_italic"] === true,
+    upright: typeof d[stem + "_text_upright"] === "boolean" ? d[stem + "_text_upright"] as boolean : true };
 }
 export const textStyle = (layer: string) => { const [size, thick] = TEXT_STYLE[layerClass(layer)]; return { size, thick }; };
 export const isBack = (l: string) => /^B\./.test(l);
