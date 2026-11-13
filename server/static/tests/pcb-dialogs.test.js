@@ -202,6 +202,24 @@ test("update PCB: the dry run reports like BOARD_NETLIST_UPDATER and nothing is 
   const f1 = K.serialize(plan.modified.get("f1")); assert.ok(f1.includes('(net "/sub/IN")') && f1.includes('(property "MPN" "X-R1"'), f1.slice(0, 700));
   assert.ok(plan.modified.has("t1") && K.serialize(plan.modified.get("t1")).includes('(net "/sub/IN")'), "the track of the renamed net follows");
 });
+test("update PCB: Group footprints based on symbol group (BOARD_NETLIST_UPDATER::updateFootprintGroup)", () => {
+  const doc = K.parseDoc(PCB, "kicad_pcb");
+  const grouped = { ...nl, components: nl.components.map((c) => (c.ref === "R1" || c.ref === "R2" ? { ...c, group: { uuid: "g-amp", name: "amp" } } : c)) };
+  assert.ok(!N.planUpdate(doc, grouped, {}).report.some((r) => /group/.test(r.text)), "off unless asked");
+  const plan = N.planUpdate(doc, grouped, { transferGroups: true });
+  const text = plan.report.map((r) => r.text).join("\n");
+  assert.ok(text.includes("Add R1 to group 'amp'.") && text.includes("Add R2 to group 'amp'."), text);
+  const g = plan.added.find((n) => n[0] === "group"); assert.ok(g, "a new board group");
+  assert.strictEqual(K.serialize(g).replace(/\s+/g, " "), '(group "amp" (uuid "g-amp") (members "f1" "f2"))');
+  // a board already grouped that way needs nothing
+  const doc2 = K.parseDoc(PCB.replace(/\)$/, ' (group "amp" (uuid "g-amp") (members "f1" "f2")))'), "kicad_pcb");
+  assert.ok(!N.planUpdate(doc2, grouped, { transferGroups: true }).report.some((r) => /group/.test(r.text)));
+  // a symbol out of its group takes the footprint out; the group of one left goes
+  const one = { ...nl, components: nl.components.map((c) => (c.ref === "R1" ? { ...c, group: { uuid: "g-amp", name: "amp" } } : c)) };
+  const p3 = N.planUpdate(doc2, one, { transferGroups: true });
+  assert.ok(p3.report.some((r) => r.text === "Remove R2 from group 'amp'."));
+  assert.ok(p3.removed.length === 1 && doc2.items.get(p3.removed[0]).kind === "group");
+});
 test("update PCB: delete unused footprints, and a library footprint is added below the board", () => {
   const doc = K.parseDoc(PCB, "kicad_pcb");
   const mod = K.parse('(footprint "R_0603_1608Metric" (version 20241229) (generator "pcbnew") (layer "F.Cu") (property "Reference" "REF**" (at 0 -1.4 0) (layer "F.SilkS") (uuid "x1") (effects (font (size 1 1) (thickness 0.15)))) (property "Value" "R_0603" (at 0 1.4 0) (layer "F.Fab") (uuid "x2") (effects (font (size 1 1) (thickness 0.15)))) (attr smd) (pad "1" smd roundrect (at -0.8 0) (size 0.9 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "x3")) (pad "2" smd roundrect (at 0.8 0) (size 0.9 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "x4")))');

@@ -39,6 +39,8 @@ export interface NetComponent {
   /** COMPONENT::GetVariants: the symbol instance's design variants that differ from the symbol (as the KiCad
    *  netlist's (variants …) carries them), in the CASE_INSENSITIVE_MAP's order */
   variants?: NetVariant[];
+  /** COMPONENT::GetGroup: the schematic group the symbol belongs to (its uuid and name) */
+  group?: { uuid: string; name: string };
 }
 /** COMPONENT_VARIANT: a flag only when the variant changes it, the fields whose text the variant changes. */
 export interface NetVariant { name: string; dnp?: boolean; excludedFromBOM?: boolean; excludedFromSim?: boolean; excludedFromPosFiles?: boolean; fields: Map<string, string> }
@@ -232,6 +234,9 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
   // ---- connectivity of each instance
   for (const inst of instances) {
     const doc = inst.sheet.doc, I = inst.index;
+    // the sheet's groups by member (SCH_ITEM::GetParentGroup)
+    const symGroup = new Map<string, { uuid: string; name: string }>();
+    for (const it of doc.items.values()) if (it.kind === "group") { const m = kid(it.node, "members") as SNode | null; const g = { uuid: kidStr(it.node, "uuid") || it.id, name: typeof it.node[1] === "string" ? str(it.node[1]) : "" }; if (m) for (const id of m.slice(1)) symGroup.set(str(id), g); }
     interface Line { a: Pt; b: Pt; node: number; bus: boolean }
     const lines: Line[] = [];
     const ends = new Map<string, number[]>();           // point -> line indices ending there
@@ -317,6 +322,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
             comp = { ref, value, footprint: propVal(n, "Footprint"), libId: kidStr(n, "lib_id"), paths: [path], fields, sheetName: inst.human, sheetFile: inst.sheet.file.split("/").pop() || inst.sheet.file,
               dnp: yes(n, "dnp", false), excludeFromBom: !yes(n, "in_bom", true), excludeFromBoard: false, pins: new Map() };
             const variants = componentVariants(n, "/" + inst.uuidPath.join("/"), ref, (doc as KDoc).version); if (variants.length) comp.variants = variants;
+            const grp = symGroup.get(it.id); if (grp) comp.group = grp;
             components.set(ref, comp); compPins.set(ref, []);
           } else { if (unit === 1) comp.paths.unshift(path); else comp.paths.push(path); if (!comp.footprint) comp.footprint = propVal(n, "Footprint"); }
         }
@@ -448,6 +454,10 @@ export interface UpdateOptions {
   updateFields?: boolean;
   /** "Remove footprint fields not found in symbols" */
   removeExtraFields?: boolean;
+  /** "Group footprints based on symbol group" (BOARD_NETLIST_UPDATER::SetTransferGroups) */
+  transferGroups?: boolean;
+  /** "Apply design block layouts to new groups": the board has no design block links here, so it changes nothing yet */
+  applyDesignBlockLayouts?: boolean;
   /** the board footprint for a library id, or null when the library is not available (or has no such footprint) */
   footprintFor?(fpid: string): SNode | null | "missing";
   /** text size / thickness of new fields (the board's Fab-layer defaults) */
@@ -720,6 +730,7 @@ export function planUpdate(doc: KDoc, netlist: Netlist, o: UpdateOptions = {}): 
     if (nextX - bb[0] > Math.max(120, bb[2] - bb[0])) { nextX = bb[0]; rowY += hgt + 5; }
   };
 
+  const addedFor = new Map<NetComponent, SNode>();
   for (const c of comps) {
     const fp = fpOf.get(c);
     if (!fp) {
@@ -729,7 +740,7 @@ export function planUpdate(doc: KDoc, netlist: Netlist, o: UpdateOptions = {}): 
       if (!lib) { say("error", `Cannot add ${c.ref} (footprint '${c.footprint}': library not available).`); continue; }
       const node = clone(lib);
       say("action", `Add ${c.ref} (footprint '${c.footprint}').`);
-      applyComponent(node, c, true); place(node); added.push(node);
+      applyComponent(node, c, true); place(node); added.push(node); addedFor.set(c, node);
       continue;
     }
     let node = clone(fp.node), noLibrary = false;
@@ -751,6 +762,36 @@ export function planUpdate(doc: KDoc, netlist: Netlist, o: UpdateOptions = {}): 
       }
     }
     if (applyComponent(node, c, false, noLibrary) || node !== fp.node && JSON.stringify(node) !== JSON.stringify(fp.node)) modified.set(fp.id, node);
+  }
+
+  // ---- BOARD_NETLIST_UPDATER::updateFootprintGroup: each footprint goes to the board group of its symbol's group
+  if (o.transferGroups) {
+    interface BGroup { id: string | null; node: SNode; members: string[]; dirty: boolean }
+    const groups = new Map<string, BGroup>();
+    for (const it of doc.items.values()) if (it.kind === "group") { const node = clone(it.node), m = kid(node, "members") as SNode | null; groups.set(kidStr(node, "uuid") || it.id, { id: it.id, node, members: m ? m.slice(1).map(str) : [], dirty: false }); }
+    const nameOf = (g: BGroup): string => (typeof g.node[1] === "string" ? str(g.node[1]) : "");
+    for (const c of comps) {
+      const fp = fpOf.get(c), fresh = addedFor.get(c);
+      const fpId = fp ? fp.id : fresh ? kidStr(fresh, "uuid") : ""; if (!fpId) continue;
+      const want = c.group ? c.group.uuid : "";
+      const cur = Array.from(groups.entries()).find(([, g]) => g.members.includes(fpId));
+      if ((cur ? cur[0] : "") === want) continue;
+      if (cur) { say("action", `Remove ${c.ref} from group '${nameOf(cur[1])}'.`); cur[1].members = cur[1].members.filter((m) => m !== fpId); cur[1].dirty = true; }
+      if (c.group) {
+        say("action", `Add ${c.ref} to group '${c.group.name}'.`);
+        let g = groups.get(want);
+        if (!g) { g = { id: null, node: c.group.name ? ["group", c.group.name, ["uuid", want], ["members"]] : ["group", "", ["uuid", want], ["members"]], members: [], dirty: true }; groups.set(want, g); }
+        g.members.push(fpId); g.dirty = true;
+      }
+    }
+    for (const g of groups.values()) {
+      if (!g.dirty) continue;
+      if (g.id && g.members.length < 2) { removed.push(g.id); continue; }   // a group of fewer than two items goes
+      if (!g.members.length) continue;
+      const i = g.node.findIndex((x, k) => k > 0 && Array.isArray(x) && x[0] === "members");
+      const m: SNode = ["members", ...g.members]; if (i > 0) g.node[i] = m; else g.node.push(m);
+      if (g.id) modified.set(g.id, g.node); else added.push(g.node);
+    }
   }
 
   // ---- footprints with no symbol

@@ -93,6 +93,9 @@ function planChanges(doc: KDoc, plan: UpdatePlan): KChange[] {
 const OPTIONS: { key: keyof UpdateOptions; group: number; label: string; tip?: string; def: boolean }[] = [
   { key: "relinkByRef", group: 0, label: "Re-link footprints to schematic symbols based on their reference designators", def: false,
     tip: "Normally footprints are linked to their symbols via their Unique IDs.  Select this option only if you want to reset the footprint linkages based on their reference designators." },
+  { key: "transferGroups", group: 0, label: "Group footprints based on symbol group", def: false },
+  { key: "applyDesignBlockLayouts", group: 0, label: "Apply design block layouts to new groups", def: false,
+    tip: "For each new group created from a design block, apply the block's saved footprint placement and routing automatically." },
   { key: "replaceFootprints", group: 1, label: "Replace footprints with those specified by symbols", def: true,
     tip: "Normally footprints on the board should be changed to match footprint assignment changes made in the schematic. Uncheck this only if you don't want to change existing footprints on the board." },
   { key: "deleteUnused", group: 1, label: "Delete footprints with no symbols", def: false, tip: "Remove from the board unlocked footprints which are not linked to a schematic symbol." },
@@ -131,6 +134,10 @@ export async function openUpdatePcb(ctx: ToolCtx): Promise<void> {
         const f = checkField(remembered[o.key] ?? o.def, o.label, { key: String(o.key), tip: o.tip, ro: !!E.viewOnly, onChange: (v) => { remembered[o.key] = v; void dryRun(); } });
         fields.set(o.key, f); groups[o.group].append(f.el);
       }
+      // OnOptionChanged: the design block layouts only with the groups transferred
+      const tg = fields.get("transferGroups") as Field<boolean>, db = fields.get("applyDesignBlockLayouts") as Field<boolean>;
+      const syncDb = (): void => { if (!tg.get()) { db.set(false); remembered.applyDesignBlockLayouts = false; } db.input.disabled = !!E.viewOnly || !tg.get(); db.el.classList.toggle("disabled", db.input.disabled); };
+      tg.input.addEventListener("change", syncDb); syncDb();
       body.append(groups[0], h("div", { class: "pd-cols2" }, groups[1], groups[2]), report.el);
       report.set([{ severity: "info", text: "Reading the schematic…" }]);
     },
