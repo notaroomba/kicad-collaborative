@@ -16,6 +16,8 @@ const SMALL = 80;   // OPENGL_GAL::blitCursor: cursorSize = 80 screen (device) p
 
 /** The cursor's document position (snapped), or null while the pointer is off the canvas. */
 let at: number[] | null = null;
+/** Whether `at` is a position a tool forced (ForceCursorPosition) rather than the grid snap of the mouse. */
+let forcedAt = false;
 
 /**
  * Where the cursor is drawn for the mouse at `mm`: the point the active tool snapped to (VIEW_CONTROLS::
@@ -29,16 +31,20 @@ function cursorPoint(mm: number[]): number[] {
   return snapMm(mm);
 }
 
-/** Draw the cursor for document position `mm` (snapped here), or hide it (null: the pointer left the canvas). */
-export function placeCrosshair(mm: number[] | null): void {
-  const next = mm && E.kdoc ? cursorPoint(mm) : null;
-  if (!next && !at) return;
-  if (next && at && next[0] === at[0] && next[1] === at[1]) return;
-  at = next; requestRepaint();
+/**
+ * Draw the cursor for document position `mm` (snapped here) or at the position a tool `forced`, or hide it (null:
+ * the pointer left the canvas).  Returns where it is drawn (GetCursorPosition), or null.
+ */
+export function placeCrosshair(mm: number[] | null, forced?: number[] | null): number[] | null {
+  const next = mm && E.kdoc ? (forced || cursorPoint(mm)) : null;
+  forcedAt = !!(next && forced);
+  if (!next && !at) return null;
+  if (next && at && next[0] === at[0] && next[1] === at[1]) return next;
+  at = next; requestRepaint(); return next;
 }
 
 /** Redraw at the last cursor position (after a pan / zoom or a mode change), if the cursor is on the canvas. */
-export function refreshCrosshair(): void { if (at && E.lastCursorMm) { at = cursorPoint(E.lastCursorMm); requestRepaint(); } }
+export function refreshCrosshair(): void { if (at && E.lastCursorMm && !forcedAt) { at = cursorPoint(E.lastCursorMm); requestRepaint(); } }
 
 /**
  * The colour theme's cursor colour: LAYER_SCHEMATIC_CURSOR (KiCad Default #0F0F0F, Classic black) on the

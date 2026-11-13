@@ -14,7 +14,8 @@ import { dragChanges } from "./drag-optimize";
 import { assembleLine, dragCorner45, rp } from "./dragger";
 import { netClearance } from "./drc";
 import { routableItems } from "./edit-commands";
-import { beginSelectDrag, bestDragOrigin, snapCursor } from "./grid-helper";
+import { angleSnapDirections, beginSelectDrag, bestDragOrigin, snapCursor } from "./grid-helper";
+import { MOVE_SNAP_MSG, angleSnapMode, displayConstraintsMsg } from "./draw-modes";
 import { applySelection, expandGroups, selectionIds } from "./groups";
 import { beginInlineDrag, dragMove, finishDrag } from "./inline-drag";
 import { editHandleMove, editHandleUp } from "./point-editor";
@@ -82,13 +83,17 @@ export function selectMoveTo(ctx: PcbCtx, mm: Pt, mods?: SelectMove["mods"]) {
   const m = S.move; if (!m) return;
   // EDIT_TOOL::doMoveSelection: the cursor resolved through the grid helper (magnetic anchors of what is not moving,
   // then the grid; Shift: grid only, Ctrl: no grid) less the drag origin
-  const sn = snapCursor(ctx, [mm[0], mm[1]], m.skip || new Set(m.orig.keys()), mods || m.mods); m.snapAt = sn.anchor;
+  // configureAngleSnap: in the 45 and 90 modes the cursor also holds to lines through the drag origin
+  const dirs = angleSnapDirections(angleSnapMode());
+  const sn = snapCursor(ctx, [mm[0], mm[1]], m.skip || new Set(m.orig.keys()), mods || m.mods, dirs.length ? { origin: m.start, dirs } : null); m.snapAt = sn.anchor;
+  const guide = sn.guide || null; if (!sameGuide(m.guide, guide)) { m.guide = guide; ctx.requestRender(); }
   const sN = sn.p; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
   if (dx === m.last[0] && dy === m.last[1]) return;
   m.last = [dx, dy]; m.moved = true;
   if (m.gen) { genMoveStep(ctx, dx, dy); return; }
   moveApply(ctx, m, dx, dy); ctx.requestRender();
 }
+const sameGuide = (a: [Pt, Pt] | null | undefined, b: [Pt, Pt] | null) => (!a && !b) || (!!a && !!b && samePt(a[0], b[0]) && samePt(a[1], b[1]));
 export function finishSelectMove(ctx: PcbCtx, commit: boolean, force?: boolean) {
   const m = S.move; S.move = null; if (!m) return; moveCursor(ctx, false);
   if (m.gen) {   // genFinishEdit with the move's commit, genCancelEdit on Escape
@@ -138,10 +143,10 @@ export function beginCarryMove(ctx: PcbCtx, opts?: { placing?: string[]; ids?: s
   const gen = !opts.placing && !opts.drag ? selectedTuningPattern(ctx, free) : null;
   if (gen) {   // doMoveSelection with one PCB_GENERATOR: genStartEdit, then each step moves its origin and end and re-tunes
     m.skip = new Set(m.orig.keys()); m.gen = gen.id; m.orig = new Map(); m.ids = [];
-    genStartEdit(ctx, gen, "Move"); S.move = m; moveCursor(ctx, true); ctx.requestRender(); return true;
+    genStartEdit(ctx, gen, "Move"); S.move = m; moveCursor(ctx, true); displayConstraintsMsg(MOVE_SNAP_MSG[angleSnapMode()]!); ctx.requestRender(); return true;
   }
   if (opts.drag) dragEnds(doc, m);
-  m.skip = new Set(m.orig.keys()); S.move = m; moveCursor(ctx, true); ctx.requestRender(); return true;
+  m.skip = new Set(m.orig.keys()); S.move = m; moveCursor(ctx, true); displayConstraintsMsg(MOVE_SNAP_MSG[angleSnapMode()]!); ctx.requestRender(); return true;
 }
 /** KICURSOR::MOVING on the canvas while a move runs (the tool's own cursor comes back afterwards). */
 export function moveCursor(ctx: PcbCtx, on: boolean) {

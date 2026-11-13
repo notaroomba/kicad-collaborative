@@ -365,8 +365,21 @@ function commitFieldDrag(): void {
 
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
-  E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY]; store.slice("viewport", { cursor: snapMm(mm) });   // GetCursorPosition(): the snapped cursor, where the crosshair is
-  placeCrosshair(mm);
+  E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY];
+  try { stagePointerMove(ev, mm); } finally {
+    // GetCursorPosition(): where the crosshair is — the position the active tool forced (ForceCursorPosition: the
+    // magnetic snap to a pad, a pin or a wire end, an angle snap line, the moved reference), else the grid-snapped one
+    const at = placeCrosshair(mm, forcedCursor()) || snapMm(mm);
+    store.slice("viewport", { cursor: [at[0]!, at[1]!] });
+  }
+});
+/** The cursor a module tool holds (VIEW_CONTROLS::ForceCursorPosition), or null when it follows the grid. */
+function forcedCursor(): number[] | null {
+  const m = activeModule() as { cursorPos?: (ctx: unknown) => number[] | null } | null;
+  if (!m || !m.cursorPos) return null;
+  try { const p = m.cursorPos(toolCtx()); return p && isFinite(p[0]!) && isFinite(p[1]!) ? [p[0]!, p[1]!] : null; } catch (e) { console.warn(e); return null; }
+}
+function stagePointerMove(ev: PointerEvent, mm: [number, number]): void {
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); boxSelModifiers(ev); drawBoxSel(); return; }
   if (E.measure && E.measure.set) { measureMove(snapMm(mm), ev.shiftKey); }
@@ -417,7 +430,7 @@ stage.addEventListener("pointermove", (ev) => {
   // peers see the move itself: the live op above moves their copy, and the presence boxes (peers.ts) carry the
   // footprint's own outline at its position right now — in the units and box definition the desktop draws from
   sendPresence(mm);
-});
+}
 
 const onPointerUp = (ev: PointerEvent) => {
   if (E.pan) { E.pan = null; return; }

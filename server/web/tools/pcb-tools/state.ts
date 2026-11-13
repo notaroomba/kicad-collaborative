@@ -6,6 +6,7 @@ import { ensureDom } from "./dom";
 export let K = root.KiCadCanvas as PcbCanvasApi;                 // re-bound from ctx.K on every hook
 export const WIDTHS = [0.2, 0.25, 0.3, 0.5, 0.8, 1.0];
 export const HL = "#FFB43A", VIA = "#ECECEC", DEL = "#FF5C5C";
+export const ANCHOR = "rgb(255, 38, 226)";   // LAYER_ANCHOR (builtin_color_themes.h): the snap guides
 export const RATSNEST = "rgba(0, 248, 255, 0.35)";   // LAYER_RATSNEST (builtin_color_themes.h)
 // the router's preview colours: the ratsnest Brightened(0.8) with alpha + 0.4 for the routed net, Brightened(0.5) for
 // the leading line from the head (DisplayRatline), and DARKDARKGRAY clearance halos

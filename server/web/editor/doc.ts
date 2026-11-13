@@ -283,6 +283,15 @@ export function setGridIndex(i: number) { const l = gridList(); if (!l.length) r
 /** grid.last_size: where the current grid is in the list (-1 when it is not one of them). */
 export function gridIndex(): number { return gridList().findIndex((g) => Math.abs(g.mm - E.gridPitch) < 1e-9); }
 
+/** DRAWING_TOOL::UpdateStatusBar's text for the board's angle snap mode (PCBNEW_SETTINGS m_AngleSnapMode, per viewer). */
+export function boardConstraintMsg(): string {
+  const pt = (window as unknown as { PcbTools?: { angleSnapMode?: () => string } }).PcbTools;
+  let m = pt && pt.angleSnapMode ? pt.angleSnapMode() : null;
+  if (!m) { try { m = localStorage.getItem("kc.pcbnew.angleSnapMode"); } catch (e) { m = null; } }
+  return m === "45" ? "Constrain to H, V, 45" : m === "90" ? "Constrain to H, V" : "";
+}
+if (typeof window !== "undefined") window.addEventListener("kc:constraint-msg", (ev) => { if (!isSch()) setStatusBar({ constraint: String((ev as CustomEvent<{ msg?: string }>).detail?.msg || "") }); });
+
 export function snapMm(mm: [number, number]): [number, number];
 export function snapMm(mm: number[]): number[];
 export function snapMm(mm: number[]): number[] {
@@ -413,7 +422,8 @@ export async function openDoc(doc: DocEntry) {
   E.DOC_TYPE = doc.docType;
   E.IU = isSch() ? 1e4 : 1e6;
   E.ITEM_TYPE = isSch() ? "SCH_SYMBOL" : "FOOTPRINT";
-  setStatusBar({ mode: "" });
+  // DRAWING_TOOL::Reset( MODEL_RELOAD ) writes the constraint field from the angle snap mode; eeschema never writes it
+  setStatusBar({ mode: "", constraint: isSch() ? "" : boardConstraintMsg() });
   if (!docNav.lock) { docNav.list.length = docNav.idx + 1; docNav.list.push(doc.docId); docNav.idx = docNav.list.length - 1; }
   setupEditorChrome(); publishDocs();
   const url = `/p/${state.project!.projectId}/edit` + (doc.docType === "footprint" ? `?fp=${encodeURIComponent(doc.docId)}` : state.docs!.length > 1 ? `?doc=${doc.docId}` : "");

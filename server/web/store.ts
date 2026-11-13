@@ -229,7 +229,8 @@ export interface AppState {
   /** the Footprint Editor (web/editor/fpedit.ts): the project's footprint libraries and the open footprint's title */
   fpLibs?: { libs: FpLibRow[]; current: string | null; version: number };
   fpTitle?: { label: string; modified: boolean; fromBoard: boolean };
-  status: { message: string; mode: string };
+  /** mode: a module's own note (not shown); constraint: status field 7, EDA_DRAW_FRAME::DisplayConstraintsMsg */
+  status: { message: string; mode: string; constraint: string };
   /** EDA_MSG_PANEL: the columns (title over value) of the selection's GetMsgPanelInfo, the board summary or the router */
   msgPanel: { items: { title: string; value: string }[] };
   toast: { id: number; text: string; ms: number } | null;
@@ -295,7 +296,7 @@ const EMPTY: AppState = {
   peers: { list: [], follow: null }, comments: [], history: { groups: [], loading: false, error: null },
   versions: { loading: false, error: null, busy: false, list: [], runs: [], docs: [], branches: [], main: null, parentId: null, branchName: null, view: null, dialog: null },
   tool: { current: "select", appTools: [], moduleTools: [], moduleActions: [], handled: [] },
-  toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, msgPanel: { items: [] }, toast: null, popover: null, contextMenu: null,
+  toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "", constraint: "" }, msgPanel: { items: [] }, toast: null, popover: null, contextMenu: null,
   routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, viaStacks: [], viaStackIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },
 };
 

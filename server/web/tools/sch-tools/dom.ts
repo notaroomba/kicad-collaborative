@@ -172,6 +172,18 @@ export function autostartCursor(ctx: SchCtx, mm: Pt) {
  * placed PLACE (setCursor at 1938), a drag MOVING.
  */
 const PLACE_KINDS = new Set(["label", "global_label", "hierarchical_label", "directive_label", "netclass_flag", "text", "text_box", "sheet_pin", "junction", "no_connect", "bus_entry"]);
+/**
+ * VIEW_CONTROLS::GetCursorPosition while a tool forces it: the end of the wire being drawn, an item riding the
+ * cursor, a shape's corner, or (Draw Wires / Buses / Lines idle) the pin or wire end the next click starts on.
+ */
+export function cursorPos(): Pt | null {
+  if (S.wire) return S.wire.cur.slice();
+  if (S.carry && S.carry.pos) return S.carry.pos.slice();
+  if (S.draw && S.draw.cur && !S.draw.await) return S.draw.cur.slice();
+  const ctx = S.ctx; const t = S.tool;
+  if (ctx && ctx.doc && S.cursor && (t === "wire" || t === "bus" || t === "lines")) return snapConn(ctx, S.cursor, t === "lines" ? "polyline" : t);
+  return null;
+}
 export function cursorNow(): string | null {
   if (S.drag && (S.drag as { moved?: boolean }).moved !== false) return "MOVING";
   if (S.carry) return PLACE_KINDS.has(S.carry.kind) ? "PLACE" : "MOVING";

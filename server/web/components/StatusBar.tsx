@@ -49,8 +49,9 @@ export function StatusBar() {
   const delta = vp.polar && !sch
     ? `r ${c(Math.hypot(rdx, rdy))}  theta ${(Math.atan2(-rdy, rdx) * 180 / Math.PI).toFixed(3)}`
     : `dx ${c(dx)}  dy ${c(dy)}  dist ${c(Math.hypot(dx, dy))}`;
-  // status field 7, DisplayConstraintsMsg: only pcbnew's DRAWING_TOOL::UpdateStatusBar writes it (by LEADER_MODE)
-  const constraint = sch ? "" : vp.lineMode === "45" ? "Constrain to H, V, 45" : vp.lineMode === "90" ? "Constrain to H, V" : "";
+  // status field 7, DisplayConstraintsMsg: only pcbnew writes it — DRAWING_TOOL::UpdateStatusBar (on load and as a
+  // drawing tool starts) and a move ("Angle snap lines: 45°"); the last text written stays, as in wxStatusBar
+  const constraint = sch ? "" : status.constraint || "";
   const live = conn.status === "live";
   const err = conn.status === "error" || conn.status === "connecting";
   // the sheet path as the editor resolved it for the title block ("/" on the root sheet, "/Name/" below it)

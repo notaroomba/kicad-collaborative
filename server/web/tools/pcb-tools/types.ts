@@ -295,6 +295,8 @@ export interface SelectMove {
   /** the colliding courtyards at the last offset (DRC_INTERACTIVE_COURTYARD_CLEARANCE) */
   conflicts?: { key: string; fps: Map<string, Pt[][]> };
   mods?: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }; snapAt?: SnapAnchor | null;
+  /** the angle snap line the cursor is held to (origin, snapped point), drawn as CONSTRUCTION_GEOM's snap line */
+  guide?: [Pt, Pt] | null;
   /** a lone tuning pattern being moved: its generator's id (the move re-tunes it rather than carrying its copper) */
   gen?: string;
   [extra: string]: unknown;

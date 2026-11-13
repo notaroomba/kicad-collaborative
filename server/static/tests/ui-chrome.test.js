@@ -127,5 +127,24 @@ test("ORIGIN_TRANSFORMS: the board status bar from the user origin, axes inverte
   assert.deepEqual(U.toDisplayRel([2, -3], true, true), [-2, 3]);
 });
 
+test("angle snap lines in a board move (GetNearestSnapLinePoint) and the constraint texts", () => {
+  require(path.join(__dirname, "..", "pcb-tools.js")); const P = globalThis.PcbTools, G = P, D = P;
+  assert.deepEqual(G.angleSnapDirections("45").length, 4); assert.deepEqual(G.angleSnapDirections("90"), [[1, 0], [0, 1]]); assert.deepEqual(G.angleSnapDirections("free"), []);
+  const g = 1.27, snap = (p) => [Math.round(p[0] / g) * g, Math.round(p[1] / g) * g];
+  // nearly horizontal from an off-grid origin: the origin's Y kept, X on the grid
+  let p = G.nearestSnapLinePoint([10.1, 20.3], [[1, 0], [0, 1]], [17, 21.2], snap([17, 21.2]), 1.27, g, snap);
+  assert.ok(Math.abs(p[0] - 16.51) < 1e-9 && Math.abs(p[1] - 20.3) < 1e-9, String(p));
+  // off every line by more than the range: none
+  assert.equal(G.nearestSnapLinePoint([0, 0], [[1, 0], [0, 1]], [10, 5], snap([10, 5]), 1.27, g, snap), null);
+  // a diagonal: the grid point on the 45 degree line nearest the cursor
+  p = G.nearestSnapLinePoint([0, 0], G.angleSnapDirections("45"), [6.6, 6.0], snap([6.6, 6.0]), 1.27, g, snap);
+  assert.ok(Math.abs(p[0] - 6.35) < 1e-9 && Math.abs(p[1] - 6.35) < 1e-9, String(p));
+  // no grid: the projection itself
+  p = G.nearestSnapLinePoint([0, 0], [[1, 0]], [5, 0.4], [5, 0.4], 1, 0, (q) => q);
+  assert.deepEqual(p, [5, 0]);
+  assert.equal(D.MOVE_SNAP_MSG["45"], "Angle snap lines: 45\u00b0"); assert.equal(D.MOVE_SNAP_MSG["90"], "Angle snap lines: 90\u00b0"); assert.equal(D.MOVE_SNAP_MSG.free, "");
+  assert.equal(D.ANGLE_SNAP_MSG["45"], "Constrain to H, V, 45"); assert.ok(D.DRAWING_TOOL_IDS.has("gline") && !D.DRAWING_TOOL_IDS.has("route"));
+});
+
 console.log(`\nui-chrome: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

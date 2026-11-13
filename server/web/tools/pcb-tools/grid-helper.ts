@@ -5,6 +5,7 @@ import { isLocked } from "./groups";
 import { padCovers, padsOf } from "./route-geom";
 import { K, S } from "./state";
 import { anchorOf } from "./transforms";
+import { MOVE_SNAP_MSG, angleSnapMode, displayConstraintsMsg } from "./draw-modes";
 import { clone, corners, isList, pt, r6, samePt } from "./util";
 
 // ---------------------------------------------------------------- select-tool drags (PCB_SELECTION_TOOL → EDIT_TOOL::doMoveSelection / drag45)
@@ -20,7 +21,7 @@ export function beginSelectDrag(ctx: PcbCtx, it: KItem, mm: Pt) {
     const at = pt(it.node, "at");
     for (const sg of ctx.doc.items.values()) { if (sg.kind !== "segment" && sg.kind !== "arc") continue; for (const key of ["start", "end"]) { const q = pt(sg.node, key); if (q && at && samePt(q, at)) { m.ends.push({ id: sg.id, key }); if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone(sg.node)); } } }
   }
-  S.move = m; S.sel = new Set([it.id]); return true;
+  S.move = m; S.sel = new Set([it.id]); displayConstraintsMsg(MOVE_SNAP_MSG[angleSnapMode()]!); return true;
 }
 // ---------------------------------------------------------------- PCB_GRID_HELPER: drag origin and magnetic snapping
 export const SNAP_SCREEN_RADIUS = 25;   // libs/snap snap_resolver.h: the magnetic range in screen pixels
@@ -78,7 +79,7 @@ export function bestDragOrigin(doc: BoardDoc, ids: Iterable<string>, mouse: Pt, 
  * held turns object snapping off (grid.SetSnap( !MD_SHIFT )), Ctrl the grid (TOOL_EVENT::DisableGridSnapping is MD_CTRL).  Returns
  * { p, anchor } where anchor is the snapped-to point or null.
  */
-export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?: Mods | null): { p: Pt; anchor: SnapAnchor | null } {
+export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?: Mods | null, line?: SnapLines | null): { p: Pt; anchor: SnapAnchor | null; guide?: [Pt, Pt] | null } {
   mods = mods || {};
   const gridOn = !!(ctx.snapOn && ctx.snap) && !(mods.ctrlKey || mods.metaKey);
   const g = gridOn ? ctx.snap(mm.slice()) : mm.slice();
@@ -90,5 +91,54 @@ export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?:
     if (b && (mm[0] < b[0] - range || mm[0] > b[2] + range || mm[1] < b[1] - range || mm[1] > b[3] + range)) continue;
     for (const p of itemAnchors(it, false, null, ctx.gridPitch)) { const d = Math.hypot(p[0] - mm[0], p[1] - mm[1]); if (d <= bd) { bd = d; best = p; } }
   }
-  return best ? { p: [r6(best[0]), r6(best[1])], anchor: best } : { p: g, anchor: null };
+  if (best) return { p: [r6(best[0]), r6(best[1])], anchor: best };
+  // no anchor captured: the angle snap lines through the move's origin (GetNearestSnapLinePoint), drawn as a guide
+  if (line && line.dirs.length) {
+    const pitch = ctx.gridPitch || 0;
+    const sl = nearestSnapLinePoint(line.origin, line.dirs, mm, g, range, pitch > 0 ? pitch : 0, (q) => (ctx.snap ? ctx.snap(q.slice()) : q));
+    if (sl) { const q: Pt = [r6(sl[0]), r6(sl[1])]; return { p: q, anchor: null, guide: [line.origin.slice(), q] }; }
+  }
+  return { p: g, anchor: null };
+}
+/** The snap lines a move offers (EDIT_TOOL::doMoveSelection configureAngleSnap): their origin and directions. */
+export interface SnapLines { origin: Pt; dirs: Pt[] }
+/** configureAngleSnap: DEG45 offers H, V and both diagonals, DEG90 H and V, DIRECT none. */
+export function angleSnapDirections(mode: string): Pt[] {
+  return mode === "45" ? [[1, 0], [0, 1], [1, 1], [1, -1]] : mode === "90" ? [[1, 0], [0, 1]] : [];
+}
+/**
+ * SNAP_LINE_MANAGER::GetNearestSnapLinePoint (common/tool/construction_manager.cpp): of the lines through `origin`
+ * along `dirs` that pass within `range` of the cursor, the nearest one; the point on it is the grid point that keeps
+ * it on the line — the origin's X or Y with the nearest grid's other coordinate for a vertical or horizontal line,
+ * and for a diagonal the one of the 3x3 grid points around the projection that scores best on (distance from the
+ * line + 0.1 x distance from the cursor).  `nearestGrid` is the cursor on the grid; `gridAt` puts a point on it.
+ */
+export function nearestSnapLinePoint(origin: Pt, dirs: Pt[], cursor: Pt, nearestGrid: Pt, range: number, pitch: number, gridAt: (p: Pt) => Pt): Pt | null {
+  const delta = [cursor[0] - origin[0], cursor[1] - origin[1]];
+  let bestPerp = Infinity, best: Pt | null = null;
+  for (const dir of dirs) {
+    const len = Math.hypot(dir[0], dir[1]); if (!len) continue;
+    const u = [dir[0] / len, dir[1] / len];
+    const along = delta[0] * u[0] + delta[1] * u[1];
+    const proj: Pt = [origin[0] + u[0] * along, origin[1] + u[1] * along];
+    const perp = Math.hypot(delta[0] - u[0] * along, delta[1] - u[1] * along);
+    if (perp > range) continue;   // (the long-range escape needs perp >= 2 x range, so it never applies here)
+    let sp: Pt = proj;
+    if (pitch > 0) {
+      if (dir[0] === 0 && dir[1] !== 0) sp = [origin[0], nearestGrid[1]];
+      else if (dir[1] === 0 && dir[0] !== 0) sp = [nearestGrid[0], origin[1]];
+      else {
+        const g0 = gridAt(proj.slice()); let bs = Infinity, bp: Pt = proj;
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+          const gp: Pt = [g0[0] + dx * pitch, g0[1] + dy * pitch];
+          const gd = [gp[0] - origin[0], gp[1] - origin[1]]; const ga = gd[0] * u[0] + gd[1] * u[1];
+          const score = Math.hypot(gd[0] - u[0] * ga, gd[1] - u[1] * ga) + Math.hypot(gp[0] - cursor[0], gp[1] - cursor[1]) * 0.1;
+          if (score < bs) { bs = score; bp = gp; }
+        }
+        sp = bp;
+      }
+    }
+    if (perp < bestPerp) { bestPerp = perp; best = sp; }
+  }
+  return best;
 }

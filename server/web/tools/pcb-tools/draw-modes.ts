@@ -23,6 +23,14 @@ export const ANGLE_SNAP_KEY = "kc.pcbnew.angleSnapMode", ANGLE_SNAP_MODES = ["fr
 /** PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT. */
 export function nextLineMode(m: string | null | undefined) { return m === "free" ? "45" : m === "45" ? "90" : "free"; }
 export const ANGLE_SNAP_MSG: Record<string, string> = { free: "", "90": "Constrain to H, V", "45": "Constrain to H, V, 45" };   // DRAWING_TOOL::UpdateStatusBar
+/** EDIT_TOOL::doMoveSelection displayConstraintsMessage: the constraint field while a move runs (it stays afterwards). */
+export const MOVE_SNAP_MSG: Record<string, string> = { free: "", "90": "Angle snap lines: 90\u00b0", "45": "Angle snap lines: 45\u00b0" };
+/** The DRAWING_TOOL actions: activating one runs DRAWING_TOOL::Reset( RUN ), which calls UpdateStatusBar. */
+export const DRAWING_TOOL_IDS = new Set(["via", "gline", "grect", "gcircle", "gtext", "garc", "gpoly", "gcurve", "gtextbox", "table", "image", "zone", "thievingzone", "rulearea", "dimaligned", "dimortho", "dimcenter", "dimradial", "leader", "anchor"]);
+/** EDA_DRAW_FRAME::DisplayConstraintsMsg: status field 7 (the app keeps the last text written, as wxStatusBar does). */
+export function displayConstraintsMsg(msg: string) {
+  try { if (typeof root.dispatchEvent === "function" && typeof CustomEvent === "function") root.dispatchEvent(new CustomEvent("kc:constraint-msg", { detail: { msg: msg || "" } })); } catch (e) { /* no DOM */ }
+}
 export function angleSnapMode() {
   if (!S.angleSnap) { const v = lsGet(ANGLE_SNAP_KEY); S.angleSnap = ANGLE_SNAP_MODES.includes(v!) ? v! : "free"; }
   return S.angleSnap;
@@ -32,6 +40,7 @@ export function setAngleSnap(ctx: PcbCtx, mode: string) {
   if (!ANGLE_SNAP_MODES.includes(mode)) return angleSnapMode();
   S.angleSnap = mode; lsSet(ANGLE_SNAP_KEY, mode);
   if (ctx && S.draw && S.drawRaw) { drawTrack(S.draw, S.drawRaw, S.drawCtrl!); }
+  if (S.move) displayConstraintsMsg(MOVE_SNAP_MSG[mode]!);   // doMoveSelection on angleSnapModeChanged
   if (ctx) ctx.requestRender();
   // angleSnapModeChanged: the toolbar's Line Modes radio follows (panes.ts listens)
   try { if (typeof root.dispatchEvent === "function" && typeof CustomEvent === "function") root.dispatchEvent(new CustomEvent("kc:pcb-linemode", { detail: { mode, msg: ANGLE_SNAP_MSG[mode] } })); } catch (e) { /* no DOM */ }

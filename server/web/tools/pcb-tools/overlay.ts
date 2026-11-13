@@ -19,7 +19,7 @@ import { padOnLayer, padsOf } from "./route-geom";
 import { padOutline as drcPadOutline } from "./drc-zones";
 import { PAD_TOOLS, masterPad } from "./pad-tool";
 import { drawDragPreview, drawRoute } from "./route-preview";
-import { CLEARANCE_MODE, HALO_COLOR, HL, K, RATSNEST, S, VIA, bind } from "./state";
+import { ANCHOR, CLEARANCE_MODE, HALO_COLOR, HL, K, RATSNEST, S, VIA, bind } from "./state";
 import { drawTune } from "./tuning-patterns";
 import { drawGenEditPreview, drawTuningSelection } from "./tuning-edit";
 import { isTuneTool } from "./tuning-tool";
@@ -415,6 +415,17 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
   // a move's magnetic snap (the anchor the cursor was pulled onto): GRID_HELPER's SNAP_INDICATOR
   const cpx = px * (view.dpr || 1);
   if (S.move && S.move.snapAt) drawSnapIndicator(c, S.move.snapAt, S.move.snapAt.t, cpx);
+  // a move held on an angle snap line: CONSTRUCTION_GEOM's snap line, dashed (12 px on, 6 off) in LAYER_ANCHOR, with
+  // a 16 px cross and circle on its origin once it is longer than 8 px; nothing under 10 nm
+  const gl = S.move && S.move.guide;
+  if (gl && Math.hypot(gl[1][0] - gl[0][0], gl[1][1] - gl[0][1]) >= 1e-5) {
+    const [a, b] = gl; c.globalAlpha = 1; c.strokeStyle = ANCHOR; c.lineWidth = px;
+    c.setLineDash([12 * px, 6 * px]); c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); c.setLineDash([]);
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) > 8 * px) {
+      c.beginPath(); c.moveTo(a[0] - 8 * px, a[1]); c.lineTo(a[0] + 8 * px, a[1]); c.moveTo(a[0], a[1] - 8 * px); c.lineTo(a[0], a[1] + 8 * px); c.stroke();
+      c.beginPath(); c.arc(a[0], a[1], 8 * px, 0, Math.PI * 2); c.stroke();
+    }
+  }
   // cursor: the via about to be placed, and the magnetic snap marker
   const hv = S.hover;
   if (hv && S.modTool) {
