@@ -15,6 +15,7 @@ import { HANDLERS, gridMenu, toggleRenderOpt } from "./actions";
 import { setToggle, state, store } from "./appstore";
 import { openAbout, openHotkeyList } from "./help-dialogs";
 import { setCrosshair, setUnitsAction } from "./panes";
+import { cycleInactiveMode, layerAlphaStep, toggleInactiveMode } from "./panels/appearance";
 import { openSelectionProperties } from "./pointer";
 import { E } from "./state";
 import { startMove } from "./gestures";
@@ -215,7 +216,9 @@ export const MENU_HANDLERS: Record<string, ActionHandler> = {
   cursorFullCrosshairs: () => (E.crosshairMode === "full" ? setCrosshair("small", "cursorSmallCrosshairs") : setCrosshair("full", "cursorFullCrosshairs")),
   toggleHiddenFields: () => { toggleRenderOpt("showHiddenText", "toggleHiddenFields"); setToggle("showHiddenText", !!E.renderOpts.showHiddenText); },
   showHiddenText: () => { toggleRenderOpt("showHiddenText", "showHiddenText"); setToggle("toggleHiddenFields", !!E.renderOpts.showHiddenText); },
-  highContrastModeCycle: () => toggleRenderOpt("highContrast", "highContrastMode"),
+  highContrastModeCycle: () => { if (isSch()) return; cycleInactiveMode(); },
+  highContrastMode: () => { if (isSch()) toggleRenderOpt("highContrast", "highContrastMode"); else toggleInactiveMode(); },
+  layerAlphaInc: () => { if (!isSch()) layerAlphaStep(1); }, layerAlphaDec: () => { if (!isSch()) layerAlphaStep(-1); },
   navigatePrevious: () => stepSheet(-1), navigateNext: () => stepSheet(1), leaveSheet,
   layerNext: () => stepLayer(1), layerPrev: () => stepLayer(-1), layerTop: () => copperLayer("F.Cu"), layerBottom: () => copperLayer("B.Cu"),
   listHotKeys: () => openHotkeyList(), about: () => openAbout(),

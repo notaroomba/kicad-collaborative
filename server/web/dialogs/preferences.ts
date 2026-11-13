@@ -116,7 +116,7 @@ export function openPreferences(page?: string): void {
           { label: "Display Options", build(pg) {
             const ap = KD().staticBox(pg, "Annotations");
             ap.append(checkbox("Show pad numbers", p.pcbDisplay.showPadNumbers, (on) => { p.pcbDisplay.showPadNumbers = on; }, { id: "kd-pref-padnumbers" }), checkbox("Show net names", p.pcbDisplay.showNetNames, (on) => { p.pcbDisplay.showNetNames = on; }, { id: "kd-pref-netnames" }),
-              checkbox("High-contrast display mode", p.pcbDisplay.highContrast, (on) => { p.pcbDisplay.highContrast = on; }, { id: "kd-pref-contrast" }));
+              checkbox("High-contrast display mode", p.pcbDisplay.contrastMode !== "normal", (on) => { p.pcbDisplay.contrastMode = on ? (p.pcbDisplay.contrastMode === "normal" ? "dim" : p.pcbDisplay.contrastMode) : "normal"; }, { id: "kd-pref-contrast" }));
           } },
           { label: "Grids", build: gridsPage("pcb") },
           { label: "Editing Options", build(pg) {

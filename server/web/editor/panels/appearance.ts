@@ -2,10 +2,15 @@
 // layers (KiCad's names, order and tooltips; visibility, colour and the active layer), the Objects rows
 // (visibility + opacity), nets and net classes (colour + ratsnest visibility), the layer / net display
 // options, layer presets and viewports.  Everything is per user and lives in localStorage — KiCad keeps the
-// colours in the user's colour theme and the rest in the project's local settings (.kicad_prl) — and reaches
-// the canvas through E.renderOpts (web/canvas/render.ts) and the pcb tool module's ratsnest state.
+// colours (with their opacity) in the user's colour theme and the rest in the project's local settings
+// (.kicad_prl) — and reaches the canvas through E.renderOpts (web/canvas/render.ts) and the pcb tool module's
+// ratsnest state.  Nothing here is written into the board file.
 import type { AppearanceState, InactiveMode, LayerInfo, LayerMenuCmd, NetClassRow, NetCmd, NetColorMode, NetRow, ObjectRow, PanelAction, RatsnestMode } from "../../panels-api";
+import { parseColor, rgba } from "../../canvas/colors";
+import { saveContrastMode, prefs } from "../../dialogs/prefs";
+import { confirmBox } from "../../dialogs/dom";
 import { setToggles, store } from "../appstore";
+import { hotkeyCyclePopup } from "../hotkey-popup";
 import { setActiveLayer } from "../doc";
 import { E } from "../state";
 import { toast } from "../util";
@@ -55,14 +60,14 @@ function boardLayerKeys(doc: KDoc): string[] {
 }
 
 // ---------------------------------------------------------------- objects (s_objectSettings)
-interface ObjectDef { id: string; label: string; tip: string; opacity?: boolean; canHide?: boolean; spacer?: boolean; defaultHidden?: boolean }
+interface ObjectDef { id: string; label: string; tip: string; opacity?: boolean; canHide?: boolean; spacer?: boolean; defaultHidden?: boolean; defaultOpacity?: number }
 const OBJECTS: ObjectDef[] = [
   { id: "tracks", label: "Tracks", tip: "Show tracks", opacity: true },
   { id: "vias", label: "Vias", tip: "Show all vias", opacity: true },
   { id: "pads", label: "Pads", tip: "Show all pads", opacity: true },
-  { id: "zones", label: "Zones", tip: "Show copper zones", opacity: true },
+  { id: "zones", label: "Zones", tip: "Show copper zones", opacity: true, defaultOpacity: 0.6 },   // "board.opacity.zones" 0.6
   { id: "filledShapes", label: "Filled Shapes", tip: "Opacity of filled shapes", opacity: true, canHide: false },
-  { id: "images", label: "Images", tip: "Show user images", opacity: true },
+  { id: "images", label: "Images", tip: "Show user images", opacity: true, defaultOpacity: 0.6 },   // "board.opacity.images" 0.6
   { id: "sp1", label: "", tip: "", spacer: true },
   { id: "fpFront", label: "Footprints Front", tip: "Show footprints that are on board's front" },
   { id: "fpBack", label: "Footprints Back", tip: "Show footprints that are on board's back" },
@@ -80,6 +85,8 @@ const OBJECTS: ObjectDef[] = [
   { id: "drawingSheet", label: "Drawing Sheet", tip: "Show drawing sheet borders and title block" },
   { id: "grid", label: "Grid", tip: "Show the (x,y) grid dots" },
 ];
+/** An Objects row's opacity: the user's, else KiCad's default (PROJECT_LOCAL_SETTINGS: zones and images 0.6, the rest 1). */
+function objOpacity(o: ObjectDef): number { const v = user.objOpacity[o.id]; return typeof v === "number" && v >= 0 && v <= 1 ? v : o.defaultOpacity === undefined ? 1 : o.defaultOpacity; }
 const SEVERITY: Record<string, string> = { drcWarnings: "warning", drcErrors: "error", drcExclusions: "exclusion" };
 
 // ---------------------------------------------------------------- presets (LAYER_PRESET)
@@ -103,7 +110,7 @@ function builtinPresets(all: string[]): Preset[] {
 }
 
 // ---------------------------------------------------------------- persisted state
-interface UserPrefs { colors: Record<string, string>; objHidden: string[]; objOpacity: Record<string, number>; netColorMode: NetColorMode; ratsnestMode: RatsnestMode }
+interface UserPrefs { colors: Record<string, string>; objHidden: string[]; objOpacity: Record<string, number>; netColorMode: NetColorMode; ratsnestMode: RatsnestMode; opacityAbs?: boolean }
 interface Viewport { name: string; rect: [number, number, number, number] }
 interface ProjectPrefs { hidden: string[] | null; netColors: Record<string, string>; classColors: Record<string, string>; hiddenNets: string[]; hiddenClasses: string[]; presets: Preset[]; viewports: Viewport[]; viewport: string | null }
 
@@ -111,6 +118,8 @@ const USER_KEY = "kui.appearance";
 const projKey = () => "kui.appearance." + (projectId() || "x");
 let user: UserPrefs = Object.assign({ colors: {}, objHidden: OBJECTS.filter((o) => o.defaultHidden).map((o) => o.id), objOpacity: {}, netColorMode: "ratsnest" as NetColorMode, ratsnestMode: "all" as RatsnestMode },
   loadJson<Partial<UserPrefs>>(USER_KEY, {}));
+// the Zones slider used to scale the fixed 0.6 zone opacity; it is the opacity itself now (as KiCad's): keep the look
+if (!user.opacityAbs) { if (typeof user.objOpacity.zones === "number") user.objOpacity.zones = Math.round(user.objOpacity.zones * 60) / 100; user.opacityAbs = true; }
 let proj: ProjectPrefs = emptyProj(); let projFor = "";
 function emptyProj(): ProjectPrefs { return { hidden: null, netColors: {}, classColors: {}, hiddenNets: [], hiddenClasses: [], presets: [], viewports: [], viewport: null }; }
 function loadProj(): void { const k = projKey(); if (k === projFor) return; projFor = k; proj = Object.assign(emptyProj(), loadJson<Partial<ProjectPrefs>>(k, {})); }
@@ -185,7 +194,7 @@ export function publishAppearance(): void {
   loadProj();
   const layers = layerRows(doc);
   const objects: ObjectRow[] = OBJECTS.map((o) => o.spacer ? { id: o.id, label: "", tip: "", spacer: true }
-    : { id: o.id, label: o.label, tip: o.tip, canHide: o.canHide !== false, visible: o.canHide === false ? undefined : objectVisible(o.id), opacity: o.opacity ? (user.objOpacity[o.id] === undefined ? 1 : user.objOpacity[o.id]) : undefined });
+    : { id: o.id, label: o.label, tip: o.tip, canHide: o.canHide !== false, visible: o.canHide === false ? undefined : objectVisible(o.id), opacity: o.opacity ? objOpacity(o) : undefined });
   const n = nets(); const s = pcbState();
   const hiddenNets = s ? s.hiddenNets : new Set(proj.hiddenNets);
   const netRows: NetRow[] = n.nets.map((x) => ({ name: x.name, code: x.code, color: proj.netColors[x.name] || null, visible: !hiddenNets.has(x.name), netclass: x.netclass }));
@@ -209,7 +218,8 @@ export function applyAppearance(): void {
   ro.layerColors = colors.size ? colors : undefined;
   const hide = new Set(user.objHidden.filter((id) => !["grid", "ratsnest", "anchors", "lockedShadow", "drawingSheet", "drcWarnings", "drcErrors", "drcExclusions"].includes(id)));
   const show = new Set<string>(); for (const id of ["anchors", "lockedShadow"]) if (!user.objHidden.includes(id)) show.add(id);
-  const opacity: Record<string, number> = {}; for (const [k, v] of Object.entries(user.objOpacity)) if (v < 1) opacity[k] = v;
+  // every opacity row goes to the renderer: zones and images default to 0.6, which is not the renderer's own default
+  const opacity: Record<string, number> = {}; for (const o of OBJECTS) if (o.opacity) opacity[o.id] = objOpacity(o);
   ro.objects = { hide, show, opacity };
   const P = pcbTools();
   if (show.has("lockedShadow") && P) { const ids = new Set<string>(); for (const it of doc.items.values()) { try { if (P.isLocked(it.node)) ids.add(it.id); } catch (e) { /* not lockable */ } } ro.lockedIds = ids; }
@@ -259,6 +269,36 @@ function setFlip(on: boolean): void { E.renderOpts.flip = !!on; setToggles({ fli
 function setInactive(mode: InactiveMode): void {
   E.renderOpts.highContrast = mode !== "normal"; E.renderOpts.inactiveHide = mode === "hide";
   setToggles({ highContrastMode: mode !== "normal" });
+  saveContrastMode(mode);   // PCB_DISPLAY_OPTIONS::m_ContrastModeDisplay is the user's, not the board's
+}
+const CONTRAST_LABELS: [InactiveMode, string][] = [["normal", "Normal"], ["dim", "Dimmed"], ["hide", "Hidden"]];
+/** View ▸ Inactive Layer View Mode (ACTIONS::highContrastMode, PCB_CONTROL::HighContrastMode): normal ⇄ dimmed. */
+export function toggleInactiveMode(): void {
+  if (isSchDoc()) return;
+  setInactive(inactiveMode() === "normal" ? "dim" : "normal"); applyAppearance(); publishAppearance();
+}
+/**
+ * H — Inactive Layer View Mode (3-state) (ACTIONS::highContrastModeCycle, PCB_CONTROL::HighContrastModeCycle):
+ * normal → dimmed → hidden → normal, with the HOTKEY_CYCLE_POPUP feedback of ContrastModeFeedback.
+ */
+export function cycleInactiveMode(): void {
+  if (isSchDoc()) return;
+  const cur = inactiveMode(), next: InactiveMode = cur === "normal" ? "dim" : cur === "dim" ? "hide" : "normal";
+  setInactive(next); applyAppearance(); publishAppearance();
+  hotkeyCyclePopup("Inactive Layer Display", CONTRAST_LABELS.map((l) => l[1]), CONTRAST_LABELS.findIndex((l) => l[0] === next));
+}
+// PCB_CONTROL::LayerAlphaInc / LayerAlphaDec: the active layer's colour alpha in steps of 0.05, kept within 0.2 .. 1
+const ALPHA_MIN = 0.2, ALPHA_MAX = 1, ALPHA_STEP = 0.05;
+/** { and } — Decrease / Increase Layer Opacity: the active layer's colour in the user's colour theme. */
+export function layerAlphaStep(dir: 1 | -1): boolean {
+  const doc = kdoc(), key = E.activeLayer as string; if (!doc || isSchDoc() || !key) return false;
+  const K = KC(), cur = user.colors[key] || K.pcbColor(key), [r, g, b, a] = parseColor(cur);
+  const want = Math.round((a + dir * ALPHA_STEP) * 100) / 100;
+  if (dir > 0 ? a > ALPHA_MAX - ALPHA_STEP + 1e-6 : a < ALPHA_MIN + ALPHA_STEP - 1e-6) return false;   // KiCad rings the bell
+  const c = rgba(r, g, b, Math.max(ALPHA_MIN, Math.min(ALPHA_MAX, want)));
+  if (c.toLowerCase() === K.pcbColor(key).toLowerCase()) delete user.colors[key]; else user.colors[key] = c;
+  saveUser(); applyAppearance(); publishAppearance();
+  return true;
 }
 function applyPreset(p: Preset): void {
   setVisibleLayers(p.layers);
@@ -317,7 +357,7 @@ async function savePreset(): Promise<void> {
   if (builtin.includes(nm)) { toast("Default presets cannot be modified. Please use a different name.", 3500); return; }
   const p: Preset = { name: nm, layers: st.layers.filter((l) => l.visible).map((l) => l.key), hiddenObjects: OBJECTS.filter((o) => !o.spacer && o.canHide !== false && !o.defaultHidden && !objectVisible(o.id)).map((o) => o.id), flip: st.flip, active: st.active };
   const i = proj.presets.findIndex((x) => x.name === nm);
-  if (i >= 0) { if (!window.confirm("Overwrite existing preset?")) return; proj.presets[i] = p; } else proj.presets.push(p);
+  if (i >= 0) { if (!await confirmBox("Save Layer Preset", "Overwrite existing preset?", "Overwrite")) return; proj.presets[i] = p; } else proj.presets.push(p);
   saveProj(); publishAppearance();
 }
 async function deletePreset(): Promise<void> {
@@ -392,6 +432,7 @@ export function appearanceDocOpened(): void {
   loadProj();
   if (proj.hidden) { const keys = new Set(layerKeys()); E.hiddenLayers = new Set(proj.hidden.filter((l) => keys.has(l))); store.slice("document", { hiddenLayers: Array.from(E.hiddenLayers as Set<string>) }); }
   if (user.objHidden.includes("grid") && E.gridOn) setGridAndRatsnest();
+  const mode = prefs().pcbDisplay.contrastMode; if (mode !== inactiveMode()) setInactive(mode);
   applyAppearance(); publishAppearance();
 }
 

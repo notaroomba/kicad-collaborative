@@ -58,13 +58,32 @@ export function useContextMenu(): { at: MenuAt | null; open: (ev: { clientX: num
 const PALETTE = ["#C83434", "#E08A2E", "#E2C12C", "#7FC820", "#22B84C", "#1FB8A6", "#2D9BE0", "#4D7FC4", "#7F5FD0", "#C04FC8", "#E0508C", "#8A5A2B",
   "#FF6060", "#FFB060", "#FFF060", "#B8FF60", "#60FF90", "#60FFE8", "#60C8FF", "#8CA8FF", "#B090FF", "#F080FF", "#FF90C0", "#C8A070",
   "#FFFFFF", "#D0D0D0", "#A0A0A0", "#707070", "#404040", "#000000"];
-const hex6 = (c: string) => { const m = /^#([0-9a-f]{6})/i.exec(c); return m ? "#" + m[1] : "#808080"; };
+/** A css colour as "#rrggbb" plus its opacity 0..100 (the colours here are "#rrggbb", "#rrggbbaa" or "rgb[a](r,g,b[,a])"). */
+export function splitColor(c: string | null): { hex: string; alpha: number } {
+  const h = c ? /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(c) : null;
+  if (h) return { hex: "#" + h[1].toLowerCase(), alpha: h[2] ? Math.round(parseInt(h[2], 16) / 2.55) : 100 };
+  const m = c ? /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(c) : null;
+  if (m) return { hex: "#" + [m[1], m[2], m[3]].map((v) => Math.max(0, Math.min(255, Math.round(+v))).toString(16).padStart(2, "0")).join(""), alpha: m[4] === undefined ? 100 : Math.round(Math.max(0, Math.min(1, +m[4])) * 100) };
+  return { hex: "#808080", alpha: 100 };
+}
+/** "#rrggbb" at full opacity, else "rgba(r,g,b,a)" (the canvas library's rgba() form). */
+export function joinColor(hex: string, alpha: number): string {
+  if (alpha >= 100) return hex.toLowerCase();
+  const v = parseInt(hex.slice(1), 16);
+  return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${+(Math.max(0, alpha) / 100).toFixed(3)})`;
+}
 
-export interface ColorAt { x: number; y: number; title: string; color: string | null; canClear: boolean; clearLabel: string; set: (c: string | null) => void }
+/**
+ * opacity: DIALOG_COLOR_PICKER's Opacity slider (aAllowOpacityControl) — on for every COLOR_SWATCH of the
+ * Appearance panel (layers, nets, net classes); a translucent layer colour lets the layers under it show through.
+ */
+export interface ColorAt { x: number; y: number; title: string; color: string | null; canClear: boolean; clearLabel: string; set: (c: string | null) => void; opacity?: boolean }
 export function ColorPicker({ at, onClose }: { at: ColorAt | null; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [val, setVal] = useState("#808080");
-  useEffect(() => { if (at) setVal(hex6(at.color || "#808080")); }, [at]);
+  const [alpha, setAlpha] = useState(100);
+  // UNSPECIFIED (no colour yet) opens fully opaque, as DIALOG_COLOR_PICKER does
+  useEffect(() => { if (at) { const c = splitColor(at.color); setVal(c.hex); setAlpha(at.opacity === false || !at.color ? 100 : c.alpha); } }, [at]);
   useEffect(() => {
     if (!at) return;
     const down = (ev: PointerEvent) => { if (ref.current && !ref.current.contains(ev.target as Node)) onClose(); };
@@ -73,8 +92,10 @@ export function ColorPicker({ at, onClose }: { at: ColorAt | null; onClose: () =
     return () => { document.removeEventListener("pointerdown", down, true); document.removeEventListener("keydown", key, true); };
   }, [at, onClose]);
   if (!at) return null;
-  const W = 232, left = Math.max(4, Math.min(at.x, window.innerWidth - W - 8)), top = Math.max(4, Math.min(at.y, window.innerHeight - 250));
-  const pick = (c: string | null) => { at.set(c); onClose(); };
+  const W = 232, left = Math.max(4, Math.min(at.x, window.innerWidth - W - 8)), top = Math.max(4, Math.min(at.y, window.innerHeight - 290));
+  const withOpacity = at.opacity !== false, a = withOpacity ? alpha : 100;
+  const pick = (c: string | null) => { at.set(c === null ? null : joinColor(c, a)); onClose(); };
+  const valid = /^#[0-9a-f]{6}$/i.test(val);
   return createPortal(
     <div ref={ref} className="kcolor fixed z-[400] p-2 bg-panel border border-line rounded-md shadow-panel text-sm text-ink" style={{ left, top, width: W }}>
       <div className="font-semibold mb-1.5">{at.title}</div>
@@ -83,20 +104,34 @@ export function ColorPicker({ at, onClose }: { at: ColorAt | null; onClose: () =
       </div>
       <div className="flex items-center gap-1.5 mb-2">
         <input type="color" value={val} onChange={(ev) => setVal(ev.target.value)} className="w-8 h-6 p-0 border border-line bg-transparent" />
-        <input type="text" value={val} spellCheck={false} onChange={(ev) => setVal(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && /^#[0-9a-f]{6}$/i.test(val)) pick(val); }}
+        <input type="text" value={val} spellCheck={false} onChange={(ev) => setVal(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter" && valid) pick(val); }}
           className="flex-1 min-w-0 px-1 py-0.5 bg-panel border border-line rounded-xs text-ink font-mono text-xs" />
+        <Swatch color={valid ? joinColor(val, a) : null} title="New color" />
       </div>
+      {withOpacity ? (
+        <div className="flex items-center gap-1.5 mb-2" title="Opacity of the color: lower it to see the layers underneath">
+          <span className="flex-none">Opacity:</span>
+          <input type="range" min={0} max={100} step={1} value={alpha} data-color-opacity onChange={(ev) => setAlpha(+ev.target.value)} className="flex-1 min-w-0 h-3 m-0 accent-blue" />
+          <span className="flex-none w-9 text-right font-mono text-xs text-ink-2">{alpha}%</span>
+        </div>
+      ) : null}
       <div className="flex gap-1.5 justify-end">
         {at.canClear ? <button type="button" className="mr-auto px-2 py-0.5 border border-line rounded-xs bg-bench text-ink" data-color-clear onClick={() => pick(null)}>{at.clearLabel}</button> : null}
         <button type="button" className="px-2 py-0.5 border border-line rounded-xs bg-bench text-ink" onClick={onClose}>Cancel</button>
-        <button type="button" className="px-2 py-0.5 border border-line rounded-xs bg-bench text-ink" data-color-ok disabled={!/^#[0-9a-f]{6}$/i.test(val)} onClick={() => pick(val)}>OK</button>
+        <button type="button" className="px-2 py-0.5 border border-line rounded-xs bg-bench text-ink" data-color-ok disabled={!valid} onClick={() => pick(val)}>OK</button>
       </div>
     </div>, document.body);
 }
 
-/** KiCad's COLOR_SWATCH: a bordered square; with no colour set it shows the checkerboard of "no colour". */
+const CHECKER = "linear-gradient(45deg,#888 25%,transparent 25%,transparent 75%,#888 75%),linear-gradient(45deg,#888 25%,#ccc 25%,#ccc 75%,#888 75%)";
+/**
+ * KiCad's COLOR_SWATCH: a bordered square; with no colour set it shows the checkerboard of "no colour", and a
+ * translucent colour is blended over that checkerboard (COLOR_SWATCH::RenderToDC).
+ */
 export function Swatch({ color, title, onPick, small }: { color: string | null; title?: string; onPick?: (ev: { clientX: number; clientY: number }) => void; small?: boolean }) {
-  const bg = color ? { background: color } : { backgroundImage: "linear-gradient(45deg,#888 25%,transparent 25%,transparent 75%,#888 75%),linear-gradient(45deg,#888 25%,#ccc 25%,#ccc 75%,#888 75%)", backgroundSize: "6px 6px", backgroundPosition: "0 0,3px 3px" };
+  const translucent = !!color && splitColor(color).alpha < 100;
+  const bg = color && !translucent ? { background: color }
+    : { backgroundImage: (translucent ? `linear-gradient(${color},${color}),` : "") + CHECKER, backgroundSize: translucent ? "100% 100%,6px 6px,6px 6px" : "6px 6px", backgroundPosition: translucent ? "0 0,0 0,3px 3px" : "0 0,3px 3px" };
   return <span className={cx("sw flex-none rounded-xs border border-black/50", small ? "w-3 h-3" : "w-[18px] h-3.5")} style={bg} title={title}
     onDoubleClick={onPick ? (ev) => { ev.stopPropagation(); onPick(ev); } : undefined}
     onAuxClick={onPick ? (ev) => { if (ev.button === 1) { ev.preventDefault(); onPick(ev); } } : undefined} />;

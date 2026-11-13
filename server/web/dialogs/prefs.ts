@@ -6,6 +6,8 @@ import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
 
 export type EditorId = "sch" | "pcb";
+/** Appearance ▸ Layer Display Options ▸ Inactive layers: Normal, Dim, Hide. */
+export type ContrastMode = "normal" | "dim" | "hide";
 export type SchThemeId = "default" | "classic" | "dark";
 export interface GridPrefs { sizes: number[]; fast1: number; fast2: number; overrides: GridOverrides; axes?: boolean }   // axes: window.grid.axes_enabled
 export interface Prefs {
@@ -14,7 +16,8 @@ export interface Prefs {
   schEditing: { lineMode: "free" | "90" | "45"; mouseDragIsDrag: boolean; autoAnnotate: boolean };
   /** the schematic canvas colours (Preferences > Schematic Editor > Colors): a theme, and whether a dark UI swaps in the dark sheet */
   schColors: { theme: SchThemeId; followDark: boolean };
-  pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean; highContrast: boolean };
+  /** contrastMode: PCB_DISPLAY_OPTIONS::m_ContrastModeDisplay (HIGH_CONTRAST_MODE NORMAL / DIMMED / HIDDEN), "board.high_contrast_mode" */
+  pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean; contrastMode: ContrastMode };
   /** PCB Editor > Editing Options (PCBNEW_SETTINGS): m_AutoRefillZones */
   pcbEditing: { autoRefillZones: boolean };
   grids: Record<EditorId, GridPrefs>;
@@ -25,7 +28,7 @@ export const DEFAULT_PREFS: Prefs = {
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
   schColors: { theme: "default", followDark: false },
-  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, highContrast: false },
+  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, contrastMode: "normal" },
   pcbEditing: { autoRefillZones: false },
   grids: {
     // EESCHEMA_SETTINGS::DefaultGridSizeList is 100 / 50 / 25 / 10 mil; the web editor has always opened on 50 mil
@@ -43,7 +46,17 @@ let cache: Prefs | null = null;
 export function prefs(): Prefs {
   if (cache) return cache;
   let raw: unknown = null; try { raw = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { raw = null; }
-  cache = merge(DEFAULT_PREFS, raw); return cache;
+  cache = merge(DEFAULT_PREFS, raw);
+  // the old on / off high-contrast switch is the Dim mode
+  const old = raw && typeof raw === "object" ? (raw as { pcbDisplay?: { highContrast?: unknown; contrastMode?: unknown } }).pcbDisplay : null;
+  if (old && old.highContrast === true && old.contrastMode === undefined) cache.pcbDisplay.contrastMode = "dim";
+  if (!["normal", "dim", "hide"].includes(cache.pcbDisplay.contrastMode)) cache.pcbDisplay.contrastMode = "normal";
+  return cache;
+}
+/** Remember the inactive layer mode (set from the Appearance panel or the H hotkey) without re-applying the rest. */
+export function saveContrastMode(mode: ContrastMode): void {
+  const p = prefs(); if (p.pcbDisplay.contrastMode === mode) return;
+  p.pcbDisplay.contrastMode = mode; try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e) { /* no storage */ }
 }
 export function savePrefs(p: Prefs): void {
   cache = merge(DEFAULT_PREFS, p); try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { /* no storage */ }
@@ -109,8 +122,8 @@ export function applyPrefs(full = true): void {
       const sch = CollabTools.sch;
       if (sch) { try { const ctx = toolCtx(); sch.setLineMode(ctx, p.schEditing.lineMode); sch.setDragMode(ctx, p.schEditing.mouseDragIsDrag ? "drag" : "move"); sch.state.annotateAuto = p.schEditing.autoAnnotate; syncSchModes(); } catch (e) { console.warn(e); } }
     } else {
-      E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.highContrast = p.pcbDisplay.highContrast; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
-      setToggles({ showPadNumbers: p.pcbDisplay.showPadNumbers, showNetNames: p.pcbDisplay.showNetNames, highContrastMode: p.pcbDisplay.highContrast });
+      E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.highContrast = p.pcbDisplay.contrastMode !== "normal"; E.renderOpts.inactiveHide = p.pcbDisplay.contrastMode === "hide"; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
+      setToggles({ showPadNumbers: p.pcbDisplay.showPadNumbers, showNetNames: p.pcbDisplay.showNetNames, highContrastMode: p.pcbDisplay.contrastMode !== "normal" });
     }
     if (full) store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) });
   }

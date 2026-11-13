@@ -135,9 +135,13 @@ export function tracePad(ctx: PathSink, g: PadGeom): void {
  *                                hiddenText, outside the hit boxes) at HIDDEN_TEXT_ALPHA; KiCad has no
  *                                painter rule for this (this version dropped LAYER_HIDDEN_TEXT).
  *   layerColors    (board)     — Map layer name → css colour: the user's colour for a layer (Appearance ▸ Layers
- *                                swatch); geometry painted in the layer's theme colour takes it instead;
+ *                                swatch); geometry painted in the layer's theme colour takes it instead.  A
+ *                                colour with an alpha (the colour picker's Opacity, { / } on the active layer)
+ *                                makes the whole layer translucent, its zones included (COLOR4D::a);
  *   objects        (board)     — { hide: Set, opacity: {…} } keyed by KiCad's Appearance ▸ Objects rows: tracks,
  *                                vias, pads, zones, images (visibility + opacity), filledShapes (opacity),
+ *                                each multiplying the item colour's alpha (PCB_RENDER_SETTINGS::GetColor); a
+ *                                zones value replaces the ZONE_OPACITY default rather than scaling it,
  *                                fpFront / fpBack (a footprint on that side with all its children, as
  *                                LAYER_FOOTPRINTS_FR/BK), values, references, fpText (footprint text), anchors
  *                                (in `show`: the 5 px LAYER_ANCHOR cross on every footprint origin) and
@@ -302,6 +306,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const layerColors = isPcb && opts.layerColors && opts.layerColors.size ? opts.layerColors : null;
   const obj = isPcb && opts.objects ? opts.objects : null, objHide = obj && obj.hide && obj.hide.size ? obj.hide : null, objAlpha = obj && obj.opacity ? obj.opacity : null;
   const hcHide = !!opts.inactiveHide;
+  // PCB_RENDER_SETTINGS::GetColor: a zone's colour alpha times m_zoneOpacity ("board.opacity.zones", 0.6 by default);
+  // the Appearance ▸ Objects ▸ Zones slider sets it outright
+  const zoneA = objAlpha && typeof objAlpha.zones === "number" ? Math.max(0, Math.min(1, objAlpha.zones)) : ZONE_OPACITY;
   const itemColors = isPcb && opts.itemColors && opts.itemColors.size ? opts.itemColors : null, tint = itemColors ? new Map<Geom, string>() : null;
   const W = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;                 // device px per mm
@@ -487,15 +494,15 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   for (const z of ZS) {
     // overlay passes that sit at this depth
     if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
-    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); dirty(); }
+    if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (zoneA / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); dirty(); }
     const arr = BUCKETS.get(z);
     if (arr) for (const g of arr) {
       let alpha = g.alpha === undefined ? 1 : g.alpha;
       if (hcLayer && g.layer !== hcLayer && g.layer !== "holes" && !g.padText) alpha *= HC_DIM;
-      if (g.zoneFill) alpha *= ZONE_OPACITY;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity
+      if (g.zoneFill) alpha *= zoneA;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity
       if (g.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g.color, fill = g.fill;
-      if (objAlpha) { const oc = objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null); const oa = oc ? objAlpha[oc] : undefined; if (oa !== undefined && oa < 1) alpha *= oa; }
+      if (objAlpha && !g.zoneFill) { const oc = objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null); const oa = oc ? objAlpha[oc] : undefined; if (oa !== undefined && oa < 1) alpha *= oa; }
       if (layerColors && !g.hole) { const lc = layerColors.get(g.layer); if (lc) { const def = pcbColor(g.layer); if (color === def) color = lc; if (fill === def) fill = lc; } }
       if (netColors && g.net! > 0 && (g.track || g.via || g.pad || g.zoneFill) && !g.hole && copperZ!.indexOf(g.layer) >= 0) { const nc = netColors.get(g.net!); if (nc) { color = nc; if (fill) fill = nc; } }
       if (tint) { const tc = tint.get(g); if (tc && copperZ!.indexOf(g.layer) >= 0) { color = tc; if (fill) fill = tc; } }
@@ -566,7 +573,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     }
   }
   if (!ratsDone) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); }
-  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); }
+  if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (zoneA / ZONE_OPACITY) * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); }
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
   // the Footprint Editor's footprint sits at the origin: its anchor is the LAYER_ANCHOR cross there

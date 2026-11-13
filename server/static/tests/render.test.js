@@ -1312,6 +1312,39 @@ test("appearance options: layer colours, object visibility and opacity, per-item
 });
 
 
+test("layer opacity: a full F.Cu pour over inner / back tracks — zone opacity, layer colour alpha, the active layer on top", () => {
+  const doc = K.parseDoc(PCB_HEAD.replace('(31 "B.Cu" signal)', '(1 "In1.Cu" signal) (31 "B.Cu" signal)') +
+    '(segment (start 2 5) (end 18 5) (width 0.5) (layer "In1.Cu") (net 0) (uuid "t1")) (segment (start 2 7) (end 18 7) (width 0.5) (layer "B.Cu") (net 0) (uuid "t2")) ' +
+    '(zone (net 0) (net_name "") (layer "F.Cu") (uuid "z1") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25) (fill yes) ' +
+    '(polygon (pts (xy 0 0) (xy 20 0) (xy 20 12) (xy 0 12))) (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 20 0) (xy 20 12) (xy 0 12)))))', "kicad_pcb");
+  assert(doc.copper.includes("In1.Cu"), "four-layer stack parsed");
+  const cu = K.pcbColor("F.Cu"), in1 = K.pcbColor("In1.Cu"), bcu = K.pcbColor("B.Cu");
+  const draw = (opts) => { const ctx = recCtx(800, 600); K.render(doc, ctx, fitView(doc, 800, 600), Object.assign({ frame: false }, opts)); return ctx.ops; };
+  const pour = (ops, c) => ops.find((o) => o.op === "fill" && o.fill === (c || cu));
+  const idx = (ops, pred) => ops.findIndex(pred);
+  // KiCad's default: the pour is translucent at m_zoneOpacity 0.6 and drawn over the other layers
+  let ops = draw({ activeLayer: "F.Cu" });
+  assert(Math.abs(pour(ops).alpha - K.ZONE_OPACITY) < 1e-6, "zone fill at the 0.6 default");
+  assert(idx(ops, (o) => o.op === "stroke" && o.stroke === in1) < idx(ops, (o) => o.op === "fill" && o.fill === cu), "F.Cu (active) above In1.Cu");
+  // the Zones slider sets the opacity outright (0.25, not 0.6 × 0.25)
+  ops = draw({ activeLayer: "F.Cu", objects: { hide: new Set(), show: new Set(), opacity: { zones: 0.25 } } });
+  assert(Math.abs(pour(ops).alpha - 0.25) < 1e-6, `zones slider is the zone opacity (${pour(ops).alpha})`);
+  ops = draw({ activeLayer: "F.Cu", objects: { hide: new Set(), show: new Set(), opacity: { zones: 1 } } });
+  assert(Math.abs(pour(ops).alpha - 1) < 1e-6, "zones at 100 % are opaque");
+  // a layer colour with an alpha (the colour picker's Opacity) is painted as is: the canvas multiplies it in
+  const see = "rgba(200,52,52,0.3)";
+  ops = draw({ activeLayer: "F.Cu", layerColors: new Map([["F.Cu", see]]) });
+  assert(pour(ops, see) && !pour(ops), "the pour takes the translucent layer colour");
+  // switching the active layer to B.Cu brings B.Cu above the F.Cu pour (PCB_DRAW_PANEL_GAL::SetTopLayer)
+  ops = draw({ activeLayer: "B.Cu" });
+  assert(idx(ops, (o) => o.op === "stroke" && o.stroke === bcu) > idx(ops, (o) => o.op === "fill" && o.fill === cu), "B.Cu over F.Cu when B.Cu is active");
+  // inactive layers: dim multiplies HC_DIM in, hide drops them
+  ops = draw({ activeLayer: "In1.Cu", highContrast: true });
+  assert(Math.abs(pour(ops).alpha - K.ZONE_OPACITY * 0.2) < 1e-6 && ops.find((o) => o.op === "stroke" && o.stroke === in1).alpha === 1, "dim: the pour fades, In1.Cu stays");
+  ops = draw({ activeLayer: "In1.Cu", highContrast: true, inactiveHide: true });
+  assert(!pour(ops) && !ops.some((o) => o.op === "stroke" && o.stroke === bcu) && ops.some((o) => o.op === "stroke" && o.stroke === in1), "hide: only In1.Cu is drawn");
+});
+
 test("ellipses (sheet, symbol body, board, footprint) and board points: KiCad's SHAPE_ELLIPSE sampling and PCB_POINT marker", () => {
   const sch = K.parseDoc(`(kicad_sch (version 20260306) (generator "eeschema") (uuid "e0000000-0000-0000-0000-000000000001") (paper "A4")
     (lib_symbols (symbol "T:E" (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "E" (at 0 0 0) (effects (font (size 1.27 1.27))))
