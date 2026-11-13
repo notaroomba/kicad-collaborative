@@ -272,7 +272,7 @@ class Blinker(unittest.TestCase):
         self.assertEqual(board.info()["copper_layers"], ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
         board.zone("GND", layer="In1.Cu")
         board.autoplace(outline=(100, 100, 130, 125))
-        self.assertIn("/THRES", board.nets())
+        self.assertTrue(any("THRES" in n for n in board.nets()))     # TRIG and THRES are tied at the chip now, so KiCad names the net after a pin
         routed = board.route(order=["THRES"], widths={"+5V": 0.4}, time_s=20)   # the schematic's names, without the slash
         self.assertEqual(routed["left"], {}, routed)
         self.assertEqual(board.check(kind="unconnected_items")["first"], [])

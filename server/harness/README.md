@@ -70,6 +70,13 @@ packs the blocks onto the smallest page they fit on, so its result has `overlaps
 itself (KiCad's 3D library first, the vendor's STEP file for a vendor part). `board.models()` says how many
 parts show as their real model and lists under `without_model` the ones drawn as a stand-in shape, with the reason.
 
+`build` swaps pins for a clean drawing, as a person does in the symbol editor: on the left and right of an IC (up to
+24 pins) supply straps go to the top, then pins whose parts rise to a supply, supply pins, signals, pins whose parts
+drop to ground, and ground straps at the bottom (`pins_swapped` in the result; `swap_pins=False` turns it off). A
+supply name KiCad's power library does not have (`VSYS`, `VDD_SPI`) gets a power symbol made for it instead of a
+label; `sch.supply("VMOTOR")` declares any name a supply. A part with one connected pin (an antenna) stands on the
+end of the chain that feeds it.
+
 `build` draws each block like a datasheet's application circuit (`kicad_harness/sheet.py`): a wire leaves each
 IC pin, capacitors and pull resistors hang from it, series parts sit in line with it, dividers stack under
 their node, same-net pins are tied together, decoupling capacitors of one supply stand in a row on shared

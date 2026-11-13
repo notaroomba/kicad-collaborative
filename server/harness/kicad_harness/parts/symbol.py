@@ -110,7 +110,7 @@ def layout(pins: list) -> dict:
 
 
 def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", datasheet: str = "", description: str = "", keywords: str = "",
-           extra: dict | None = None) -> tuple:
+           extra: dict | None = None, sides: dict | None = None) -> tuple:
     """A KiCad symbol for a part.  pins: (number, name[, type]) tuples or dicts.  Returns (library text of the symbol, facts).
 
     facts has the same shape the engine gives for a library symbol (pins with dx, dy; body_box), so a part can be
@@ -123,10 +123,14 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
         else:
             num, nm, ty = str(p[0]), str(p[1]) if len(p) > 1 else "", (p[2] if len(p) > 2 else "")
         ps.append({"number": num, "name": kicad_name(nm), "type": guess_type(nm, ty)})
-    sides = layout(ps)
+    if sides is None:
+        sides = layout(ps)
+    else:       # the caller chose each side and its order: {side: [[pin, stacked pin, ...], ...]}, pins as dicts
+        sides = {k: [None if st is None else [{"number": str(q["number"]), "name": kicad_name(str(q.get("name", ""))), "type": q.get("type") or "passive", "hidden": bool(q.get("hidden"))} for q in st] for st in sides.get(k, [])]
+                 for k in ("left", "right", "top", "bottom")}
     g = 2.54
     nl, nr, nt, nb = (len(sides[s]) for s in ("left", "right", "top", "bottom"))
-    longest = lambda side: max([len(re.sub(r"~\{(.*?)\}", r"\1", s[0]["name"])) for s in sides[side]] + [0])
+    longest = lambda side: max([len(re.sub(r"~\{(.*?)\}", r"\1", s[0]["name"])) for s in sides[side] if s] + [0])
     rows = max(nl, nr, 1)
     half_h = math.ceil(((rows - 1) * g / 2 + g + (g if nt or nb else 0)) / g) * g
     text_w = (longest("left") + longest("right")) * 1.0 + 5.08
@@ -136,8 +140,8 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 
     def emit(stack, x, y, angle):
         for i, p in enumerate(stack):
-            hidden = i > 0
-            ty = "passive" if hidden and p["type"] != "no_connect" else p["type"]
+            hidden = i > 0 or bool(p.get("hidden"))
+            ty = "passive" if i > 0 and p["type"] != "no_connect" else p["type"]
             out_pins.append(f'\t\t\t(pin {ty} line (at {_n(x)} {_n(y)} {angle}) (length {_n(plen)}){" (hide yes)" if hidden else ""} '
                             f'(name {_q(p["name"] or "~")} (effects (font (size 1.27 1.27)))) (number {_q(p["number"])} (effects (font (size 1.27 1.27)))))')
             facts.append({"number": p["number"], "name": p["name"], "type": ty, "dx": round(x, 3), "dy": round(-y, 3), **({"hidden": True} if hidden else {})})
@@ -147,7 +151,8 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
         y0 = (n - 1) * g / 2
         y0 = math.floor(y0 / g) * g if (n % 2 == 0) else y0   # keep every pin on the 2.54 grid
         for i, stack in enumerate(sides[side]):
-            emit(stack, x, y0 - i * g, angle)
+            if stack:           # None is an empty row, left free between groups of pins
+                emit(stack, x, y0 - i * g, angle)
     for side, y, angle in (("top", half_h + plen, 270), ("bottom", -half_h - plen, 90)):
         n = len(sides[side])
         x0 = -math.floor((n - 1) / 2) * g

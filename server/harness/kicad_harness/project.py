@@ -27,6 +27,9 @@ _LABEL_ROT = {"left": 180, "right": 0, "top": 90, "bottom": 270}
 _GND_ROT = {"bottom": 0, "right": 90, "top": 180, "left": 270}
 _SUPPLY_ROT = {"top": 0, "left": 90, "bottom": 180, "right": 270}
 _GROUND = re.compile(r"^(A|D|P)?(GND|VSS|VEE)|^GND|^-\d|^Earth", re.I)
+# names that read as a supply although KiCad's power library has no symbol for them; a measurement or control net named after one is not
+_SUPPLY = re.compile(r"^(\+.+|[AD]?V(DD|CC|BUS|BAT|BATT|SYS|IN|OUT|REF|IO|PP|AA|M|CORE|REG|USB|DC|MAIN|RTC|SPI)(_?[A-Z0-9+.]+)*)$")
+_NOT_SUPPLY = re.compile(r"SENSE|ADC|MON|DIV|DET|_EN$|_OK$|_PG$|FB|_ON$", re.I)
 _POWER = re.compile(r"^(\+?\d+V\d*|\+\d.*|-\d+V\d*|GND\w*|VCC\w*|VDD\w*|VSS\w*|VEE\w*|VBUS|VBAT|VAA|VPP|\+BATT|-BATT|Earth\w*|[ADP]GND\w*)$")
 
 
@@ -98,6 +101,7 @@ class Project:
         self._open: dict = {}
         self.log: list = []
         self.footprints: dict = {}   # generated footprints by id, handed to the board when it syncs
+        self.custom_power: dict = {}  # power symbols made for supply names KiCad's power library does not have: name -> symbol text
         self.net_pins: dict = {}     # net name given to build -> one of its pins, for nets that carry no label on the sheet
 
     # ---- documents
@@ -617,15 +621,39 @@ class Schematic(_Doc):
             if end:
                 self._edit({"op": "add_wire", "points": [list(p.at), list(end)]})
             rot = (_GND_ROT if _GROUND.search(short) else _SUPPLY_ROT)[p["side"]]
-            self._edit({"op": "add_symbol", "lib_id": lib_id, "x": at[0], "y": at[1], "rotation": rot})
+            self._is_power(short)
+            self._edit(self._power_edit(lib_id, at[0], at[1], rot))
 
     def _is_power(self, name: str) -> bool:
-        if not _POWER.match(name):
+        if name in self.project.custom_power:
+            return True
+        if not _POWER.match(name) and not (_SUPPLY.match(name) and not _NOT_SUPPLY.search(name)):
             return False
         try:
             return bool(self.lib("power:" + name).get("power_symbol", True))
         except HarnessError:
-            return False
+            self.supply(name)        # a supply KiCad's power library has no symbol for: one is made, as a person would
+            return True
+
+    def supply(self, name: str) -> str:
+        """Declare a net a supply (or a ground) that KiCad's power library has no symbol for ("VSYS", "VDD_SPI", "GND_RF"):
+        from then on it is drawn with a power symbol of its own, an arrow up for a supply and KiCad's ground mark for a
+        ground, instead of a net label.  `net`, `power` and `build` do this by themselves for names that read as supplies."""
+        if name not in self.project.custom_power:
+            ground = bool(_GROUND.search(name))
+            self.project.custom_power[name] = _power_symbol(name, ground)
+            self._facts["power:" + name] = {"lib_id": "power:" + name, "power_symbol": True, "reference_prefix": "#PWR", "value": name,
+                                            "units": [{"unit": 1, "body_box": [-1.27, 0, 1.27, 2.54] if ground else [-0.762, -2.54, 0.762, 0],
+                                                       "pins": [{"number": "1", "name": "~", "type": "power_in", "dx": 0, "dy": 0}]}]}
+        return name
+
+    def _power_edit(self, name: str, x, y, rotation=0) -> dict:
+        """The edit that places a power symbol, carrying the symbol's drawing when it is one of our own."""
+        short = name.split(":", 1)[-1]
+        e = {"op": "add_symbol", "lib_id": name if ":" in name else "power:" + name, "x": x, "y": y, "rotation": rotation}
+        if short in self.project.custom_power:
+            e["symbol"] = self.project.custom_power[short]
+        return e
 
     def net(self, name: str, *pins) -> None:
         """Put pins on a named net: a power symbol when KiCad has one of that name (GND, +3V3, VBUS), else a label."""
@@ -883,7 +911,7 @@ class Schematic(_Doc):
 
     # ---- a whole sheet from a netlist
     def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None,
-              notes: dict | None = None, frames: bool = True, labels: list | None = None) -> dict:
+              notes: dict | None = None, frames: bool = True, labels: list | None = None, swap_pins: bool = True) -> dict:
         """Draw a schematic from a netlist in one call.
 
         parts: {ref: {"lib": "Device:R", "value": "10k", "footprint": "...", "fields": {...}}} (lib may be a
@@ -915,7 +943,7 @@ class Schematic(_Doc):
         #         block, parts hanging on and in line with the wires of the IC pins, labels only where a net leaves it
         from .sheet import Blocks
         intent = self._intent(parts, nets)
-        drawer = Blocks(self, parts, nets, groups, intent, _GROUND)
+        drawer = Blocks(self, parts, nets, groups, intent, _GROUND, arrange_pins=swap_pins)
         drawer.force |= set(labels or [])
         for (ref, num), name in intent.items():      # a net wired inside its block has no label: remember it by one of its pins
             self.project.net_pins.setdefault(name, f"{ref}.{num}")
@@ -994,6 +1022,8 @@ class Schematic(_Doc):
         lay = self.layout(limit=8)
         out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
                "problems": problems + wrong, "unconnected": self.unconnected()[:40], "overlaps": lay.get("count", 0)}
+        if drawer.swapped:
+            out["pins_swapped"] = drawer.swapped      # symbols redrawn with supply straps on top and ground straps at the bottom of their side
         if lay.get("count"):
             out["overlap_list"] = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in lay.get("overlaps", [])]
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
@@ -1038,7 +1068,7 @@ class Schematic(_Doc):
         ty0 = max(top or 15.24, 15.24)
         title = (pw - 125.0, ph - 49.0)
         sky = [(left, right, ty0)]   # (x0, x1, y): the drawing is free below y between x0 and x1
-        spots = []
+        spots, done = [], []
         for b in blocks:
             w, h = b["w"], b["h"]
             best = None
@@ -1047,6 +1077,11 @@ class Schematic(_Doc):
                 if x + w > right + 1e-6:
                     continue
                 y = max(seg[2] for seg in sky if seg[0] < x + w - 1e-6 and seg[1] > x + 1e-6)
+                while True:      # the skyline only keeps the gap to the right of a block: stay clear of every block already placed
+                    hit = [r for r in done if x < r[0] + r[2] + gap - 1e-6 and x + w + gap > r[0] + 1e-6 and y < r[1] + r[3] + gap - 1e-6 and y + h + gap > r[1] + 1e-6]
+                    if not hit:
+                        break
+                    y = max(r[1] + r[3] + gap for r in hit)
                 if y + h > title[1] and x + w > title[0]:
                     continue
                 if y + h > bottom + 1e-6:
@@ -1059,6 +1094,7 @@ class Schematic(_Doc):
                 best = (left, max(seg[2] for seg in sky))
             x, y = best
             spots.append((x, y))
+            done.append((x, y, w, h))
             nx0, nx1, ny = x, min(right, x + w + gap), y + h + gap
             new = []
             for a0, a1, ay in sky:
@@ -1078,6 +1114,27 @@ class Schematic(_Doc):
             return self._pins(spec)
         except HarnessError:
             return []
+
+
+def _power_symbol(name: str, ground: bool) -> str:
+    """A power symbol for a net name KiCad's power library does not have, drawn like the library's own."""
+    q = lambda t: '"' + str(t).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    hide = '(effects (font (size 1.27 1.27)) (hide yes))'
+    line = lambda pts: "\t\t\t(polyline (pts " + " ".join(f"(xy {x} {y})" for x, y in pts) + ") (stroke (width 0) (type default)) (fill (type none)))"
+    if ground:
+        art, vy, ry, ang = [line([(0, 0), (0, -1.27), (1.27, -1.27), (0, -2.54), (-1.27, -1.27), (0, -1.27)])], -3.81, -6.35, 270
+    else:
+        art, vy, ry, ang = [line([(-0.762, 1.27), (0, 2.54)]), line([(0, 2.54), (0.762, 1.27)]), line([(0, 0), (0, 2.54)])], 3.556, -3.81, 90
+    rows = [f"\t(symbol {q(name)}", "\t\t(power)", "\t\t(pin_numbers (hide yes))", "\t\t(pin_names (offset 0) (hide yes))", "\t\t(exclude_from_sim no)", "\t\t(in_bom yes)", "\t\t(on_board yes)",
+            f'\t\t(property "Reference" "#PWR" (at 0 {ry} 0) {hide})',
+            f'\t\t(property "Value" {q(name)} (at 0 {vy} 0) (effects (font (size 1.27 1.27))))',
+            f'\t\t(property "Footprint" "" (at 0 0 0) {hide})', f'\t\t(property "Datasheet" "" (at 0 0 0) {hide})',
+            f'\t\t(property "Description" {q("Power symbol creates a global label with name " + name)} (at 0 0 0) {hide})',
+            f'\t\t(property "ki_keywords" "global power" (at 0 0 0) {hide})',
+            f"\t\t(symbol {q(name + '_0_1')}"] + art + ["\t\t)", f"\t\t(symbol {q(name + '_1_1')}",
+            f'\t\t\t(pin power_in line (at 0 0 {ang}) (length 0) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))',
+            "\t\t)", "\t\t(embedded_fonts no)", "\t)"]
+    return "\n".join(rows) + "\n"
 
 
 def _rot(dx: float, dy: float, rotation: int):
