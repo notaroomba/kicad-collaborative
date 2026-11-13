@@ -246,7 +246,10 @@ export function endDrag(ctx: SchCtx, commit: boolean) {
   if (d.moved || !d.byPointer) S.dragEndedAt = Date.now();
   const [dx, dy] = d.last, doc = ctx.doc;
   applyDrag(doc, d, 0, 0);                      // originals back first, so commit() records a true inverse
-  const done = () => { if (d.restoreMode) { S.dragMode = d.restoreMode; announceModes(ctx); } ctx.requestRender(); };
+  // the dangling-end cache was rebuilt with the items in flight: a cancel that drops or restores them leaves no commit
+  // behind to bump the generation, so bump it here (KiCad's revert recomputes the screen's dangling state) and drop
+  // the autostart cursor the in-flight ends gave
+  const done = () => { S.docGen++; S.autoCursor = null; if (d.restoreMode) { S.dragMode = d.restoreMode; announceModes(ctx); } ctx.requestRender(); };
   if (d.brk) { endBreak(ctx, d, commit); done(); return; }
   if (d.local) {                                // a paste / duplicate in flight: never committed yet
     if (!commit) { dropLocal(ctx, d); done(); return; }
