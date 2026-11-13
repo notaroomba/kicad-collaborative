@@ -3,6 +3,7 @@
 // It works on a copy of the parent dialog's staged field rows (never the document) and hands back the complete,
 // merged row list (DIALOG_SYMBOL_PROPERTIES::OnEditSpiceModel), so the parent's OK still commits one change and
 // collaboration / undo see an ordinary field edit.  window.KiCadSimModel.open(rows, ctx, done).
+import { trapTab } from "../tools/kicad-dialogs/shell";
 import * as S from "./sim-model-logic";
 import { KD, h, popupMenu } from "./dom";
 import type { NgspiceModelInfo } from "./sim-model-ngspice";
@@ -82,7 +83,7 @@ function browseModels(files: SimFile[], current: string): Promise<SimFile | null
     const cancel = h("button", { class: "btn", onclick: () => done(null) }, "Cancel"), ok = h("button", { class: "btn primary", id: "kd-sim-browse-ok", onclick: pick }, "Open");
     d.foot.append(h("span", { class: "spacer" }), cancel, ok);
     list.addEventListener("dblclick", pick);
-    d.ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Escape") { ev.preventDefault(); done(null); } else if (ev.key === "Enter") { ev.preventDefault(); pick(); } });
+    d.ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, d.ov); if (ev.key === "Escape") { ev.preventDefault(); done(null); } else if (ev.key === "Enter") { ev.preventDefault(); pick(); } });
     (d.dlg.querySelector(".kd-x") as HTMLElement).addEventListener("click", () => done(null));
     list.focus();
   });
@@ -399,7 +400,7 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   cancelBtn.addEventListener("click", () => finish(false)); okBtn.addEventListener("click", () => finish(true));
   (d.dlg.querySelector(".kd-x") as HTMLElement).addEventListener("click", () => finish(false));
   d.ov.addEventListener("keydown", (ev) => {
-    ev.stopPropagation();
+    ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, d.ov);
     if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
     else if (ev.key === "Enter" && !ro) { const t = ev.target as HTMLElement; if (t.tagName === "TEXTAREA" || t.tagName === "BUTTON" || t.closest("#kd-sim-params") || t === pathText || t === filter) return; ev.preventDefault(); finish(true); }
   });

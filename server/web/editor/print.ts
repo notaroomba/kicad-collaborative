@@ -10,6 +10,7 @@
 // The pages are the plot pages (fab/pageplot.ts for a board, the painter recorded for a sheet) written as SVG and
 // laid out in a hidden iframe, each with its own @page size, which the browser prints; Print Preview shows the same
 // pages over the dialog.
+import { trapTab } from "../tools/kicad-dialogs/shell";
 import type { KiCadFabApi } from "../fab/index";
 import type { PlotPage } from "../fab/plotter";
 import { store } from "./appstore";
@@ -201,7 +202,7 @@ function preview(fab: KiCadFabApi, pages: PlotPage[]): void {
   ov.append(dlg); document.body.append(ov);
   const shut = (): void => ov.remove();
   close.addEventListener("click", shut);
-  ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Escape") { ev.preventDefault(); shut(); } });
+  ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov); if (ev.key === "Escape") { ev.preventDefault(); shut(); } });
   const cs = getComputedStyle(document.documentElement), tok = (n: string, d: string): string => (cs.getPropertyValue(n) || "").trim() || d;
   frame.srcdoc = printHtml(fab, pages, "Print Preview").replace("<style>", `<style>html,body{background:${tok("--panel-2", tok("--panel", "gray"))}!important}body{padding:12px}.pg{width:100%!important;height:auto!important;box-sizing:border-box;background:#fff;margin:0 auto 12px;border:1px solid ${tok("--line", "gray")}}`);
   close.focus();

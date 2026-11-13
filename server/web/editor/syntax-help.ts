@@ -1,6 +1,7 @@
 // syntax-help — PCB_TEXT::ShowSyntaxHelp / SCH_TEXT::ShowSyntaxHelp: a modeless "Syntax Help" HTML_MESSAGE_BOX
 // (320 × 320 dialog units) holding KiCad's help table.  The "Syntax help" hyperlink of the text, textbox, table and
-// table-cell dialogs opens it (tooltip "Show syntax help window").
+// table-cell dialogs opens it (tooltip "Show syntax help window").  It is a child window of the dialog that opened
+// it: that dialog stays open (with the person's edits) beside it, and closing the dialog closes the help.
 import { PCB_TEXT_HELP, SCH_TEXT_HELP } from "./syntax-help-text";
 
 export const SYNTAX_HELP_TOOLTIP = "Show syntax help window";
@@ -11,7 +12,7 @@ export function syntaxHelpHtml(isPcb: boolean): string { return isPcb ? PCB_TEXT
 /** Open the modeless Syntax Help window. */
 export function syntaxHelp(isPcb: boolean): void {
   if (typeof document === "undefined" || typeof KDialogs === "undefined" || !KDialogs) return;
-  KDialogs.open({ title: "Syntax Help", width: 640, modeless: true, okLabel: "Close",
+  KDialogs.open({ title: "Syntax Help", width: 640, modeless: true, child: true, okLabel: "Close",
     build(body: HTMLElement) {
       const div = document.createElement("div");
       div.className = "kd-help kd-syntax-help"; div.setAttribute("data-k", "syntax-help-body");

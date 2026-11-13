@@ -1,5 +1,6 @@
 // dialogs/dom.ts — small typed DOM helpers shared by the dialogs, and the typed face of kicad-dialogs.js's
 // shell and widgets (window.KDialogs: open, notebook, treebook, grid, staticBox).
+import { trapTab } from "../tools/kicad-dialogs/shell";
 import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 import { fitMenu } from "../menufit";
 
@@ -12,6 +13,8 @@ export interface DlgSpec {
   geomKey?: string;
   /** A dialog without wxRESIZE_BORDER: no resize grip, and only its position is remembered. */
   fixedSize?: boolean;
+  /** A child window of the open dialog (HTML_MESSAGE_BOX): it opens over the dialog instead of replacing it and closes with it. */
+  child?: boolean;
 }
 export interface DlgApi { body: HTMLElement; dlg: HTMLElement; foot: HTMLElement; close(): void; finish(apply: boolean): void; refocus(key?: string): void }
 export interface NotebookTab { label: string; build(page: HTMLElement): void }
@@ -84,7 +87,7 @@ export function promptText(title: string, label: string, initial = "", validate?
     const ok = h("button", { class: "btn primary", onclick: () => done(input.value) }, "OK"), cancel = h("button", { class: "btn", onclick: () => done(null) }, "Cancel");
     const dlg = h("div", { class: "kd-dialog", style: "width:380px;min-width:0" }, h("div", { class: "kd-title" }, h("span", null, title)), h("div", { class: "kd-body" }, h("div", { class: "kv" }, h("label", null, label), input)), h("div", { class: "kd-foot" }, cancel, ok));
     const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
-    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(input.value); } else if (ev.key === "Escape") { ev.preventDefault(); done(null); } });
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov); if (ev.key === "Enter") { ev.preventDefault(); done(input.value); } else if (ev.key === "Escape") { ev.preventDefault(); done(null); } });
     document.body.append(ov); input.focus(); input.select();
   });
 }
@@ -103,7 +106,7 @@ export function promptFields(title: string, fields: { key: string; label: string
     inputs.forEach((i, k) => body.append(h("label", { class: "pd-lbl", style: k ? "display:block;margin-top:8px" : "display:block" }, i.f.label), i.el));
     const dlg = h("div", { class: "kd-dialog", style: `width:${width}px;min-width:0` }, h("div", { class: "kd-title" }, h("span", null, title)), body, h("div", { class: "kd-foot" }, cancel, ok));
     const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
-    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter" && !(ev.target instanceof HTMLTextAreaElement)) { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov); if (ev.key === "Enter" && !(ev.target instanceof HTMLTextAreaElement)) { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
     document.body.append(ov); if (inputs[0]) inputs[0].el.focus();
   });
 }
@@ -113,7 +116,7 @@ export function confirmBox(title: string, message: string, okLabel = "OK"): Prom
     const ok = h("button", { class: "btn primary", onclick: () => done(true) }, okLabel), cancel = h("button", { class: "btn", onclick: () => done(false) }, "Cancel");
     const dlg = h("div", { class: "kd-dialog", style: "width:420px;min-width:0" }, h("div", { class: "kd-title" }, h("span", null, title)), h("div", { class: "kd-body" }, h("p", { style: "margin:4px 0;white-space:pre-wrap" }, message)), h("div", { class: "kd-foot" }, cancel, ok));
     const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
-    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov); if (ev.key === "Enter") { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
     document.body.append(ov); ok.focus();
   });
 }

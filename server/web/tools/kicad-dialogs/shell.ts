@@ -1,23 +1,60 @@
 // kicad-dialogs/shell.ts — the dialog shell (DOM): one modal (or modeless) dialog at a time, with a title
-// bar that drags it, OK / Cancel (or the dialog's own button row) and the desktop keyboard contract.
+// bar that drags it, OK / Cancel (or the dialog's own button row) and the desktop keyboard contract.  A dialog may
+// open a child window over itself (spec.child: the modeless HTML_MESSAGE_BOX of "Syntax help"), which closes with it.
 import type { DlgApi, DlgSpec } from "../../dialogs/dom";
 import { esc } from "./sexpr";
 import { ensureCss } from "./widgets";
 
 interface OpenDialog { ov: HTMLElement; dlg: HTMLElement; body: HTMLElement; spec: DlgSpec; finish(apply: boolean): void }
 
-let current: OpenDialog | null = null;
-export const isOpen = (): boolean => !!current;
+/** The open dialogs, the main one first and its child windows above it. */
+const stack: OpenDialog[] = [];
+const top = (): OpenDialog | null => (stack.length ? stack[stack.length - 1] : null);
+export const isOpen = (): boolean => stack.length > 0;
 export function el(tag: string, cls?: string, html?: string): HTMLElement { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; }
-export function close(): void { if (current) { current.ov.remove(); current = null; } }
+/** Close one dialog and the child windows it opened (a wxWindow's children go with it). */
+function closeEntry(d: OpenDialog): void { const i = stack.indexOf(d); if (i < 0) return; for (const x of stack.splice(i).reverse()) x.ov.remove(); }
+/** Close the dialog (and any child window over it). */
+export function close(): void { if (stack.length) closeEntry(stack[0]); }
+// ---------------------------------------------------------------- Tab stays in the dialog
+// DIALOG_SHIM is a modal wxDialog: Tab and Shift+Tab cycle through its own controls and never reach the frame.
+const FOCUSABLE = "input, k-select, textarea, button, select, a[href], [tabindex]";
+/** The controls Tab visits, in order: enabled, shown, not taken out of the tab order. */
+export function tabStops(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((e) => {
+    if ((e as HTMLInputElement).disabled || e.hasAttribute("disabled") || e.getAttribute("tabindex") === "-1" || e.closest("[inert], [hidden]")) return false;
+    if (e.parentElement && e.parentElement.closest("k-select")) return false;   // a k-select's own parts: the k-select is the stop
+    if (typeof e.getClientRects === "function" && !e.getClientRects().length) return false;   // display:none somewhere above
+    return true;
+  });
+}
+/** The control Tab (back = Shift+Tab) moves to from `from` when it would leave the dialog, else null (the browser's own step). */
+export function wrapTab(stops: HTMLElement[], from: Element | null, back: boolean): HTMLElement | null {
+  if (!stops.length) return null;
+  const i = from ? stops.indexOf(from as HTMLElement) : -1;
+  if (i < 0) return back ? stops[stops.length - 1] : stops[0];
+  if (!back && i === stops.length - 1) return stops[0];
+  if (back && i === 0) return stops[stops.length - 1];
+  return null;
+}
+/** Keep Tab inside `dlg`: call from the overlay's keydown. */
+export function trapTab(ev: KeyboardEvent, dlg: HTMLElement): void {
+  if (ev.key !== "Tab" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const stops = tabStops(dlg), a = document.activeElement;
+  const inner = a && a.closest ? a.closest("k-select") || a : a;
+  const to = wrapTab(stops, inner && dlg.contains(inner) ? inner : null, ev.shiftKey);
+  if (!to) { if (!stops.length) ev.preventDefault(); return; }
+  ev.preventDefault(); to.focus(); if (to instanceof HTMLInputElement && to.type === "text") to.select();
+}
 // Esc closes the open dialog wherever the keyboard focus is: a dialog that redraws its body (the Symbol Fields
 // Table) or is opened from a toolbar button can leave the focus outside the overlay, whose own key handler then
 // never hears the key.
 if (typeof document !== "undefined") document.addEventListener("keydown", (ev) => {
-  if (!current || ev.key !== "Escape" || ev.defaultPrevented) return;
+  const cur = top();
+  if (!cur || ev.key !== "Escape" || ev.defaultPrevented) return;
   const t = ev.target as Element | null;
   if (t && t.closest && t.closest(".kd-overlay, .kd-font-pop, #ctxMenu, [role='menu'], [data-popup-open]")) return;   // the overlay's own handler, a prompt on top, or an open menu
-  ev.preventDefault(); ev.stopPropagation(); current.finish(false);
+  ev.preventDefault(); ev.stopPropagation(); cur.finish(false);
 }, true);
 // ---------------------------------------------------------------- DIALOG_SHIM's window geometry
 // A dialog is centred on its parent the first time; after the person moves or resizes it, the next opening of the
@@ -73,9 +110,18 @@ function restoreGeometry(key: string, dlg: HTMLElement, resizable: boolean): voi
   if (c.height) { dlg.style.height = c.height + "px"; dlg.style.maxHeight = "none"; }
 }
 
+/** A child window opens next to the dialog that opened it (right of it, else left of it), not on top of its controls. */
+function besideParent(dlg: HTMLElement, parent: HTMLElement): void {
+  const p = parent.getBoundingClientRect(), r = dlg.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+  let left: number | null = null;
+  if (p.right + 8 + r.width <= vw) left = p.right + 8; else if (p.left - 8 - r.width >= 0) left = p.left - 8 - r.width;
+  if (left === null) left = Math.max(0, vw - r.width);   // no room beside it: the right edge of the window
+  dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = Math.round(left) + "px"; dlg.style.top = Math.round(Math.max(0, Math.min(p.top, vh - r.height))) + "px";
+}
 /** open({title, width, build(body, api), ok() -> false keeps it open, extra:[{label, fn}], readOnly}) */
 export function open(spec: DlgSpec): DlgApi {
-  close();
+  if (!spec.child || !stack.length) close();
+  else for (const d of stack.slice(1)) if (d.spec.title === spec.title) closeEntry(d);   // one window of a kind: a second "Syntax help" replaces the first
   const ov = el("div", "kd-overlay"), dlg = el("div", "kd-dialog"); if (spec.width) dlg.style.width = spec.width + "px";
   const tt = el("div", "kd-title", `<span>${esc(spec.title)}</span><span class="kd-x" title="Close (Esc)">×</span>`);
   const body = el("div", "kd-body"), foot = el("div", "kd-foot");
@@ -91,12 +137,14 @@ export function open(spec: DlgSpec): DlgApi {
   if (spec.cls) dlg.classList.add(...String(spec.cls).split(" ")); if (spec.modeless) ov.classList.add("kd-modeless");
   dlg.tabIndex = -1; dlg.style.outline = "none";   // a click on a label or a tree node keeps the keyboard (Esc/Enter) in the dialog
   dlg.append(tt, body, foot); ov.appendChild(dlg); document.body.appendChild(ov);
-  const finish = (apply: boolean): void => { if (apply) { const a = document.activeElement as HTMLElement | null; if (a && a !== document.body && dlg.contains(a)) a.blur(); if (spec.ok && spec.ok() === false) return; } close(); if (!apply && spec.cancel) spec.cancel(); };
+  if (spec.child) ov.style.zIndex = String(60 + stack.length * 2);   // above the dialog that opened it
+  const finish = (apply: boolean): void => { if (apply) { const a = document.activeElement as HTMLElement | null; if (a && a !== document.body && dlg.contains(a)) a.blur(); if (spec.ok && spec.ok() === false) return; } closeEntry(entry); if (!apply && spec.cancel) spec.cancel(); };
   cancel.addEventListener("click", () => finish(false)); ok.addEventListener("click", () => finish(true)); tt.querySelector(".kd-x")!.addEventListener("click", () => finish(false));
   // DIALOG_SHIM: a modal dialog ignores clicks on the frame behind it; only OK / Cancel / Esc / the close box end it
   ov.addEventListener("keydown", (ev) => {
     ev.stopPropagation();
-    if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+    if (ev.key === "Tab") trapTab(ev, dlg);
+    else if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
     else if (ev.key === "Enter" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && ev.target && (ev.target as HTMLElement).closest && (ev.target as HTMLElement).closest(".kd-grid")) { ev.preventDefault(); (ev.target as HTMLElement).blur(); }   // Enter in a grid cell commits the cell, as in a wxGrid
     // multi-line text: Enter is a new line, Shift/Ctrl+Enter is OK (SCINTILLA_TRICKS, DIALOG_SHIM)
     else if (ev.key === "Enter" && !(ev.target && (ev.target as HTMLElement).tagName === "TEXTAREA" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) && !(ev.target && (ev.target as HTMLElement).tagName === "BUTTON")) { ev.preventDefault(); if (spec.buttons) { if (defaultBtn && !defaultBtn.disabled) defaultBtn.click(); } else finish(true); }
@@ -119,10 +167,12 @@ export function open(spec: DlgSpec): DlgApi {
     dlg.style.maxWidth = "none"; dlg.style.maxHeight = "none";
   });
   grip.addEventListener("pointerup", () => { if (sizeFrom) saveGeometry(geomKey, dlg, true); sizeFrom = null; });
-  current = { ov, dlg, body, spec, finish };
+  const entry: OpenDialog = { ov, dlg, body, spec, finish };
+  stack.push(entry);
   ensureCss();
-  const api: DlgApi = { body, close, dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector<HTMLInputElement>(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
+  const api: DlgApi = { body, close: () => closeEntry(entry), dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector<HTMLInputElement>(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
   spec.build(body, api);
+  if (spec.child && stack.length > 1) besideParent(dlg, stack[stack.length - 2].dlg);
   restoreGeometry(geomKey, dlg, resizable);
   const first = body.querySelector<HTMLInputElement>("input:not([type=checkbox]), k-select, textarea, input"); if (first && !spec.readOnly && !first.disabled) { first.focus(); if (first.select && first.type === "text") first.select(); }
   if (!dlg.contains(document.activeElement)) dlg.focus();
