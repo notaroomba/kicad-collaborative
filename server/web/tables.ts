@@ -63,17 +63,11 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       ["Import", ["importNonKicadSchematic|Non-KiCad Schematic...", "importFPAssignments|Footprint Assignments...", "importGraphics|Graphics..."]],
       ["Export", ["drawSheetOnClipboard|Drawing to Clipboard", "exportNetlist|Netlist...", "exportSymbolsToLibrary|Symbols..."]],
       "-", ...COLLAB_FILE, "-", "compareSchematicWithFile", "compareSchematicWithHistory|Compare Schematic with History...", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "home"]],
+    // eeschema/menubar.cpp: the Edit menu ends at Attributes; the item commands live in the context menus and hotkeys
     ["&Edit", ["undo", "redo", "-", "cut", "copy", "copyAsText", "paste", "pasteSpecial", "doDelete", "-",
-      "selectAll", "unselectAll", ["&Select", ["selectConnection", "selectNode", "-", "nextNetItem", "previousNetItem"]], "-",
+      "selectAll", "unselectAll", "-",
       "find", "findAndReplace", "-", "deleteTool", "editTextAndGraphics", "changeSymbols", "editPageNumber",
-      ["Attributes", ["setExcludeFromSim", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromPosFiles", "setDNP"]],
-      "-", "duplicate", "repeatDrawItem", "increment", "decrement",
-      "-", "move", "drag", "rotateCCW", "rotateCW", "mirrorV", "mirrorH", "swap",
-      ["Align", ["alignLeft", "alignCenterX", "alignRight", "-", "alignTop", "alignCenterY", "alignBottom", "-", "alignToGrid"]], "module:moveExactly",
-      "-", "properties", "editReference", "editValue", "editFootprint", "autoplaceFields", "showDatasheet",
-      ["Symbol Unit", ["previousUnit", "nextUnit", "placeNextSymbolUnit", "-", "cycleBodyStyle"]],
-      ["Change To", ["toLabel", "toDLabel", "toHLabel", "toGLabel", "toText", "toTextBox"]],
-      "-", "breakWire", "slice", "unfoldBus", "syncSheetPins", "cleanupSheetPins"]],
+      ["Attributes", ["setExcludeFromSim", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromPosFiles", "setDNP"]]]],
     ["&View", [["Panels", ["showProperties", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel|Design Blocks", "showRemoteSymbolPanel|Remote Symbols", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance"]],
       "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw",
       "-", "navigateBack", "navigateUp", "navigateForward", "navigatePrevious", "navigateNext",
@@ -197,7 +191,14 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     // Clear Annotation is the Annotate dialog's button and Annotate Automatically the left toolbar's toggle: KiCad's Tools menu has neither
     "clearAnnotation", "toggleAnnotateAuto",
     // the arc tool's modes: the Arc toolbar group and EE_GRAPHIC_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
-    "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode"],
+    "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode",
+    // commands KiCad's menubar does not list: the selection's context menus and their hotkeys carry them
+    "duplicate", "repeatLast", "increment", "decrement", "selectConnection", "selectNode", "nextNetItem", "previousNetItem",
+    "rotateSelection", "rotateSelectionCW", "mirrorSelectionX", "mirrorSelectionY", "swap", "moveExactly",
+    "alignToGrid", "alignTop", "alignBottom", "alignLeft", "alignRight", "alignCenterX", "alignCenterY",
+    "editReference", "editValue", "editFootprint", "autoplace", "showDatasheet", "nextUnit", "previousUnit", "placeNextSymbolUnit", "cycleBodyStyle",
+    "toLabel", "toGLabel", "toHLabel", "toDLabel", "toText", "toTextBox", "breakWire", "slice", "unfoldBus", "syncSheetPins", "cleanupSheetPins",
+    "lock", "unlock", "toggleLock", "clearHighlight"],
   pcb: ["skip",   // Tab while moving individually: the move's own command
     // context menus only (board_editor_control.cpp ZONE_CONTEXT_MENU, the selection tool's menu, EDIT_TOOL's menu)
     "getAndPlace", "copyWithReference", "drawZoneCutout", "drawSimilarZone",

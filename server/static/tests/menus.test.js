@@ -99,7 +99,7 @@ function flatten(entries, trail, out) {
       const placed = new Set(); for (const [title, entries] of T.MENUS[ed]) for (const e of flatten(entries, [title], [])) placed.add(e.id);
       const covered = new Set(T.MODULE_DUPLICATES[ed]);
       for (const id of placed) covered.add(id.startsWith("module:") ? id.slice(7) : id);
-      for (const [kicad, own] of Object.entries(T.MODULE_ALIAS[ed])) { assert.ok(placed.has(kicad), `${ed}: alias ${kicad} is not in a menu`); covered.add(own); }
+      for (const [kicad, own] of Object.entries(T.MODULE_ALIAS[ed])) { assert.ok(placed.has(kicad) || T.MODULE_DUPLICATES[ed].includes(own), `${ed}: alias ${kicad} is not in a menu`); covered.add(own); }
       const seen = new Set(), loose = [];
       for (const a of Object.values(globalThis.CollabTools[ed].actions)) {
         if (covered.has(a.id)) continue;
