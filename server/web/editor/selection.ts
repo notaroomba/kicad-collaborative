@@ -166,6 +166,12 @@ export function pointInPoly(p: readonly number[], poly: readonly (readonly numbe
 export function drawBoxSel() { requestRepaint(); }
 
 // KiCad: dragging left-to-right selects what the box encloses, right-to-left what it touches; the lasso takes what it contains.
+/** PCB_SELECTION_TOOL::FilterCollectorForHierarchy: with a board group entered, items outside it are dropped (in place). */
+export function scopeToEnteredGroup(items: KItem[]): void {
+  const pcb = !isSch() && CollabTools.pcb; if (!pcb || !pcb.withinEnteredGroup || !E.kdoc) return;
+  let keep: Set<string>; try { keep = new Set(pcb.withinEnteredGroup(E.kdoc, items.map((it) => it.id))); } catch (e) { console.warn(e); return; }
+  for (let i = items.length - 1; i >= 0; i--) if (!keep.has(items[i].id)) items.splice(i, 1);
+}
 export function finishBoxSel(ev: { clientX: number; clientY: number }) {
   const b: BoxSel | null = E.boxSel; E.boxSel = null; requestRepaint(); if (!b || !E.kdoc) return;
   const moved = Math.hypot(ev.clientX - b.startClient[0], ev.clientY - b.startClient[1]);
@@ -187,6 +193,7 @@ export function finishBoxSel(ev: { clientX: number; clientY: number }) {
       if (touches && !inside && board && it.kind !== "footprint" && it.geom && it.geom.length) touches = KiCadCanvas.itemTouchesRect(it, x0, y0, x1, y1, E.hiddenLayers);
       if (enclose ? inside : touches) picked.push(it); }
   }
+  scopeToEnteredGroup(picked);
   const pcbSel = CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel;
   if (schM && schM.state && !b.add) schM.state.selEnds = null;
   if (!b.add) { E.selPins = []; E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too

@@ -65,6 +65,11 @@ export function enteredGroupIds(doc: BoardDoc | null | undefined): Set<string> |
   const g = enteredGroup(doc); if (!g || !doc) return null;
   const s = groupDeepMembers(doc, g); s.add(g); return s;
 }
+/** The ids PCB_GROUP::WithinScope keeps while a group is entered (its members to any depth, not the group itself). */
+export function withinEnteredGroup(doc: BoardDoc | null | undefined, ids: string[]): string[] {
+  const g = enteredGroup(doc); if (!g || !doc) return ids;
+  const scope = groupDeepMembers(doc, g); return ids.filter((id) => scope.has(id));
+}
 export const ANCHOR_COLOR = "#FF26E2";   // LAYER_ANCHOR (builtin_color_themes.h)
 /**
  * PCB_PAINTER::draw( PCB_GROUP ) on LAYER_ANCHOR: a group selected on its own (not through a selected parent), or

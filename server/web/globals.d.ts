@@ -198,6 +198,7 @@ interface ToolModule {
   toolCursorPoint?(): number[] | null;
   /** board groups: the entered group's members, entering one at a double-clicked item, leaving it */
   enteredGroupIds?(doc: KDoc): Set<string> | null;
+  withinEnteredGroup?(doc: KDoc, ids: string[]): string[];
   selectedTopGroup?(ctx: ToolCtx): string | null;
   enterGroupAt?(ctx: ToolCtx, id: string): boolean;
   leaveGroupOutside?(mm: [number, number], ctx: ToolCtx): boolean;

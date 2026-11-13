@@ -149,7 +149,7 @@ export type PcbState = {
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; netColorMode?: string; trackClearance?: number; padClearance?: boolean; showCourtyardConflicts?: boolean; enteredGroup?: string | null; hiddenSeverities?: Set<string> | null;
   arcMode?: number; arcEditMode?: number; angleSnap?: string; stickyUp?: boolean; startWithVia?: { from: string } | null;
-  forceHover?: boolean; dragFree?: boolean; downHandled?: unknown;
+  forceHover?: boolean; dragFree?: boolean; downHandled?: unknown; escCleared?: unknown;
 };
 
 /** A copper shape: a core (point, segment, polyline, turned rectangle or polygon) plus an outward offset r. */

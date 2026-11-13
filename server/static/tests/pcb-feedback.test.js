@@ -103,6 +103,15 @@ test("Enter Group: picking a member stays inside the entered group; its box and 
   P.state.enteredGroup = null;
 });
 
+test("an entered group scopes box selection and Select All (FilterCollectorForHierarchy: WithinScope)", () => {
+  const doc = K.parseDoc(GROUPED);
+  P.state.enteredGroup = null;
+  assert.deepEqual(P.withinEnteredGroup(doc, ["s1", "s2", "s3", "g1"]), ["s1", "s2", "s3", "g1"], "no group entered: unchanged");
+  P.state.enteredGroup = "g1";
+  assert.deepEqual(P.withinEnteredGroup(doc, ["s1", "s2", "s3", "g1", "g2"]), ["s1", "s2", "g2"], "entered: members to any depth, not the group itself nor s3");
+  P.state.enteredGroup = null;
+});
+
 test("outside an entered group items fade to the Outside Group opacity, selected ones do not", () => {
   const doc = K.parseDoc(GROUPED);
   const run = (opts) => { const c = recCtx(); c.canvas = { width: 400, height: 300 }; K.render(doc, c, { ppm: 20, zoom: 1, panX: 0, panY: 0, x0: -2, y0: -2, dpr: 1 }, Object.assign({ frame: false, netNames: false }, opts)); return c.ops.filter((o) => o.op === "stroke" && o.lw > 0.2); };

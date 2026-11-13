@@ -63,7 +63,7 @@ import { SELECTION_TYPES, boardLayerName, filterIds, idsOnLayer, inspectClearanc
 import { clusterRoots, conductors, connectedCopperIds, localRatsnest, netHighlightIds, netInspector, netItemIds, netTable, netlist, ratsnest } from "./netlist";
 import { netNode, netOf, netStyle } from "./nets";
 import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, thievingAllowed, THIEVING_FILE_VERSION, THIEVING_NEEDS_VERSION_MSG } from "./nodes";
-import { drawGroupFrames, enterGroup, enteredGroupIds, exitGroup, groupBox, selectedTopGroup } from "./group-edit";
+import { drawGroupFrames, enterGroup, enteredGroupIds, exitGroup, groupBox, selectedTopGroup, withinEnteredGroup } from "./group-edit";
 import { adjustColor, courtyardConflicts, clearanceOutlines, drawClearanceOutlines, drawOverlay, drawSnapIndicator, dynamicRatsnest, gridOriginColor, snapTypeOf } from "./overlay";
 import { genHiddenIds, selectedTuningPattern, editTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit } from "./tuning-edit";
 import { addCornerChanges, arcEditGeometry, arcEditMode, canAddCorner, canRemoveCorner, editPointNode, editPoints, removeCornerChanges, setArcEditMode } from "./point-editor";
@@ -207,6 +207,11 @@ export const pcb = {
     if (b && mm[0] >= b[0] && mm[0] <= b[2] && mm[1] >= b[1] && mm[1] <= b[3]) return false;
     return exitGroup(ctx, false);
   },
+  /**
+   * FilterCollectorForHierarchy's entered-group rule: with a group entered, only items within its scope (PCB_GROUP::
+   * WithinScope, members to any depth) may be picked by a box or Select All; with none entered the ids pass unchanged.
+   */
+  withinEnteredGroup(doc: BoardDoc, ids: string[]) { return withinEnteredGroup(doc, ids); },
   /** Esc with nothing selected leaves the entered group (PCB_SELECTION_TOOL::Main). */
   exitGroup(ctx?: PcbCtx) { return exitGroup(ctx || null, false); },
   brightenedIds() { return S.modTool === "delete" && S.hover && S.hover.del && S.hover.del.id ? [S.hover.del.id] : []; },
@@ -456,5 +461,5 @@ root.PcbTools = { useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad:
   sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch, circleOutside, ovalOutside, circleApprox, ovalApprox, splitCollinearOutlines,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,
-  adjustColor, courtyardConflicts, drawSnapIndicator, gridOriginColor, snapTypeOf, startLayerOf, groupBox, enteredGroupIds, drawGroupFrames, clearanceOutlines, drawClearanceOutlines, drawStatusNote, statusNoteDims,
+  adjustColor, courtyardConflicts, drawSnapIndicator, gridOriginColor, snapTypeOf, startLayerOf, groupBox, enteredGroupIds, withinEnteredGroup, drawGroupFrames, clearanceOutlines, drawClearanceOutlines, drawStatusNote, statusNoteDims,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

@@ -400,6 +400,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   // grid: GAL::DrawGrid.  The pitch is multiplied by the coarse tick (10) until grid marks are more than
   // grid.min_spacing (10 px; 20 for small crosses) apart; every 10th row / column of the drawn grid is major:
   // twice the dot size, line width or cross size.  Styles: "dots" (KiCad's default), "lines", "crosses".
+  // the background grid is the last, unbounded source of drawGridSources: the grid items' coverage masks it out
+  const gridClaims = isPcb && opts.subgrids !== false && opts.grid! > 0 ? gridItemList(doc).filter((g) => !(opts.selected && opts.selected.has(g.id!))) : [];
+  if (gridClaims.length) { ctx.save(); clipOutsideGrids(ctx, gridClaims, [vx0, vy0, vx1, vy1]); }
   if (opts.grid! > 0) {   // undefined > 0 is false: no grid
     const style = opts.gridStyle === "lines" || opts.gridStyle === "crosses" ? opts.gridStyle : "dots";
     const minSpacing = (opts.gridMinSpacing! > 0 ? opts.gridMinSpacing! : GRID_MIN_SPACING) * (style === "crosses" ? 2 : 1) / sCss;
@@ -438,6 +441,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       }
     }
   }
+  if (gridClaims.length) ctx.restore();
   // GAL::DrawGrid draws the axes before it looks at the grid's visibility: one grid line wide, through 0,0
   if (opts.gridAxes) {
     const px1 = Math.max(1, dpr) / s;
@@ -816,8 +820,11 @@ export function umbilicalLines(doc: Doc, selected: Iterable<string>): [Pt, Pt][]
     const i = k.indexOf("#field:");
     if (i < 0) {
       if (!fpEd) continue;
-      const it = doc.items.get(k); if (!it || it.kind !== "property" || it.x === undefined || it.y === undefined) continue;
-      out.push([[it.x, it.y], [0, 0]]); continue;
+      // any PCB_TEXT with a parent footprint (pcb_painter.cpp draw( PCB_TEXT ): fp_parent && IsSelected), fields and user texts
+      const it = doc.items.get(k); if (!it) continue;
+      if (it.kind === "property" && it.x !== undefined && it.y !== undefined) { out.push([[it.x, it.y], [0, 0]]); continue; }
+      if (it.kind === "gr_text") { const at = kid(it.node, "at"); if (at) out.push([[num(at[1]), num(at[2])], [0, 0]]); }
+      continue;
     }
     const it = doc.items.get(k.slice(0, i)); if (!it || it.kind !== "footprint" || it.x === undefined || it.y === undefined) continue;
     const name = k.slice(i + 7); const g = it.geom.find((q) => q.t === "text" && q.field === name && (q as TextGeom).textPos) as TextGeom | undefined;
@@ -858,12 +865,11 @@ export const SUBGRID_COLOR = "#C2C200", GRID_DIM_ALPHA = 0.4, GRID_EDGE_DARKEN =
  * Darkened( 0.75 ).  A selected grid is Brightened( 0.5 ).
  */
 function drawGridItems(ctx: Ctx2D, doc: Doc, opts: RenderOpts, s: number, dpr: number, sCss: number, vr: number[], bg: string): void {
-  const list: GridItemGeom[] = [];
-  for (const it of doc.items.values()) { if (it.kind !== "grid_item") continue; const g = gridItemGeom(it.node); if (g && g.pitch[0] > 0 && g.pitch[1] > 0) { g.id = it.id; list.push(g); } }
+  const list = gridItemList(doc);
   if (!list.length) return;
-  list.sort((a, b) => (gridTakesPrecedence(a, b) ? -1 : gridTakesPrecedence(b, a) ? 1 : 0));
+  const claims: GridItemGeom[] = [];
   const sel = opts.selected || null, isSel = (g: GridItemGeom) => !!sel && sel.has(g.id!);
-  const order = [...list.filter((g) => !isSel(g)).reverse(), ...list.filter(isSel).reverse()];
+  const order = [...list.filter((g) => !isSel(g)), ...list.filter(isSel)];   // precedence order: the first drawn wins, selected ones last
   const style = opts.gridStyle === "lines" || opts.gridStyle === "crosses" ? opts.gridStyle : "dots";
   const threshold = (opts.gridMinSpacing! > 0 ? opts.gridMinSpacing! : GRID_MIN_SPACING) * (style === "crosses" ? 2 : 1) / sCss;
   const px1 = Math.max(1, dpr) / s, base = opts.gridItemColor || SUBGRID_COLOR;
@@ -875,15 +881,14 @@ function drawGridItems(ctx: Ctx2D, doc: Doc, opts: RenderOpts, s: number, dpr: n
     let dx: number, dy: number;
     if (g.kind === "polar") { dx = autoSparsePitch(g.pitch[0], tick, threshold); dy = g.extent[0] > 0 ? autoSparsePitch(g.pitch[1], tick, threshold / g.extent[0]) : g.pitch[1]; }
     else { const mp = Math.min(g.pitch[0], g.pitch[1]), k = autoSparsePitch(mp, tick, threshold) / mp; dx = g.pitch[0] * k; dy = g.pitch[1] * k; }
-    ctx.save(); ctx.translate(g.origin[0], g.origin[1]); ctx.rotate(-g.orientation);
-    const coverage = () => {
-      ctx.beginPath();
-      if (g.kind === "xy") ctx.rect(-g.extent[0], -g.extent[1], 2 * g.extent[0], 2 * g.extent[1]);
-      else if (g.extent[0] > 0 && g.extent[1] >= 2 * Math.PI - 1e-6) ctx.arc(0, 0, g.extent[0], 0, 2 * Math.PI);
-      else if (g.extent[0] > 0 && g.extent[1] > 0) { const n = Math.max(16, Math.floor(g.extent[1] / (Math.PI / 16))); ctx.moveTo(0, 0); for (let i = 0; i <= n; i++) { const a = g.extent[1] * i / n; ctx.lineTo(g.extent[0] * Math.cos(a), g.extent[0] * Math.sin(a)); } ctx.closePath(); }
-    };
-    // clear the coverage (the grids under it stop there); a selected grid only washes it
-    ctx.globalAlpha = hi ? GRID_DIM_ALPHA : 1; ctx.fillStyle = bg; coverage(); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.save();
+    if (!hi) clipOutsideGrids(ctx, claims, vr);
+    ctx.translate(g.origin[0], g.origin[1]); ctx.rotate(-g.orientation);
+    const coverage = () => { ctx.beginPath(); gridCoverageSubpath(ctx, g, true); };
+    // drawGridSources' stencil: a grid draws only where no grid before it claimed the area (its outline too), and then
+    // claims its own coverage without painting it, so the axes and whatever lies under stay; a selected grid ignores
+    // the claims and washes its coverage with the background at GRID_DIM_ALPHA instead
+    if (hi) { ctx.globalAlpha = GRID_DIM_ALPHA; ctx.fillStyle = bg; coverage(); ctx.fill(); ctx.globalAlpha = 1; }
     ctx.strokeStyle = color; ctx.fillStyle = color;
     const dot = (x: number, y: number, mx: boolean, my: boolean) => { const w = mx ? 2 * px1 : px1, h = my ? 2 * px1 : px1; ctx.rect(x - w / 2, y - h / 2, w, h); };
     const cross = (x: number, y: number, mj: boolean, ang: number) => { const w = mj ? 2 * px1 : px1, len = 2 * w, c = Math.cos(ang) * len, sn = Math.sin(ang) * len; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x - c, y - sn); ctx.lineTo(x + c, y + sn); ctx.moveTo(x + sn, y - c); ctx.lineTo(x - sn, y + c); ctx.stroke(); };
@@ -921,8 +926,30 @@ function drawGridItems(ctx: Ctx2D, doc: Doc, opts: RenderOpts, s: number, dpr: n
     // the coverage outline, so a grid too sparse to draw still reads as an area
     ctx.strokeStyle = darkened(color, GRID_EDGE_DARKEN); ctx.lineWidth = px1; coverage(); ctx.stroke();
     ctx.restore();
+    if (!hi) claims.push(g);
   }
   ctx.restore();
+}
+/** A grid item's coverage (drawGridCoverageShape) added to the current path, in its own frame. */
+function gridCoverageSubpath(ctx: Ctx2D, g: GridItemGeom, inFrame = false): void {
+  if (!inFrame) { ctx.save(); ctx.translate(g.origin[0], g.origin[1]); ctx.rotate(-g.orientation); }
+  if (g.kind === "xy") ctx.rect(-g.extent[0], -g.extent[1], 2 * g.extent[0], 2 * g.extent[1]);
+  else if (g.extent[0] > 0 && g.extent[1] >= 2 * Math.PI - 1e-6) ctx.arc(0, 0, g.extent[0], 0, 2 * Math.PI);
+  else if (g.extent[0] > 0 && g.extent[1] > 0) { const n = Math.max(16, Math.floor(g.extent[1] / (Math.PI / 16))); ctx.moveTo(0, 0); for (let i = 0; i <= n; i++) { const a = g.extent[1] * i / n; ctx.lineTo(g.extent[0] * Math.cos(a), g.extent[0] * Math.sin(a)); } ctx.closePath(); }
+  if (!inFrame) ctx.restore();
+}
+/** The stencil test of drawGridSources on a 2D canvas: clip to outside each claimed coverage (the clips intersect). */
+function clipOutsideGrids(ctx: Ctx2D, claims: GridItemGeom[], vr: number[]): void {
+  if (!claims.length || typeof ctx.clip !== "function") return;
+  const m = Math.max(vr[2] - vr[0], vr[3] - vr[1]) + 1;
+  for (const c of claims) { ctx.beginPath(); ctx.rect(vr[0] - m, vr[1] - m, vr[2] - vr[0] + 2 * m, vr[3] - vr[1] + 2 * m); gridCoverageSubpath(ctx, c); ctx.clip("evenodd"); }
+}
+/** The board's grid items in precedence order (gridTakesPrecedence), with zero-pitch ones left out. */
+function gridItemList(doc: Doc): GridItemGeom[] {
+  const list: GridItemGeom[] = [];
+  for (const it of doc.items.values()) { if (it.kind !== "grid_item") continue; const g = gridItemGeom(it.node); if (g && g.pitch[0] > 0 && g.pitch[1] > 0) { g.id = it.id; list.push(g); } }
+  list.sort((a, b) => (gridTakesPrecedence(a, b) ? -1 : gridTakesPrecedence(b, a) ? 1 : 0));
+  return list;
 }
 
 /** LAYER_VIA_STITCHING (builtin_color_themes.h: 77, 204, 178). */

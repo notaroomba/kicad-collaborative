@@ -250,7 +250,26 @@ export function startFieldMove(mm: Mm): boolean {
   const pn = K && K._.fieldNode ? K._.fieldNode(it.node, sf.name) : null, at = pn && KiCadCanvas.kid(pn, "at"); if (!at) return false;
   const g = (it.geom as { t: string; field?: string; textPos?: number[] }[]).find((q) => q.t === "text" && q.field === sf.name && q.textPos);
   const pos = g && g.textPos ? [g.textPos[0], g.textPos[1]] : [mm[0], mm[1]];
-  E.fdrag = { id: it.id, name: sf.name, startMm: [mm[0], mm[1]], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], moved: false, sticky: true, origin: pos };
+  E.fdrag = { id: it.id, name: sf.name, startMm: [mm[0], mm[1]], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], origAt: at.slice(), moved: false, sticky: true, origin: pos };
+  return true;
+}
+
+/**
+ * R / Shift+R while a field follows the cursor (EDIT_TOOL::Rotate inside the move loop): the text turns about its own
+ * position in the document copy only, and the drop commits position and angle as the move's one undo step.
+ * Returns true when a field move was in flight.
+ */
+export function rotateFieldMove(ccw: boolean): boolean {
+  const fd = E.fdrag; if (!fd) return false;
+  const d = doc(), it = d && d.items.get(fd.id);
+  const K = window.KDialogs as (KDialogsApi & { _: { fieldNode?(node: SNode, name: string): SNode | null } }) | undefined;
+  const pn = it && K && K._.fieldNode ? K._.fieldNode(it.node, fd.name) : null, at = pn && KiCadCanvas.kid(pn, "at");
+  if (!d || !it || !at) return true;
+  const a = ((KiCadCanvas.num(at[3] === undefined ? 0 : at[3]) + (ccw ? 90 : -90)) % 360 + 360) % 360;
+  if (at.length > 3 || a !== 0) at[3] = a;
+  if (!fd.origAt) fd.origAt = [at[0], fd.orig[0], fd.orig[1]];
+  fd.moved = true; fd.rotated = true;
+  KiCadCanvas.replaceChange(d, it);
   return true;
 }
 
@@ -259,7 +278,7 @@ function revertFieldDrag(): void {
   const d = doc(), it = d && d.items.get(fd.id);
   const K = window.KDialogs as (KDialogsApi & { _: { fieldNode?(node: SNode, name: string): SNode | null } }) | undefined;
   const pn = it && K && K._.fieldNode ? K._.fieldNode(it.node, fd.name) : null, at = pn && KiCadCanvas.kid(pn, "at");
-  if (d && it && at && fd.moved) { at[1] = fd.orig[0]; at[2] = fd.orig[1]; KiCadCanvas.replaceChange(d, it); }
+  if (d && it && at && fd.moved) { if (fd.origAt) at.splice(0, at.length, ...fd.origAt); else { at[1] = fd.orig[0]; at[2] = fd.orig[1]; } KiCadCanvas.replaceChange(d, it); }
 }
 
 /**

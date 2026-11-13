@@ -6,7 +6,7 @@ import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./
 import { toolChanging } from "./gestures";
 import { sendOp } from "./net";
 import { cycleFollow } from "./peers";
-import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, selFilter } from "./selection";
+import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, scopeToEnteredGroup, selFilter } from "./selection";
 import { E } from "./state";
 import { api, toast } from "./util";
 import type { CommitOpts, ItemSummary, UndoEntry } from "./types";
@@ -274,7 +274,8 @@ export function selectAll() {
   // SCH_SELECTION_TOOL::SelectAll sets STARTPOINT | ENDPOINT on every line: no wire stays selected by one end
   const schSt = isSch() && CollabTools.sch ? (CollabTools.sch.state as unknown as { selEnds?: Map<string, number> | null }) : null;
   if (schSt) schSt.selEnds = null;
-  for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind, it)) E.selection.add(it.id);
+  const all: KItem[] = []; for (const it of E.kdoc.items.values()) if (it.bbox && filterAllows(it.kind, it)) all.push(it);
+  scopeToEnteredGroup(all); for (const it of all) E.selection.add(it.id);   // SelectAll runs FilterCollectorForHierarchy too
   E.selected = E.items.find((f: ItemSummary) => E.selection.has(f.id)) || null;
   drawSelection(); renderProps(); renderObjects(); setStatusBar({ message: `${E.selection.size} items selected` });
 }

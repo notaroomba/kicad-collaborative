@@ -25,7 +25,7 @@ import { closeThread, placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
-import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
+import { cancelInteraction, clearAllSelection, rotateFieldMove, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -47,7 +47,7 @@ type SchDrag = { moved?: boolean; last: number[]; kind?: string };
 import { installLibrary } from "./library";
 import { importFootprintFiles, installFpEditHandlers } from "./fpedit";
 import { importSymbolLibraries } from "../symedit/dialogs";
-import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
+import { comboOf, keyHooks, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
 import { installTableCells } from "./tablecells";   // last: its imports must not reorder the modules above
 import { initFonts } from "./fonts";
@@ -194,10 +194,12 @@ stage.addEventListener("pointerdown", (ev) => {
     const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
     if (f) {
       const wasField = !!(E.selField && E.selField.id === f.item.id && E.selField.name === f.name);   // DRAG_SELECTED: only a selected field drags
-      clearSelection(); E.selField = { id: f.item.id, name: f.name }; drawSelection(); renderProps(); renderObjects(); requestRender();
+      clearSelection(); E.selField = { id: f.item.id, name: f.name };
+      const pst = !isSch() && CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev;   // one item per click: the board module does not pick what lies under the field
+      drawSelection(); renderProps(); renderObjects(); requestRender();
       const pn = fieldOf(f.item, f.name), at = pn && KiCadCanvas.kid(pn, "at");
       if (!wasField) { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); }
-      else if (at && !E.viewOnly && E.ws && E.ws.readyState === 1) { E.fdrag = { id: f.item.id, name: f.name, startMm: [x, y], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], moved: false }; stage.setPointerCapture(ev.pointerId); }
+      else if (at && !E.viewOnly && E.ws && E.ws.readyState === 1) { E.fdrag = { id: f.item.id, name: f.name, startMm: [x, y], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], origAt: at.slice(), moved: false }; stage.setPointerCapture(ev.pointerId); }
       ev.preventDefault(); return;
     }
   }
@@ -329,10 +331,10 @@ function commitFieldDrag(): void {
   const fd = E.fdrag; E.fdrag = null; if (!fd) return;
   const it = E.kdoc && E.kdoc.items.get(fd.id), pn = it && fieldOf(it, fd.name), at = pn && KiCadCanvas.kid(pn, "at");
   if (fd.moved && at) {
-    const nx = at[1], ny = at[2];
-    at[1] = fd.orig[0]; at[2] = fd.orig[1]; KiCadCanvas.replaceChange(E.kdoc, it);
-    if (nx !== fd.orig[0] || ny !== fd.orig[1]) {
-      const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2!, "at")!; a2[1] = nx; a2[2] = ny;
+    const now = at.slice(), orig = fd.origAt || [at[0], fd.orig[0], fd.orig[1], ...at.slice(3)];
+    at.splice(0, at.length, ...orig); KiCadCanvas.replaceChange(E.kdoc, it);
+    if (JSON.stringify(now) !== JSON.stringify(orig)) {
+      const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2!, "at")!; a2.splice(0, a2.length, ...now);
       commitChanges([KiCadCanvas.replaceChange(E.kdoc, Object.assign({}, it, { node, geom: [], bbox: null }))], "move " + fd.name.toLowerCase());
     }
     requestRender();
@@ -519,6 +521,16 @@ function promotePin(ev: KeyboardEvent): void {
   if (combo === "M" || combo === "G") { drawSelection(); renderProps(); return; }
   setTimeout(() => { if (E.selected && E.selected.id === pin.id && !E.selection.size && !E.selPins.length) { E.selected = null; E.selPins = [pin]; renderProps(); requestRender(); } }, 0);
 }
+// A footprint field following the cursor (Move): R / Shift+R turn it inside the move (one commit at the drop, as
+// EDIT_TOOL::Rotate in the move loop); other edits wait for the drop so no half-moved state is ever committed.  Window
+// capture, ahead of the board module's own key handlers; Esc goes on to cancelInteraction.
+keyHooks.unshift((ev) => {   // capture phase (hotkeys.ts preemptKey), ahead of the board module's own key handlers
+  if (!E.fdrag || isSch() || ev.key === "Escape") return false;   // Esc goes on to cancelInteraction
+  const c = comboOf(ev);
+  if (c === "R" || c === "Shift+R") { ev.preventDefault(); rotateFieldMove(c === "R"); requestRender(); return true; }
+  if (/^(F[1-9]|F1[0-2]|Home|Shift|Control|Alt|Meta| )$/.test(ev.key)) return false;
+  ev.preventDefault(); return true;
+});
 document.addEventListener("keydown", (ev) => {
   if (state.view !== "editor" || typingTarget(ev)) return;              // a field, a dialog or an open menu owns the keyboard
   // A dialog or menu of the project UI (Share…) is open over the editor: it owns the keyboard.
@@ -532,7 +544,7 @@ document.addEventListener("keydown", (ev) => {
     if (E.tool !== "select") { setTool("select"); return; }
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
     if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField && !E.selPins.length) CollabTools.sch.exitGroup();
-    if (!isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup && !selectionIds().length) CollabTools.pcb.exitGroup(toolCtx());
+    if (!isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup && !selectionIds().length && !E.selField && !(CollabTools.pcb.state && (CollabTools.pcb.state.padSel || (CollabTools.pcb.state as { escCleared?: unknown }).escCleared === ev))) CollabTools.pcb.exitGroup(toolCtx());
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   promotePin(ev);

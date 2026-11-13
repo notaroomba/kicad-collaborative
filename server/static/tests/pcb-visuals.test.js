@@ -16,7 +16,7 @@ function recCtx(w, h) {
   Object.defineProperty(ctx, "fillStyle", { set: (v) => { fill = v; }, get: () => fill });
   Object.defineProperty(ctx, "globalAlpha", { set: (v) => { alpha = +(+v).toFixed(3); }, get: () => alpha });
   Object.defineProperty(ctx, "lineWidth", { set: (v) => { lw = v; }, get: () => lw });
-  for (const n of ["stroke", "fill", "strokeRect", "fillRect", "fillText", "drawImage"]) ctx[n] = (...args) => ops.push({ op: n, stroke, fill, alpha, lw, args });
+  for (const n of ["stroke", "fill", "strokeRect", "fillRect", "fillText", "drawImage", "clip"]) ctx[n] = (...args) => ops.push({ op: n, stroke, fill, alpha, lw, args });
   ctx.ops = ops; return ctx;
 }
 const HEAD = '(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (37 "F.SilkS" user) (44 "Edge.Cuts" user)) (net 0 "") (net 1 "A") ';
@@ -131,6 +131,13 @@ test("Footprint Editor: a selected field's umbilical runs to the origin", () => 
   assert.deepEqual(K.umbilicalLines(d, new Set(["r"])), [[[1, -2], [0, 0]]]);
 });
 
+test("Footprint Editor: a selected user text (fp_text user) draws its umbilical to the origin too", () => {
+  const d = K.parseDoc('(footprint "x" (version 20240108) (generator "t") (layer "F.Cu") (fp_text user "${REFERENCE}" (at 0.5 1.5 0) (layer "F.Fab") (uuid "t1") (effects (font (size 1 1) (thickness 0.15)))))');
+  if (!d.fpEditor) return;
+  const t = [...d.items.values()].find((it) => it.kind === "gr_text"); assert(t, "the user text is a gr_text item");
+  assert.deepEqual(K.umbilicalLines(d, new Set([t.id])), [[[0.5, 1.5], [0, 0]]]);
+});
+
 test("via stitching generator: its outline and the inward hairline ticks every 2 mm, 0.5 mm long", () => {
   const node = K.parse('(generated (uuid "g") (type via_stitch) (name "") (pitch 2) (outline (pts (xy 0 0) (xy 10 0) (xy 10 6) (xy 0 6))) (members))');
   const pts = K.viaStitchOutline(node); assert.deepEqual(pts, [[0, 0], [10, 0], [10, 6], [0, 6]]);
@@ -161,7 +168,13 @@ test("grid items (PCB_GRID_ITEM): geometry, precedence, sparse pitch, drawn over
   const ops = draw({ grid: 0.5 }, d);
   assert(ops.some((o) => o.op === "fill" && o.fill === "#C2C200"), "the lattice in LAYER_SUBGRIDS");
   assert(ops.some((o) => o.op === "stroke" && o.stroke === K.darkened("#C2C200", 0.75)), "the coverage outline");
-  assert(ops.some((o) => o.op === "fill" && o.fill === K.PCB_BG && o.alpha === 1), "the coverage cleared with the background");
+  // drawGridSources claims the coverage in the stencil only: nothing is painted over it (the axes stay), and the
+  // background grid is clipped to outside it
+  assert(!ops.some((o) => o.op === "fill" && o.fill === K.PCB_BG), "the coverage is not painted with the background");
+  const firstClip = ops.findIndex((o) => o.op === "clip"), gridDots = ops.findIndex((o) => o.op === "fill" && o.fill === "#848484");   // PCB_GRID
+  assert(firstClip >= 0 && ops[firstClip].args[0] === "evenodd" && gridDots > firstClip, "the background grid is drawn outside the grid item's coverage");
+  const axes = draw({ grid: 0.5, gridAxes: true }, d), axisIdx = axes.findIndex((o) => o.op === "stroke" && o.stroke === "#C2C2C2");   // PCB_GRID_AXES
+  assert(axisIdx >= 0 && !axes.slice(axisIdx).some((o) => o.op === "fill" && o.fill === K.PCB_BG), "the axes are not covered afterwards");
   assert(!draw({ grid: 0.5, subgrids: false }, d).some((o) => o.fill === "#C2C200"), "Appearance ▸ Grids off");
   const lit = draw({ grid: 0.5, selected: new Set(["g1"]) }, d);
   assert(lit.some((o) => o.op === "fill" && o.fill === K.brightened("#C2C200", 0.5)), "a selected grid brightened");

@@ -158,7 +158,7 @@ export function onCaptureKey(ev: KeyboardEvent) {
   }
   if (k === "Escape") {
     if (cancelInFlight()) { ev.stopImmediatePropagation(); ev.preventDefault(); }
-    else if (S.sel.size || S.padSel) { S.sel.clear(); S.padSel = null; if (lastCtx) lastCtx.requestRender(); }
+    else if (S.sel.size || S.padSel) { S.sel.clear(); S.padSel = null; S.escCleared = ev; if (lastCtx) lastCtx.requestRender(); }   // this Esc cleared a selection: it does not also leave an entered group
     return;
   }
   let remap = null;
