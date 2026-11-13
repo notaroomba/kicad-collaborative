@@ -72,7 +72,7 @@ parts show as their real model and lists under `without_model` the ones drawn as
 
 `build` swaps pins for a clean drawing, as a person does in the symbol editor: on the left and right of an IC (up to
 24 pins) supply straps go to the top, then pins whose parts rise to a supply, supply pins, signals, pins whose parts
-drop to ground, and ground straps at the bottom (`pins_swapped` in the result; `swap_pins=False` turns it off). A
+drop to ground, and ground straps at the bottom and a supply or ground pin drawn on the side of a sensor or logic part moves to the top or bottom edge, so all its supply pins share one rail with their capacitors (a regulator or charger keeps input and output on the sides) (`pins_swapped` in the result; `swap_pins=False` turns it off). A
 supply name KiCad's power library does not have (`VSYS`, `VDD_SPI`) gets a power symbol made for it instead of a
 label; `sch.supply("VMOTOR")` declares any name a supply. A part with one connected pin (an antenna) stands on the
 end of the chain that feeds it.

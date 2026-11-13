@@ -90,6 +90,22 @@ def arrange(sch, ref, spec, rank_of, net_of):
         sides[side_of[st[0]["number"]]].append((y if side_of[st[0]["number"]] in ("left", "right") else x, st))
     changed = False
     out = {}
+    # supply pins belong on top and ground pins underneath (KiCad's library convention): a sensor drawn with VDD or GND on
+    # its side gets them moved, so every supply pin shares one rail with the capacitors. A part that makes a supply
+    # (a regulator, a charger) keeps its input and output on the sides, where the power flows left to right.
+    if not any(q.get("type") == "power_out" for q in units[0]["pins"]):
+        for side in ("left", "right"):
+            for row in list(sides[side]):
+                q = row[1][0]
+                if q.get("type") != "power_in" or q.get("hidden"):
+                    continue
+                rk = rank_of(q["number"], q.get("type"))
+                to = "top" if rk == 2 else "bottom" if rk == 6 else None
+                if to:
+                    sides[side].remove(row)
+                    edge = [r[0] for r in sides[to]]
+                    sides[to].append(((max(edge) + 2.54) if edge and side == "right" else (min(edge) - 2.54) if edge else 0.0, row[1]))
+                    changed = True
     for side, rows in sides.items():
         rows.sort(key=lambda r: r[0])
         order = [st for _, st in rows]
