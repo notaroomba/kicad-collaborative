@@ -6,7 +6,8 @@
 // pcbItemDialog first and falls back to the generic property sheet for the kinds not handled here (pads
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
-import { box, checkField, form, grid, h, coordField, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { trackViaDialog } from "./track-via";
+import { box, checkField, errorMessage, fmtLenU, form, grid, h, coordField, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { E } from "../state";
 import { kicadActionAvailable, runKicadAction } from "../hotkeys";
 import { dimensionDialog } from "./dimension";
@@ -67,13 +68,21 @@ function netField(doc: KDoc, node: SNode, ro: boolean): Field<string> {
   return selectField<string>(cur, [["", "<no net>"], ...withCurrent(names.map((n): [string, string] => [n, n]), cur)], { ro, key: "net" });
 }
 
-type Apply = (node: SNode) => string | void;
+/** A failed TransferDataFromWindow: the message DisplayError shows, and the control that gets the focus after it. */
+export interface ApplyError { msg: string; focus?: { input: HTMLElement } | HTMLElement | null }
+type Apply = (node: SNode) => string | ApplyError | void;
+/** DisplayError over the dialog, then (as KiCad's SelectAll(); SetFocus()) the bad field focused with its text selected. */
+export function showApplyError(err: string | ApplyError): void {
+  const e: ApplyError = typeof err === "string" ? { msg: err } : err;
+  const target = e.focus ? ("input" in e.focus ? e.focus.input : e.focus) as HTMLElement : null;
+  errorMessage(e.msg, () => { if (target && document.contains(target)) { target.focus(); if (target instanceof HTMLInputElement && target.type === "text") target.select(); } });
+}
 /** The shell: a copy of the node, a builder that returns how to lay the controls into it, one change on OK. */
 /**
  * One item's properties dialog.  `create` makes it the dialog of a new item a drawing tool is about to place
  * (DRAWING_TOOL::PlaceText): OK hands the edited node over instead of committing, Cancel hands over null.
  */
-function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, build: (node: SNode, body: HTMLElement, ro: boolean) => Apply, create?: (node: SNode | null) => void): boolean {
+function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, build: (node: SNode, body: HTMLElement, ro: boolean) => Apply, create: ((node: SNode | null) => void) | undefined, undo: string): boolean {
   const doc = ctx.doc; if (!doc) return false;
   const staged = (K().cloneNode as (n: SNode) => SNode)(item.node);
   let apply: Apply = () => undefined;
@@ -84,60 +93,14 @@ function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, bui
     ok() {
       if (ctx.viewOnly) return true;
       const err = apply(staged);
-      if (typeof err === "string" && err) { ctx.toast(err, 4000); return false; }
+      if (err && (typeof err === "string" || err.msg)) { showApplyError(err); return false; }
       if (create) { create(staged); return true; }
       if (K().serialize(staged) === before) return true;
-      ctx.commit([K().replaceChange(doc, { ...item, node: staged, geom: [], bbox: null })], "properties");
+      ctx.commit([K().replaceChange(doc, { ...item, node: staged, geom: [], bbox: null })], undo);
       return true;
     } });
 }
 const xyRow = (lx: string, x: Field<number>, y: Field<number>): [string, HTMLElement, HTMLElement] => [lx, h("span", { class: "pd-xy" }, x.el, h("label", null, "Y:"), y.el), unitLabel()];
-
-// ---------------------------------------------------------------- Track & Via Properties
-function trackViaDialog(ctx: ToolCtx, item: KItem): boolean {
-  const doc = ctx.doc as KDoc;
-  return itemDialog(ctx, item, "Track & Via Properties", 520, (node, body, ro) => {
-    const net = netField(doc, node, ro), locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
-    body.append(box("Common", form([["Net:", net.el]], true), locked.el));
-    const common = (n: SNode): void => { if (net.get() !== PH().netNameOf(doc, n)) setNet(doc, n, net.get()); if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get()); };
-    if (item.kind === "via") {
-      const at = K().atOf(node), type = typeof node[1] === "string" ? String(node[1]) : "through";
-      const ls = kid(node, "layers"), top = doc.copper[0] || "F.Cu", bottom = doc.copper[doc.copper.length - 1] || "B.Cu";
-      const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" });
-      const size = lenField(nval(kid(node, "size")), { ro, key: "size" }), drill = lenField(nval(kid(node, "drill")), { ro, key: "drill" });
-      const vtype = selectField<string>(type, [["through", "Through"], ["micro", "Micro"], ["blind", "Blind"], ["buried", "Buried"]], { ro, key: "viaType", onChange: (v) => { const thru = v === "through"; l0.input.disabled = l1.input.disabled = ro || thru; if (thru) { l0.set(top); l1.set(bottom); } } });
-      const l0 = selectField<string>(sval(ls, 1) || top, withCurrent(copperLayers(doc), sval(ls, 1)), { ro: ro || type === "through", key: "startLayer" });
-      const l1 = selectField<string>(sval(ls, 2) || bottom, withCurrent(copperLayers(doc), sval(ls, 2)), { ro: ro || type === "through", key: "endLayer" });
-      body.append(box("Vias", form([xyRow("Position X:", x, y), ["Via diameter:", size.el, unitLabel()], ["Via hole:", drill.el, unitLabel()], ["Via type:", vtype.el], ["Start layer:", l0.el], ["End layer:", l1.el]], true)));
-      return (n) => {
-        if (!(size.get() > 0) || !(drill.get() > 0)) return "Via diameter and hole must be greater than zero.";
-        if (drill.get() >= size.get()) return "Via hole size must be smaller than via diameter";
-        if (vtype.get() !== "through" && l0.get() === l1.get()) return "Via start layer and end layer cannot be the same";
-        common(n);
-        K().setAt(n, +f6(x.get()), +f6(y.get()));
-        put(n, "size", `(size ${f6(size.get())})`, ["drill", "layers"]); put(n, "drill", `(drill ${f6(drill.get())})`, ["layers"]);
-        if (typeof n[1] === "string") n.splice(1, 1);
-        if (vtype.get() !== "through") n.splice(1, 0, vtype.get());
-        put(n, "layers", `(layers ${quote(l0.get())} ${quote(l1.get())})`, ["net", "uuid"]);
-        return undefined;
-      };
-    }
-    const arc = item.kind === "arc";
-    const s = kid(node, "start"), e = kid(node, "end");
-    const sx = coordField(nval(s, 1), "x", { ro: ro || arc, key: "sx" }), sy = coordField(nval(s, 2), "y", { ro: ro || arc, key: "sy" }), ex = coordField(nval(e, 1), "x", { ro: ro || arc, key: "ex" }), ey = coordField(nval(e, 2), "y", { ro: ro || arc, key: "ey" });
-    const width = lenField(nval(kid(node, "width")), { ro, key: "width" });
-    const cur = sval(kid(node, "layer")), layer = selectField<string>(cur, withCurrent(copperLayers(doc), cur), { ro, key: "layer" });
-    body.append(box("Tracks", form([xyRow("Start X:", sx, sy), xyRow("End X:", ex, ey), ["Track width:", width.el, unitLabel()], ["Layer:", layer.el]], true)));
-    return (n) => {
-      if (!(width.get() > 0)) return "Track width must be greater than zero.";
-      common(n);
-      if (!arc) { put(n, "start", `(start ${f6(sx.get())} ${f6(sy.get())})`); put(n, "end", `(end ${f6(ex.get())} ${f6(ey.get())})`); }
-      put(n, "width", `(width ${f6(width.get())})`, ["layer"]);
-      if (layer.get() !== cur) put(n, "layer", `(layer ${quote(layer.get())})`, ["net", "uuid"]);
-      return undefined;
-    };
-  });
-}
 
 // ---------------------------------------------------------------- Copper Zone Properties
 function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
@@ -175,8 +138,8 @@ function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
     return (n) => {
       const on = layerChecks.filter((l) => l.f.get()).map((l) => l.name);
       if (!on.length) return "No layer selected.";
-      if (minW.get() < 0.001) return "Minimum width must be at least 0.001 mm.";
-      if ((conn.get() === "thermal" || conn.get() === "thru_hole_only") && spoke.get() < minW.get()) return "Thermal spoke width cannot be smaller than the minimum width.";
+      if (minW.get() < 0.001) return { msg: `Minimum width must be at least ${fmtLenU(0.001)}.`, focus: minW };
+      if ((conn.get() === "thermal" || conn.get() === "thru_hole_only") && spoke.get() < minW.get()) return { msg: "Thermal spoke width cannot be smaller than the minimum width.", focus: spoke };
       if (net.get() !== PH().netNameOf(doc, n)) setNet(doc, n, net.get());
       if (on.join(" ") !== Array.from(cur).join(" ")) {
         put(n, "layer", null); put(n, "layers", null);
@@ -202,7 +165,7 @@ function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
       if (im === 2) put(f, "island_area_min", `(island_area_min ${f6(area.get())})`, ["hatch_thickness"]); else put(f, "island_area_min", null);
       return undefined;
     };
-  }, create);
+  }, create, "Edit Zone Properties");
 }
 
 /** The layers a zone names, its wildcards ("*.Cu", "F&B.Cu", "*.Mask" …) spelled out over the board's layers. */
@@ -307,7 +270,7 @@ function ruleAreaDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null)
       void radios;
       return undefined;
     };
-  }, create);
+  }, create, "Edit Zone Properties");
 }
 
 // ---------------------------------------------------------------- Non Copper Zone Properties (DIALOG_NONCOPPER_ZONES_EDITOR)
@@ -337,7 +300,7 @@ function nonCopperZoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | 
           ["Smoothing effort:", effort.el], ["Smoothing amount:", amount.el]])))));
     return (n) => {
       const err = layers.apply(n); if (err) return err;
-      if (minW.get() < 0.001) return "Minimum width must be at least 0.001 mm.";
+      if (minW.get() < 0.001) return { msg: `Minimum width must be at least ${fmtLenU(0.001)}.`, focus: minW };
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       out.apply(n);
       put(n, "min_thickness", `(min_thickness ${f6(minW.get())})`, ["filled_areas_thickness", "fill", "polygon"]);
@@ -351,7 +314,7 @@ function nonCopperZoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | 
       } else if (hatchMode) { put(f, "mode", null); }
       return undefined;
     };
-  }, create);
+  }, create, "Edit Zone Properties");
 }
 /** InvokeCopperZonesEditor / InvokeRuleAreaEditor / InvokeNonCopperZonesEditor on the template of a zone about to be drawn. */
 export function newZoneDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean {
@@ -391,7 +354,7 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
         form([["Layer:", layer.el], knockout.el, ["Font:", face.el], h("span", { class: "pd-inline" }, bold.el, italic.el, mirror.el), ["Horizontal:", hj.el], ["Vertical:", vj.el]], true),
         form([["Width:", w.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Thickness:", th.el, unitLabel()], ["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")]])));
     return (n) => {
-      if (!(w.get() > 0) || !(ht.get() > 0)) return "Text width and height must be greater than zero.";
+      if (!(w.get() > 0) || !(ht.get() > 0)) return { msg: "Text width and height must be greater than zero.", focus: !(w.get() > 0) ? w : ht };
       const t = text.value.replace(/\r/g, "");   // new lines stay new lines: the writer escapes them as "\\n"
       if (t !== shownText) { const stored = xref.toKiids(t); if (stored !== sval(n)) n[1] = stored; }
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
@@ -408,7 +371,7 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
       put(e, "justify", j.length ? `(justify ${j.join(" ")})` : null, ["hide", "href"]);
       return undefined;
     };
-  }, create);
+  }, create, "Edit Text Properties");
 }
 /** DIALOG_TEXT_PROPERTIES on a new text (DRAWING_TOOL::PlaceText): done gets the edited node, or null on Cancel. */
 export function newTextDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean {
@@ -449,10 +412,10 @@ function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
     body.append(form(rows, true), h("div", { class: "pd-row", style: "margin:8px 0" }, locked.el),
       form([["Line width:", width.el, unitLabel()], ["Line style:", style.el], ...(closed ? [["Fill:", fill.el] as [string, HTMLElement]] : []), ["Layer:", layer.el]], true));
     return (n) => {
-      if (width.get() < 0) return "Line width may not be negative.";
-      if (!closed && !(width.get() > 0)) return "Line width must be greater than zero.";
+      if (width.get() < 0) return { msg: "Line width may not be negative.", focus: width };
+      if (!closed && !(width.get() > 0)) return { msg: "Line width must be greater than zero.", focus: width };
       for (const p of pts) if (p && kind !== "gr_arc") put(n, p.key, `(${p.key} ${f6(p.x.get())} ${f6(p.y.get())})`);
-      if (radius && pts[0]) { if (!(radius.get() > 0)) return "Radius must be greater than zero."; put(n, "end", `(end ${f6(pts[0].x.get() + radius.get())} ${f6(pts[0].y.get())})`); }
+      if (radius && pts[0]) { if (!(radius.get() > 0)) return { msg: "Radius must be greater than zero.", focus: radius }; put(n, "end", `(end ${f6(pts[0].x.get() + radius.get())} ${f6(pts[0].y.get())})`); }
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       const s = kid(n, "stroke");
       if (s) { put(s, "width", `(width ${f6(width.get())})`, ["type"]); if (style.get() !== (sval(kid(s, "type")) || "default")) put(s, "type", `(type ${style.get()})`); }
@@ -461,7 +424,7 @@ function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
       if (layer.get() !== ly) put(n, "layer", `(layer ${quote(layer.get())})`, ["net", "uuid", "tstamp"]);
       return undefined;
     };
-  });
+  }, undefined, "Edit Shape Properties");
 }
 
 // ---------------------------------------------------------------- Footprint Properties
@@ -564,7 +527,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
       if (zone.get() !== (zc ? String(zc[1]) : "")) put(n, "zone_connect", zone.get() === "" ? null : `(zone_connect ${zone.get()})`, AFTER.slice(4));
       return undefined;
     };
-  });
+  }, undefined, "Edit Footprint Properties");
 }
 
 /** The KiCad dialog for a board item; false when this module has none for it (the caller falls back). */
@@ -572,8 +535,8 @@ export function pcbItemDialog(ctx: ToolCtx, item: KItem): boolean {
   if (!ctx.doc || ctx.doc.type !== "pcb" || !item) return false;
   if (typeof KDialogs === "undefined" || !KDialogs) return false;
   switch (item.kind) {
-    case "segment": case "arc": return item.docType === "pcb" && !!kid(item.node, "width") ? trackViaDialog(ctx, item) : false;
-    case "via": return trackViaDialog(ctx, item);
+    case "segment": case "arc": return item.docType === "pcb" && !!kid(item.node, "width") ? trackViaDialog(ctx, [item]) : false;
+    case "via": return trackViaDialog(ctx, [item]);
     case "zone": return kid(item.node, "keepout") ? ruleAreaDialog(ctx, item) : Array.from(zoneLayerSet(ctx.doc, item.node)).some((l) => /\.Cu$/.test(l)) ? zoneDialog(ctx, item) : nonCopperZoneDialog(ctx, item);
     case "gr_text": return textDialog(ctx, item);
     case "gr_text_box": return textBoxDialog(ctx, item);

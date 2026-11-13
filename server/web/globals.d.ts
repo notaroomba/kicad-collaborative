@@ -277,6 +277,8 @@ interface KDialogsApi {
   TITLES: Record<string, string>;
   _: Record<string, unknown>;
   schProperties?(): boolean;
+  /** web/editor/pcbdialogs: Track & Via Properties over a selection of tracks and vias only. */
+  pcbSelectionDialog?(ctx: ToolCtx, items: KItem[]): boolean;
 }
 
 declare const KiCadCanvas: KiCadCanvasApi;

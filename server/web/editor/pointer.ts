@@ -29,6 +29,11 @@ export function openSelectionProperties() {
   // the board module keeps a Set of ids (tracks, vias, graphics, zones), the schematic module one id
   const first = (s: unknown): string | null => (s && typeof s === "object" && typeof (s as Iterable<string>)[Symbol.iterator] === "function" ? (s as Set<string>).values().next().value : s as string | null) || null;
   const id = E.selected ? E.selected.id : (first(modSel) || first(E.selection));
+  if (!isSch() && KDialogs!.pcbSelectionDialog) {   // EDIT_TOOL::Properties: only tracks and vias selected opens Track & Via Properties over all of them
+    const ids = new Set<string>([...(E.selected ? [E.selected.id] : []), ...((modSel && typeof modSel === "object" ? Array.from(modSel as Set<string>) : [])), ...(E.selection ? Array.from(E.selection as Set<string>) : [])]);
+    const items = Array.from(ids).map((i) => E.kdoc!.items.get(i)).filter((x): x is KItem => !!x);
+    if (items.length > 1 && KDialogs!.pcbSelectionDialog(ctx, items)) return true;
+  }
   const it = id && E.kdoc.items.get(id);
   if (!it && !isSch() && CollabTools.pcb && CollabTools.pcb.requestSelection) {
     // EDIT_TOOL::Properties with nothing selected: the item under the cursor (a hover selection, not kept)

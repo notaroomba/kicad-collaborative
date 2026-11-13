@@ -7,6 +7,7 @@ import "./find";   // Edit > Find (DIALOG_FIND): registers E.hooks.boardFind / b
 import { openFootprintFields } from "./fp-fields";
 import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, openNetInspector, prevMarker } from "./inspect";
 import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";
+import { tracksOnly, trackViaDialog } from "./track-via";
 import { newTextBoxDialog } from "./textbox";
 import { newTableDialog } from "./table";
 import { createArrayDialog } from "./array";
@@ -31,6 +32,7 @@ export function installPcbDialogs(): void {
   if (installed || typeof CollabTools === "undefined" || !CollabTools.pcb) return;
   installed = true;
   if (typeof KDialogs !== "undefined" && KDialogs) (KDialogs as KDialogsApi & { pcbItemDialog?: typeof pcbItemDialog }).pcbItemDialog = pcbItemDialog;   // KDialogs.openItem asks it first
+  if (typeof KDialogs !== "undefined" && KDialogs) KDialogs.pcbSelectionDialog = (ctx, items) => tracksOnly(items) && trackViaDialog(ctx, items);
   (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;   // DIALOG_PAD_PROPERTIES in place of the module's short form
   Object.assign(CollabTools.pcb as object, { drcReport, projectNetlist });   // the DRC dialog's run and the project's netlist as data (plugins' kicad-cli)
   const nd = (CollabTools.pcb as ToolModule & { setNewItemDialogs?(d: Record<string, unknown>): void }).setNewItemDialogs;

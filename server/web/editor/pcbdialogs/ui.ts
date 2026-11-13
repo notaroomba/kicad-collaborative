@@ -2,6 +2,7 @@
 // (static/kicad-dialogs.js): a notebook (wxNotebook), a paged tree (PAGED_DIALOG's wxTreebook), static
 // boxes, unit fields (UNIT_BINDER: a number in the editor's units followed by the unit name), editable
 // grids with KiCad's add / delete row buttons (WX_GRID), and a report list (WX_HTML_REPORT_PANEL).
+import { trapTab } from "../../tools/kicad-dialogs/shell";
 import { E } from "../state";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 import { fromDisplayAbsAxis, toDisplayAbsAxis } from "../userorigin";
@@ -117,6 +118,7 @@ const CSS = `
 .pd-fieldlist { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-2); padding: 6px 8px; background: var(--panel); max-height: 380px; overflow: auto; }
 .pd-report .ln.hd { font-weight: 600; }
 .pd-xy { display: inline-flex; gap: 6px; align-items: center; } .pd-xy input { width: 96px; } .pd-xy label { color: var(--ink); }
+.pd-dim { color: var(--ink-3, var(--ink-2)) !important; opacity: .7; }
 .pd-zone { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 0 16px; }
 textarea.pd-text { width: 100%; min-height: 260px; font-family: var(--mono); font-size: 12px; white-space: pre; }
 `;
@@ -189,7 +191,7 @@ export function messageBox(title: string, message: string, buttons: { label: str
   foot.append(...btns);
   dlg.append(h("div", { class: "kd-title" }, h("span", null, title)), body, foot); ov.append(dlg);
   ov.addEventListener("keydown", (ev) => {
-    ev.stopPropagation();
+    ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov);
     if (ev.key === "Escape") { ev.preventDefault(); done(escape === undefined ? 0 : escape); }
     else if (ev.key === "Enter" && !(ev.target instanceof HTMLButtonElement)) { ev.preventDefault(); done(buttons.length - 1); }
   });
@@ -213,7 +215,7 @@ export function textEntryBox(title: string, caption: string, value: string, mult
   cancel.addEventListener("click", () => done(false)); okb.addEventListener("click", () => done(true));
   dlg.append(h("div", { class: "kd-title" }, h("span", null, title)), body, h("div", { class: "kd-foot" }, h("span", { class: "spacer" }), cancel, okb)); ov.append(dlg);
   ov.addEventListener("keydown", (ev) => {
-    ev.stopPropagation();
+    ev.stopPropagation(); if (ev.key === "Tab") trapTab(ev, ov);
     if (ev.key === "Escape") { ev.preventDefault(); done(false); }
     else if (ev.key === "Enter" && (!multiline || ev.shiftKey || ev.ctrlKey || ev.metaKey) && !(ev.target instanceof HTMLButtonElement)) { ev.preventDefault(); done(true); }
   });

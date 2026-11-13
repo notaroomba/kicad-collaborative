@@ -20,6 +20,8 @@ const kdialogs = { open, close, openItem, openNew, openField, isOpen, TITLES, no
 export type KDialogsModule = typeof kdialogs & {
   /** web/editor/pcbdialogs: a board item's own KiCad dialog; true when it took the item. */
   pcbItemDialog?(ctx: DialogCtx, item: DialogItem): boolean;
+  /** web/editor/pcbdialogs: EDIT_TOOL::Properties over a selection of tracks and vias only (DIALOG_TRACK_VIA_PROPERTIES); true when it took them. */
+  pcbSelectionDialog?(ctx: DialogCtx, items: DialogItem[]): boolean;
   /** web/dialogs/sch-items: eeschema's item dialogs; true when one took the item. */
   schItemDialog?(ctx: DialogCtx, item: DialogItem, opts: ItemOpts): boolean;
   /** web/dialogs/sch-items: DIALOG_FIELD_PROPERTIES; true when it took the field. */
