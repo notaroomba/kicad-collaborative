@@ -63391,7 +63391,8 @@ var RULE_KEYS = [
   ["via_drill", "via drill"],
   ["min_track_width", "minimum track width"],
   ["min_clearance", "minimum clearance"],
-  ["edge_clearance", "copper to edge clearance"]
+  ["edge_clearance", "copper to edge clearance"],
+  ["hole_clearance", "copper to hole clearance"]
 ];
 function writeRules(pro, r) {
   const ns = pro.net_settings = pro.net_settings || { classes: [], meta: { version: 0 } };
@@ -63425,6 +63426,7 @@ function writeRules(pro, r) {
   if (typeof r.min_track_width === "number") rules.min_track_width = r.min_track_width;
   if (typeof r.min_clearance === "number") rules.min_clearance = r.min_clearance;
   if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
+  if (typeof r.hole_clearance === "number") rules.min_hole_clearance = r.hole_clearance;
 }
 
 // web/harness/workspace.ts

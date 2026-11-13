@@ -1347,7 +1347,7 @@ class Board(_Doc):
         self.add_item(f'(gr_rect (start {_r(x0)} {_r(y0)}) (end {_r(x1)} {_r(y1)}) (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "{_uuid.uuid4()}"))')
 
     def rules(self, **rules) -> None:
-        """Set design rules in mm: clearance, track_width, via_diameter, via_drill, min_track_width, min_clearance, edge_clearance, net_class."""
+        """Set design rules in mm: clearance, track_width, via_diameter, via_drill, min_track_width, min_clearance, edge_clearance, hole_clearance (copper to a hole of something else), net_class."""
         self._edit(dict({"op": "set_rules"}, **rules))
         self.flush()
 

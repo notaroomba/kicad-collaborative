@@ -152,7 +152,7 @@ function needWrite(req: Request, p: Project): void {
   if (p.role !== "editor") throw new ToolError(`You have view-only access to ${p.name}.`);
 }
 
-const RULE_PATHS = ["min_track_width", "min_clearance", "min_copper_edge_clearance"];
+const RULE_PATHS = ["min_track_width", "min_clearance", "min_copper_edge_clearance", "min_hole_clearance"];
 /** The parts of the project file a set_rules edit writes, as they were, so the edit can be taken back. */
 function rulesBefore(text: string): { classes: unknown; rules: Record<string, unknown> } {
   const pro = JSON.parse(text); const rules: Record<string, unknown> = {};

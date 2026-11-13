@@ -730,7 +730,7 @@ export function staleReason(p: Proposal): string | null {
 }
 
 const RULE_KEYS: [string, string][] = [["clearance", "clearance"], ["track_width", "track width"], ["via_diameter", "via diameter"], ["via_drill", "via drill"],
-  ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"]];
+  ["min_track_width", "minimum track width"], ["min_clearance", "minimum clearance"], ["edge_clearance", "copper to edge clearance"], ["hole_clearance", "copper to hole clearance"]];
 /** The rules of a set_rules edit written into a .kicad_pro: the net class's own values, and the board-wide minimums. */
 export function writeRules(pro: any, r: Record<string, number | string>): void {
   const ns = pro.net_settings = pro.net_settings || { classes: [], meta: { version: 0 } }; if (!Array.isArray(ns.classes)) ns.classes = [];
@@ -742,6 +742,7 @@ export function writeRules(pro: any, r: Record<string, number | string>): void {
   if (typeof r.min_track_width === "number") rules.min_track_width = r.min_track_width;
   if (typeof r.min_clearance === "number") rules.min_clearance = r.min_clearance;
   if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
+  if (typeof r.hole_clearance === "number") rules.min_hole_clearance = r.hole_clearance;
 }
 
 /** Apply an accepted proposal through the editor's own commit path: local apply, op to the server, one undo step. */
