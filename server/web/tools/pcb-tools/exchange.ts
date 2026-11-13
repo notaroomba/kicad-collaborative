@@ -429,6 +429,22 @@ export function exchangeFootprint(existing: SNode, aNew: SNode, o: ExchangeOptio
   return { node: n, shifted, updated };
 }
 
+const NEEDS_UPDATE_ATTRS = ["through_hole", "smd", "board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "dnp"];
+/**
+ * The attribute and override half of FOOTPRINT::FootprintNeedsUpdate( aLibFP ) (drc_test_provider_library_parity.cpp),
+ * which processFootprint seeds `updated` with before ExchangeFootprint: footprint type, mask bridges, the fabrication
+ * attributes, a board-level clearance / mask / paste / zone-connection override that differs from the library's, and
+ * net tie pad groups.  The geometry half is exchangeFootprint's own comparison of the result.
+ */
+export function footprintAttrsNeedUpdate(board: SNode, lib: SNode): boolean {
+  const flags = (n: SNode) => new Set((K.kid(n, "attr") || []).slice(1).map(str));
+  const a = flags(board), b = flags(lib);
+  if (NEEDS_UPDATE_ATTRS.some((f) => a.has(f) !== b.has(f))) return true;
+  if (maskBridges(board) !== maskBridges(lib)) return true;
+  for (const k of FP_CLEARANCE) if (K.kid(board, k) && kidText(board, k) !== kidText(lib, k)) return true;
+  return kidText(board, "net_tie_pad_groups") !== kidText(lib, "net_tie_pad_groups");
+}
+
 export interface ExchangeJob {
   /** Update Footprints (each footprint from its own library id) or Change Footprints (to newFpid) */
   updateMode: boolean;
@@ -461,7 +477,9 @@ export function planExchange(fps: { id: string; node: SNode }[], job: ExchangeJo
     let msg = job.updateMode ? `Updated footprint ${ref} (${oldId}): ` : `Changed footprint ${ref} from '${oldId}' to '${newId}': `;
     const lib = job.library(newId);
     if (!lib) { out.report.push({ severity: "error", text: msg + "*** library footprint not found ***" }); continue; }
+    // bool updated = !m_updateMode || aFootprint->FootprintNeedsUpdate( newFootprint ), then ExchangeFootprint( …, &updated, &shifted )
     const r = exchangeFootprint(fp.node, lib, job.opts);
+    if (job.updateMode && footprintAttrsNeedUpdate(fp.node, lib)) r.updated = true;
     out.ids.push(fp.id);
     if (canonical(r.node) !== canonical(fp.node)) out.modified.push([fp.id, r.node]);
     if (job.updateMode && !r.updated) { msg += r.shifted ? ": (shifted/rotated to match pad positions)" : ": (no changes)"; out.report.push({ severity: "info", text: msg }); }
@@ -518,4 +536,4 @@ export function matchPads(oldPads: SNode[], newPads: SNode[], fOld: [number, num
 }
 
 /** The node tests reach these through PcbTools.exchange. */
-export const exchangeApi = { editableCopy, exchangeFootprint, EXCHANGE_DEFAULTS, wildCompare, levenshteinRatio, planExchange, validFpid, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };
+export const exchangeApi = { editableCopy, exchangeFootprint, EXCHANGE_DEFAULTS, wildCompare, levenshteinRatio, planExchange, footprintAttrsNeedUpdate, validFpid, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };

@@ -108,3 +108,10 @@ test("a dimension's layer change moves its gr_text too", () => {
   assert.equal(K.kid(d, "layer")[1], "F.Fab");
   assert.equal(K.kid(K.kid(d, "gr_text"), "layer")[1], "F.Fab");
 });
+test("the font choice sets a face, or KiCad Font removes it", () => {
+  const m = runSafe({ scope: { references: true }, values: { font: "Arial", bold: true } });
+  const f = K.kid(K.kid(prop(m.get("fp1"), "Reference"), "effects"), "font");
+  assert.deepEqual(f[1], ["face", "Arial"]);
+  const back = T.editTextAndGraphics((() => { const d = K.parseDoc(SAFE, "kicad_pcb"); const it = d.items.get("fp1"); it.node = m.get("fp1"); return d; })(), { scope: { references: true }, filter: {}, specified: true, values: { font: "" } });
+  assert.ok(!K.kid(K.kid(K.kid(prop(back[0][1], "Reference"), "effects"), "font"), "face"));
+});

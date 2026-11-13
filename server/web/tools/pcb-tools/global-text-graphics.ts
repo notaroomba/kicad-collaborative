@@ -14,7 +14,9 @@ export interface TextGraphicsScope {
 export interface TextGraphicsFilter { layer?: string | null; reference?: string | null; footprint?: string | null; selectedOnly?: boolean }
 /** null / undefined = leave as it is (INDETERMINATE_ACTION / wxCHK_UNDETERMINED) */
 export interface TextGraphicsValues {
-  layer?: string | null; visible?: boolean | null; lineWidth?: number | null; kicadFont?: boolean; textWidth?: number | null; textHeight?: number | null;
+  layer?: string | null; visible?: boolean | null; lineWidth?: number | null; kicadFont?: boolean;
+  /** the font choice: "" = KiCad Font, a face name = that face, null / undefined = leave (kicadFont is the older spelling of "") */
+  font?: string | null; textWidth?: number | null; textHeight?: number | null;
   thickness?: number | null; autoThickness?: boolean; bold?: boolean | null; italic?: boolean | null; keepUpright?: boolean | null; centerOnFootprint?: boolean;
 }
 export interface TextGraphicsJob { scope: TextGraphicsScope; filter: TextGraphicsFilter; specified: boolean; values: TextGraphicsValues; selection?: Set<string> }
@@ -87,7 +89,9 @@ function processNode(n: SNode, job: TextGraphicsJob, inFootprint: boolean, fpCen
         else if (v.thickness !== null && v.thickness !== undefined) setThickness(t, v.thickness);
         if (v.bold !== null && v.bold !== undefined) setFontFlag(font(t), "bold", v.bold);
         if (v.italic !== null && v.italic !== undefined) setFontFlag(font(t), "italic", v.italic);
-        if (v.kicadFont) { const f = font(t); const face = K.kid(f, "face"); if (face) f.splice(f.indexOf(face), 1); }
+        // SetFont( m_fontCtrl->GetFontSelection( bold, italic ) ): the stroke font stores no face
+        const fontChoice = v.font !== undefined && v.font !== null ? v.font : v.kicadFont ? "" : null;
+        if (fontChoice !== null) { const f = font(t); const face = K.kid(f, "face"); if (face) f.splice(f.indexOf(face), 1); if (fontChoice) f.splice(1, 0, ["face", fontChoice]); }
         if (inFootprint) {
           if (v.keepUpright !== null && v.keepUpright !== undefined && storesUpright(t)) setKeepUpright(t, v.keepUpright);
           if (v.centerOnFootprint && fpCenterLocal) { const at = K.kid(t, "at"); if (at) { at[1] = r6(fpCenterLocal[0]); at[2] = r6(fpCenterLocal[1]); } }

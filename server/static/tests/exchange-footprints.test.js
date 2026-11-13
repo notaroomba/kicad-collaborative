@@ -96,3 +96,17 @@ test("reset scale off keeps the board footprint's transform scale", () => {
   const keep = X.exchangeFootprint(b, LIB(), { resetTransform: false }).node; assert.deepEqual(K.kid(K.kid(keep, "transform"), "scale").slice(1), [2, 2]);
   const reset = X.exchangeFootprint(b, LIB(), { resetTransform: true }).node; assert.equal(K.kid(reset, "transform"), null);
 });
+
+test("FootprintNeedsUpdate seeds 'updated': a board-only DNP / BOM / clearance difference kept by the options still reports OK", () => {
+  const keep = { deleteExtraTexts: false, resetTextLayers: false, resetTextEffects: false, resetTextPositions: false, resetTextContent: false, resetFabricationAttrs: false, resetClearanceOverrides: false, reset3DModels: false };
+  const strip = (n) => { for (let i = n.length - 1; i > 1; i--) { const c = n[i]; if (Array.isArray(c) && (c[0] === "clearance" || c[0] === "attr")) n.splice(i, 1); } n.push(["attr", "smd"]); return n; };
+  const b = BOARD();                       // (attr smd exclude_from_bom) (clearance 0.3) on the board
+  const lib = strip(K.cloneNode(b));       // the library has neither
+  const plan = X.planExchange([{ id: "fp-1", node: b }], { updateMode: true, match: () => true, opts: keep, library: () => K.cloneNode(lib) });
+  assert.equal(plan.report[0].text, "Updated footprint R7 (Lib:R_0603): : OK");
+  assert.equal(plan.report[0].severity, "action");
+  assert.equal(plan.modified.length, 0, "the kept attributes leave the footprint as it was");
+  assert.ok(X.footprintAttrsNeedUpdate(b, lib));
+  const withClr = K.cloneNode(lib); withClr.push(["clearance", 0.2]);
+  assert.ok(!X.footprintAttrsNeedUpdate(lib, withClr), "a library override the board does not set is no difference");
+});

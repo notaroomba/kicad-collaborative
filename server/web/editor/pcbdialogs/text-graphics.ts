@@ -30,6 +30,15 @@ function triField(label: string, key: string, tip?: string): { el: HTMLElement; 
   return { el, get: () => v, setEnabled(on) { input.disabled = !on; el.classList.toggle("dim", !on); } };
 }
 
+/** The faces the font choice offers besides KiCad Font: those the board's text uses, and the common system faces. */
+export function boardFontFaces(doc: KDoc | null): string[] {
+  const used = new Set<string>();
+  const walk = (n: unknown): void => { if (!Array.isArray(n)) return; if (n[0] === "face" && typeof n[1] === "string" && n[1]) used.add(n[1]); for (const c of n) walk(c); };
+  if (doc) for (const it of doc.items.values()) walk(it.node);
+  const common = ["Arial", "Courier New", "DejaVu Sans", "DejaVu Sans Mono", "Georgia", "Helvetica", "Liberation Sans", "Noto Sans", "Times New Roman", "Verdana"];
+  return Array.from(new Set([...used, ...common])).sort((a, b) => a.localeCompare(b));
+}
+
 export function openTextAndGraphics(ctx: ToolCtx): void {
   const doc = E.kdoc as KDoc | null;
   if (!doc || doc.type !== "pcb") { ctx.toast("This needs a board"); return; }
@@ -74,7 +83,9 @@ export function openTextAndGraphics(ctx: ToolCtx): void {
       const layerCtrl = layerSelect(true, "layer", "");
       const visible = triField("Visible  (fields only)", "visible");
       const lineW = lenInput("lineWidth");
-      const fontSel = h("select", { "data-k": "font" }, h("option", { value: "" }, LEAVE), h("option", { value: "kicad" }, "KiCad Font")) as HTMLSelectElement;
+      // FONT_CHOICE: KiCad Font, then the faces (those the board's text already uses and the common system faces)
+      const fontSel = h("select", { "data-k": "font" }, h("option", { value: "" }, LEAVE), h("option", { value: "kicad" }, "KiCad Font"),
+        ...boardFontFaces(doc).map((f) => h("option", { value: "face:" + f }, f))) as HTMLSelectElement;
       const bold = triField("Bold", "bold"), italic = triField("Italic", "italic"), upright = triField("Keep upright", "keepUpright");
       const textW = lenInput("textWidth"), textH = lenInput("textHeight"), thick = lenInput("thickness");
       const auto = h("button", { type: "button", class: "btn", "data-k": "autoThickness", title: "Adjust the text thickness", "aria-pressed": "false" }, "Auto") as HTMLButtonElement;
@@ -138,7 +149,7 @@ export function openTextAndGraphics(ctx: ToolCtx): void {
           scope: scopeOut,
           filter: { layer: byLayer.get() ? layerFilter.value : null, reference: byRef.get() && refText.value ? refText.value : null, footprint: byFp.get() && fpText.value ? fpText.value : null, selectedOnly: selOnly.get() },
           specified: specified.checked,
-          values: { layer: layerCtrl.value || null, visible: visible.get(), lineWidth: lw, kicadFont: fontSel.value === "kicad", textWidth: tw, textHeight: th, thickness: tk, autoThickness: autoOn,
+          values: { layer: layerCtrl.value || null, visible: visible.get(), lineWidth: lw, kicadFont: fontSel.value === "kicad", font: fontSel.value === "kicad" ? "" : fontSel.value.startsWith("face:") ? fontSel.value.slice(5) : null, textWidth: tw, textHeight: th, thickness: tk, autoThickness: autoOn,
             bold: bold.get(), italic: italic.get(), keepUpright: upright.get(), centerOnFootprint: center.get() },
           selection: boardSelection(ctx) } };
       };

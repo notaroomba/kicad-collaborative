@@ -171,11 +171,29 @@ test("Interactive Offset: Offset Item starts at the vector between the points; O
   pcb.onPointerDown(ev(), [0, 5], ctx);
   assert.equal(P.state.pick.prompt, "Select the point to define the new offset from.");
   pcb.onPointerDown(ev(), [10, 10], ctx); pcb.setForm(null);
-  assert.equal(spec.title, "Offset Item"); assert.equal(spec.fields[0].value, -10); assert.equal(spec.fields[1].value, -5);
-  spec.apply({ x: 1, y: 2, polar: false });
+  // the base dialog's "Use polar coordinates" starts checked: Distance / Angle of the vector (-10, -5)
+  assert.equal(spec.title, "Offset Item"); assert.equal(spec.fields[0].label, "Distance:"); assert.equal(spec.fields[0].value, String(+Math.hypot(10, 5).toFixed(4)));
+  assert.equal(spec.fields[1].label, "Angle:"); assert.equal(spec.fields[1].unit, "deg"); assert.equal(spec.fields[0].unit, "mm");
+  spec.apply({ x: "1", y: "2", polar: false });
   assert.equal(log.commits[0].label, "Set Relative Position Interactively");
   const s = doc.items.get("s2").node; assert.deepEqual(kid(s, "start").slice(1), [11, 12]);
-  const set = {}; spec.change("polar", true, (k, v) => { set[k] = v; }); assert.equal(set.x, Math.round(Math.hypot(10, 5) * 1e6) / 1e6);
+  assert.equal(P.state.pick.prompt, "Select the reference point on the item to move.", "the tool runs on until Escape");
+  pcb.onKeyDown && pcb.onKeyDown({ key: "Escape", preventDefault() {}, stopPropagation() {} }, ctx);
+});
+test("DIALOG_OFFSET_ITEM state: units, polar conversion of the typed entries, Reset", () => {
+  const O = P.OffsetItemState;
+  const st = new O([-10, -5], "mm");
+  assert.deepEqual(st.labels, ["Distance:", "Angle:"]); assert.deepEqual(st.units, ["mm", "deg"]);
+  assert.equal(st.x, "11.1803"); assert.equal(st.y, String(+(Math.atan2(-5, -10) * 180 / Math.PI).toFixed(4)));
+  st.setPolar(false); assert.deepEqual([st.x, st.y], ["-10", "-5"], "unchanged entries go back to the stored X / Y");
+  st.x = "3"; st.y = "4"; st.setPolar(true); assert.deepEqual([st.x, st.y], ["5", "53.1301"], "the typed values are converted");
+  st.x = "2"; st.y = "90"; st.setPolar(false); assert.deepEqual([st.x, st.y], ["0", "2"]);
+  st.clear("x"); assert.equal(st.x, "-10"); st.clear("y"); assert.equal(st.y, "-5");
+  assert.deepEqual(st.result(), [-10, -5]);
+  const mil = new O([2.54, 0], "mil", false);
+  assert.deepEqual(mil.units, ["mils", "mils"]); assert.equal(mil.x, "100"); assert.deepEqual(mil.labels, ["Offset X:", "Offset Y:"]);
+  mil.x = "100"; mil.y = "50"; assert.deepEqual(mil.result(), [2.54, 1.27], "100 mils is 2.54 mm, not 100 mm");
+  mil.setPolar(true); mil.clear("y"); assert.equal(mil.y, "0"); assert.deepEqual(mil.units, ["mils", "deg"]);
 });
 
 const RBOARD = `(kicad_pcb (version 20260728) (generator "pcbnew")
