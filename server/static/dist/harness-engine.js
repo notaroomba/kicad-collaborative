@@ -63488,7 +63488,7 @@ function planSilk(doc, opts = {}) {
       } else {
         next = got.f.node(got.x, got.y);
         const b = got.f.box(got.x, got.y);
-        obs[j.side].push({ box: grow2(b, 0.2), fp: j.fp.id, key: "ref:" + j.fp.id });
+        obs[j.side].push({ box: grow2(b, Math.max(0.3, got.size * 0.55)), fp: j.fp.id, key: "ref:" + j.fp.id });
         if (got.size < sizes[0] - 1e-9) report3.resized[j.ref] = got.size;
         if (got.turned) report3.turned.push(j.ref);
         if (hiddenText(j.prop)) report3.shown.push(j.ref);

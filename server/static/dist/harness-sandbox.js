@@ -2074,16 +2074,23 @@ class Board(_Doc):
                 out[k] = d[k]
         return out
 
-    def layers(self, count: int, planes: list | None = None) -> None:
+    def layers(self, count: int, planes: list | None = None) -> dict:
         """Set the number of copper layers (2, 4, 6, ...).  Inner layers are In1.Cu, In2.Cu, ...; \`planes\` names the ones
-        that are power planes, for example layers(4, planes=["In1.Cu", "In2.Cu"]) and then zone("GND", "In1.Cu")."""
+        that are power planes, for example layers(4, planes=["In1.Cu", "In2.Cu"]) and then zone("GND", "In1.Cu").
+        A board that already has that many layers is left as it is ({"changed": False}), so a script can be run again."""
         e: dict = {"op": "set_layers", "count": count}
         if planes:
             e["planes"] = list(planes)
         self.flush()
         self._edit(e)
-        self.flush()
+        try:
+            self.flush()
+        except HarnessError as err:
+            if "already has" not in str(err):
+                raise
+            return {"layers": count, "changed": False}
         self._geom = None
+        return {"layers": count, "changed": True}
 
     def connect(self, *pads, width: float | None = None, time_s: float | None = None) -> dict:
         """Route the net that joins these pads ("U1.3", "R1.1")."""

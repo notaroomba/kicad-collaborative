@@ -380,7 +380,8 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
       report.hidden.push(j.ref);
     } else {
       next = got.f.node(got.x, got.y); const b = got.f.box(got.x, got.y);
-      obs[j.side].push({ box: grow(b, 0.2), fp: j.fp.id, key: "ref:" + j.fp.id });
+      // two names side by side must not read as one word: the next one keeps about a character's width away
+      obs[j.side].push({ box: grow(b, Math.max(0.3, got.size * 0.55)), fp: j.fp.id, key: "ref:" + j.fp.id });
       if (got.size < sizes[0] - 1e-9) report.resized[j.ref] = got.size;
       if (got.turned) report.turned.push(j.ref);
       if (hiddenText(j.prop)) report.shown.push(j.ref);

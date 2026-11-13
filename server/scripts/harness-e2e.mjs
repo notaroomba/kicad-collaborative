@@ -241,6 +241,7 @@ board.zone("GND", layer="In1.Cu")
 board.autoplace(outline=(100, 100, 130, 125))
 routed = board.route(order=["OUT"], widths={"+5V": 0.4}, time_s=20)
 again = board.route(nets=["OUT"])
+assert board.layers(4, planes=["In1.Cu"])["changed"] is False
 result = {"layers": board.info()["copper_layers"], "left": routed["left"], "again": again["routed"], "open": board.check(kind="unconnected_items")["first"], "errors": board.check()["errors"]}
 ` });
   const b = (big.data && big.data.result) || {};
