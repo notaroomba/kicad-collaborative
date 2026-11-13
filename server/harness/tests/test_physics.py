@@ -122,7 +122,7 @@ class Physics(Boards):
         pairs = self.finding(rv, "pairs")
         self.assertIn("usb2", pairs)
         self.assertIn("limit 1.27 mm", pairs)
-        self.assertIn("without its partner", pairs)
+        self.assertIn("without its partner", self.finding(rv, "pairs.coupled"))
 
     def test_the_part_checks_name_the_part_and_thermal_vias_fix_the_pad(self):
         box = (100, 100, 160, 150)

@@ -878,6 +878,11 @@ export function writeRules(pro: any, r: Record<string, number | string>): void {
   if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
   if (typeof r.hole_clearance === "number") rules.min_hole_clearance = r.hole_clearance;
   if (typeof r.min_text_height === "number") rules.min_text_height = r.min_text_height;
+  // a via the net class asks for is one the board's minimums allow: lower them to it (KiCad's stock minimums are a 0.5 mm via on a 0.3 mm hole)
+  const vd = typeof c.via_diameter === "number" ? c.via_diameter : 0, vh = typeof c.via_drill === "number" ? c.via_drill : 0;
+  if (vd > 0 && (rules.min_via_diameter === undefined ? 0.5 : rules.min_via_diameter) > vd) rules.min_via_diameter = vd;
+  if (vh > 0 && (rules.min_through_hole_diameter === undefined ? 0.3 : rules.min_through_hole_diameter) > vh) rules.min_through_hole_diameter = vh;
+  if (vd > vh && vh > 0) { const ann = +((vd - vh) / 2).toFixed(4); if ((rules.min_via_annular_width === undefined ? 0.1 : rules.min_via_annular_width) > ann) rules.min_via_annular_width = ann; }
 }
 
 /** Apply an accepted proposal through the editor's own commit path: local apply, op to the server, one undo step. */

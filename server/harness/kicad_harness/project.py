@@ -1887,6 +1887,16 @@ class Board(_Doc):
                 hit = None
         return hit or name
 
+    def _house_vias(self) -> None:
+        """A board still on KiCad's stock via (0.6 mm on a 0.3 mm hole) gets the house via, 0.4 mm on a 0.25 mm hole,
+        before anything is routed: the net class and the board minimums both."""
+        r = self.project.transport.call("get_board_info", {}).get("design_rules") or {}
+        d = ((r.get("net_classes") or {}).get("Default") or {})
+        if abs((d.get("via_diameter") or 0.6) - 0.6) < 1e-6 and abs((d.get("via_drill") or 0.3) - 0.3) < 1e-6:
+            from .stackups import DEFAULT_VIA
+            self.rules(via_diameter=DEFAULT_VIA[0], via_drill=DEFAULT_VIA[1])
+            self.project.note(f"board: vias set to the house size, {DEFAULT_VIA[0]} mm on a {DEFAULT_VIA[1]} mm hole")
+
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
               fill: bool = True, max_vias: int | None = None, kinds: dict | None = None, separate=None, fence=None,
@@ -1919,6 +1929,7 @@ class Board(_Doc):
         pad that only its own net may use, so neighbours cannot box a pin in; raise it (0.8 to 1.2) when a QFN's pins
         are left "blocked", False turns it off.
         """
+        self._house_vias()
         self.flush()
         fix = self._net
         e: dict = {"op": "autoroute"}

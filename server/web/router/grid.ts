@@ -29,6 +29,7 @@ export interface Grid {
   keep: (Uint8Array | null)[];           // rule areas that keep tracks out, per layer
   quiet?: Uint8Array;                    // under a crystal: only the crystal's own nets may run there, on any layer
   edgeClr: number; margin: number;
+  holeClr?: number;                      // copper of another net keeps this far from a drilled hole (KiCad's hole clearance)
   obstacles: Map<string, Obstacle[]>;    // board copper by net ("" = no net, holes, edges)
   classes: Map<string, RuleClass>;
   weights: Weights;
@@ -152,7 +153,7 @@ export function pickGrid(pads: (Pt | number[])[], bounds: [number, number, numbe
 }
 
 export const growFor = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr : Math.max(c.clr, o.clr)) + c.width / 2 + G.margin;
-export const growVia = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr : Math.max(c.clr, o.clr)) + c.viaD / 2 + G.margin;
+export const growVia = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr + c.viaD / 2 : Math.max(Math.max(c.clr, o.clr) + c.viaD / 2, (G.holeClr || 0) + c.viaDrill / 2)) + G.margin;
 /** The extra a track of another signal domain adds to the gap (0 when the two are of a kind, or it is a pad). */
 const domainGap = (G: Grid, c: RuleClass, o: Obstacle): number => {
   if (!c.kind || !G.kinds || !G.sep || o.pad || o.edge || !o.net) return 0; const k = G.kinds.get(o.net); if (!k || k === c.kind) return 0;

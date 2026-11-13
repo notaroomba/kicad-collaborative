@@ -210,6 +210,9 @@ def build(fab: str | None = None, layers: int = 2, thickness: float | None = Non
     return {"layers": rows, "thickness": total, "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": f"{n}-layer {mat}, {total} mm", "derived": True, "notes": notes, "fab": fab, "material": key}
 
 
+DEFAULT_VIA = (0.4, 0.25)   # pad, hole in mm: the via a generated board uses unless told otherwise
+
+
 def rules_for(fab: str, material_name: str = "fr4", layers: int = 2, copper_oz: float = 1.0) -> dict:
     """The fabricator's limits as design rules (mm), for board.rules(**...)."""
     f = FABS[_fab(fab)]
@@ -225,7 +228,9 @@ def rules_for(fab: str, material_name: str = "fr4", layers: int = 2, copper_oz: 
         w = ts[("2oz" if copper_oz >= 2 else "1oz") + (" multilayer" if layers > 2 else " 2-layer")]
     else:
         w = ts["2oz"] if copper_oz >= 2 else ts["1oz advanced (no surcharge)"]
-    return {"min_track_width": w, "min_clearance": w, "edge_clearance": max(0.2, r["copper_to_edge"]), "hole_clearance": r.get("via_to_track", 0.2)}
+    v = r.get("via") or {}   # the house via is 0.4 mm on a 0.25 mm hole (the person's default), raised to what the fab can drill
+    return {"min_track_width": w, "min_clearance": w, "edge_clearance": max(0.2, r["copper_to_edge"]), "hole_clearance": r.get("via_to_track", 0.2),
+            "via_diameter": max(DEFAULT_VIA[0], v.get("diameter", 0)), "via_drill": max(DEFAULT_VIA[1], v.get("hole", 0))}
 
 
 def choose(ghz: float | None = None, flex: bool = False, dynamic: bool = False, watts: float | None = None, led: bool = False, fine_pitch: float | None = None,

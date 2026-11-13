@@ -211,7 +211,7 @@ export class Router {
     if (!routable.some(Boolean)) routable.fill(true);
     const rmin = s.clearance + s.trackWidth / 2;
     const G: Grid = this.G = { g: pg.g, ox: pg.ox, oy: pg.oy, W, H, layers: copper, routable, noVia: new Uint16Array(W * H), thru: new Uint8Array(W * H), outside: null, keep: copper.map(() => null),
-      edgeClr: Math.max(s.edgeClearance || 0, 0), margin: pg.g * pg.g / (4 * Math.max(rmin, 0.05)) + 0.002, obstacles, classes: new Map(), weights: this.W };
+      edgeClr: Math.max(s.edgeClearance || 0, 0), holeClr: Math.max(s.holeClearance || 0, 0), margin: pg.g * pg.g / (4 * Math.max(rmin, 0.05)) + 0.002, obstacles, classes: new Map(), weights: this.W };
     if (outline) { const out = G.outside = new Uint8Array(W * H).fill(1); fillPoly(G, outline, (x0, x1, iy) => out.fill(0, iy * W + x0, iy * W + x1 + 1)); }
     // The rim: cells within a header pitch of the board edge.  A track may reach a pad there, but a long run along
     // the edge (out past a pin row and down the side of the board) is priced so that a way through the board wins.
@@ -578,7 +578,7 @@ export class Router {
    *  the other end's layer.  Both lines change layer at the same place through matched vias. */
   private layPairVias(pr: Pair): string {
     const G = this.G, P = this.P, { cp, cn } = pr; const w = Math.min(cp.cls.width, cn.cls.width), clr = Math.max(cp.cls.clr, cn.cls.clr), gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0);
-    const viaD = Math.max(cp.cls.viaD, cn.cls.viaD), pitch = viaD + Math.max(clr, gap); const all = G.layers.map((_, l) => l).filter((l) => G.routable[l]);
+    const viaD = Math.max(cp.cls.viaD, cn.cls.viaD), drill = Math.max(cp.cls.viaDrill, cn.cls.viaDrill), clrV = Math.max(clr, (G.holeClr || 0) - (viaD - drill) / 2), pitch = viaD + Math.max(clrV, gap); const all = G.layers.map((_, l) => l).filter((l) => G.routable[l]);
     if (!this.allowVias || !pr.p.guide.allowVias || !pr.n.guide.allowVias) return "its pads are not all on one layer and vias are not allowed";
     const nEnd = (e: "a" | "b"): "a" | "b" => (pr.swap ? (e === "a" ? "b" : "a") : e);
     const half = (a: Anchor) => { const sh = a.shape as any; return sh ? (sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0) : 0; };
@@ -600,8 +600,8 @@ export class Router {
         const fan = (a: Anchor, v: Pt) => { const o = half(a) + w / 2 + 0.05, q: Pt = [r6(a.p[0] + ex * dir * o), r6(a.p[1] + ey * dir * o)]; return !bend || (q[0] - a.p[0]) * (v[0] - a.p[0]) + (q[1] - a.p[1]) * (v[1] - a.p[1]) < o * o ? [stub(a.p, v)] : [stub(a.p, q), stub(q, v)]; };
         const sp = fan(pv, vp), sn = fan(nv, vn); const gapOK = (xs: Shape[], ys: Shape[]) => xs.every((x) => ys.every((y) => P.shapeGap(x, y) >= clr - 1e-4));
         if (!gapOK(sp, sn) || !gapOK(sp, [via(vn)]) || !gapOK(sn, [via(vp)])) continue;
-        this.cur = cp; this.curSoft = false; if (!all.every((l) => this.clearOf(via(vp), l, pr.p.key, clr)) || !sp.every((x) => this.clearOf(x, lv, pr.p.key, clr))) continue;
-        this.cur = cn; if (!all.every((l) => this.clearOf(via(vn), l, pr.n.key, clr)) || !sn.every((x) => this.clearOf(x, lv, pr.n.key, clr))) continue;
+        this.cur = cp; this.curSoft = false; if (!all.every((l) => this.clearOf(via(vp), l, pr.p.key, clrV)) || !sp.every((x) => this.clearOf(x, lv, pr.p.key, clr))) continue;
+        this.cur = cn; if (!all.every((l) => this.clearOf(via(vn), l, pr.n.key, clrV)) || !sn.every((x) => this.clearOf(x, lv, pr.n.key, clr))) continue;
         // the vias stand in for that end's pads while the coupled run is laid
         const keepP = cp[end], keepN = cn[nEnd(end)];
         cp[end] = { p: vp, layers: run.slice(), shape: via(vp), cluster: keepP.cluster, grp: keepP.grp };
@@ -620,7 +620,7 @@ export class Router {
         // the run must keep clear of the other line's via and fan-out too
         const clash = cp.shapes.some((o) => P.shapeGap(o.shape, via(vn)) < clr - 1e-4 || (o.layers[0] === lv && !gapOK([o.shape], sn))) || cn.shapes.some((o) => P.shapeGap(o.shape, via(vp)) < clr - 1e-4 || (o.layers[0] === lv && !gapOK([o.shape], sp)));
         if (clash) { this.rip(cp); this.rip(cn); this.pairReports.delete(cp.id + "/" + cn.id); why = "its pads are not all on one layer, and the run would crowd the via pair"; continue; }
-        const add = (c: Conn, sh: (Shape & { a: Pt; b: Pt })[], v: Pt, k: { ix: number; iy: number }) => { this.place(c, -1); let len = 0; for (const x of sh) { c.shapes.push({ net: c.net, layers: [lv], shape: x, clr: c.cls.clr }); len += Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1]); } c.shapes.push({ net: c.net, layers: all.slice(), shape: via(v), clr: c.cls.clr }); c.viaCells = [k.iy * G.W + k.ix]; this.place(c, 1); return len; };
+        const add = (c: Conn, sh: (Shape & { a: Pt; b: Pt })[], v: Pt, k: { ix: number; iy: number }) => { this.place(c, -1); let len = 0; for (const x of sh) { c.shapes.push({ net: c.net, layers: [lv], shape: x, clr: c.cls.clr }); len += Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1]); } c.shapes.push({ net: c.net, layers: all.slice(), shape: via(v), clr: clrV }); c.viaCells = [k.iy * G.W + k.ix]; this.place(c, 1); return len; };
         const ap = add(cp, sp, vp, kp), an = add(cn, sn, vn, kn); const rep = this.pairReports.get(cp.id + "/" + cn.id);
         if (rep) { rep.lengthP = +((rep.lengthP || 0) + ap).toFixed(3); rep.lengthN = +((rep.lengthN || 0) + an).toFixed(3); rep.skew = +Math.abs(rep.lengthP - rep.lengthN).toFixed(3); (rep as any).vias = 2; }
         return "";
@@ -1037,7 +1037,7 @@ export class Router {
     this.lift(net, 1, conn.cls);
     for (let i = 0; i + 1 < nodes.length; i++) {
       const a = nodes[i], b = nodes[i + 1];
-      if (a.l !== b.l) { const gi = a.iy * G.W + a.ix; if ((!G.thru[gi] || !holes.has(gi)) && !viaCells.includes(gi)) { viaCells.push(gi); const p = this.mm(a); shapes.push({ net: conn.net, layers: all, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr }); } }
+      if (a.l !== b.l) { const gi = a.iy * G.W + a.ix; if ((!G.thru[gi] || !holes.has(gi)) && !viaCells.includes(gi)) { viaCells.push(gi); const p = this.mm(a); shapes.push({ net: conn.net, layers: all, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr: Math.max(clr, (G.holeClr || 0) - (conn.cls.viaD - conn.cls.viaDrill) / 2) }); } }
       else shapes.push({ net: conn.net, layers: [a.l], shape: { t: "seg", a: this.mm(a), b: this.mm(b), r: w / 2 }, clr });
     }
     this.lift(net, -1, conn.cls);

@@ -79592,7 +79592,7 @@ function pickGrid(pads, bounds, nLayers, forced) {
   return { g: best.g, ox, oy };
 }
 var growFor = (G2, c, o) => (o.edge ? G2.edgeClr : Math.max(c.clr, o.clr)) + c.width / 2 + G2.margin;
-var growVia = (G2, c, o) => (o.edge ? G2.edgeClr : Math.max(c.clr, o.clr)) + c.viaD / 2 + G2.margin;
+var growVia = (G2, c, o) => (o.edge ? G2.edgeClr + c.viaD / 2 : Math.max(Math.max(c.clr, o.clr) + c.viaD / 2, (G2.holeClr || 0) + c.viaDrill / 2)) + G2.margin;
 var domainGap = (G2, c, o) => {
   if (!c.kind || !G2.kinds || !G2.sep || o.pad || o.edge || !o.net) return 0;
   const k = G2.kinds.get(o.net);
@@ -80278,6 +80278,7 @@ var Router = class _Router {
       outside: null,
       keep: copper.map(() => null),
       edgeClr: Math.max(s.edgeClearance || 0, 0),
+      holeClr: Math.max(s.holeClearance || 0, 0),
       margin: pg.g * pg.g / (4 * Math.max(rmin, 0.05)) + 2e-3,
       obstacles,
       classes: /* @__PURE__ */ new Map(),
@@ -80502,6 +80503,16 @@ var Router = class _Router {
       if (watchOnly && !pour) continue;
       const cls = this.classFor(net.key);
       const info = { key: net.key, obj: nl.table.byName.get(net.key) || { code: net.code, name: net.name }, cls, conns: [], clusters: clusters.length, zoneCells, zoneCluster, guide: this.guideFor(net.key), anchors, pour };
+      const isPair = !!pairName(net.key);
+      const partOf2 = (i) => {
+        for (const a of clusters[i]) {
+          const r = this.padNames.get(a.p[0].toFixed(3) + "," + a.p[1].toFixed(3));
+          if (r) return r.replace(/\.[^.]*$/, "");
+        }
+        return "#" + i;
+      };
+      const parts = isPair ? clusters.map((_, i) => partOf2(i)) : null;
+      const isConn = (r) => /^(J|P|CN|USB|X)\d/i.test(r);
       const near = (i, j) => {
         let best = null;
         for (const a of clusters[i]) for (const b of clusters[j]) {
@@ -80510,20 +80521,25 @@ var Router = class _Router {
         }
         return best;
       };
+      const cost = (i, j, e) => !parts ? e[0] : parts[i] === parts[j] ? e[0] * 0.01 : e[0] + (isConn(parts[i]) || isConn(parts[j]) ? 5 : 0);
       const inTree = clusters.map(() => false);
       const bestTo = clusters.map(() => null);
+      const bestCost = clusters.map(() => Infinity);
       const update = (k) => {
         for (let j = 0; j < clusters.length; j++) {
           if (inTree[j]) continue;
-          const e = near(k, j);
-          if (!bestTo[j] || e[0] < bestTo[j][0]) bestTo[j] = e;
+          const e = near(k, j), c = cost(k, j, e);
+          if (!bestTo[j] || c < bestCost[j]) {
+            bestTo[j] = e;
+            bestCost[j] = c;
+          }
         }
       };
       inTree[0] = true;
       update(0);
       for (let n2 = 1; n2 < (watchOnly ? 0 : clusters.length); n2++) {
         let j = -1;
-        for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestTo[i][0] < bestTo[j][0])) j = i;
+        for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestCost[i] < bestCost[j])) j = i;
         inTree[j] = true;
         const e = bestTo[j];
         const room = Math.min(this.roomAt(e[1], net.key), this.roomAt(e[2], net.key));
@@ -80960,7 +80976,7 @@ var Router = class _Router {
   layPairVias(pr) {
     const G2 = this.G, P = this.P, { cp: cp2, cn } = pr;
     const w = Math.min(cp2.cls.width, cn.cls.width), clr = Math.max(cp2.cls.clr, cn.cls.clr), gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0);
-    const viaD = Math.max(cp2.cls.viaD, cn.cls.viaD), pitch = viaD + Math.max(clr, gap);
+    const viaD = Math.max(cp2.cls.viaD, cn.cls.viaD), drill2 = Math.max(cp2.cls.viaDrill, cn.cls.viaDrill), clrV = Math.max(clr, (G2.holeClr || 0) - (viaD - drill2) / 2), pitch = viaD + Math.max(clrV, gap);
     const all2 = G2.layers.map((_, l) => l).filter((l) => G2.routable[l]);
     if (!this.allowVias || !pr.p.guide.allowVias || !pr.n.guide.allowVias) return "its pads are not all on one layer and vias are not allowed";
     const nEnd = (e) => pr.swap ? e === "a" ? "b" : "a" : e;
@@ -81004,9 +81020,9 @@ var Router = class _Router {
         if (!gapOK(sp, sn) || !gapOK(sp, [via(vn)]) || !gapOK(sn, [via(vp)])) continue;
         this.cur = cp2;
         this.curSoft = false;
-        if (!all2.every((l) => this.clearOf(via(vp), l, pr.p.key, clr)) || !sp.every((x) => this.clearOf(x, lv, pr.p.key, clr))) continue;
+        if (!all2.every((l) => this.clearOf(via(vp), l, pr.p.key, clrV)) || !sp.every((x) => this.clearOf(x, lv, pr.p.key, clr))) continue;
         this.cur = cn;
-        if (!all2.every((l) => this.clearOf(via(vn), l, pr.n.key, clr)) || !sn.every((x) => this.clearOf(x, lv, pr.n.key, clr))) continue;
+        if (!all2.every((l) => this.clearOf(via(vn), l, pr.n.key, clrV)) || !sn.every((x) => this.clearOf(x, lv, pr.n.key, clr))) continue;
         const keepP = cp2[end], keepN = cn[nEnd(end)];
         cp2[end] = { p: vp, layers: run.slice(), shape: via(vp), cluster: keepP.cluster, grp: keepP.grp };
         cn[nEnd(end)] = { p: vn, layers: run.slice(), shape: via(vn), cluster: keepN.cluster, grp: keepN.grp };
@@ -81064,7 +81080,7 @@ var Router = class _Router {
             c.shapes.push({ net: c.net, layers: [lv], shape: x, clr: c.cls.clr });
             len += Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1]);
           }
-          c.shapes.push({ net: c.net, layers: all2.slice(), shape: via(v), clr: c.cls.clr });
+          c.shapes.push({ net: c.net, layers: all2.slice(), shape: via(v), clr: clrV });
           c.viaCells = [k.iy * G2.W + k.ix];
           this.place(c, 1);
           return len;
@@ -81914,7 +81930,7 @@ ${p[0].toFixed(3)},${p[1].toFixed(3)}`;
         if ((!G2.thru[gi] || !holes.has(gi)) && !viaCells.includes(gi)) {
           viaCells.push(gi);
           const p = this.mm(a);
-          shapes2.push({ net: conn.net, layers: all2, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr });
+          shapes2.push({ net: conn.net, layers: all2, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr: Math.max(clr, (G2.holeClr || 0) - (conn.cls.viaD - conn.cls.viaDrill) / 2) });
         }
       } else shapes2.push({ net: conn.net, layers: [a.l], shape: { t: "seg", a: this.mm(a), b: this.mm(b), r: w / 2 }, clr });
     }
@@ -104307,6 +104323,13 @@ function writeRules(pro, r) {
   if (typeof r.edge_clearance === "number") rules.min_copper_edge_clearance = r.edge_clearance;
   if (typeof r.hole_clearance === "number") rules.min_hole_clearance = r.hole_clearance;
   if (typeof r.min_text_height === "number") rules.min_text_height = r.min_text_height;
+  const vd = typeof c.via_diameter === "number" ? c.via_diameter : 0, vh = typeof c.via_drill === "number" ? c.via_drill : 0;
+  if (vd > 0 && (rules.min_via_diameter === void 0 ? 0.5 : rules.min_via_diameter) > vd) rules.min_via_diameter = vd;
+  if (vh > 0 && (rules.min_through_hole_diameter === void 0 ? 0.3 : rules.min_through_hole_diameter) > vh) rules.min_through_hole_diameter = vh;
+  if (vd > vh && vh > 0) {
+    const ann = +((vd - vh) / 2).toFixed(4);
+    if ((rules.min_via_annular_width === void 0 ? 0.1 : rules.min_via_annular_width) > ann) rules.min_via_annular_width = ann;
+  }
 }
 
 // web/harness/workspace.ts

@@ -1984,6 +1984,16 @@ class Board(_Doc):
                 hit = None
         return hit or name
 
+    def _house_vias(self) -> None:
+        """A board still on KiCad's stock via (0.6 mm on a 0.3 mm hole) gets the house via, 0.4 mm on a 0.25 mm hole,
+        before anything is routed: the net class and the board minimums both."""
+        r = self.project.transport.call("get_board_info", {}).get("design_rules") or {}
+        d = ((r.get("net_classes") or {}).get("Default") or {})
+        if abs((d.get("via_diameter") or 0.6) - 0.6) < 1e-6 and abs((d.get("via_drill") or 0.3) - 0.3) < 1e-6:
+            from .stackups import DEFAULT_VIA
+            self.rules(via_diameter=DEFAULT_VIA[0], via_drill=DEFAULT_VIA[1])
+            self.project.note(f"board: vias set to the house size, {DEFAULT_VIA[0]} mm on a {DEFAULT_VIA[1]} mm hole")
+
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
               fill: bool = True, max_vias: int | None = None, kinds: dict | None = None, separate=None, fence=None,
@@ -2016,6 +2026,7 @@ class Board(_Doc):
         pad that only its own net may use, so neighbours cannot box a pin in; raise it (0.8 to 1.2) when a QFN's pins
         are left "blocked", False turns it off.
         """
+        self._house_vias()
         self.flush()
         fix = self._net
         e: dict = {"op": "autoroute"}
@@ -5009,6 +5020,9 @@ def build(fab: str | None = None, layers: int = 2, thickness: float | None = Non
     return {"layers": rows, "thickness": total, "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": f"{n}-layer {mat}, {total} mm", "derived": True, "notes": notes, "fab": fab, "material": key}
 
 
+DEFAULT_VIA = (0.4, 0.25)   # pad, hole in mm: the via a generated board uses unless told otherwise
+
+
 def rules_for(fab: str, material_name: str = "fr4", layers: int = 2, copper_oz: float = 1.0) -> dict:
     """The fabricator's limits as design rules (mm), for board.rules(**...)."""
     f = FABS[_fab(fab)]
@@ -5024,7 +5038,9 @@ def rules_for(fab: str, material_name: str = "fr4", layers: int = 2, copper_oz: 
         w = ts[("2oz" if copper_oz >= 2 else "1oz") + (" multilayer" if layers > 2 else " 2-layer")]
     else:
         w = ts["2oz"] if copper_oz >= 2 else ts["1oz advanced (no surcharge)"]
-    return {"min_track_width": w, "min_clearance": w, "edge_clearance": max(0.2, r["copper_to_edge"]), "hole_clearance": r.get("via_to_track", 0.2)}
+    v = r.get("via") or {}   # the house via is 0.4 mm on a 0.25 mm hole (the person's default), raised to what the fab can drill
+    return {"min_track_width": w, "min_clearance": w, "edge_clearance": max(0.2, r["copper_to_edge"]), "hole_clearance": r.get("via_to_track", 0.2),
+            "via_diameter": max(DEFAULT_VIA[0], v.get("diameter", 0)), "via_drill": max(DEFAULT_VIA[1], v.get("hole", 0))}
 
 
 def choose(ghz: float | None = None, flex: bool = False, dynamic: bool = False, watts: float | None = None, led: bool = False, fine_pitch: float | None = None,
@@ -6797,9 +6813,9 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var p=require("node:fs"),H=globalThis,L=p.constants;process.binding=e=>{if(e==="constants")return{fs:L};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete H[e]}catch{}var G=new(require("node:string_decoder")).StringDecoder("utf8"),T=new Int32Array(new SharedArrayBuffer(4)),i="";function N(){let e=Buffer.alloc(65536);for(;;){let s=i.indexOf(`
+`;var p=require("node:fs"),L=globalThis,H=p.constants;process.binding=e=>{if(e==="constants")return{fs:H};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete L[e]}catch{}var G=new(require("node:string_decoder")).StringDecoder("utf8"),T=new Int32Array(new SharedArrayBuffer(4)),i="";function N(){let e=Buffer.alloc(65536);for(;;){let s=i.indexOf(`
 `);if(s>=0){let t=i.slice(0,s);return i=i.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),i+=G.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}throw t}}var M=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/physics.py",b],["kicad_harness/stackups.py",_],["kicad_harness/parts/__init__.py",y],["kicad_harness/parts/datasheet.py",w],["kicad_harness/parts/footprint.py",x],["kicad_harness/parts/search.py",k],["kicad_harness/parts/symbol.py",v]],U=`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}throw t}}var U=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/physics.py",b],["kicad_harness/stackups.py",_],["kicad_harness/parts/__init__.py",y],["kicad_harness/parts/datasheet.py",w],["kicad_harness/parts/footprint.py",x],["kicad_harness/parts/search.py",k],["kicad_harness/parts/symbol.py",v]],M=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -6830,6 +6846,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),o=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});o.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),o.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of M)o.FS.writeFile("/kh/"+r,l);o.runPython(U);let E=o.globals.get("__kc_run"),a;try{a=JSON.parse(String(E(String(e.code||""))))}catch(r){a={ok:!1,error:String(r&&r.message||r).split(`
+`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),o=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});o.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),o.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of U)o.FS.writeFile("/kh/"+r,l);o.runPython(M);let E=o.globals.get("__kc_run"),a;try{a=JSON.parse(String(E(String(e.code||""))))}catch(r){a={ok:!1,error:String(r&&r.message||r).split(`
 `).filter(Boolean).slice(-1)[0]||"The script failed."}}a.done=!0,a.output=n.join(`
 `),d(a),process.exit(0)}V().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
