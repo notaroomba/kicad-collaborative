@@ -233,7 +233,8 @@ const SELECT = "w-full text-sm";
 // application switcher) and Option; elsewhere Ctrl and Shift.  APPEARANCE_CONTROLS::rebuildLayerPresetsWidget /
 // rebuildViewportsWidget write the labels with KeyNameFromKeyCode over the form's "Ctrl+Tab" / "Alt+Tab".
 const PRESET_SWITCH_KEY = IS_MAC ? "RawCtrl" : "Ctrl";
-// the browser keeps Ctrl+Tab for its own tabs: the label names the key the page receives (editor/view-switcher.ts)
+// browsers keep Ctrl+Tab for their own tabs, so Ctrl+` opens the preset switcher too (editor/view-switcher.ts); the
+// label stays KiCad's (APPEARANCE_CONTROLS: "Presets (%s+Tab):") and the tooltip names the browser's key
 const PRESET_SWITCH_STEP = "`";
 const VIEWPORT_SWITCH_KEY = IS_MAC ? "Alt" : "Shift";
 function PresetsAndViewports() {
@@ -245,7 +246,7 @@ function PresetsAndViewports() {
   const user = presets.filter((p) => !builtin.includes(p));
   return (
     <div className="flex-none px-1.5 py-1.5 border-t border-line bg-bench">
-      <div className="mb-0.5" data-label="presets">Presets ({keyName(PRESET_SWITCH_KEY + "+" + PRESET_SWITCH_STEP)}):</div>
+      <div className="mb-0.5" data-label="presets" title={keyName(PRESET_SWITCH_KEY + "+" + PRESET_SWITCH_STEP)}>Presets ({keyName(PRESET_SWITCH_KEY + "+Tab")}):</div>
       {/* rebuildLayerPresetsWidget: the built-in presets, then "---" and the user's own (both alphabetical), then
           "---", Save, Delete; no preset matching what is shown selects that last separator (count - 3) */}
       <Select id="presetSel" className={SELECT} title="Layer presets" value={preset && presets.includes(preset) ? preset : "\u0001sep"}
