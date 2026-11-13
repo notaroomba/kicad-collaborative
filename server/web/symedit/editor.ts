@@ -1105,7 +1105,7 @@ export class SymbolEditor {
     this.edit("Explode Stacked Pin", (s) => { const r = M.explodeStackedPin(s, this.selNodes(s)[0]); if (typeof r === "string") { err = r; return false; } return []; });
     if (err) this.infoBarError(err); else { t.sel.clear(); this.selChanged(); }
   }
-  private selNodes(sym: M.Node): M.Node[] { const t = this.tab; return t ? [...t.sel].map((id) => nodeOf(sym, id)).filter((n): n is M.Node => !!n) : []; }
+  selNodes(sym: M.Node): M.Node[] { const t = this.tab; return t ? [...t.sel].map((id) => nodeOf(sym, id)).filter((n): n is M.Node => !!n) : []; }
   private selCentre(): [number, number] {
     const doc = this.kdoc(); const t = this.tab; let bb: number[] | null = null;
     if (doc && t) for (const id of t.sel) { const it = doc.items.get(id); if (it && it.bbox) bb = bb ? [Math.min(bb[0], it.bbox[0]), Math.min(bb[1], it.bbox[1]), Math.max(bb[2], it.bbox[2]), Math.max(bb[3], it.bbox[3])] : it.bbox.slice(); }

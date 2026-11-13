@@ -1008,14 +1008,33 @@ export function pinTable(se: SymbolEditor): void {
   const bodyNames = M.bodyStyles(root).names; const nUnits = M.unitCount(root);
   const unitOpts: [string, string][] = [["0", "ALL"], ...Array.from({ length: nUnits }, (_, i) => [String(i + 1), M.unitLetter(i + 1)] as [string, string])];
   const bodyOpts: [string, string][] = [["0", "ALL"], ...bodyNames.map((n, i) => [String(i + 1), n] as [string, string])];
-  const summary = h("div", { id: "pt-summary", style: "display:flex;gap:16px;margin-top:6px;color:var(--ink-2)" });
-  const sum = () => { const s = M.pinNumberSummary(rows); summary.innerHTML = ""; summary.append(h("span", null, `Pin numbers: ${s.numbers}`), h("span", null, `Pin count: ${s.count}`), s.duplicates ? h("span", { style: "color:var(--err)" }, `Duplicate pins: ${s.duplicates}`) : ""); };
+  // DIALOG_LIB_EDIT_PIN_TABLE: Pin numbers / Pin count / Duplicate pins over every pin, whatever the filters show
+  const summary = h("div", { id: "pt-summary", style: "display:flex;gap:16px;margin-bottom:6px;color:var(--ink-2)" });
+  const sum = () => { const s = M.pinNumberSummary(rows); summary.innerHTML = "";
+    summary.append(h("span", null, `Pin numbers: ${s.numbers}`), h("span", null, `Pin count: ${s.count}`), h("span", { id: "pt-dups", style: s.duplicates ? "color:var(--err)" : "" }, `Duplicate pins: ${s.duplicates || 0}`)); };
   let grid: { refresh(): void } | null = null;
   const len = (k: keyof M.PinRow) => ({ key: k as string, label: "", width: 76, format: (v: unknown) => toUser(Number(v)) });
+  // the filters (RebuildRows: a pin common to all units / body styles always shows)
+  const selNodes = new Set<M.Node>(se.selNodes(sym));
+  const fUnit = checkbox("Filter by unit:", false, () => rebuild(), { id: "pt-filter-unit", disabled: nUnits < 2 });
+  const fUnitSel = select(unitOpts, "0", () => { (fUnit.querySelector("input") as HTMLInputElement).checked = true; rebuild(); }, { id: "pt-unit", disabled: nUnits < 2 });
+  const fBody = checkbox("Filter by body style:", false, () => rebuild(), { id: "pt-filter-body", disabled: bodyNames.length < 2 });
+  const fBodySel = select(bodyOpts, "0", () => { (fBody.querySelector("input") as HTMLInputElement).checked = true; rebuild(); }, { id: "pt-body", disabled: bodyNames.length < 2 });
+  const fSel = checkbox("Filter by selection", false, () => rebuild(), { id: "pt-filter-sel" });
+  const on = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
+  const shown: M.PinRow[] = [];
+  const visible = (r: M.PinRow): boolean => {
+    const u = on(fUnit) ? Number(fUnitSel.value) : 0, b = on(fBody) ? Number(fBodySel.value) : 0;
+    return (u === 0 || r.unit === 0 || r.unit === u) && (b === 0 || r.body === 0 || r.body === b) && (!on(fSel) || (!!r.node && selNodes.has(r.node)));
+  };
+  const rebuild = () => { shown.length = 0; shown.push(...rows.filter(visible)); grid && grid.refresh(); sum(); };
+  shown.push(...rows.filter(visible));
   KD().open({
     title: `Pin Table`, width: 1100, cls: "kd-wide", readOnly: ro,
     build(body) {
+      sum(); body.append(summary);
       grid = KD().grid(body, [
+        { key: "count", label: "Count", type: "ro", width: 46 },
         { key: "number", label: "Number", width: 70 }, { key: "name", label: "Name", width: 120 },
         { key: "type", label: "Electrical Type", type: "choice", options: M.PIN_TYPES.map(([a, l]) => [a, l] as [string, string]), width: 120 },
         { key: "shape", label: "Graphic Style", type: "choice", options: M.PIN_SHAPES.map(([a, l]) => [a, l] as [string, string]), width: 120 },
@@ -1023,22 +1042,38 @@ export function pinTable(se: SymbolEditor): void {
         { ...len("numSize"), label: "Number Text Size" }, { ...len("nameSize"), label: "Name Text Size" }, { ...len("length"), label: "Length" }, { ...len("x"), label: "X Position" }, { ...len("y"), label: "Y Position" },
         { key: "visible", label: "Visible", type: "bool", width: 50 },
         { key: "unit", label: "Unit", type: "choice", options: unitOpts, width: 56 }, { key: "body", label: "Body Style", type: "choice", options: bodyOpts, width: 90 },
-      ], rows, {
+      ], shown, {
         readOnly: ro, height: 380,
-        onChange(r, key, v) {
+        onChange(r, key, v, sel) {
           const row = r as unknown as Record<string, unknown>;
           if (key && ["numSize", "nameSize", "length", "x", "y"].includes(key) && typeof v === "string") { const n = parseLen(v); row[key] = n === null ? 0 : +M.fmt(n); }
           if (key === "orient" || key === "unit" || key === "body") row[key] = Number(v);
+          // the grid edits the shown rows: an added row joins the pins, a deleted one leaves them
+          if (key === null && typeof sel === "number") { const pr = r as unknown as M.PinRow; const i = rows.indexOf(pr); if (sel < 0 && i >= 0) rows.splice(i, 1); else if (sel >= 0 && i < 0) rows.push(pr); }
           sum();
         },
         buttons: { add: () => { const last = rows[rows.length - 1]; const p = last ? M.repeatPin({ ...M.newPinInfo(last.x, last.y, se.lastPin, last.unit, last.body), name: last.name, number: last.number, orient: last.orient }) : M.newPinInfo(0, 0, se.lastPin, t.unit, t.body); return { count: 1, number: p.number, name: p.name, type: p.type, shape: p.shape, orient: p.orient, numSize: p.numSize, nameSize: p.nameSize, length: p.length, x: p.x, y: p.y, visible: p.visible, unit: p.unit, body: p.body, node: null }; }, remove: true },
       });
-      sum(); body.append(summary);
-      const exp = (sep: string) => M.pinsToCsv(rows, sym, (mm) => toUser(mm), sep);
-      body.append(h("div", { style: "display:flex;gap:6px;margin-top:6px" },
-        h("button", { class: "btn sm", id: "pt-export", onclick: () => download(M.symName(sym) + "-pins.csv", exp(",")) }, "Export to File..."),
-        h("button", { class: "btn sm", onclick: () => { try { void navigator.clipboard.writeText(exp("\t")); } catch (e) { /* no clipboard */ } } }, "Export to Clipboard"),
-        h("button", { class: "btn sm", id: "pt-import", disabled: ro, onclick: () => void pickFile(".csv,.tsv,.txt").then(async (f) => { if (!f) return; const got = M.pinsFromCsv(await f.text(), sym, (s) => parseLen(s) || 0); rows.length = 0; rows.push(...got); grid && grid.refresh(); sum(); }) }, "Import from File...")));
+      for (const l of [fUnit, fBody, fSel]) l.style.whiteSpace = "nowrap";
+      fUnitSel.style.width = fBodySel.style.width = "110px";
+      body.append(h("div", { style: "display:flex;gap:14px;align-items:center;margin-top:6px;flex-wrap:wrap" },
+        h("span", { style: "display:flex;gap:6px;align-items:center" }, fUnit, fUnitSel), h("span", { style: "display:flex;gap:6px;align-items:center" }, fBody, fBodySel), fSel));
+      // the Export and Import boxes
+      const radio = (name: string, id: string, label: string, checked: boolean) => { const i = h("input", { type: "radio", name, id, style: "width:auto;margin:0" }) as HTMLInputElement; i.checked = checked; return h("label", { style: "display:flex;gap:6px;align-items:center" }, i, label); };
+      const expAll = radio("pt-exp", "pt-exp-all", "Export all pins", true), expShown = radio("pt-exp", "pt-exp-shown", "Export only shown pins", false);
+      const impReplace = radio("pt-imp", "pt-imp-replace", "Replace all existing pins", true), impAppend = radio("pt-imp", "pt-imp-append", "Append to existing pins", false);
+      const exp = (sep: string) => M.pinsToCsv((expShown.querySelector("input") as HTMLInputElement).checked ? shown : rows, sym, (mm) => toUser(mm), sep);
+      const boxes = h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px" });
+      body.append(boxes);
+      const eb = KD().staticBox(boxes, "Export"); const ib = KD().staticBox(boxes, "Import");
+      eb.append(h("div", { style: "display:flex;gap:14px;align-items:center;flex-wrap:wrap" }, expAll, expShown, h("span", { style: "flex:1" }),
+        h("button", { class: "btn sm", id: "pt-export", onclick: () => download(M.symName(sym) + "-pins.csv", exp(",")) }, "To File..."),
+        h("button", { class: "btn sm", id: "pt-export-clip", onclick: () => { try { void navigator.clipboard.writeText(exp("\t")); } catch (e) { /* no clipboard */ } } }, "To Clipboard")));
+      ib.append(h("div", { style: "display:flex;gap:14px;align-items:center;flex-wrap:wrap" }, impReplace, impAppend, h("span", { style: "flex:1" }),
+        h("button", { class: "btn sm", id: "pt-import", disabled: ro, onclick: () => void pickFile(".csv,.tsv,.txt").then(async (f) => {
+          if (!f) return; const got = M.pinsFromCsv(await f.text(), sym, (s) => parseLen(s) || 0);
+          if ((impReplace.querySelector("input") as HTMLInputElement).checked) rows.length = 0;
+          rows.push(...got); rebuild(); }) }, "From File...")));
     },
     ok() { if (ro) return true; se.edit("Edit Pins", (s) => { M.applyPinRows(s, rows); }); return true; },
   });
