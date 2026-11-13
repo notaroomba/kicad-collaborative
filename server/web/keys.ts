@@ -67,3 +67,26 @@ export function keysInText(text: string): string {
   if (!IS_MAC) return text;
   return text.replace(/\b((?:(?:Ctrl|Alt|Shift)\+)+)(?=\S)/g, (mods) => (/Ctrl|Alt/.test(mods) ? keyName(mods + "x").slice(0, -1) : mods));
 }
+
+/** The unshifted and shifted character of each punctuation key on the US layout, by KeyboardEvent.code. */
+const PUNCT_CODES: Record<string, [string, string]> = {
+  Backquote: ["`", "~"], Minus: ["-", "_"], Equal: ["=", "+"], BracketLeft: ["[", "{"], BracketRight: ["]", "}"], Backslash: ["\\", "|"],
+  Semicolon: [";", ":"], Quote: ["'", "\""], Comma: [",", "<"], Period: [".", ">"], Slash: ["/", "?"], IntlBackslash: ["\\", "|"],
+};
+
+/**
+ * The key a hotkey names for this event.  Option (Alt) composes another character on a Mac and on some layouts:
+ * Option+S types "ß", Option+/ "÷", and Option+` is a dead key ("Dead").  wx matches the key code of the physical
+ * key, so this does too: letters and digits always by their code while Alt is held, punctuation when the key
+ * typed something else (a dead key or a character outside ASCII).  Null for an event that names no key.
+ */
+export function hotkeyKey(ev: { key: string; code?: string; altKey: boolean; shiftKey: boolean }): string | null {
+  const k = ev.key;
+  if (!k || k === "Unidentified") return null;
+  if (ev.altKey && ev.code) {
+    const m = /^(?:Key|Digit)(.)$/.exec(ev.code); if (m) return m[1];
+    const p = PUNCT_CODES[ev.code];
+    if (p && (k === "Dead" || k.length !== 1 || k.charCodeAt(0) > 0x7e)) return p[ev.shiftKey ? 1 : 0];
+  }
+  return k === "Dead" ? null : k;
+}

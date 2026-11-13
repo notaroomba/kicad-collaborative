@@ -1,4 +1,5 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
+import { hotkeyKey } from "../keys";
 import { setGroupCurrent, setStatusBar, state, store } from "./appstore";
 import { refreshCrosshair, toolCursor } from "./crosshair";
 import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./doc";
@@ -170,10 +171,10 @@ export function hotkeyMatches(ev: { key: string; code?: string; ctrlKey: boolean
   const parts = String(key).split("+"); const k = parts.pop()!;
   if (parts.includes("Ctrl") !== (ev.ctrlKey || ev.metaKey) || parts.includes("Shift") !== ev.shiftKey || parts.includes("Alt") !== ev.altKey) return false;
   const want = KEY_NAMES[k] || k;
-  // Option (Alt) composes another character on a Mac (Option+S types "ß"): the physical key for letters and digits
-  const phys = ev.altKey && ev.code ? /^(?:Key|Digit)(.)$/.exec(ev.code) : null;
-  const got = phys ? phys[1] : ev.key;
-  return want.length === 1 ? got.toUpperCase() === want.toUpperCase() : ev.key === want;
+  // Option (Alt) composes another character on a Mac (Option+S types "ß", Option+/ "÷", Option+` is a dead key):
+  // the physical key (keys.ts hotkeyKey)
+  const got = hotkeyKey(ev); if (!got) return false;
+  return want.length === 1 ? got.toUpperCase() === want.toUpperCase() : got === want;
 }
 
 export function runModuleHotkey(ev: KeyboardEvent) {

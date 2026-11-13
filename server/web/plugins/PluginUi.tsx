@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 import { useApp } from "../store";
 import { cx } from "../util";
+import { keyName } from "../keys";
 import {
   actionsFor, actionsOf, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, closeWindow, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
   installFromRegistry, installOfficial, loadOfficial, installRecommended, loadRegistry, lookupPublished, missingRecommended, moderate, report, openManager, originOf, panelsFor, publish, readLocalFiles, recommend,
@@ -57,7 +58,7 @@ export function usePluginBarEntries(): { key: string; node: ReactNode; menu?: { 
   return [{ key: "plugin-sep", node: <span className="plg-tb-sep" />, menu: null }, ...acts.map((a) => {
     const run = s.running[a.plugin]; const working = !!run && run.busy === a.name; const icon = a.action.icon ? safeSvg(a.action.icon) : "";
     return { key: a.uiId, menu: { id: a.uiId, label: a.name, glyph: icon || undefined }, node: (
-      <button type="button" className={cx("plg-tb-btn", working && "busy")} data-uiact={a.uiId} title={`${a.name}${a.action.key ? `  (${a.action.key})` : ""}\n${a.description}\n— plugin: ${a.pluginName}`} onClick={() => runPluginUi(a.uiId)}>
+      <button type="button" className={cx("plg-tb-btn", working && "busy")} data-uiact={a.uiId} title={`${a.name}${a.action.key ? `  (${keyName(a.action.key)})` : ""}\n${a.description}\n— plugin: ${a.pluginName}`} onClick={() => runPluginUi(a.uiId)}>
         {a.action.iconUrl ? <img src={a.action.iconUrl} alt="" draggable={false} /> : icon ? <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} /> : PUZZLE}
       </button>
     ) };
@@ -223,7 +224,7 @@ function Contributes({ m, actions }: { m: PluginManifest; actions?: PluginAction
     for (const a of actions) rows.push(`Command: ${a.name}`);
     return <ul className="plg-adds">{rows.map((r) => <li key={r}>{r}</li>)}</ul>;
   }
-  for (const a of m.actions || []) rows.push(`Command: ${a.name}${a.key ? ` (${a.key})` : ""}`);
+  for (const a of m.actions || []) rows.push(`Command: ${a.name}${a.key ? ` (${keyName(a.key)})` : ""}`);
   if (m.panel) rows.push(`Panel: ${m.panel.name}`);
   for (const i of m.importers || []) rows.push(`Import: ${i.name}`);
   for (const e of m.exporters || []) rows.push(`Export: ${e.name}`);

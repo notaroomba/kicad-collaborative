@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from "react-dom";
 import { dispatch, useApp } from "../store";
 import { cx } from "../util";
-import { menuScroller, menuSize, placeMenu } from "../menufit";
+import { menuArrowPad, menuScroller, menuSize, placeMenu } from "../menufit";
 import { Select, type SelectOption } from "./Select";
 
 const SEL = "ksel h-6 text-sm max-w-[320px]";
@@ -62,9 +62,17 @@ export function LayerSelect() {
     if (!open || !btn.current) return;
     const r = btn.current.getBoundingClientRect();
     const p = placeMenu(list.current ? menuSize(list.current) : { w: 230, h: 300 }, { below: r });
-    setStyle({ left: p.left + "px", top: p.top + "px", maxHeight: Math.min(p.maxHeight, Math.round(window.innerHeight * 0.7)) + "px", minWidth: r.width + "px" });
-    if (list.current) menuScroller(list.current);
-    const on = list.current && list.current.querySelector(".on"); if (on) on.scrollIntoView({ block: "nearest" });
+    const st = { left: p.left + "px", top: p.top + "px", maxHeight: Math.min(p.maxHeight, Math.round(window.innerHeight * 0.7)) + "px", minWidth: r.width + "px" };
+    setStyle(st);
+    const el = list.current; if (!el) return;
+    Object.assign(el.style, st, { visibility: "" });   // cut now, so the active layer is scrolled to in the list as it shows
+    menuScroller(el, { combo: true });   // PCB_LAYER_BOX_SELECTOR is a wxBitmapComboBox
+    const on = el.querySelector(".on") as HTMLElement | null;
+    if (on) {   // in view and clear of the arrow strips of a list cut on a Mac
+      const pad = menuArrowPad(el), top = on.offsetTop, bot = top + on.offsetHeight;
+      if (top - pad < el.scrollTop) el.scrollTop = Math.max(0, top - pad);
+      else if (bot + pad > el.scrollTop + el.clientHeight) el.scrollTop = bot + pad - el.clientHeight;
+    }
   }, [open, layers.length]);
   useEffect(() => {
     if (!open) return;

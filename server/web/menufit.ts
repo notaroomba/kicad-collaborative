@@ -8,6 +8,8 @@
 // k-select lists, the Symbol Editor's and 3D Viewer's menus) is placed with menuPlacement / fitMenu and scrolls
 // with menuScroller.
 
+import { IS_MAC } from "./keys";
+
 export interface MenuAnchor {
   /** a context menu: its top-left corner at the pointer */
   at?: { x: number; y: number };
@@ -100,8 +102,14 @@ function arrow(dir: "up" | "down"): HTMLDivElement {
  * while rows are hidden below; resting the pointer on a strip scrolls the menu.  The strips sit over the menu
  * (in the body, so neither React nor the menu's own code sees them) and go away with it.  Idempotent.
  */
-export function menuScroller(el: HTMLElement): void {
-  if (typeof document === "undefined" || SCROLLERS.has(el)) return;
+export function menuScroller(el: HTMLElement, opts: { combo?: boolean } = {}): void {
+  if (typeof document === "undefined") return;
+  // A combo box's list (wxChoice, wxComboBox, wxBitmapComboBox) is a menu only on a Mac (an NSPopUpButton's
+  // NSMenu, with the arrows); on Windows and GTK it is a list box with a scroll bar, which it keeps.
+  if (opts.combo && !IS_MAC) return;
+  // cut now, not on the first frame: a scrollIntoView right after this already keeps clear of the arrows
+  el.classList.toggle("kmenu-cut", el.scrollHeight > el.clientHeight + 1);
+  if (SCROLLERS.has(el)) return;
   el.classList.add("kmenu-scrolls");
   const s: Scroller = { up: arrow("up"), down: arrow("down"), dir: 0, last: 0, raf: 0 };
   SCROLLERS.set(el, s);
@@ -136,4 +144,12 @@ export function menuScroller(el: HTMLElement): void {
     s.raf = requestAnimationFrame(tick);
   };
   s.raf = requestAnimationFrame(tick);
+}
+
+/**
+ * How far a row must stay from the top and the bottom of a menu's visible part to be seen: the arrow strips cover
+ * that much of a menu cut by menuScroller (theme.css gives .kmenu-cut the same scroll-padding).  0 elsewhere.
+ */
+export function menuArrowPad(el: HTMLElement): number {
+  return SCROLLERS.has(el) && el.scrollHeight > el.clientHeight + 1 ? ARROW + 2 : 0;
 }

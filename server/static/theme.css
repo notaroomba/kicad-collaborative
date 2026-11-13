@@ -200,8 +200,10 @@ k-select.input { min-height: var(--h-md); height: auto; }
 .ksel-head { padding: 4px 10px 2px; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
 .ksel-opt.ind { padding-left: 20px; }
 
-/* ---- menus cut to the window (web/menufit.ts): they scroll, with macOS's arrow strips at the ends in place
-        of a scroll bar; resting the pointer on a strip scrolls the menu ---- */
+/* ---- menus cut to the window (web/menufit.ts): they scroll, with arrow strips at the ends in place of a scroll
+        bar, as native menus do (macOS, Windows and GTK menus alike); resting the pointer on a strip scrolls the
+        menu.  A combo box's list gets them only on a Mac (an NSPopUpButton's menu); elsewhere it is never
+        .kmenu-cut and keeps its scroll bar, like a wxChoice's list ---- */
 .kmenu-cut { scrollbar-width: none; scroll-padding-block: 18px; }
 .kmenu-cut::-webkit-scrollbar { display: none; }
 .kmenu-arrow { position: fixed; display: none; align-items: center; justify-content: center; box-sizing: border-box;

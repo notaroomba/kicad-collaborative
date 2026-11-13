@@ -13,6 +13,7 @@
 //                      where a module binds a key KiCad uses for something else (tables.ts KICAD_KEY_WINS);
 //   runSpecHotkey(ev)  from index.ts's keydown handler after the module had its turn: the generic table.
 // Nothing fires while the user types in a field, a dialog or an open menu (typingTarget).
+import { hotkeyKey } from "../keys";
 import { hotkeyOwners, type EditorKind } from "../menuspec";
 import { EDITOR_ONLY, FPEDIT_BLOCKED, FPEDIT_ONLY, KICAD_KEY_WINS, MODULE_ALIAS, toolFor } from "../tables";
 import { HANDLERS } from "./actions";
@@ -28,10 +29,10 @@ const NAMED: Record<string, string> = { Delete: "Del", Escape: "Esc", " ": "Spac
 
 /** The event as a hotkey in the spec's notation: "Ctrl+Shift+Z", "F1", "Shift+Space", "'" (Cmd counts as Ctrl). */
 export function comboOf(ev: KeyboardEvent): string {
-  let k = ev.key;
-  if (!k || k === "Control" || k === "Shift" || k === "Alt" || k === "Meta" || k === "Dead" || k === "Unidentified") return "";
-  // Alt composes other characters on some layouts (Alt+3 → "#" / "£"): take the physical key for digits and letters
-  if (ev.altKey && ev.code) { const m = /^(?:Key|Digit)(.)$/.exec(ev.code); if (m) k = m[1]; }
+  // Alt composes other characters on some layouts (Alt+3 → "#" / "£", Option+/ → "÷", Option+` a dead key):
+  // the physical key (keys.ts hotkeyKey)
+  let k = hotkeyKey(ev);
+  if (!k || k === "Control" || k === "Shift" || k === "Alt" || k === "Meta") return "";
   k = NAMED[k] || k;
   const letter = k.length === 1 && /[a-z]/i.test(k);
   if (letter) k = k.toUpperCase();

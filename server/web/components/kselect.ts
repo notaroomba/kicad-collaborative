@@ -18,7 +18,7 @@
 //
 // Each bundle that builds a select imports this file; the first one to load defines the element.
 
-import { menuScroller } from "../menufit";
+import { menuArrowPad, menuScroller } from "../menufit";
 
 export const KSELECT_TAG = "k-select";
 
@@ -204,9 +204,11 @@ export function defineKSelect(): void {
       const g = o.parentElement; if (!g || g.tagName !== "OPTGROUP" || (prev && prev.parentElement === g)) return null;
       const r = document.createElement("div"); r.className = cls; r.setAttribute("role", "presentation"); r.textContent = (g as HTMLOptGroupElement).label; return r;
     }
+    /** Scrolls the row into the visible part of the list: clear of the arrow strips of a list cut on a Mac (menufit.ts). */
     private scrollRow(box: HTMLElement, row: HTMLElement): void {
-      if (row.offsetTop < box.scrollTop) box.scrollTop = row.offsetTop;
-      else if (row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight;
+      const pad = menuArrowPad(box);
+      if (row.offsetTop - pad < box.scrollTop) box.scrollTop = Math.max(0, row.offsetTop - pad);
+      else if (row.offsetTop + row.offsetHeight + pad > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop + row.offsetHeight + pad - box.clientHeight;
     }
 
     // ------------------------------------------------------------ the popup list
@@ -273,8 +275,8 @@ export function defineKSelect(): void {
       pop.style.maxHeight = h + "px";
       pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
       const w = pop.offsetWidth; pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+      menuScroller(pop, { combo: true });
       const row = pop.querySelector(".hi, .on") as HTMLElement | null; if (row) this.scrollRow(pop, row);
-      menuScroller(pop);
     }
     private highlight(i: number, scroll = true): void {
       this.hi = i; const pop = this.pop; if (!pop) return;

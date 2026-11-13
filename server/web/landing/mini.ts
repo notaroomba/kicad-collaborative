@@ -7,6 +7,7 @@
 import {
   BOARD, Box, HIDDEN, K, PEERS, boardText, Pt, Rat, View, clamp, clash, copperAt, dist, drawCursor, ease, fit, lerp, loadPcbOpen, meta, ratsnest, span, toMm, toPx, trackAt,
 } from "./demo";
+import { keysInText } from "../keys";
 import { SANS, Stage, makeStage, reducedMotion } from "./stage";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -518,5 +519,7 @@ export function startMini(root: HTMLElement): void {
   root.querySelectorAll<HTMLElement>("[data-tool-btn]").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.toolBtn as Tool)));
   root.querySelectorAll<HTMLElement>("[data-layer-btn]").forEach((b) => b.addEventListener("click", () => setLayer(b.dataset.layerBtn as Layer)));
   root.querySelectorAll<HTMLElement>("[data-act]").forEach((b) => b.addEventListener("click", () => act(b.dataset.act!)));
+  // the page spells hotkeys as KiCad's tables do ("Undo (Ctrl+Z)"): a Mac reads them with its own names ("Cmd+Z")
+  root.querySelectorAll<HTMLElement>("[title]").forEach((b) => { b.title = keysInText(b.title); });
   sync();
 }
