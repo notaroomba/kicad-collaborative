@@ -1014,7 +1014,7 @@
           } else {
             const inp = el("input");
             inp.type = "text";
-            inp.value = str(v);
+            inp.value = c.format ? c.format(v, r) : str(v);
             inp.dataset.col = c.key;
             if (c.list) inp.setAttribute("list", c.list);
             inp.addEventListener("change", () => {
@@ -1104,27 +1104,61 @@
   }
 
   // web/tools/kicad-dialogs/shell.ts
-  var current = null;
-  var isOpen = () => !!current;
+  var stack = [];
+  var top = () => stack.length ? stack[stack.length - 1] : null;
+  var isOpen = () => stack.length > 0;
   function el(tag, cls, html) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     if (html !== void 0) e.innerHTML = html;
     return e;
   }
+  function closeEntry(d) {
+    const i = stack.indexOf(d);
+    if (i < 0) return;
+    for (const x of stack.splice(i).reverse()) x.ov.remove();
+  }
   function close() {
-    if (current) {
-      current.ov.remove();
-      current = null;
+    if (stack.length) closeEntry(stack[0]);
+  }
+  var FOCUSABLE = "input, k-select, textarea, button, select, a[href], [tabindex]";
+  function tabStops(root2) {
+    return Array.from(root2.querySelectorAll(FOCUSABLE)).filter((e) => {
+      if (e.disabled || e.hasAttribute("disabled") || e.getAttribute("tabindex") === "-1" || e.closest("[inert], [hidden]")) return false;
+      if (e.parentElement && e.parentElement.closest("k-select")) return false;
+      if (typeof e.getClientRects === "function" && !e.getClientRects().length) return false;
+      return true;
+    });
+  }
+  function wrapTab(stops, from, back) {
+    if (!stops.length) return null;
+    const i = from ? stops.indexOf(from) : -1;
+    if (i < 0) return back ? stops[stops.length - 1] : stops[0];
+    if (!back && i === stops.length - 1) return stops[0];
+    if (back && i === 0) return stops[stops.length - 1];
+    return null;
+  }
+  function trapTab(ev, dlg) {
+    if (ev.key !== "Tab" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const stops = tabStops(dlg), a = document.activeElement;
+    const inner = a && a.closest ? a.closest("k-select") || a : a;
+    const to = wrapTab(stops, inner && dlg.contains(inner) ? inner : null, ev.shiftKey);
+    if (!to) {
+      if (!stops.length) ev.preventDefault();
+      return;
     }
+    ev.preventDefault();
+    to.focus();
+    if (to instanceof HTMLInputElement && to.type === "text") to.select();
   }
   if (typeof document !== "undefined") document.addEventListener("keydown", (ev) => {
-    if (!current || ev.key !== "Escape" || ev.defaultPrevented) return;
+    const cur = top();
+    if (!cur || ev.key !== "Escape" || ev.defaultPrevented) return;
     const t = ev.target;
     if (t && t.closest && t.closest(".kd-overlay, .kd-font-pop, #ctxMenu, [role='menu'], [data-popup-open]")) return;
     ev.preventDefault();
     ev.stopPropagation();
-    current.finish(false);
+    cur.finish(false);
   }, true);
   function dialogKeyFromTitle(title) {
     let t = String(title);
@@ -1200,14 +1234,27 @@
       dlg.style.maxHeight = "none";
     }
   }
+  function besideParent(dlg, parent) {
+    const p = parent.getBoundingClientRect(), r = dlg.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
+    let left = null;
+    if (p.right + 8 + r.width <= vw) left = p.right + 8;
+    else if (p.left - 8 - r.width >= 0) left = p.left - 8 - r.width;
+    if (left === null) left = Math.max(0, vw - r.width);
+    dlg.style.position = "fixed";
+    dlg.style.margin = "0";
+    dlg.style.left = Math.round(left) + "px";
+    dlg.style.top = Math.round(Math.max(0, Math.min(p.top, vh - r.height))) + "px";
+  }
   function open(spec) {
-    close();
+    if (!spec.child || !stack.length) close();
+    else for (const d of stack.slice(1)) if (d.spec.title === spec.title) closeEntry(d);
     const ov = el("div", "kd-overlay"), dlg = el("div", "kd-dialog");
     if (spec.width) dlg.style.width = spec.width + "px";
     const tt = el("div", "kd-title", `<span>${esc(spec.title)}</span><span class="kd-x" title="Close (Esc)">\xD7</span>`);
     const body = el("div", "kd-body"), foot = el("div", "kd-foot");
     for (const b of spec.extra || []) {
       const btn = el("button", "btn", esc(b.label));
+      if (b.id) btn.id = b.id;
       btn.addEventListener("click", () => b.fn());
       foot.appendChild(btn);
     }
@@ -1226,6 +1273,7 @@
       foot.appendChild(btn);
     }
     else foot.append(cancel, ok);
+    if (spec.buttons && !spec.buttons.length && !(spec.extra || []).length) foot.style.display = "none";
     if (spec.cls) dlg.classList.add(...String(spec.cls).split(" "));
     if (spec.modeless) ov.classList.add("kd-modeless");
     dlg.tabIndex = -1;
@@ -1233,13 +1281,14 @@
     dlg.append(tt, body, foot);
     ov.appendChild(dlg);
     document.body.appendChild(ov);
+    if (spec.child) ov.style.zIndex = String(60 + stack.length * 2);
     const finish = (apply) => {
       if (apply) {
         const a = document.activeElement;
         if (a && a !== document.body && dlg.contains(a)) a.blur();
         if (spec.ok && spec.ok() === false) return;
       }
-      close();
+      closeEntry(entry);
       if (!apply && spec.cancel) spec.cancel();
     };
     cancel.addEventListener("click", () => finish(false));
@@ -1247,7 +1296,8 @@
     tt.querySelector(".kd-x").addEventListener("click", () => finish(false));
     ov.addEventListener("keydown", (ev) => {
       ev.stopPropagation();
-      if (ev.key === "Escape") {
+      if (ev.key === "Tab") trapTab(ev, dlg);
+      else if (ev.key === "Escape") {
         ev.preventDefault();
         finish(false);
       } else if (ev.key === "Enter" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && ev.target && ev.target.closest && ev.target.closest(".kd-grid")) {
@@ -1301,9 +1351,10 @@
       if (sizeFrom) saveGeometry(geomKey, dlg, true);
       sizeFrom = null;
     });
-    current = { ov, dlg, body, spec, finish };
+    const entry = { ov, dlg, body, spec, finish };
+    stack.push(entry);
     ensureCss();
-    const api = { body, close, dlg, foot, finish, refocus(key) {
+    const api = { body, close: () => closeEntry(entry), dlg, foot, finish, refocus(key) {
       const c = key !== void 0 && body.querySelector(`[data-k="${key}"]`);
       if (c) {
         c.focus();
@@ -1311,6 +1362,7 @@
       }
     } };
     spec.build(body, api);
+    if (spec.child && stack.length > 1) besideParent(dlg, stack[stack.length - 2].dlg);
     restoreGeometry(geomKey, dlg, resizable);
     const first = body.querySelector("input:not([type=checkbox]), k-select, textarea, input");
     if (first && !spec.readOnly && !first.disabled) {

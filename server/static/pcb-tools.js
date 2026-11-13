@@ -1022,6 +1022,23 @@
     if (g.t === "rect" || g.t === "image") return x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h ? 0 : Infinity;
     return Infinity;
   }
+  function padDist(geom, x, y, slop) {
+    let d = Infinity;
+    for (const g of geom) {
+      const gg = g;
+      if (gg.padText || gg.padNum || gg.noBox || g.t === "text") continue;
+      if (K.geomHit(g, x, y, 0)) return 0;
+      if (!(slop > 0) || !K.geomHit(g, x, y, slop)) continue;
+      let lo = 0, hi = slop;
+      for (let i = 0; i < 12; i++) {
+        const m = (lo + hi) / 2;
+        if (K.geomHit(g, x, y, m)) hi = m;
+        else lo = m;
+      }
+      d = Math.min(d, hi);
+    }
+    return d;
+  }
   function hitTestItem(doc, x, y, slop, only) {
     let best = null, bd = slop;
     for (const it of doc.items.values()) {
@@ -1030,7 +1047,8 @@
       const b = it.bbox;
       if (x < b[0] - slop || x > b[2] + slop || y < b[1] - slop || y > b[3] + slop) continue;
       let d = Infinity;
-      if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") d = x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3] ? slop * 0.5 : Infinity;
+      if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension" || it.kind === "property") d = x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3] ? slop * 0.5 : Infinity;
+      else if (it.kind === "pad") d = padDist(it.geom, x, y, slop);
       else for (const g of it.geom) {
         if (it.kind === "zone" && g.fill) continue;
         d = Math.min(d, geomDist(g, x, y));
@@ -2088,7 +2106,7 @@
     return m;
   }
 
-  // node_modules/clipper2-ts/dist/Core.js
+  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
   var ClipType;
   (function(ClipType2) {
     ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -2747,7 +2765,7 @@
   var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
   var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-  // node_modules/clipper2-ts/dist/Engine.js
+  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
   var B02 = BigInt(0);
   var B22 = BigInt(2);
   var B42 = BigInt(4);
@@ -5612,7 +5630,7 @@
     }
   };
 
-  // node_modules/clipper2-ts/dist/Offset.js
+  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
   var JoinType;
   (function(JoinType2) {
     JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -6228,7 +6246,7 @@
     }
   };
 
-  // node_modules/clipper2-ts/dist/Clipper.js
+  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
   var B23 = BigInt(2);
   function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
     if (typeof clipOrFillRule === "number") {
@@ -6513,7 +6531,7 @@
     }
   }
 
-  // node_modules/opentype.js/dist/opentype.module.js
+  // ../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.module.js
   if (!String.prototype.codePointAt) {
     (function() {
       var defineProperty = (function() {
@@ -40170,7 +40188,9 @@ Press <esc> to cancel all; double-click to finish`;
       jumperGroups: jg ? jg.slice(1).filter(isList).map((g) => g.map(str7).join(", ")) : [],
       models,
       fields: fieldItems(doc).map(fieldRow),
-      otherAttrs: attrs.filter((a) => !known.includes(a))
+      otherAttrs: attrs.filter((a) => !known.includes(a)),
+      embeddedFiles: K.kids(one("embedded_files") || ["embedded_files"], "file").map((f) => str7((K.kid(f, "name") || [])[1])).filter(Boolean),
+      embedFonts: yes2(one("embedded_fonts"))
     };
   }
   function minimalCopperCount(used) {
@@ -40425,6 +40445,18 @@ Please remove the objects that use these layers first.`, page: 1 };
       for (const n of old) h.splice(h.indexOf(n), 1);
       for (const mm of m.models.filter((x) => x.file)) h.push(oldBySig.get(modelSig(mm)) || modelNode(mm));
     }
+    if (m.embedFonts !== before.embedFonts) setHeader(h, "embedded_fonts", [m.embedFonts ? "yes" : "no"]);
+    if ((m.embeddedFiles || []).join("\n") !== before.embeddedFiles.join("\n")) {
+      const ef = K.kid(h, "embedded_files");
+      const keepNames = new Set(m.embeddedFiles || []);
+      if (ef) {
+        for (let j = ef.length - 1; j >= 1; j--) {
+          const c = ef[j];
+          if (isList(c) && c[0] === "file" && !keepNames.has(str7((K.kid(c, "name") || [])[1]))) ef.splice(j, 1);
+        }
+        if (!K.kids(ef, "file").length) setHeader(h, "embedded_files", null);
+      }
+    }
     const changes = [];
     if (K.serialize(h) !== K.serialize(h0)) changes.push({ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: K.serialize(h) });
     const modern = (doc.version || 20240108) >= 2023e4;
@@ -40523,6 +40555,33 @@ Please remove the objects that use these layers first.`, page: 1 };
     }
     if (["smd", "connect", "non_component"].includes(str8(n[2]))) setKid2(n, "drill", null);
     return n;
+  }
+  var bufferPad = null;
+  function bufferPadNode() {
+    return clone(bufferPad || defaultPad("tht"));
+  }
+  function copyPadSettings(doc, ids) {
+    if (ids.length !== 1) return false;
+    const it = doc.items.get(ids[0]);
+    if (!it || it.kind !== "pad") return false;
+    bufferPad = clone(it.node);
+    const t = typeFromPad(it.node);
+    if (t) {
+      padMemory.lastType = t;
+      padMemory.lastByType[t] = it.id;
+    }
+    return true;
+  }
+  function pastePadChanges(doc, ids) {
+    const out = [];
+    const master = bufferPadNode();
+    for (const id of ids) {
+      const it = doc.items.get(id);
+      if (!it || it.kind !== "pad") continue;
+      const n = importPadSettings(it.node, master);
+      if (K.serialize(n) !== K.serialize(it.node)) out.push(replacedChange(it, n));
+    }
+    return out;
   }
   function pushPadChanges(doc, srcId, f) {
     const src = doc.items.get(srcId);
@@ -40979,6 +41038,9 @@ Press <esc> to cancel all; double-click to finish`;
     return out;
   }
   var fpPadsApi = {
+    copyPadSettings,
+    pastePadChanges,
+    bufferPadNode,
     pushPadChanges,
     importPadSettings,
     explodePadChanges,
@@ -42172,6 +42234,39 @@ Press <esc> to cancel all; double-click to finish`;
     beginMove(ctx, at, sticky) {
       bind(ctx);
       return beginCarryMove(ctx, { at, sticky });
+    },
+    /**
+     * DRAWING_TOOL::PlaceImportedGraphics after the dialog: the shapes (in a new group when asked and there are two or
+     * more) committed where they are, or, with interactive placement, hung on the cursor by the file's origin until a
+     * click places them as one "Import Graphics" step.
+     */
+    placeImported(ctx, nodes, opts) {
+      bind(ctx);
+      const doc = ctx.doc;
+      if (!doc || ctx.viewOnly || !nodes.length) return false;
+      const label = opts.label || "Import Graphics", at = opts.interactive ? cursorPoint(ctx) : null;
+      const changes = [], ids = [];
+      for (const n of nodes) {
+        if (at) translateNode(n, at[0], at[1]);
+        const c = addedChange(doc, n);
+        changes.push(c);
+        ids.push(c.id);
+      }
+      let sel = ids.slice();
+      if (opts.group && ids.length >= 2) {
+        const g = addedChange(doc, groupNode("", ids));
+        changes.push(g);
+        sel = [g.id];
+      }
+      if (!at) {
+        ctx.commit(changes, label);
+        applySelection(ctx, sel);
+        return true;
+      }
+      ctx.commit(changes, label, { tentative: true });
+      applySelection(ctx, sel);
+      beginCarryMove(ctx, { placing: ids.slice(), at });
+      return true;
     },
     unlockedIds(ctx, ids, quiet) {
       bind(ctx);

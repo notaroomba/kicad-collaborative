@@ -1038,6 +1038,23 @@ var require_pcb_tools = __commonJS({
         if (g2.t === "rect" || g2.t === "image") return x >= g2.x && x <= g2.x + g2.w && y >= g2.y && y <= g2.y + g2.h ? 0 : Infinity;
         return Infinity;
       }
+      function padDist(geom, x, y, slop) {
+        let d = Infinity;
+        for (const g2 of geom) {
+          const gg = g2;
+          if (gg.padText || gg.padNum || gg.noBox || g2.t === "text") continue;
+          if (K7.geomHit(g2, x, y, 0)) return 0;
+          if (!(slop > 0) || !K7.geomHit(g2, x, y, slop)) continue;
+          let lo = 0, hi = slop;
+          for (let i = 0; i < 12; i++) {
+            const m = (lo + hi) / 2;
+            if (K7.geomHit(g2, x, y, m)) hi = m;
+            else lo = m;
+          }
+          d = Math.min(d, hi);
+        }
+        return d;
+      }
       function hitTestItem(doc, x, y, slop, only) {
         let best = null, bd = slop;
         for (const it of doc.items.values()) {
@@ -1046,7 +1063,8 @@ var require_pcb_tools = __commonJS({
           const b = it.bbox;
           if (x < b[0] - slop || x > b[2] + slop || y < b[1] - slop || y > b[3] + slop) continue;
           let d = Infinity;
-          if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") d = x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3] ? slop * 0.5 : Infinity;
+          if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension" || it.kind === "property") d = x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3] ? slop * 0.5 : Infinity;
+          else if (it.kind === "pad") d = padDist(it.geom, x, y, slop);
           else for (const g2 of it.geom) {
             if (it.kind === "zone" && g2.fill) continue;
             d = Math.min(d, geomDist(g2, x, y));
@@ -40006,7 +40024,9 @@ Press <esc> to cancel all; double-click to finish`;
           jumperGroups: jg ? jg.slice(1).filter(isList6).map((g2) => g2.map(str7).join(", ")) : [],
           models,
           fields: fieldItems(doc).map(fieldRow),
-          otherAttrs: attrs.filter((a) => !known.includes(a))
+          otherAttrs: attrs.filter((a) => !known.includes(a)),
+          embeddedFiles: K7.kids(one2("embedded_files") || ["embedded_files"], "file").map((f2) => str7((K7.kid(f2, "name") || [])[1])).filter(Boolean),
+          embedFonts: yes22(one2("embedded_fonts"))
         };
       }
       function minimalCopperCount(used) {
@@ -40261,6 +40281,18 @@ Please remove the objects that use these layers first.`, page: 1 };
           for (const n2 of old) h.splice(h.indexOf(n2), 1);
           for (const mm2 of m.models.filter((x) => x.file)) h.push(oldBySig.get(modelSig(mm2)) || modelNode(mm2));
         }
+        if (m.embedFonts !== before.embedFonts) setHeader(h, "embedded_fonts", [m.embedFonts ? "yes" : "no"]);
+        if ((m.embeddedFiles || []).join("\n") !== before.embeddedFiles.join("\n")) {
+          const ef = K7.kid(h, "embedded_files");
+          const keepNames = new Set(m.embeddedFiles || []);
+          if (ef) {
+            for (let j = ef.length - 1; j >= 1; j--) {
+              const c = ef[j];
+              if (isList6(c) && c[0] === "file" && !keepNames.has(str7((K7.kid(c, "name") || [])[1]))) ef.splice(j, 1);
+            }
+            if (!K7.kids(ef, "file").length) setHeader(h, "embedded_files", null);
+          }
+        }
         const changes = [];
         if (K7.serialize(h) !== K7.serialize(h0)) changes.push({ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: K7.serialize(h) });
         const modern = (doc.version || 20240108) >= 2023e4;
@@ -40357,6 +40389,33 @@ Please remove the objects that use these layers first.`, page: 1 };
         }
         if (["smd", "connect", "non_component"].includes(str8(n2[2]))) setKid22(n2, "drill", null);
         return n2;
+      }
+      var bufferPad = null;
+      function bufferPadNode() {
+        return clone3(bufferPad || defaultPad("tht"));
+      }
+      function copyPadSettings(doc, ids) {
+        if (ids.length !== 1) return false;
+        const it = doc.items.get(ids[0]);
+        if (!it || it.kind !== "pad") return false;
+        bufferPad = clone3(it.node);
+        const t = typeFromPad(it.node);
+        if (t) {
+          padMemory.lastType = t;
+          padMemory.lastByType[t] = it.id;
+        }
+        return true;
+      }
+      function pastePadChanges(doc, ids) {
+        const out = [];
+        const master = bufferPadNode();
+        for (const id of ids) {
+          const it = doc.items.get(id);
+          if (!it || it.kind !== "pad") continue;
+          const n2 = importPadSettings(it.node, master);
+          if (K7.serialize(n2) !== K7.serialize(it.node)) out.push(replacedChange(it, n2));
+        }
+        return out;
       }
       function pushPadChanges(doc, srcId, f2) {
         const src = doc.items.get(srcId);
@@ -40813,6 +40872,9 @@ Press <esc> to cancel all; double-click to finish`;
         return out;
       }
       var fpPadsApi = {
+        copyPadSettings,
+        pastePadChanges,
+        bufferPadNode,
         pushPadChanges,
         importPadSettings,
         explodePadChanges,
@@ -41997,6 +42059,39 @@ Press <esc> to cancel all; double-click to finish`;
           bind(ctx);
           return beginCarryMove(ctx, { at: at2, sticky });
         },
+        /**
+         * DRAWING_TOOL::PlaceImportedGraphics after the dialog: the shapes (in a new group when asked and there are two or
+         * more) committed where they are, or, with interactive placement, hung on the cursor by the file's origin until a
+         * click places them as one "Import Graphics" step.
+         */
+        placeImported(ctx, nodes, opts) {
+          bind(ctx);
+          const doc = ctx.doc;
+          if (!doc || ctx.viewOnly || !nodes.length) return false;
+          const label = opts.label || "Import Graphics", at2 = opts.interactive ? cursorPoint(ctx) : null;
+          const changes = [], ids = [];
+          for (const n2 of nodes) {
+            if (at2) translateNode(n2, at2[0], at2[1]);
+            const c = addedChange(doc, n2);
+            changes.push(c);
+            ids.push(c.id);
+          }
+          let sel = ids.slice();
+          if (opts.group && ids.length >= 2) {
+            const g2 = addedChange(doc, groupNode("", ids));
+            changes.push(g2);
+            sel = [g2.id];
+          }
+          if (!at2) {
+            ctx.commit(changes, label);
+            applySelection(ctx, sel);
+            return true;
+          }
+          ctx.commit(changes, label, { tentative: true });
+          applySelection(ctx, sel);
+          beginCarryMove(ctx, { placing: ids.slice(), at: at2 });
+          return true;
+        },
         unlockedIds(ctx, ids, quiet) {
           bind(ctx);
           return unlockedIds(ctx, ids, quiet);
@@ -42639,9 +42734,9 @@ Press <esc> to cancel all; double-click to finish`;
   }
 });
 
-// node_modules/opentype.js/dist/opentype.js
+// ../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.js
 var require_opentype = __commonJS({
-  "node_modules/opentype.js/dist/opentype.js"(exports2, module2) {
+  "../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.js"(exports2, module2) {
     (function(global, factory) {
       typeof exports2 === "object" && typeof module2 !== "undefined" ? factory(exports2) : typeof define === "function" && define.amd ? define(["exports"], factory) : (global = global || self, factory(global.opentype = {}));
     })(exports2, (function(exports3) {
@@ -56450,6 +56545,30 @@ function documentDrawingSheet(doc) {
   SHEET_CACHE.set(doc, { key: key2, wks, items });
   return items;
 }
+function hitTestDrawingSheet(doc, x, y, tol) {
+  const seg = (ax, ay, bx, by, d) => {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+    return Math.hypot(x - (ax + t * dx), y - (ay + t * dy)) <= d;
+  };
+  for (const it of documentDrawingSheet(doc)) {
+    if (it.t === "line") {
+      if (seg(it.x1, it.y1, it.x2, it.y2, tol + it.w / 2)) return true;
+    } else if (it.t === "rect") {
+      const d = tol + it.lw / 2, x1 = it.x + it.w, y1 = it.y + it.h;
+      if (seg(it.x, it.y, x1, it.y, d) || seg(x1, it.y, x1, y1, d) || seg(x1, y1, it.x, y1, d) || seg(it.x, y1, it.x, it.y, d)) return true;
+    } else {
+      const lines = it.text.split("\n"), w = Math.max(...lines.map((l) => textWidth(l, it.size, it.w))), h = it.size * (1 + (lines.length - 1) * 1.62);
+      let bw = w, bh = h;
+      if (Math.abs(it.rot % 180) === 90) {
+        bw = h;
+        bh = w;
+      }
+      const x0 = it.h === "center" ? it.x - bw / 2 : it.h === "right" ? it.x - bw : it.x, y0 = it.v === "middle" || it.v === "center" ? it.y - bh / 2 : it.v === "bottom" ? it.y - bh : it.y;
+      if (x >= x0 - tol && x <= x0 + bw + tol && y >= y0 - tol && y <= y0 + bh + tol) return true;
+    }
+  }
+  return false;
+}
 
 // web/canvas/tables-images.ts
 function cellAddr(row2, col, isPcb) {
@@ -60869,7 +60988,7 @@ function render(doc, ctx, view, opts) {
     ctx.setTransform(A, 0, 0, s, E, ty);
     if (anchors) drawFieldAnchors(ctx, anchors, s, dpr, false);
   }
-  if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
+  if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg), isPcb ? 0 : SCH_SELECTION_THICKNESS * Math.max(1, dpr) / s + SCH_SELECTION_THICKNESS * MIL2);
   if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -61419,7 +61538,7 @@ function drawRatsnest(ctx, lines, nets, netColors, s, dpr, vr) {
 function markerPolygon(m, scale) {
   return MARKER_CORNERS.map(([px, py]) => [m.x + px * scale, m.y + py * scale]);
 }
-function drawMarkers(ctx, markers, docType, scale, bg) {
+function drawMarkers(ctx, markers, docType, scale, bg, selShadowW = 0) {
   const colors = MARKER_COLORS[docType === "sch" ? "sch" : "pcb"];
   const [br, bgc, bb] = parseColor(bg);
   const shadow = rgba(br, bgc, bb, 0.5);
@@ -61439,6 +61558,10 @@ function drawMarkers(ctx, markers, docType, scale, bg) {
     if (docType !== "sch") {
       ctx.strokeStyle = shadow;
       ctx.lineWidth = scale;
+      ctx.stroke();
+    } else if (m.selected && selShadowW > 0) {
+      ctx.strokeStyle = SCH.selection;
+      ctx.lineWidth = selShadowW;
       ctx.stroke();
     }
     ctx.fillStyle = docType !== "sch" && (m.selected || m.brightened) ? DRC_HIGHLIGHTED : colors[m.severity] || colors.error;
@@ -67456,6 +67579,45 @@ function setPadChild(pad, key2, text2) {
   }
   pad.splice(at2, 0, n2);
 }
+var SIM_ELECTRICAL_TYPE_VERSION = 20260521;
+var DIE_DELAY_VERSION = 20251027;
+var TD_DEFAULTS = { enabled: false, twoSegments: true, preferZone: true, maxLen: 1, maxWidth: 2, lenRatio: 0.5, widthRatio: 1, filterRatio: 0.9, curved: false };
+var sameTd = (a, b) => Object.keys(TD_DEFAULTS).every((k) => typeof a[k] === "number" ? Math.abs(a[k] - b[k]) < 1e-9 : a[k] === b[k]);
+function readTeardrops(pad) {
+  const t = kid3(pad, "teardrops");
+  const out = { ...TD_DEFAULTS };
+  if (!t) return out;
+  out.enabled = false;
+  out.twoSegments = false;
+  out.preferZone = false;
+  const n2 = (k, d) => {
+    const c = kid3(t, k);
+    return c ? num2(c[1], d) : d;
+  };
+  const b = (k, d, bare2) => {
+    const c = kid3(t, k);
+    if (!c) return d;
+    if (c.length < 2) return bare2;
+    const v = String(c[1]);
+    return v === "yes" || v === "true" ? true : v === "no" || v === "false" ? false : d;
+  };
+  out.lenRatio = n2("best_length_ratio", out.lenRatio);
+  out.maxLen = n2("max_length", out.maxLen);
+  out.widthRatio = n2("best_width_ratio", out.widthRatio);
+  out.maxWidth = n2("max_width", out.maxWidth);
+  const cp2 = kid3(t, "curve_points");
+  if (cp2) out.curved = num2(cp2[1], 0) > 0;
+  out.curved = b("curved_edges", out.curved, true);
+  out.filterRatio = n2("filter_ratio", out.filterRatio);
+  out.enabled = b("enabled", out.enabled, true);
+  out.twoSegments = b("allow_two_segments", out.twoSegments, true);
+  out.preferZone = b("prefer_zone_connections", out.preferZone, false);
+  return out;
+}
+function formatTeardrops(t) {
+  const yn2 = (v) => v ? "yes" : "no";
+  return `(teardrops (best_length_ratio ${f6(t.lenRatio)}) (max_length ${f6(t.maxLen)}) (best_width_ratio ${f6(t.widthRatio)}) (max_width ${f6(t.maxWidth)}) (curved_edges ${yn2(t.curved)}) (filter_ratio ${f6(t.filterRatio)}) (enabled ${yn2(t.enabled)}) (allow_two_segments ${yn2(t.twoSegments)}) (prefer_zone_connections ${yn2(t.preferZone)}))`;
+}
 var TECH = [
   ["Front adhesive", "F.Adhes"],
   ["Back adhesive", "B.Adhes"],
@@ -67609,7 +67771,11 @@ function readPad(doc, fp, pad, netName2) {
     clearance: opt("clearance"),
     mask: opt("solder_mask_margin"),
     paste: opt("solder_paste_margin"),
-    pasteRatio: opt("solder_paste_margin_ratio")
+    pasteRatio: opt("solder_paste_margin_ratio"),
+    dieDelayOn: !!kid3(pad, "die_delay") && num2((kid3(pad, "die_delay") || [])[1]) !== 0,
+    dieDelay: num2((kid3(pad, "die_delay") || [])[1]),
+    simType: str3((kid3(pad, "sim_electrical_type") || [])[1]),
+    td: readTeardrops(pad)
   };
 }
 var fileShape = (s) => s === "chamfer" || s === "mixed" ? "roundrect" : s === "custom_circle" || s === "custom_rect" ? "custom" : s;
@@ -67725,6 +67891,9 @@ function writePad(doc, fp, pad, m, was, netCode2) {
     setPadChild(pad, "net", !m.net ? null : numbered ? `(net ${netCode2(m.net)} ${quote4(m.net)})` : `(net ${quote4(m.net)})`);
   }
   if (m.dieOn !== was.dieOn || !sameNum(m.die, was.die)) setPadChild(pad, "die_length", m.dieOn && m.die ? `(die_length ${f6(m.die)})` : null);
+  if (m.dieDelayOn !== was.dieDelayOn || !sameNum(m.dieDelay, was.dieDelay)) setPadChild(pad, "die_delay", m.dieDelayOn && m.dieDelay ? `(die_delay ${f6(m.dieDelay)})` : null);
+  if (m.simType !== was.simType) setPadChild(pad, "sim_electrical_type", m.simType === "source" || m.simType === "sink" ? `(sim_electrical_type ${m.simType})` : null);
+  if (!sameTd(m.td, was.td)) setPadChild(pad, "teardrops", sameTd(m.td, TD_DEFAULTS) ? null : formatTeardrops(m.td));
   const optional = (key2, v, v0, fmt4 = f6) => {
     if (!sameNum(v, v0)) setPadChild(pad, key2, isNaN(v) ? null : `(${key2} ${fmt4(v)})`);
   };
@@ -67746,7 +67915,7 @@ function writePad(doc, fp, pad, m, was, netCode2) {
     setPadChild(pad, "primitives", null);
   }
 }
-var padModel = { PAD_ORDER, TECH, PROPS, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };
+var padModel = { PAD_ORDER, TECH, PROPS, TD_DEFAULTS, SIM_ELECTRICAL_TYPE_VERSION, DIE_DELAY_VERSION, readTeardrops, formatTeardrops, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };
 
 // web/canvas/libsym.ts
 function subUnitBody(name) {
@@ -68736,6 +68905,7 @@ var api = {
   defaultDrawingSheet,
   buildDrawingSheet,
   documentDrawingSheet,
+  hitTestDrawingSheet,
   sheetTextVars,
   varResolver,
   expandTextVars,
@@ -68861,7 +69031,7 @@ root.KiCadCanvas = api;
   var TEXT_KINDS = /* @__PURE__ */ new Set(["label", "global_label", "hierarchical_label", "text"]);
   var POINT_KINDS = /* @__PURE__ */ new Set(["junction", "no_connect", "bus_entry"]);
   var SHAPE_KINDS = /* @__PURE__ */ new Set(["rectangle", "circle", "arc", "ellipse", "ellipse_arc"]);
-  var DRAW_TOOLS = /* @__PURE__ */ new Set(["rect", "circle", "arc", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
+  var DRAW_TOOLS = /* @__PURE__ */ new Set(["rect", "circle", "ellipse", "ellipse_arc", "arc", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
   var TYPE_NAMES = { bezier: "SCH_SHAPE", image: "SCH_BITMAP", table: "SCH_TABLE", rule_area: "SCH_RULE_AREA" };
   var DELETE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2 8h12M8 2v12M4 8h8M8 4v8" stroke="#fff" stroke-width="3"/><path d="M2 8h12M8 2v12" stroke="#000" stroke-width="1.2"/><path d="M14 10h8l-1 12h-6zM13 8h10M17 6h2v2h-2z" fill="#fff" stroke="#c00" stroke-width="1.2"/></svg>') + '") 8 8, crosshair';
   var BULLSEYE_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#fff" stroke-width="3"/><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="1.2"/><circle cx="12" cy="12" r="5" fill="none" stroke="#fff" stroke-width="3"/><circle cx="12" cy="12" r="5" fill="none" stroke="#000" stroke-width="1.2"/><circle cx="12" cy="12" r="1.6" fill="#000"/></svg>') + '") 12 12, crosshair';
@@ -68881,6 +69051,8 @@ root.KiCadCanvas = api;
     { id: "lines", label: "Lines", key: "I", kind: "polyline", cursor: "LINE_GRAPHIC", icon: '<path d="M3 20l6-10 5 6 7-12"/>' },
     { id: "rect", label: "Rectangle", key: "", cursor: "PENCIL", icon: '<rect x="4" y="6" width="16" height="12"/>' },
     { id: "circle", label: "Circle", key: "", cursor: "PENCIL", icon: '<circle cx="12" cy="12" r="8"/>' },
+    { id: "ellipse", label: "Ellipse", key: "", cursor: "PENCIL", icon: '<ellipse cx="12" cy="12" rx="9" ry="5"/>' },
+    { id: "ellipse_arc", label: "Elliptical arc", key: "", cursor: "PENCIL", icon: '<path d="M3 12a9 5 0 0 1 18 0"/>' },
     { id: "arc", label: "Arc", key: "", cursor: "PENCIL", icon: '<path d="M4 18a8 8 0 0 1 16 0"/>' },
     { id: "textbox", label: "Text box", key: "", cursor: "PENCIL", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M8 9h8M12 9v7"/>' },
     { id: "delete", label: "Delete", key: "", cursor: "REMOVE", icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
@@ -69312,6 +69484,38 @@ root.KiCadCanvas = api;
     const [x0, y0, x1, y1] = corners(a, b);
     return ["rectangle", ["start", x0, y0], ["end", x1, y1], stroke0(), fillNone()];
   }
+  function angle10(deg) {
+    return +(+deg.toPrecision(10)).toString();
+  }
+  function ellipseFromBox(a, b) {
+    const IU2 = 1e4, iu3 = (v) => Math.round(v * IU2), tdiv = (x, y) => Math.trunc(x / y);
+    const x1 = iu3(a[0]), y1 = iu3(a[1]), x2 = iu3(b[0]), y2 = iu3(b[1]);
+    const cx = tdiv(x1 + x2, 2), cy = tdiv(y1 + y2, 2), hw = tdiv(Math.abs(x2 - x1), 2), hh = tdiv(Math.abs(y2 - y1), 2), wide = hw >= hh;
+    return { cx: cx / IU2, cy: cy / IU2, major: Math.max(wide ? hw : hh, 1) / IU2, minor: Math.max(wide ? hh : hw, 1) / IU2, rotation: wide ? 0 : 90, start: 0, end: 360 };
+  }
+  function ellipseAngle(e, p) {
+    const a = Math.max(1e-4, e.major), b = Math.max(1e-4, e.minor), r = e.rotation * Math.PI / 180, dx = p[0] - e.cx, dy = p[1] - e.cy;
+    return Math.atan2((-dx * Math.sin(r) + dy * Math.cos(r)) / b, (dx * Math.cos(r) + dy * Math.sin(r)) / a) * 180 / Math.PI;
+  }
+  function ellipseArcAngles(e, s, t) {
+    const start = ellipseAngle(e, s);
+    if (!t) return { start, end: start + 360 };
+    let end = ellipseAngle(e, t);
+    while (end <= start) end += 360;
+    return { start, end };
+  }
+  function ellipseNode(e, arc) {
+    return [
+      arc ? "ellipse_arc" : "ellipse",
+      ["center", r45(e.cx), r45(e.cy)],
+      ["major_radius", r45(e.major)],
+      ["minor_radius", r45(e.minor)],
+      ["rotation_angle", angle10(e.rotation)],
+      ...arc ? [["start_angle", angle10(e.start)], ["end_angle", angle10(e.end)]] : [],
+      stroke0(),
+      fillNone()
+    ];
+  }
   function circleNode(c, r) {
     return ["circle", ["center", r45(c[0]), r45(c[1])], ["radius", r45(r)], stroke0(), fillNone()];
   }
@@ -69339,6 +69543,14 @@ root.KiCadCanvas = api;
   var SHEET_BORDER = 0.1524;
   var SHEET_NAME_OFF = r45(SHEET_BORDER / 2 + 4e-6 + 1.27 * 0.5);
   var SHEET_FILE_OFF = r45(SHEET_BORDER / 2 + 4e-6 + 1.27 * 0.4);
+  function sheetCorner(p0, cur2, grid) {
+    const g2 = grid > 0 ? grid : 1.27, minW = 12.7, minH = 3.81;
+    const w = Math.max(cur2[0] - p0[0], minW), h = Math.max(cur2[1] - p0[1], minH);
+    let gx = Math.round((p0[0] + w) / g2) * g2, gy = Math.round((p0[1] + h) / g2) * g2;
+    if (gx - p0[0] < minW - 1e-9) gx += g2;
+    if (gy - p0[1] < minH - 1e-9) gy += g2;
+    return [r45(gx), r45(gy)];
+  }
   function sheetNode(a, b, name, file) {
     const [x0, y0, x1, y1] = corners(a, b);
     return [
@@ -69358,9 +69570,9 @@ root.KiCadCanvas = api;
     ];
   }
   var PIN_SIDE = { right: [0, "right"], top: [90, "right"], left: [180, "left"], bottom: [270, "left"] };
-  function sheetPinNode(name, p, side) {
+  function sheetPinNode(name, p, side, textSize = 1.27) {
     const [rot3, just] = PIN_SIDE[side] || PIN_SIDE.left;
-    return ["pin", name, "input", ["at", r45(p[0]), r45(p[1]), rot3], ["uuid", K7.newUuid()], ["effects", fontNode(1.27), ["justify", just]]];
+    return ["pin", name, "input", ["at", r45(p[0]), r45(p[1]), rot3], ["uuid", K7.newUuid()], ["effects", fontNode(textSize), ["justify", just]]];
   }
   function tableNode(a, b, rows, cols, grid) {
     const [x0, y0, x1, y1] = corners(a, b);
@@ -70433,6 +70645,72 @@ root.KiCadCanvas = api;
     const id = K7.hitTest(ctx.doc, mm2[0], mm2[1], Math.max(0.3, 5 * mmPerPx(ctx)));
     return id ? ctx.doc.items.get(id) || null : null;
   }
+  function isLockedNode(node) {
+    const l = kid5(node, "locked");
+    return !!l && str4(l[1]) !== "no";
+  }
+  function isLockedItem(doc, it) {
+    if (isLockedNode(it.node)) return true;
+    if (it.kind === "group") {
+      const m = kid5(it.node, "members");
+      if (m) for (const id of m.slice(1)) {
+        const c = doc.items.get(str4(id));
+        if (c && isLockedItem(doc, c)) return true;
+      }
+    }
+    return false;
+  }
+  var SHEET_ATTRS = /* @__PURE__ */ new Set(["exclude_from_sim", "in_bom", "on_board", "in_pos_files", "dnp"]);
+  function setLockedNode(kind, node, on) {
+    const n2 = deep(node);
+    for (let i2 = n2.length - 1; i2 > 0; i2--) {
+      const c = n2[i2];
+      if (Array.isArray(c) && c[0] === "locked") n2.splice(i2, 1);
+    }
+    if (!on) return n2;
+    const flag22 = ["locked", "yes"];
+    const at2 = (tok) => n2.findIndex((c, i2) => i2 > 0 && Array.isArray(c) && c[0] === tok);
+    let i = -1;
+    if (kind === "rule_area") i = 1;
+    else if (kind === "symbol") {
+      i = at2("fields_autoplaced");
+      if (i < 0) i = at2("uuid");
+    } else if (kind === "sheet") {
+      for (let j = 1; j < n2.length; j++) {
+        const c = n2[j];
+        if (Array.isArray(c) && SHEET_ATTRS.has(String(c[0]))) i = j + 1;
+      }
+      if (i < 0) {
+        i = at2("fields_autoplaced");
+        if (i < 0) i = at2("stroke");
+      }
+    } else {
+      const u = at2("uuid");
+      i = u >= 0 ? u + 1 : -1;
+    }
+    if (i < 0 || i > n2.length) n2.push(flag22);
+    else n2.splice(i, 0, flag22);
+    return n2;
+  }
+  function modifyLock(ctx, mode2) {
+    if (!editable(ctx)) return false;
+    const doc = ctx.doc, items = selectedItems(ctx);
+    if (!items.length) return false;
+    const on = mode2 === "toggle" ? !items.some((it) => isLockedNode(it.node)) : mode2 === "on";
+    const changes = [];
+    for (const it of items) {
+      if (isLockedNode(it.node) === on) continue;
+      changes.push(modChange(doc, it, setLockedNode(it.kind, it.node, on)));
+    }
+    if (!changes.length) return true;
+    ctx.commit(changes, on ? "Lock" : "Unlock");
+    return true;
+  }
+  function unlockedSelection(ctx) {
+    const items = selectedItems(ctx), free = items.filter((it) => !isLockedItem(ctx.doc, it));
+    if (free.length !== items.length && typeof ctx.setSelection === "function") ctx.setSelection(free.map((it) => it.id));
+    return free;
+  }
   function detectMac2() {
     if (typeof navigator === "undefined") return false;
     const nav = navigator;
@@ -71383,6 +71661,36 @@ root.KiCadCanvas = api;
     for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);
     return out.concat(extra);
   }
+  function orientDrag(ctx, op) {
+    const d = S2.drag;
+    if (!d) return false;
+    if (d.brk || d.ends && d.ends.length) return true;
+    const [dx, dy] = d.last, doc = ctx.doc, C = [d.anchor0[0], d.anchor0[1]], lone = d.items.length === 1;
+    applyDrag(doc, d, 0, 0);
+    if (!d.touched0) {
+      d.touched0 = [];
+      for (const e of d.items) d.touched0.push(...connPoints(doc, e.item));
+    }
+    for (const e of d.items) {
+      const n2 = deep(e.base || e.orig);
+      const lop = lone && e.kind === "image" && (op === "ccw" || op === "cw") ? op === "ccw" ? "cw" : "ccw" : op;
+      if (transformNode(e.kind, n2, lop, C, lone) === false) continue;
+      e.base = n2;
+    }
+    for (const r of d.riders) {
+      if (!r.node0) r.node0 = deep(r.item.node);
+      const n2 = deep(r.base || r.node0);
+      transformNode(r.item.kind, n2, op, C);
+      r.base = n2;
+      const a = atOf3(n2);
+      r.orig = [a[0], a[1]];
+    }
+    const prev = d.mapPt;
+    d.mapPt = (p) => mapPoint(op, C, prev ? prev(p) : p);
+    applyDrag(doc, d, dx, dy);
+    ctx.requestRender();
+    return true;
+  }
   function transformSelected(ctx, op, items, centre) {
     if (!editable(ctx)) return false;
     items = items || selectedItems(ctx);
@@ -71472,7 +71780,7 @@ root.KiCadCanvas = api;
   }
   function swapSelection(ctx) {
     if (!editable(ctx)) return false;
-    const items = selectedItems(ctx).filter((it) => DRAG_KINDS.has(it.kind));
+    const items = unlockedSelection(ctx).filter((it) => DRAG_KINDS.has(it.kind));
     if (items.length < 2) {
       ctx.toast("Select two or more items to swap");
       return false;
@@ -71525,7 +71833,7 @@ root.KiCadCanvas = api;
   }
   function alignToGrid(ctx) {
     if (!editable(ctx)) return false;
-    const items = selectedItems(ctx);
+    const items = unlockedSelection(ctx);
     if (!items.length) return false;
     const changes = alignToGridChanges(ctx, items);
     if (!changes.length) {
@@ -71538,12 +71846,19 @@ root.KiCadCanvas = api;
   function alignEdgeChanges(ctx, items, which) {
     const doc = ctx.doc, boxes = items.map((it) => it.bbox || rectOf(it)).filter(Boolean);
     if (boxes.length < 2) return [];
-    const target2 = which === "top" ? Math.min(...boxes.map((b) => b[1])) : which === "bottom" ? Math.max(...boxes.map((b) => b[3])) : which === "left" ? Math.min(...boxes.map((b) => b[0])) : which === "right" ? Math.max(...boxes.map((b) => b[2])) : which === "centerX" ? boxes.reduce((t, b) => t + (b[0] + b[2]) / 2, 0) / boxes.length : boxes.reduce((t, b) => t + (b[1] + b[3]) / 2, 0) / boxes.length;
+    const edge = (b) => which === "top" ? b[1] : which === "bottom" ? b[3] : which === "left" ? b[0] : which === "right" ? b[2] : which === "centerX" ? (b[0] + b[2]) / 2 : (b[1] + b[3]) / 2;
+    const locked = items.filter((it) => isLockedNode(it.node)).map((it) => it.bbox || rectOf(it)).filter(Boolean);
+    let target2;
+    if (locked.length) {
+      const c = cursorOf(ctx), hit5 = c && locked.find((b) => c[0] >= b[0] && c[0] <= b[2] && c[1] >= b[1] && c[1] <= b[3]);
+      const vals = locked.map(edge);
+      target2 = hit5 ? edge(hit5) : which === "bottom" || which === "right" ? Math.max(...vals) : Math.min(...vals);
+    } else target2 = which === "top" ? Math.min(...boxes.map((b) => b[1])) : which === "bottom" ? Math.max(...boxes.map((b) => b[3])) : which === "left" ? Math.min(...boxes.map((b) => b[0])) : which === "right" ? Math.max(...boxes.map((b) => b[2])) : which === "centerX" ? boxes.reduce((t, b) => t + (b[0] + b[2]) / 2, 0) / boxes.length : boxes.reduce((t, b) => t + (b[1] + b[3]) / 2, 0) / boxes.length;
     const out = [], touched = [], keep = /* @__PURE__ */ new Set();
     for (const it of items) {
       const b = it.bbox || rectOf(it);
-      if (!b || !DRAG_KINDS.has(it.kind)) continue;
-      const cur2 = which === "top" ? b[1] : which === "bottom" ? b[3] : which === "left" ? b[0] : which === "right" ? b[2] : which === "centerX" ? (b[0] + b[2]) / 2 : (b[1] + b[3]) / 2;
+      if (!b || !DRAG_KINDS.has(it.kind) || isLockedNode(it.node)) continue;
+      const cur2 = edge(b);
       const d = ctx.snap ? r45(K7.snap(target2 - cur2, ctx.gridPitch || 1.27)) : r45(target2 - cur2);
       if (!d) continue;
       const n2 = deep(it.node);
@@ -71766,6 +72081,7 @@ root.KiCadCanvas = api;
     return id ? ctx.doc.items.get(id) || null : null;
   }
   function orientSelected(ctx, op) {
+    if (S2.drag) return orientDrag(ctx, op);
     const c = S2.carry;
     if (c) {
       const ok22 = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw");
@@ -71773,7 +72089,7 @@ root.KiCadCanvas = api;
       refreshCarry(ctx);
       return true;
     }
-    const items = selectedItems(ctx);
+    const items = unlockedSelection(ctx);
     if (items.length > 1) return transformSelected(ctx, op, items);
     const it = items[0];
     if (!it) return false;
@@ -71817,6 +72133,7 @@ root.KiCadCanvas = api;
   function deleteSelected(ctx) {
     const it = S2.sel ? ctx.doc.items.get(S2.sel) : null;
     if (!it) return false;
+    if (isLockedItem(ctx.doc, it)) return true;
     const changes = deleteChanges(ctx.doc, it);
     S2.sel = null;
     S2.hover = null;
@@ -71826,7 +72143,7 @@ root.KiCadCanvas = api;
   }
   function deleteAt(ctx, mm2) {
     const it = pickAny(ctx, mm2);
-    if (!it) return null;
+    if (!it || isLockedItem(ctx.doc, it)) return null;
     const changes = deleteChanges(ctx.doc, it);
     S2.sel = null;
     S2.hover = null;
@@ -72095,6 +72412,30 @@ ${body}
       } else if (it.kind === "sheet") lines.push([it.name, it.file].filter(Boolean).join(" "));
     }
     clipWrite(ctx, lines.join("\n"));
+    return true;
+  }
+  function placeImported(ctx, nodes, opts) {
+    if (!editable(ctx) || !nodes.length) return false;
+    const label = opts.label || "Import Graphic";
+    for (const n2 of nodes) if (!kid5(n2, "uuid")) n2.push(["uuid", K7.newUuid()]);
+    const live = opts.interactive && canFollow(ctx), at2 = live ? snapCursor(ctx) : null;
+    if (at2) for (const n2 of nodes) shiftNode(n2[0], n2, at2[0], at2[1]);
+    const all2 = nodes.slice();
+    if (opts.group && nodes.length >= 2) all2.push(["group", "", ["uuid", K7.newUuid()], ["members", ...nodes.map((n2) => str4((kid5(n2, "uuid") || [])[1]))]]);
+    const changes = [], ids = [];
+    for (const n2 of all2) {
+      const { item, change } = addNode(ctx.doc, n2);
+      changes.push(change);
+      ids.push(item.id);
+    }
+    const sel = opts.group && nodes.length >= 2 ? [ids[ids.length - 1]] : ids.slice();
+    if (live && at2 && followPaste(ctx, ids, [], at2, label)) {
+      setSelectionIds(ctx, sel);
+      return true;
+    }
+    ctx.commit(changes, label);
+    setSelectionIds(ctx, sel);
+    ctx.requestRender();
     return true;
   }
   function rememberPlaced(kind, node) {
@@ -72985,6 +73326,13 @@ Link '${target2}' to this file?`)) return null;
       ctx.requestRender();
       return;
     }
+    if (shape3 === "ellipse_arc") {
+      if (d.pts.length === 1 && same(p, d.pts[0])) return;
+      d.pts.push(p);
+      if (d.pts.length === 4) finishDraw(ctx);
+      else ctx.requestRender();
+      return;
+    }
     if (shape3 === "bezier") {
       if (d.pts.length === 2 && same(p, d.pts[0])) {
         ctx.toast("The curve's end must differ from its start");
@@ -72993,6 +73341,11 @@ Link '${target2}' to this file?`)) return null;
       d.pts.push(p);
       if (d.pts.length === 4) finishDraw(ctx);
       else ctx.requestRender();
+      return;
+    }
+    if (shape3 === "sheet") {
+      d.pts.push(sheetCorner(d.pts[0], p, ctx.gridPitch));
+      finishDraw(ctx);
       return;
     }
     if (same(p, last) && shape3 !== "table") return;
@@ -73005,7 +73358,17 @@ Link '${target2}' to this file?`)) return null;
     const doc = ctx.doc, pts = d.pts;
     let node = null, label = d.shape;
     if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
-    else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
+    else if (d.shape === "ellipse") {
+      node = ellipseNode(ellipseFromBox(pts[0], pts[1]), false);
+      label = "Draw Ellipse";
+    } else if (d.shape === "ellipse_arc") {
+      if (pts.length === 4) {
+        const e = ellipseFromBox(pts[0], pts[1]);
+        Object.assign(e, ellipseArcAngles(e, pts[2], pts[3]));
+        node = ellipseNode(e, true);
+      }
+      label = "Draw Elliptical Arc";
+    } else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
     else if (d.shape === "arc") {
       commitSchArc(ctx, d, false);
       ctx.requestRender();
@@ -73404,8 +73767,16 @@ Link '${target2}' to this file?`)) return null;
       const a = dr.pts[0], c = dr.cur;
       if (dr.shape === "table") {
         for (const l of drawTableLines(a, c, S2.ctx && S2.ctx.gridPitch || 1.27, labelDefaults().textSize)) if (out.length < 120) out.push([l[0], l[1], l[2], l[3], 0.1524]);
-      } else if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet") box(corners(a, c));
-      else if (dr.shape === "circle") {
+      } else if (dr.shape === "sheet") box(corners(a, dr.await && dr.pts[1] ? dr.pts[1] : sheetCorner(a, c, S2.ctx && S2.ctx.gridPitch || 1.27)));
+      else if (dr.shape === "rect" || dr.shape === "textbox") box(corners(a, c));
+      else if (dr.shape === "ellipse" || dr.shape === "ellipse_arc") {
+        const e = ellipseFromBox(a, dr.pts[1] || c), r = e.rotation * Math.PI / 180, ring = [];
+        for (let i = 0; i <= 32; i++) {
+          const t = i * Math.PI / 16, x = e.major * Math.cos(t), y = e.minor * Math.sin(t);
+          ring.push([e.cx + x * Math.cos(r) - y * Math.sin(r), e.cy + x * Math.sin(r) + y * Math.cos(r)]);
+        }
+        path2(ring);
+      } else if (dr.shape === "circle") {
         const r = Math.hypot(c[0] - a[0], c[1] - a[1]), ring = [];
         for (let i = 0; i <= 24; i++) ring.push([a[0] + r * Math.cos(i * Math.PI / 12), a[1] + r * Math.sin(i * Math.PI / 12)]);
         path2(ring);
@@ -74072,6 +74443,536 @@ Link '${target2}' to this file?`)) return null;
     }
     c.restore();
   }
+  var UNITS = {
+    mm: { name: "mm", f: (v) => v, d: 4 },
+    in: { name: "in", f: (v) => v / 25.4, d: 4 },
+    mil: { name: "mils", f: (v) => v / 0.0254, d: 2 }
+  };
+  function angleText(deg) {
+    return `${deg.toFixed(1)}\xB0`;
+  }
+  var UNIT_TEXT2 = { mm: " mm", mil: " mils", in: " in" };
+  function cExp(v, n2) {
+    const [m, e] = v.toExponential(n2).split("e");
+    const x = Number(e);
+    return `${m}e${x < 0 ? "-" : "+"}${String(Math.abs(x)).padStart(2, "0")}`;
+  }
+  function messageText(mm2, units, scale, label = true) {
+    const u = UNITS[units] ? units : "mm", short2 = scale === "sch", iu3 = short2 ? 1e4 : 1e6;
+    const v = UNITS[u].f(Math.round(mm2 * iu3) / iu3);
+    const digits = u === "mm" ? short2 ? 3 : 4 : u === "mil" ? short2 ? 0 : 2 : short2 ? 3 : 4;
+    let text2 = v.toFixed(digits);
+    if (v !== 0 && !/[1-9]/.test(text2)) text2 = cExp(v, 3);
+    if (short2 && u === "mm") {
+      const n2 = text2.length;
+      if (n2 > 4 && text2[n2 - 4] === "." && text2[n2 - 1] === "0") text2 = text2.slice(0, -1);
+    }
+    return label ? text2 + UNIT_TEXT2[u] : text2;
+  }
+  var yes6 = (n2) => !!n2 && str4(n2[1]) !== "no";
+  var flag2 = (node, key2) => {
+    const k = kid5(node, key2);
+    return k ? str4(k[1] ?? "yes") !== "no" : node.includes(key2);
+  };
+  function unescapeString(s) {
+    const MAP = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "	", return: "\n", brace: "{" };
+    return s.replace(/\{(\w+)\}/g, (m, k) => k in MAP ? MAP[k] : m);
+  }
+  function effects(node) {
+    return kid5(node, "effects");
+  }
+  function font(node) {
+    const e = effects(node);
+    return e ? kid5(e, "font") : null;
+  }
+  function textWidth2(node) {
+    const f2 = font(node), s = f2 ? kid5(f2, "size") : null;
+    return s ? num8(s[2] ?? s[1], 1.27) : 1.27;
+  }
+  function fontName(node) {
+    const f2 = font(node), face = f2 ? kid5(f2, "face") : null;
+    return face ? str4(face[1]) : "Default";
+  }
+  function bold(node) {
+    const f2 = font(node);
+    return !!f2 && flag2(f2, "bold");
+  }
+  function italic(node) {
+    const f2 = font(node);
+    return !!f2 && flag2(f2, "italic");
+  }
+  function styleName(node) {
+    const b = bold(node), i = italic(node);
+    return b && i ? "Bold Italic" : b ? "Bold" : i ? "Italic" : "Normal";
+  }
+  function textStyleName(node) {
+    const b = bold(node), i = italic(node);
+    return b && i ? "Bold+Italic" : b ? "Bold" : i ? "Italic" : "Normal";
+  }
+  function justify(node) {
+    const e = effects(node), j = e ? kid5(e, "justify") : null;
+    return j ? j.slice(1).map(String) : [];
+  }
+  function hJust(node) {
+    const j = justify(node);
+    return j.includes("left") ? "left" : j.includes("right") ? "right" : "center";
+  }
+  function vJust(node) {
+    const j = justify(node);
+    return j.includes("top") ? "top" : j.includes("bottom") ? "bottom" : "center";
+  }
+  function hidden(node) {
+    const e = effects(node);
+    return yes6(kid5(node, "hide")) || !!e && flag2(e, "hide");
+  }
+  var LINE_STYLES = { solid: "Solid", dash: "Dashed", dot: "Dotted", dash_dot: "Dash-Dot", dash_dot_dot: "Dash-Dot-Dot" };
+  function strokeOf2(node) {
+    const s = kid5(node, "stroke");
+    if (!s) return { width: 0, type: "default" };
+    const w = kid5(s, "width"), t = kid5(s, "type");
+    return { width: w ? num8(w[1], 0) : 0, type: t ? str4(t[1]) : "default" };
+  }
+  function strokeRows(node, o, style = true, width = true) {
+    const s = strokeOf2(node), out = [];
+    if (style) out.push({ title: "Line Style", value: LINE_STYLES[s.type] || "Default" });
+    if (width) out.push({ title: "Line Width", value: len(s.width, o) });
+    return out;
+  }
+  var len = (mm2, o) => messageText(mm2, o.units, "sch", true);
+  var ell = (s, o) => {
+    const t = unescapeString(s).replace(/[\n\r\t]/g, " ");
+    return o.ellipsize ? o.ellipsize(t) : t;
+  };
+  function connectionRows(item, o, pin) {
+    const c = o.connection ? o.connection(item, pin) : null;
+    if (!c) return [];
+    const out = [{ title: "Connection Name", value: unescapeString(c.name) }];
+    if (!c.bus) out.push({ title: "Resolved Netclass", value: unescapeString(c.netclass || "Default") });
+    return out;
+  }
+  var fieldNode = (node, name) => kids3(node, "property").find((p) => str4(p[1]) === name) || null;
+  var fieldText2 = (node, name) => {
+    const f2 = fieldNode(node, name);
+    return f2 ? str4(f2[2]) : "";
+  };
+  function libOf(doc, node) {
+    const name = str4((kid5(node, "lib_name") || kid5(node, "lib_id") || [])[1]), id = str4((kid5(node, "lib_id") || [])[1]);
+    return K7.resolveLib(doc, name) || K7.resolveLib(doc, id) || doc.lib.get(name) || doc.lib.get(id) || null;
+  }
+  function libUnitInfo(lib) {
+    let units = 1, styles = 1;
+    const names = /* @__PURE__ */ new Map();
+    if (!lib) return { units, styles, names };
+    for (const sub of kids3(lib, "symbol")) {
+      const m = str4(sub[1]).match(/_(\d+)_(\d+)$/);
+      if (!m) continue;
+      units = Math.max(units, +m[1]);
+      styles = Math.max(styles, +m[2]);
+      const un = kid5(sub, "unit_name");
+      if (un && +m[1] > 0) names.set(+m[1], str4(un[1]));
+    }
+    if (kid5(lib, "body_styles")) styles = Math.max(styles, kids3(lib, "body_styles")[0].length - 1);
+    return { units, styles, names };
+  }
+  function unitLetter3(unit2) {
+    let n2 = unit2, s = "";
+    while (n2 > 0) {
+      n2--;
+      s = String.fromCharCode(65 + n2 % 26) + s;
+      n2 = Math.floor(n2 / 26);
+    }
+    return s;
+  }
+  function symbolRows(doc, it, o) {
+    const n2 = it.node, out = [], lib = libOf(doc, n2);
+    const libId = str4((kid5(n2, "lib_id") || [])[1]), colon = libId.indexOf(":");
+    const nick = colon >= 0 ? libId.slice(0, colon) : "", itemName = colon >= 0 ? libId.slice(colon + 1) : libId;
+    const ref = it.ref || fieldText2(n2, "Reference"), value = fieldText2(n2, "Value");
+    const excludes = () => {
+      const m = [];
+      if (flag2(n2, "exclude_from_sim")) m.push("Simulation");
+      const bom2 = kid5(n2, "in_bom");
+      if (bom2 && str4(bom2[1]) === "no") m.push("BOM");
+      const brd = kid5(n2, "on_board");
+      if (brd && str4(brd[1]) === "no") m.push("Board");
+      if (flag2(n2, "dnp")) m.push("DNP");
+      if (m.length) out.push({ title: "Exclude from", value: m.join(", ") });
+    };
+    if (lib) {
+      if (isPowerSymbol(doc, libId)) out.push({ title: "Power symbol", value: ell(value, o) });
+      else {
+        out.push({ title: "Reference", value: unescapeString(ref) }, { title: "Value", value: ell(value, o) });
+        excludes();
+        out.push({ title: "Name", value: ell(itemName, o) });
+      }
+      const ext = kid5(lib, "extends");
+      if (ext) out.push({ title: "Derived from", value: unescapeString(str4(ext[1])) });
+      else out.push({ title: "Library", value: nick || "Undefined!!!" });
+      const fp = ell(fieldText2(n2, "Footprint"), o);
+      out.push({ title: "Footprint", value: fp || "<Unknown>" });
+      const kw = fieldNode(lib, "ki_keywords");
+      out.push({ title: `Description: ${fieldText2(n2, "Description") || fieldText2(lib, "Description")}`, value: `Keywords: ${kw ? str4(kw[2]) : ""}` });
+    } else {
+      out.push({ title: "Reference", value: ref }, { title: "Value", value: ell(value, o) });
+      excludes();
+      out.push({ title: "Name", value: ell(itemName, o) });
+      out.push({ title: "Library", value: nick ? `Symbol not found in ${nick}!` : "No library defined!" });
+    }
+    return out;
+  }
+  var PIN_TYPE = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-state", passive: "Passive", free: "Free", unspecified: "Unspecified", power_in: "Power input", power_out: "Power output", open_collector: "Open collector", open_emitter: "Open emitter", no_connect: "Unconnected" };
+  var PIN_SHAPE = { line: "Line", inverted: "Inverted", clock: "Clock", inverted_clock: "Inverted clock", input_low: "Input low", clock_low: "Clock low", output_low: "Output low", edge_clock_high: "Falling edge clock", non_logic: "NonLogic" };
+  var PIN_ORIENT = { 0: "Right", 90: "Up", 180: "Left", 270: "Down" };
+  function pinRows(doc, it, number, o) {
+    const pin = symbolPins(doc, it).find((p) => p.number === number);
+    if (!pin) return [];
+    const n2 = it.node, lib = libOf(doc, n2), info = libUnitInfo(lib), out = [{ title: "Type", value: "Pin" }];
+    const unit2 = kid5(n2, "unit") ? num8(kid5(n2, "unit")[1], 1) : 1;
+    if (info.units > 1) out.push({ title: "Unit", value: info.names.get(unit2) || unitLetter3(unit2) });
+    if (info.styles > 1) {
+      const bs = kid5(n2, "body_style") || kid5(n2, "convert");
+      const s = bs ? num8(bs[1], 1) : 1;
+      out.push({ title: "Body Style", value: s === 1 ? "Standard" : s === 2 ? "Alternate" : `Body style ${s}` });
+    }
+    out.push(
+      { title: "Name", value: unescapeString(pin.name === "~" ? "" : pin.name) },
+      { title: "Number", value: pin.number === "~" ? "" : pin.number },
+      { title: "Type", value: PIN_TYPE[pin.type] || "Unspecified" },
+      { title: "Style", value: PIN_SHAPE[pin.shape || "line"] || "Line" },
+      { title: "Visible", value: pin.hidden ? "No" : "Yes" },
+      { title: "Length", value: len(pin.len, o) },
+      { title: "Orientation", value: PIN_ORIENT[(Math.round(pin.libRot || 0) % 360 + 360) % 360] || "Right" },
+      { title: it.ref || fieldText2(n2, "Reference"), value: unescapeString(fieldText2(n2, "Value")) }
+    );
+    return out;
+  }
+  function fieldRows(it, name, o) {
+    const f2 = fieldNode(it.node, name);
+    if (!f2) return [];
+    const h = hJust(f2), v = vJust(f2);
+    return [
+      { title: "Symbol Field", value: unescapeString(name) },
+      { title: "Text", value: ell(str4(f2[2]), o) },
+      { title: "Visible", value: hidden(f2) ? "No" : "Yes" },
+      { title: "Font", value: fontName(f2) },
+      { title: "Style", value: textStyleName(f2) },
+      { title: "Text Size", value: len(textWidth2(f2), o) },
+      { title: "H Justification", value: h === "left" ? "Left" : h === "right" ? "Right" : "Center" },
+      { title: "V Justification", value: v === "top" ? "Top" : v === "bottom" ? "Bottom" : "Center" }
+    ];
+  }
+  var LABEL_TITLE = { label: "Label", directive_label: "Directive Label", netclass_flag: "Directive Label", global_label: "Global Label", hierarchical_label: "Hierarchical Label" };
+  var LABEL_SHAPE = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-State", passive: "Passive" };
+  var SPIN_JUST = ["Align left", "Align bottom", "Align right", "Align top"];
+  function labelRows(it, o) {
+    const n2 = it.node, out = [{ title: LABEL_TITLE[it.kind], value: unescapeString(str4(n2[1])) }];
+    if (it.kind === "global_label" || it.kind === "hierarchical_label") {
+      const sh = kid5(n2, "shape");
+      out.push({ title: "Type", value: LABEL_SHAPE[sh ? str4(sh[1]) : "input"] || "???" });
+    }
+    out.push(
+      { title: "Font", value: fontName(n2) },
+      { title: "Style", value: styleName(n2) },
+      { title: "Text Size", value: len(textWidth2(n2), o) },
+      { title: "Justification", value: SPIN_JUST[spinOfNode(n2)] || "???" }
+    );
+    out.push(...connectionRows(it, o));
+    return out;
+  }
+  function textRows(it, o) {
+    const n2 = it.node, out = [{ title: "Text", value: ell(str4(n2[1]), o) }];
+    if (flag2(n2, "exclude_from_sim")) out.push({ title: "Exclude from", value: "Simulation" });
+    const h = hJust(n2);
+    out.push(
+      { title: "Font", value: fontName(n2) },
+      { title: "Style", value: styleName(n2) },
+      { title: "Text Size", value: len(textWidth2(n2), o) },
+      { title: "Justification", value: h === "left" ? "Align left" : h === "right" ? "Align right" : "Align center" }
+    );
+    return out;
+  }
+  function textBoxRows(it, o) {
+    const n2 = it.node, out = [{ title: "Text Box", value: ell(str4(n2[1]), o) }];
+    if (flag2(n2, "exclude_from_sim")) out.push({ title: "Exclude from", value: "Simulation" });
+    const [, , w, h] = boxOf22(n2);
+    out.push(
+      { title: "Font", value: fontName(n2) },
+      { title: "Style", value: styleName(n2) },
+      { title: "Text Size", value: len(textWidth2(n2), o) },
+      { title: "Box Width", value: len(Math.abs(w), o) },
+      { title: "Box Height", value: len(Math.abs(h), o) },
+      ...strokeRows(n2, o)
+    );
+    return out;
+  }
+  function boxOf22(n2) {
+    const s = kid5(n2, "start"), e = kid5(n2, "end");
+    if (s && e) return [num8(s[1]), num8(s[2]), num8(e[1]) - num8(s[1]), num8(e[2]) - num8(s[2])];
+    const a = atOf3(n2), sz = kid5(n2, "size");
+    return [a[0], a[1], sz ? num8(sz[1]) : 0, sz ? num8(sz[2]) : 0];
+  }
+  function shapeRows(it, o) {
+    const n2 = it.node, out = [];
+    const pts = () => ptsOf3(n2);
+    switch (it.kind) {
+      case "circle": {
+        const c = kid5(n2, "center"), r = kid5(n2, "radius");
+        out.push({ title: "Shape", value: "Circle" }, { title: "Radius", value: len(r ? num8(r[1]) : 0, o) });
+        void c;
+        break;
+      }
+      case "arc": {
+        const s = kid5(n2, "start"), m = kid5(n2, "mid"), e = kid5(n2, "end");
+        const A = s ? [num8(s[1]), num8(s[2])] : [0, 0], M = m ? [num8(m[1]), num8(m[2])] : A, B = e ? [num8(e[1]), num8(e[2])] : A;
+        const c = circumcentre(A, M, B), r = c ? Math.hypot(A[0] - c[0], A[1] - c[1]) : 0;
+        let ang = 0;
+        if (c) {
+          const a0 = Math.atan2(A[1] - c[1], A[0] - c[0]), am = Math.atan2(M[1] - c[1], M[0] - c[0]), a1 = Math.atan2(B[1] - c[1], B[0] - c[0]);
+          const sweep = (x) => (x % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+          const cw = sweep(am - a0) < sweep(a1 - a0);
+          ang = (cw ? sweep(a1 - a0) : -sweep(a0 - a1)) * 180 / Math.PI;
+        }
+        out.push({ title: "Shape", value: "Arc" }, { title: "Length", value: len(Math.abs(ang) * Math.PI / 180 * r, o) }, { title: "Angle", value: angleText(ang) }, { title: "Radius", value: len(r, o) });
+        break;
+      }
+      case "bezier": {
+        const p = pts();
+        out.push({ title: "Shape", value: "Curve" }, { title: "Length", value: len(bezierLength(p), o) });
+        break;
+      }
+      case "rectangle": {
+        const [, , w, h] = boxOf22(n2);
+        out.push({ title: "Shape", value: "Rectangle" }, { title: "Width", value: len(Math.abs(w), o) }, { title: "Height", value: len(Math.abs(h), o) });
+        break;
+      }
+      case "polyline":
+        out.push({ title: "Shape", value: "Polygon" }, { title: "Points", value: String(pts().length) });
+        break;
+      default:
+        break;
+    }
+    out.push(...strokeRows(n2, o));
+    return out;
+  }
+  function circumcentre(a, b, c) {
+    const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+    if (Math.abs(d) < 1e-12) return null;
+    const a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
+    return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
+  }
+  function bezierLength(p) {
+    if (p.length < 4) return 0;
+    let l = 0, prev = p[0];
+    for (let i = 1; i <= 64; i++) {
+      const t = i / 64, u = 1 - t;
+      const q = [u * u * u * p[0][0] + 3 * u * u * t * p[1][0] + 3 * u * t * t * p[2][0] + t * t * t * p[3][0], u * u * u * p[0][1] + 3 * u * u * t * p[1][1] + 3 * u * t * t * p[2][1] + t * t * t * p[3][1]];
+      l += Math.hypot(q[0] - prev[0], q[1] - prev[1]);
+      prev = q;
+    }
+    return l;
+  }
+  function lineRows(it, o) {
+    const n2 = it.node, out = [{ title: "Line Type", value: it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphical" }];
+    const st = strokeOf2(n2);
+    if ((it.kind === "wire" || it.kind === "bus") && st.type === "default") out.push({ title: "Line Style", value: "from netclass" });
+    else out.push(...strokeRows(n2, o, true, false));
+    if (it.kind === "wire" || it.kind === "bus") out.push(...connectionRows(it, o));
+    return out;
+  }
+  function sheetRows(it, o) {
+    const n2 = it.node, name = fieldText2(n2, "Sheetname") || fieldText2(n2, "Sheet name"), file = fieldText2(n2, "Sheetfile") || fieldText2(n2, "Sheet file");
+    const out = [{ title: "Sheet Name", value: ell(name, o) }];
+    if (o.sheetPath !== void 0) {
+      const base = o.sheetPath.endsWith("/") ? o.sheetPath : o.sheetPath + "/";
+      out.push({ title: "Hierarchical Path", value: `${base}${name}/` });
+    }
+    out.push({ title: "File Name", value: ell(file, o) });
+    const m = [];
+    if (flag2(n2, "exclude_from_sim")) m.push("Simulation");
+    const bom2 = kid5(n2, "in_bom");
+    if (bom2 && str4(bom2[1]) === "no") m.push("BOM");
+    const brd = kid5(n2, "on_board");
+    if (brd && str4(brd[1]) === "no") m.push("Board");
+    if (flag2(n2, "dnp")) m.push("DNP");
+    if (m.length) out.push({ title: "Exclude from", value: m.join(", ") });
+    return out;
+  }
+  function imageInfoOf(node) {
+    let b = null;
+    try {
+      b = base64ToBytes(imageData(node));
+    } catch (e) {
+      b = null;
+    }
+    const sz = imageSize(b);
+    if (!b || !sz) return null;
+    let ppi = 300;
+    if (b[0] === 137 && b[1] === 80) {
+      for (let i = 8; i + 12 <= b.length; ) {
+        const ln = (b[i] << 24 >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3], type = String.fromCharCode(b[i + 4], b[i + 5], b[i + 6], b[i + 7]);
+        if (type === "pHYs" && ln >= 9) {
+          const ppm = (b[i + 8] << 24 >>> 0) + (b[i + 9] << 16) + (b[i + 10] << 8) + b[i + 11];
+          if (b[i + 16] === 1 && ppm > 0) ppi = Math.round(ppm * 0.0254);
+          break;
+        }
+        if (type === "IDAT" || type === "IEND") break;
+        i += 12 + ln;
+      }
+    }
+    return { ppi, px: [sz[0], sz[1]] };
+  }
+  function msgPanelInfo(doc, sel, o) {
+    const it = doc.items.get(sel.id);
+    if (!it) return [];
+    if (sel.pin !== void 0 && it.kind === "symbol") return pinRows(doc, it, sel.pin, o);
+    if (sel.field !== void 0) return fieldRows(it, sel.field, o);
+    switch (it.kind) {
+      case "symbol":
+        return symbolRows(doc, it, o);
+      case "wire":
+      case "bus":
+        return lineRows(it, o);
+      case "polyline":
+        return ptsOf3(it.node).length === 2 ? lineRows(it, o) : shapeRows(it, o);
+      case "label":
+      case "global_label":
+      case "hierarchical_label":
+      case "directive_label":
+      case "netclass_flag":
+        return labelRows(it, o);
+      case "text":
+        return textRows(it, o);
+      case "text_box":
+        return textBoxRows(it, o);
+      case "rectangle":
+      case "circle":
+      case "arc":
+      case "bezier":
+        return shapeRows(it, o);
+      case "sheet":
+        return sheetRows(it, o);
+      case "junction": {
+        const d = kid5(it.node, "diameter"), dia = d && num8(d[1], 0) > 0 ? num8(d[1]) : doc.schSettings?.junctionDiameter ?? 0.9144;
+        return [{ title: "Junction", value: "" }, { title: "Size", value: len(dia, o) }, ...connectionRows(it, o)];
+      }
+      case "bus_entry":
+        return [{ title: "Bus Entry Type", value: "Wire" }, ...connectionRows(it, o)];
+      case "image": {
+        const sc = kid5(it.node, "scale"), scale = sc ? num8(sc[1], 1) : 1, info = o.imageInfo ? o.imageInfo(it) : imageInfoOf(it.node);
+        const ppi = info && info.ppi > 0 ? info.ppi : 300, px = info ? info.px : [0, 0];
+        return [
+          { title: "Bitmap", value: "" },
+          { title: "PPI", value: `${Math.round(ppi)} ` },
+          { title: "Scale", value: `${scale.toFixed(6)} ` },
+          { title: "Width", value: len(px[0] / ppi * 25.4 * scale, o) },
+          { title: "Height", value: len(px[1] / ppi * 25.4 * scale, o) }
+        ];
+      }
+      case "rule_area": {
+        const pl = kid5(it.node, "polyline") || it.node;
+        return [{ title: "Rule Area", value: "" }, { title: "Points", value: String(ptsOf3(pl).length) }, ...strokeRows(pl, o), { title: "Resolved netclass", value: "<None>" }];
+      }
+      case "table": {
+        const c = kid5(it.node, "column_count");
+        return [{ title: "Table", value: `${c ? num8(c[1], 0) : 0} Columns` }];
+      }
+      default:
+        return [];
+    }
+  }
+  function ellipsizeMenuText(s) {
+    const t = unescapeString(s).replace(/[\n\r\t]/g, " ");
+    return t.length > 36 ? t.slice(0, 34) + "..." : t;
+  }
+  function itemDescription(doc, id, units, sub) {
+    const it = doc.items.get(id);
+    if (!it) return "";
+    const n2 = it.node, L = (mm2) => messageText(mm2, units, "sch", true), text2 = () => ellipsizeMenuText(str4(n2[1]));
+    if (sub && sub.field !== void 0) {
+      const f2 = fieldNode(n2, sub.field), content = f2 ? ellipsizeMenuText(str4(f2[2])) : "";
+      return content ? `Field ${unescapeString(sub.field)} '${content}'` : `Field ${unescapeString(sub.field)} (empty)`;
+    }
+    switch (it.kind) {
+      case "symbol": {
+        const libId = str4((kid5(n2, "lib_id") || [])[1]), name = libId.slice(libId.indexOf(":") + 1);
+        const ref = ellipsizeMenuText(it.ref || fieldText2(n2, "Reference"));
+        if (sub && sub.pin !== void 0) return `Symbol ${ref} Pin ${sub.pin}`;
+        return `Symbol ${ref} [${ellipsizeMenuText(name)}]`;
+      }
+      case "wire":
+      case "bus":
+      case "polyline": {
+        const p = ptsOf3(n2);
+        if (it.kind === "polyline" && p.length !== 2) return `Polyline, ${p.length} points`;
+        const what = it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphic Line";
+        const [a, b] = p.length >= 2 ? [p[0], p[p.length - 1]] : [[0, 0], [0, 0]];
+        const dir = a[0] === b[0] ? "Vertical " : a[1] === b[1] ? "Horizontal " : "";
+        return `${dir}${what}, length ${L(Math.hypot(b[0] - a[0], b[1] - a[1]))}`;
+      }
+      case "junction":
+        return "Junction";
+      case "no_connect":
+        return "No Connect";
+      case "bus_entry":
+        return "Bus to wire entry";
+      case "label":
+        return `Label '${text2()}'`;
+      case "global_label":
+        return `Global Label '${text2()}'`;
+      case "hierarchical_label":
+        return `Hierarchical Label '${text2()}'`;
+      case "directive_label":
+      case "netclass_flag": {
+        const f2 = kids3(n2, "property")[0];
+        if (!f2) return "Directive Label";
+        const content = ellipsizeMenuText(str4(f2[2])), name = unescapeString(str4(f2[1]));
+        return content ? `Directive Label [${name} ${content}]` : `Directive Label [${name} (empty)]`;
+      }
+      case "text":
+        return `Graphic Text '${text2()}'`;
+      case "text_box":
+        return `Text box '${text2()}'`;
+      case "sheet":
+        return `Hierarchical Sheet '${ellipsizeMenuText(fieldText2(n2, "Sheetname") || fieldText2(n2, "Sheet name"))}'`;
+      case "image":
+        return "Image";
+      case "rule_area":
+        return "Schematic rule area";
+      case "table": {
+        const c = kid5(n2, "column_count");
+        return `${c ? num8(c[1], 0) : 0} Column Table`;
+      }
+      case "rectangle": {
+        const [, , w, h] = boxOf22(n2);
+        return `Rectangle, width ${L(Math.abs(w))} height ${L(Math.abs(h))}`;
+      }
+      case "circle": {
+        const c = kid5(n2, "center"), r = kid5(n2, "radius"), e = kid5(n2, "end");
+        const rad2 = r ? num8(r[1]) : c && e ? Math.hypot(num8(e[1]) - num8(c[1]), num8(e[2]) - num8(c[2])) : 0;
+        return `Circle, radius ${L(rad2)}`;
+      }
+      case "arc": {
+        const s = kid5(n2, "start"), m = kid5(n2, "mid"), e = kid5(n2, "end");
+        const A = s ? [num8(s[1]), num8(s[2])] : [0, 0], M = m ? [num8(m[1]), num8(m[2])] : A, B = e ? [num8(e[1]), num8(e[2])] : A;
+        const c = circumcentre(A, M, B);
+        return `Arc, radius ${L(c ? Math.hypot(A[0] - c[0], A[1] - c[1]) : 0)}`;
+      }
+      case "bezier":
+        return `Bezier Curve, ${ptsOf3(n2).length} points`;
+      case "ellipse":
+      case "ellipse_arc": {
+        const v = (k) => num8((kid5(n2, k) || [])[1], 0);
+        return `${it.kind === "ellipse" ? "Ellipse" : "Elliptical Arc"}, ${L(v("major_radius"))} x ${L(v("minor_radius"))}`;
+      }
+      case "group": {
+        const nm3 = kid5(n2, "name") ? str4(kid5(n2, "name")[1]) : str4(n2[1]), m = kid5(n2, "members");
+        const cnt = m ? m.length - 1 : 0;
+        return nm3 ? `Group '${nm3}', ${cnt} members` : `Unnamed Group, ${cnt} members`;
+      }
+      default:
+        return it.kind;
+    }
+  }
   var NET_PICK = /* @__PURE__ */ new Set(["wire", "bus", "junction", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
   function terminalsOf(doc, it) {
     const k = it.kind, n2 = it.node, at2 = () => atOf3(n2).slice(0, 2).map(r45);
@@ -74289,12 +75190,36 @@ Link '${target2}' to this file?`)) return null;
   function noConnectAt(doc, p) {
     return noConnectsAt(doc, p).length > 0;
   }
+  var PIN_SHAPE_TEXT = { line: "Line", inverted: "Inverted", clock: "Clock", inverted_clock: "Inverted clock", input_low: "Input low", clock_low: "Clock low", output_low: "Output low", edge_clock_high: "Falling edge clock", non_logic: "NonLogic" };
+  var unesc = (t) => {
+    const u = K7.unescapeText;
+    return u ? u(t) : t;
+  };
+  function pinItemRef(t) {
+    const name = t.pin.name && t.pin.name !== "~" ? unesc(t.pin.name) : "", type = PIN_TYPE_TEXT[t.pin.type] || "Unspecified", shape3 = PIN_SHAPE_TEXT[t.pin.shape || "line"] || "Line";
+    const what = `${t.pin.hidden ? "Hidden pin" : "Pin"} ${t.pin.number} [${name ? name + ", " : ""}${type}, ${shape3}]`;
+    return { x: r45(t.p[0]), y: r45(t.p[1]), desc: `Symbol ${t.item.ref || "?"} ${what}` };
+  }
+  function itemRef(doc, it) {
+    const n2 = it.node, at2 = atOf3(n2), pts = it.kind === "wire" || it.kind === "bus" || it.kind === "polyline" ? ptsOf3(n2) : [];
+    if (pts.length === 2) {
+      const [a, b] = pts, what = it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphic Line";
+      const dir = a[0] === b[0] ? "Vertical " : a[1] === b[1] ? "Horizontal " : "";
+      return { x: a[0], y: a[1], desc: `${dir}${what}, length %L`, len: Math.hypot(b[0] - a[0], b[1] - a[1]) };
+    }
+    const p = pts[0] || at2;
+    return { x: p[0], y: p[1], desc: itemDescription(doc, it.id, "mm") || it.kind };
+  }
   function pinLabel(t) {
     return `${t.item.ref || "?"} pin ${t.pin.number}${t.pin.name && t.pin.name !== "~" ? " (" + t.pin.name + ")" : ""}`;
   }
   function ercCheck(doc, opts) {
     opts = opts || {};
-    const markers = [], mark = (code, severity, p, text2, ids) => markers.push({ code, severity, x: r45(p[0]), y: r45(p[1]), text: text2, ids: Array.from(new Set(ids || [])) });
+    const markers = [], mark = (code, severity, p, text2, ids, refs, extra) => {
+      const idl = Array.from(new Set(ids || []));
+      const items = refs || idl.slice(0, 2).map((id) => doc.items.get(id)).filter((x) => !!x).map((x) => itemRef(doc, x));
+      markers.push(Object.assign({ code, severity, x: r45(p[0]), y: r45(p[1]), text: text2, ids: idl, items }, extra || {}));
+    };
     const { nets } = ercNets(doc);
     const byRef2 = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) {
@@ -74313,16 +75238,19 @@ Link '${target2}' to this file?`)) return null;
       const leaves = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label" || t.item.kind === "global_label" || t.power || t.pin && t.key);
       for (const t of pins) {
         if (t.pin.hidden || t.pin.type === "no_connect" || t.key) continue;
-        if (!t.attached && !noConnectAt(doc, t.p)) mark("pin_not_connected", "error", t.p, `Pin not connected: ${pinLabel(t)}`, [t.item.id]);
+        if (!t.attached && !noConnectAt(doc, t.p)) mark("pin_not_connected", "error", t.p, `Pin not connected: ${pinLabel(t)}`, [t.item.id], [pinItemRef(t)]);
         if (t.pin.type === "no_connect" || noConnectAt(doc, t.p) && net.terms.some((u) => u !== t && u.item !== t.item))
-          mark("no_connect_connected", "warning", t.p, `A pin with a "no connection" flag is connected: ${pinLabel(t)}`, [t.item.id]);
+          mark("no_connect_connected", "warning", t.p, `A pin with a "no connection" flag is connected: ${pinLabel(t)}`, [t.item.id], [pinItemRef(t)]);
       }
       const visible = pins.filter((t) => !t.pin.hidden || t.power);
-      let hasDriver = false, isPower2 = visible.some((t) => t.pin.type === "power_in"), needs = null, worst = null;
+      let hasDriver = false, isPower2 = visible.some((t) => t.pin.type === "power_in"), needs = null, needAll = [], worst = null;
       for (let i = 0; i < visible.length; i++) {
         const a = visible[i];
         if (isPower2 ? a.pin.type === "power_out" : DRIVING.has(a.pin.type)) hasDriver = true;
-        if (DRIVEN.has(a.pin.type) && (!needs || isPower2 && a.pin.type === "power_in" && needs.pin.type !== "power_in")) needs = a;
+        if (DRIVEN.has(a.pin.type)) {
+          needAll.push(a);
+          if (!needs || isPower2 && a.pin.type === "power_in" && needs.pin.type !== "power_in") needs = a;
+        }
         for (let j = i + 1; j < visible.length; j++) {
           const b = visible[j];
           if (a.item === b.item && a.pin.number === b.pin.number) continue;
@@ -74330,15 +75258,18 @@ Link '${target2}' to this file?`)) return null;
           if (e && (!worst || e > worst.e)) worst = { e, a, b };
         }
       }
-      if (worst) mark(worst.e === 2 ? "pin_to_pin_error" : "pin_to_pin_warning", worst.e === 2 ? "error" : "warning", worst.a.p, `Pins of type ${PIN_TYPE_TEXT[worst.a.pin.type]} and ${PIN_TYPE_TEXT[worst.b.pin.type]} are connected: ${pinLabel(worst.a)} and ${pinLabel(worst.b)}`, [worst.a.item.id, worst.b.item.id]);
+      if (worst) mark("pin_to_pin", worst.e === 2 ? "error" : "warning", worst.a.p, `Pins of type ${PIN_TYPE_TEXT[worst.a.pin.type]} and ${PIN_TYPE_TEXT[worst.b.pin.type]} are connected: ${pinLabel(worst.a)} and ${pinLabel(worst.b)}`, [worst.a.item.id, worst.b.item.id], [pinItemRef(worst.a), pinItemRef(worst.b)]);
       if (needs && !hasDriver && visible.length > 1 && !net.terms.some((t) => t.pin && noConnectAt(doc, t.p))) {
         const leavesSheet = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label");
-        if (!leavesSheet) mark(
+        const powerIns = needAll.filter((t) => t.pin.type === "power_in"), nonPower = needAll.filter((t) => !t.power);
+        const flagged = !opts.showAllErrors ? [needs] : isPower2 && powerIns.length ? powerIns : nonPower.length ? nonPower : needAll;
+        if (!leavesSheet) for (const t of flagged) mark(
           isPower2 ? "power_pin_not_driven" : "pin_not_driven",
           leaves ? "warning" : "error",
-          needs.p,
-          (isPower2 ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(needs) + (leaves ? " (no driver on this sheet)" : ""),
-          [needs.item.id]
+          t.p,
+          (isPower2 ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(t) + (leaves ? " (no driver on this sheet)" : ""),
+          [t.item.id],
+          [pinItemRef(t)]
         );
       }
       for (const t of labels) {
@@ -74395,9 +75326,15 @@ Link '${target2}' to this file?`)) return null;
       if (sub) {
         const hier = /* @__PURE__ */ new Set();
         for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str4(o.node[1]));
-        for (const [name, pin] of pinNames) if (!hier.has(name)) mark("hier_label_mismatch", "error", atOf3(pin), `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id]);
+        for (const [name, pin] of pinNames) if (!hier.has(name)) {
+          const pp = atOf3(pin);
+          mark("hier_label_mismatch", "error", pp, `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id], [{ x: pp[0], y: pp[1], desc: `Hierarchical Sheet Pin '${ellipsizeMenuText(name)}'` }]);
+        }
         const [x, y] = atOf3(it.node);
-        for (const name of hier) if (!pinNames.has(name)) mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id]);
+        for (const name of hier) if (!pinNames.has(name)) {
+          const lab = Array.from(sub.items.values()).find((o) => o.kind === "hierarchical_label" && str4(o.node[1]) === name);
+          mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id], lab ? [itemRef(sub, lab)] : void 0, lab ? { mainFile: it.file, mainSheet: it.id } : void 0);
+        }
       }
     }
     if (opts.parentPins) {
@@ -74463,6 +75400,63 @@ Link '${target2}' to this file?`)) return null;
     if (!changes.length) return false;
     ctx.commit(changes, "sync sheet pins");
     return true;
+  }
+  function autoPlaceSheetPinsNode(sheetNode2, sub, textSize = 1.27) {
+    const names = new Set(kids3(sheetNode2, "pin").map((p) => str4(p[1])));
+    const labels = [];
+    for (const o of sub.items.values()) if (o.kind === "hierarchical_label") {
+      const n2 = str4(o.node[1]);
+      if (!names.has(n2)) {
+        names.add(n2);
+        const sh = kid5(o.node, "shape");
+        labels.push({ name: n2, shape: sh ? str4(sh[1]) : "input" });
+      }
+    }
+    if (!labels.length) return null;
+    const IU2 = 1e4, iu3 = (mm22) => Math.round(mm22 * IU2), mm2 = (v) => r45(v / IU2);
+    const grid = iu3(1.27), ts = iu3(textSize);
+    let pitch = Math.max(Math.round(ts * 2), iu3(2.54));
+    pitch = Math.round(pitch / grid) * grid;
+    const margin = pitch, node = deep(sheetNode2), [x, y] = atOf3(node), size = kid5(node, "size");
+    const leftX = iu3(x), rightX = iu3(x) + iu3(num8(size[1])), topY = iu3(y), h0 = iu3(num8(size[2]));
+    let leftY = topY + margin - pitch, rightY = leftY;
+    for (const p of kids3(node, "pin")) {
+      const a = kid5(p, "at");
+      if (!a) continue;
+      const r = (Math.round(num8(a[3]) || 0) % 360 + 360) % 360, py = iu3(num8(a[2]));
+      if (r === 0) rightY = Math.max(rightY, py);
+      else if (r === 180) leftY = Math.max(leftY, py);
+    }
+    const byText2 = (a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    const right = labels.filter((l) => l.shape === "output").sort(byText2), left = labels.filter((l) => l.shape !== "output").sort(byText2);
+    const needBot = Math.max(leftY + left.length * pitch, rightY + right.length * pitch) + margin;
+    if (needBot > topY + h0) {
+      const dh = needBot - topY - h0;
+      size[2] = mm2(needBot - topY);
+      const ap = kid5(node, "fields_autoplaced"), auto = !!ap && str4(ap[1]) !== "no";
+      if (auto) for (const f2 of kids3(node, "property")) {
+        const fa = kid5(f2, "at");
+        if (fa && iu3(num8(fa[2])) >= topY + h0) fa[2] = mm2(iu3(num8(fa[2])) + dh);
+      }
+      for (const p of kids3(node, "pin")) {
+        const a = kid5(p, "at");
+        if (a && iu3(num8(a[2])) === topY + h0 && (Math.round(num8(a[3]) || 0) % 360 + 360) % 360 === 270) a[2] = mm2(needBot);
+      }
+    }
+    const column = (col, px, start, side) => {
+      let py = Math.round(start / grid) * grid;
+      for (const l of col) {
+        py += pitch;
+        const pin = sheetPinNode(l.name, [mm2(px), mm2(py)], side, textSize);
+        pin[2] = l.shape;
+        const i = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
+        if (i >= 0) node.splice(i, 0, pin);
+        else node.push(pin);
+      }
+    };
+    column(left, leftX, leftY, "left");
+    column(right, rightX, rightY, "right");
+    return node;
   }
   function cleanupSheetPins(ctx) {
     if (!editable(ctx)) return false;
@@ -74887,8 +75881,23 @@ Link '${target2}' to this file?`)) return null;
           c.lineTo(l[2], l[3]);
         }
         c.stroke();
-      } else if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet") c.strokeRect(Math.min(p0[0], cur2[0]), Math.min(p0[1], cur2[1]), Math.abs(cur2[0] - p0[0]), Math.abs(cur2[1] - p0[1]));
-      else if (d.shape === "circle") {
+      } else if (d.shape === "sheet") {
+        const b = d.await ? cur2 : sheetCorner(p0, cur2, S2.ctx ? S2.ctx.gridPitch : 1.27), it = ghost(doc, sheetNode(p0, b, "Untitled Sheet", "untitled.kicad_sch"));
+        if (it) {
+          c.restore();
+          paintItems(c, view, doc, [it], {});
+          c.save();
+        }
+      } else if (d.shape === "rect" || d.shape === "textbox") c.strokeRect(Math.min(p0[0], cur2[0]), Math.min(p0[1], cur2[1]), Math.abs(cur2[0] - p0[0]), Math.abs(cur2[1] - p0[1]));
+      else if (d.shape === "ellipse" || d.shape === "ellipse_arc") {
+        const box = d.pts.length >= 2 ? d.pts[1] : cur2, e = ellipseFromBox(p0, box), rad2 = (deg) => deg * Math.PI / 180;
+        c.beginPath();
+        if (d.shape === "ellipse_arc" && d.pts.length >= 3) {
+          const g2 = ellipseArcAngles(e, d.pts[2], cur2);
+          c.ellipse(e.cx, e.cy, e.major, e.minor, rad2(e.rotation), rad2(g2.start), rad2(g2.end));
+        } else c.ellipse(e.cx, e.cy, e.major, e.minor, rad2(e.rotation), 0, Math.PI * 2);
+        c.stroke();
+      } else if (d.shape === "circle") {
         c.beginPath();
         c.arc(p0[0], p0[1], Math.hypot(cur2[0] - p0[0], cur2[1] - p0[1]), 0, Math.PI * 2);
         c.stroke();
@@ -74919,9 +75928,11 @@ Link '${target2}' to this file?`)) return null;
         if (d.shape !== "lines" && d.pts.length >= 2) c.closePath();
         c.stroke();
       }
-      c.fillStyle = CLR.sel;
-      const h = 3 * px;
-      for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+      if (d.shape !== "sheet") {
+        c.fillStyle = CLR.sel;
+        const h = 3 * px;
+        for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+      }
       c.restore();
     }
     if (S2.carry && S2.carry.item) {
@@ -75137,13 +76148,16 @@ Link '${target2}' to this file?`)) return null;
       if (!r.isNew) continue;
       let n2;
       const multi = libUnits(doc, r.item.node).units > 1;
-      const packageKey = multi && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
+      const packageKey = !opts.regroup && multi && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
       if (packageKey && assigned.has(packageKey)) n2 = assigned.get(packageKey);
       else {
         n2 = packageKey ? firstFree(r, false) : firstFree(r, multi);
-        if (packageKey) assigned.set(packageKey, n2);
+        take(r, n2);
+        if (packageKey) {
+          assigned.set(packageKey, n2);
+          for (const o of refs) if (o !== r && o.isNew && o.prefix === r.prefix && o.old === r.old && libUnits(doc, o.item.node).units > 1) take(o, n2);
+        }
       }
-      take(r, n2);
       const ref = r.prefix + n2;
       if (ref === r.old) continue;
       const node = deep(r.item.node);
@@ -75151,6 +76165,39 @@ Link '${target2}' to this file?`)) return null;
       changes.push(modChange(doc, r.item, node));
     }
     return changes;
+  }
+  var unitLetter22 = (unit2) => {
+    let n2 = unit2, s = "";
+    while (n2 > 0) {
+      n2--;
+      s = String.fromCharCode(65 + n2 % 26) + s;
+      n2 = Math.floor(n2 / 26);
+    }
+    return s;
+  };
+  function annotateMessages(doc, changes, clear = false) {
+    const out = [];
+    for (const c of changes) {
+      const it = doc.items.get(c.id);
+      if (!it || it.kind !== "symbol") continue;
+      const p0 = refField(it.node), prev = p0 ? str4(p0[2]) : "", annotated = !!prev && !/\?$/.test(prev);
+      const val = (() => {
+        const v = kids3(it.node, "property").find((q) => str4(q[1]) === "Value");
+        return v ? str4(v[2]) : "";
+      })();
+      const multi = libUnits(doc, it.node).units > 1, u = kid5(it.node, "unit"), sub = multi ? unitLetter22(u ? num8(u[1], 1) : 1) : "";
+      if (clear) {
+        out.push(multi ? `Cleared annotation for ${val} (unit ${sub}).` : `Cleared annotation for ${val}.`);
+        continue;
+      }
+      const n2 = typeof c.sexpr === "string" ? K7.parseAll(c.sexpr).find((t) => Array.isArray(t) && t[0] !== "lib_symbols") : null, p1 = n2 ? refField(n2) : null;
+      const u1 = n2 ? kid5(n2, "unit") : null, sub1 = multi ? unitLetter22(u1 ? num8(u1[1], 1) : u ? num8(u[1], 1) : 1) : "";
+      const ref = (p1 ? str4(p1[2]) : "") + sub1, prevRef = prev + sub;
+      if (annotated && ref === prevRef) continue;
+      if (annotated) out.push(multi ? `Updated ${val} (unit ${sub1}) from ${prevRef} to ${ref}.` : `Updated ${val} from ${prevRef} to ${ref}.`);
+      else out.push(multi ? `Annotated ${val} (unit ${sub1}) as ${ref}.` : `Annotated ${val} as ${ref}.`);
+    }
+    return out;
   }
   function clearAnnotationChanges(doc, only) {
     const changes = [];
@@ -76597,7 +77644,7 @@ Link '${target2}' to this file?`)) return null;
     if (!editable(ctx)) return false;
     const changes = [];
     for (const it of selectedItems(ctx)) {
-      if (it.kind !== "symbol") continue;
+      if (it.kind !== "symbol" || isLockedNode(it.node)) continue;
       const n2 = autoplaceNode(ctx.doc, it, opts);
       if (n2) changes.push(modChange(ctx.doc, it, n2));
     }
@@ -76802,7 +77849,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function beginDrag(ctx, items, mm2, byPointer, opts) {
     const doc = ctx.doc, seen = /* @__PURE__ */ new Set(), list = [], partial = [];
-    for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id)) {
+    for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id) && !isLockedItem(doc, it)) {
       seen.add(it.id);
       const e = !(opts && opts.plain) && S2.selEnds ? S2.selEnds.get(it.id) : void 0, pts = e === 0 || e === 1 ? ptsOf3(it.node) : null;
       if (pts && pts.length === 2) partial.push({ item: it, index: e, orig: pts.map((q) => q.slice()) });
@@ -76880,12 +77927,16 @@ Link '${target2}' to this file?`)) return null;
   }
   function applyDrag(doc, d, dx, dy) {
     for (const e of d.items) {
-      if (!dx && !dy) restoreNode(e.item.node, e.orig);
+      if (e.base) {
+        restoreNode(e.item.node, e.base);
+        if (dx || dy) shiftNode(e.kind, e.item.node, dx, dy);
+      } else if (!dx && !dy) restoreNode(e.item.node, e.orig);
       else shiftNode(e.kind, e.item.node, r45(dx - d.applied[0]), r45(dy - d.applied[1]));
       K7.replaceChange(doc, e.item);
     }
     d.applied = [dx, dy];
     for (const r of d.riders) {
+      if (r.base) restoreNode(r.item.node, r.base);
       const [cx, cy] = atOf3(r.item.node);
       shiftNode(r.item.kind, r.item.node, r45(r.orig[0] + dx - cx), r45(r.orig[1] + dy - cy));
       K7.replaceChange(doc, r.item);
@@ -76905,7 +77956,7 @@ Link '${target2}' to this file?`)) return null;
       for (const x of g2.extra) d.preview.push({ kind: e.item.kind, pts: x });
     }
     for (const a of d.anchors) {
-      const Pn = [r45(a.p[0] + dx), r45(a.p[1] + dy)];
+      const Pn = anchorTo(d, a.p, dx, dy);
       for (const e of a.ends) {
         let pts = e.orig.map((q) => q.slice());
         if (connected) {
@@ -76922,6 +77973,31 @@ Link '${target2}' to this file?`)) return null;
         K7.replaceChange(doc, f2.item);
       }
       if (connected && a.stub && !same(a.p, Pn)) d.preview.push({ kind: a.stub.kind, pts: [a.p, Pn] });
+    }
+  }
+  function anchorTo(d, p, dx, dy) {
+    const q = d.mapPt ? d.mapPt(p) : p;
+    return [r45(q[0] + dx), r45(q[1] + dy)];
+  }
+  function restorePristine(doc, d) {
+    for (const e of d.items) if (e.base) {
+      restoreNode(e.item.node, e.orig);
+      K7.replaceChange(doc, e.item);
+    }
+    for (const r of d.riders) if (r.node0) {
+      restoreNode(r.item.node, r.node0);
+      K7.replaceChange(doc, r.item);
+    }
+    if (d.mapPt) for (const a of d.anchors) {
+      for (const e of a.ends) {
+        setPts2(e.item.node, e.orig.map((q) => q.slice()));
+        K7.replaceChange(doc, e.item);
+      }
+      for (const f2 of a.followers) {
+        const [cx, cy] = atOf3(f2.item.node);
+        shiftNode(f2.item.kind, f2.item.node, r45(f2.orig[0] - cx), r45(f2.orig[1] - cy));
+        K7.replaceChange(doc, f2.item);
+      }
     }
   }
   function moveDrag(ctx, mm2) {
@@ -76961,18 +78037,20 @@ Link '${target2}' to this file?`)) return null;
         done();
         return;
       }
-      const changes2 = dragChanges(ctx, d, dx, dy);
+      const changes2 = dragChanges(ctx, d, dx, dy, true);
       for (const id of d.local) ctx.doc.items.delete(id);
       if (changes2.length) ctx.commit(changes2, d.label || "paste");
       setSelectionIds(ctx, Array.from(d.local).filter((id) => ctx.doc.items.has(id)));
       done();
       return;
     }
-    if (!commit || !d.moved || !dx && !dy) {
+    const turned = !!d.mapPt;
+    if (!commit || !turned && (!d.moved || !dx && !dy)) {
+      restorePristine(doc, d);
       done();
       return;
     }
-    const changes = dragChanges(ctx, d, dx, dy);
+    const changes = dragChanges(ctx, d, dx, dy, true);
     if (changes.length) ctx.commit(changes, S2.dragMode === "drag" ? "drag" : "move");
     done();
   }
@@ -76984,8 +78062,14 @@ Link '${target2}' to this file?`)) return null;
   function cancelDrag(ctx) {
     if (S2.drag) endDrag(ctx, false);
   }
-  function dragChanges(ctx, d, dx, dy) {
+  function dragChanges(ctx, d, dx, dy, pristine = false) {
     const doc = ctx.doc, connected = S2.dragMode === "drag", out = /* @__PURE__ */ new Map();
+    const res = dragChangeList(ctx, d, dx, dy, connected, out);
+    if (pristine) restorePristine(doc, d);
+    return res;
+  }
+  function dragChangeList(ctx, d, dx, dy, connected, out) {
+    const doc = ctx.doc;
     const put = (c) => {
       const prev = out.get(c.id);
       if (prev && prev.kind === "ADDED" && c.kind === "REMOVED") {
@@ -77037,8 +78121,9 @@ Link '${target2}' to this file?`)) return null;
       if (!d.local) touched.push(p);
       touched.push([r45(p[0] + dx), r45(p[1] + dy)]);
     }
+    for (const p of d.touched0 || []) touched.push(p);
     if (connected) for (const a of d.anchors) {
-      const Pn = [r45(a.p[0] + dx), r45(a.p[1] + dy)];
+      const Pn = anchorTo(d, a.p, dx, dy);
       touched.push(a.p, Pn);
       for (const e of a.ends) {
         const g2 = endGeometry(e, Pn, d.mode ? "free" : S2.lineMode);
@@ -77496,6 +78581,65 @@ Link '${target2}' to this file?`)) return null;
     }
     return out;
   }
+  function unfoldEntries(doc, bus) {
+    const out = [], seen = /* @__PURE__ */ new Set();
+    const add = (e) => {
+      const k = (e.bus ? "b:" : "n:") + e.name;
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(e);
+    };
+    for (const id of netItems(doc, bus)) {
+      const it = doc.items.get(id);
+      if (!it || !(it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label")) continue;
+      const text2 = str4(it.node[1]).trim(), m = busMembers(text2);
+      if (!m) continue;
+      if (m.vector) {
+        for (const n2 of m.members) add({ name: n2, bus: false, members: [] });
+        continue;
+      }
+      const g2 = text2.match(/^([^\s\[\]{}]*)\{(.*)\}$/);
+      if (!g2) continue;
+      const prefix = g2[1] ? g2[1] + "." : "";
+      for (const tok of g2[2].split(/[\s,]+/).filter(Boolean)) {
+        const sub = busMembers(tok);
+        if (sub && sub.vector) add({ name: prefix + tok, bus: true, members: sub.members.map((x) => prefix + x) });
+        else add({ name: prefix + tok, bus: false, members: [] });
+      }
+    }
+    return out;
+  }
+  function printBusForUI(name) {
+    const K32 = root4.KiCadCanvas;
+    const u = K32 && K32.unescapeText ? K32.unescapeText(name) : name;
+    let out = "";
+    for (let i = 0; i < u.length; i++) {
+      const c = u[i];
+      if ((c === "~" || c === "_" || c === "^") && u[i + 1] === "{") {
+        out += c;
+        i++;
+        continue;
+      }
+      if (c === "}") continue;
+      if (c === "\\" && u[i + 1] === " ") continue;
+      out += c;
+    }
+    return out;
+  }
+  function busForUnfolding(ctx) {
+    const sel = selectedItems(ctx).find((it) => it.kind === "bus");
+    if (sel) return sel;
+    const c = cursorOf(ctx), tol = Math.max(0.6, 8 * mmPerPx(ctx));
+    let best = null, bd = Infinity;
+    for (const it of ctx.doc.items.values()) if (it.kind === "bus") for (const [a, b] of segs(it)) {
+      const q = closestOnSeg(c, a, b), d = Math.hypot(q[0] - c[0], q[1] - c[1]);
+      if (d <= tol && d < bd) {
+        bd = d;
+        best = it;
+      }
+    }
+    return best;
+  }
   function unfoldMembers(doc, bus) {
     const seen = /* @__PURE__ */ new Set(), out = [];
     for (const b of busLabelsOf(doc, bus)) for (const m of b.members) if (!seen.has(m)) {
@@ -77536,42 +78680,19 @@ Link '${target2}' to this file?`)) return null;
     if (!editable(ctx)) return false;
     opts = opts || {};
     const doc = ctx.doc;
-    let bus = opts.bus ? typeof opts.bus === "string" ? doc.items.get(opts.bus) : opts.bus : selectedItems(ctx).find((it) => it.kind === "bus");
-    if (!bus) {
-      const c = cursorOf(ctx), hit5 = hitNonSymbol(doc, c[0], c[1], Math.max(0.6, 8 * mmPerPx(ctx)));
-      if (hit5 && hit5.kind === "bus") bus = hit5;
-    }
-    if (!bus) {
-      ctx.toast("Select a bus first");
-      return false;
-    }
-    const members = unfoldMembers(doc, bus);
-    if (!members.length) {
-      ctx.toast("No bus label names this bus's members");
-      return false;
-    }
-    const go = (m) => {
-      if (m && members.includes(m)) unfoldBus(ctx, bus, m, opts.at);
-    };
+    const bus = opts.bus ? typeof opts.bus === "string" ? doc.items.get(opts.bus) : opts.bus : busForUnfolding(ctx);
+    const members = bus ? unfoldMembers(doc, bus) : [];
     if (opts.member) {
-      go(opts.member);
+      if (bus && members.includes(opts.member)) unfoldBus(ctx, bus, opts.member, opts.at);
       return true;
     }
-    const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
-    if (!KD) {
-      go(members[0]);
+    const hk = root4.CollabEditor && root4.CollabEditor.hooks;
+    if (hk && hk.busUnfoldMenu) {
+      hk.busUnfoldMenu(bus ? unfoldEntries(doc, bus) : [], bus || null, opts.at || cursorOf(ctx));
       return true;
     }
-    KD.open({
-      title: "Unfold from Bus",
-      width: 320,
-      build(body) {
-        body.innerHTML = `<div class="kv"><label>Net</label><k-select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</k-select></div>`;
-      },
-      ok() {
-        go(document.getElementById("kd-member").value);
-      }
-    });
+    if (!bus || !members.length) return false;
+    unfoldBus(ctx, bus, members[0], opts.at);
     return true;
   }
   var ARC_MODE_LABELS = ["Draw Arc: Center, Start, End", "Draw Arc: Start, End, Midpoint", "Draw Arc: Start, End, Center", "Draw Arc: Tangent", "Draw Arc: Start, Direction, End"];
@@ -77645,6 +78766,10 @@ Link '${target2}' to this file?`)) return null;
     act("fieldsTable", "Symbol Fields Table...", "", (ctx) => openFieldsTable(ctx)),
     act("unfoldBus", "Unfold from Bus", "C", (ctx, opts) => unfoldAction(ctx, opts)),
     act("syncSheetPins", "Sync Sheet Pins...", "", (ctx) => syncSheetPins(ctx)),
+    // SCH_EDIT_TOOL::Lock / Unlock / ToggleLock (the Locking submenu)
+    act("lock", "Lock", "", (ctx) => modifyLock(ctx, "on")),
+    act("unlock", "Unlock", "", (ctx) => modifyLock(ctx, "off")),
+    act("toggleLock", "Toggle Lock", "", (ctx) => modifyLock(ctx, "toggle")),
     act("cleanupSheetPins", "Cleanup Sheet Pins", "", (ctx) => cleanupSheetPins(ctx)),
     act("highlightNet", "Highlight Net", "`", (ctx) => highlightNetNow(ctx)),
     act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => {
@@ -77962,443 +79087,6 @@ Link '${target2}' to this file?`)) return null;
     ctx.requestRender();
     return null;
   }
-  var UNITS = {
-    mm: { name: "mm", f: (v) => v, d: 4 },
-    in: { name: "in", f: (v) => v / 25.4, d: 4 },
-    mil: { name: "mils", f: (v) => v / 0.0254, d: 2 }
-  };
-  function angleText(deg) {
-    return `${deg.toFixed(1)}\xB0`;
-  }
-  var UNIT_TEXT2 = { mm: " mm", mil: " mils", in: " in" };
-  function cExp(v, n2) {
-    const [m, e] = v.toExponential(n2).split("e");
-    const x = Number(e);
-    return `${m}e${x < 0 ? "-" : "+"}${String(Math.abs(x)).padStart(2, "0")}`;
-  }
-  function messageText(mm2, units, scale, label = true) {
-    const u = UNITS[units] ? units : "mm", short2 = scale === "sch", iu3 = short2 ? 1e4 : 1e6;
-    const v = UNITS[u].f(Math.round(mm2 * iu3) / iu3);
-    const digits = u === "mm" ? short2 ? 3 : 4 : u === "mil" ? short2 ? 0 : 2 : short2 ? 3 : 4;
-    let text2 = v.toFixed(digits);
-    if (v !== 0 && !/[1-9]/.test(text2)) text2 = cExp(v, 3);
-    if (short2 && u === "mm") {
-      const n2 = text2.length;
-      if (n2 > 4 && text2[n2 - 4] === "." && text2[n2 - 1] === "0") text2 = text2.slice(0, -1);
-    }
-    return label ? text2 + UNIT_TEXT2[u] : text2;
-  }
-  var yes6 = (n2) => !!n2 && str4(n2[1]) !== "no";
-  var flag2 = (node, key2) => {
-    const k = kid5(node, key2);
-    return k ? str4(k[1] ?? "yes") !== "no" : node.includes(key2);
-  };
-  function unescapeString(s) {
-    const MAP = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "	", return: "\n", brace: "{" };
-    return s.replace(/\{(\w+)\}/g, (m, k) => k in MAP ? MAP[k] : m);
-  }
-  function effects(node) {
-    return kid5(node, "effects");
-  }
-  function font(node) {
-    const e = effects(node);
-    return e ? kid5(e, "font") : null;
-  }
-  function textWidth2(node) {
-    const f2 = font(node), s = f2 ? kid5(f2, "size") : null;
-    return s ? num8(s[2] ?? s[1], 1.27) : 1.27;
-  }
-  function fontName(node) {
-    const f2 = font(node), face = f2 ? kid5(f2, "face") : null;
-    return face ? str4(face[1]) : "Default";
-  }
-  function bold(node) {
-    const f2 = font(node);
-    return !!f2 && flag2(f2, "bold");
-  }
-  function italic(node) {
-    const f2 = font(node);
-    return !!f2 && flag2(f2, "italic");
-  }
-  function styleName(node) {
-    const b = bold(node), i = italic(node);
-    return b && i ? "Bold Italic" : b ? "Bold" : i ? "Italic" : "Normal";
-  }
-  function textStyleName(node) {
-    const b = bold(node), i = italic(node);
-    return b && i ? "Bold+Italic" : b ? "Bold" : i ? "Italic" : "Normal";
-  }
-  function justify(node) {
-    const e = effects(node), j = e ? kid5(e, "justify") : null;
-    return j ? j.slice(1).map(String) : [];
-  }
-  function hJust(node) {
-    const j = justify(node);
-    return j.includes("left") ? "left" : j.includes("right") ? "right" : "center";
-  }
-  function vJust(node) {
-    const j = justify(node);
-    return j.includes("top") ? "top" : j.includes("bottom") ? "bottom" : "center";
-  }
-  function hidden(node) {
-    const e = effects(node);
-    return yes6(kid5(node, "hide")) || !!e && flag2(e, "hide");
-  }
-  var LINE_STYLES = { solid: "Solid", dash: "Dashed", dot: "Dotted", dash_dot: "Dash-Dot", dash_dot_dot: "Dash-Dot-Dot" };
-  function strokeOf2(node) {
-    const s = kid5(node, "stroke");
-    if (!s) return { width: 0, type: "default" };
-    const w = kid5(s, "width"), t = kid5(s, "type");
-    return { width: w ? num8(w[1], 0) : 0, type: t ? str4(t[1]) : "default" };
-  }
-  function strokeRows(node, o, style = true, width = true) {
-    const s = strokeOf2(node), out = [];
-    if (style) out.push({ title: "Line Style", value: LINE_STYLES[s.type] || "Default" });
-    if (width) out.push({ title: "Line Width", value: len(s.width, o) });
-    return out;
-  }
-  var len = (mm2, o) => messageText(mm2, o.units, "sch", true);
-  var ell = (s, o) => {
-    const t = unescapeString(s).replace(/[\n\r\t]/g, " ");
-    return o.ellipsize ? o.ellipsize(t) : t;
-  };
-  function connectionRows(item, o, pin) {
-    const c = o.connection ? o.connection(item, pin) : null;
-    if (!c) return [];
-    const out = [{ title: "Connection Name", value: unescapeString(c.name) }];
-    if (!c.bus) out.push({ title: "Resolved Netclass", value: unescapeString(c.netclass || "Default") });
-    return out;
-  }
-  var fieldNode = (node, name) => kids3(node, "property").find((p) => str4(p[1]) === name) || null;
-  var fieldText2 = (node, name) => {
-    const f2 = fieldNode(node, name);
-    return f2 ? str4(f2[2]) : "";
-  };
-  function libOf(doc, node) {
-    const name = str4((kid5(node, "lib_name") || kid5(node, "lib_id") || [])[1]), id = str4((kid5(node, "lib_id") || [])[1]);
-    return K7.resolveLib(doc, name) || K7.resolveLib(doc, id) || doc.lib.get(name) || doc.lib.get(id) || null;
-  }
-  function libUnitInfo(lib) {
-    let units = 1, styles = 1;
-    const names = /* @__PURE__ */ new Map();
-    if (!lib) return { units, styles, names };
-    for (const sub of kids3(lib, "symbol")) {
-      const m = str4(sub[1]).match(/_(\d+)_(\d+)$/);
-      if (!m) continue;
-      units = Math.max(units, +m[1]);
-      styles = Math.max(styles, +m[2]);
-      const un = kid5(sub, "unit_name");
-      if (un && +m[1] > 0) names.set(+m[1], str4(un[1]));
-    }
-    if (kid5(lib, "body_styles")) styles = Math.max(styles, kids3(lib, "body_styles")[0].length - 1);
-    return { units, styles, names };
-  }
-  function unitLetter3(unit2) {
-    let n2 = unit2, s = "";
-    while (n2 > 0) {
-      n2--;
-      s = String.fromCharCode(65 + n2 % 26) + s;
-      n2 = Math.floor(n2 / 26);
-    }
-    return s;
-  }
-  function symbolRows(doc, it, o) {
-    const n2 = it.node, out = [], lib = libOf(doc, n2);
-    const libId = str4((kid5(n2, "lib_id") || [])[1]), colon = libId.indexOf(":");
-    const nick = colon >= 0 ? libId.slice(0, colon) : "", itemName = colon >= 0 ? libId.slice(colon + 1) : libId;
-    const ref = it.ref || fieldText2(n2, "Reference"), value = fieldText2(n2, "Value");
-    const excludes = () => {
-      const m = [];
-      if (flag2(n2, "exclude_from_sim")) m.push("Simulation");
-      const bom2 = kid5(n2, "in_bom");
-      if (bom2 && str4(bom2[1]) === "no") m.push("BOM");
-      const brd = kid5(n2, "on_board");
-      if (brd && str4(brd[1]) === "no") m.push("Board");
-      if (flag2(n2, "dnp")) m.push("DNP");
-      if (m.length) out.push({ title: "Exclude from", value: m.join(", ") });
-    };
-    if (lib) {
-      if (isPowerSymbol(doc, libId)) out.push({ title: "Power symbol", value: ell(value, o) });
-      else {
-        out.push({ title: "Reference", value: unescapeString(ref) }, { title: "Value", value: ell(value, o) });
-        excludes();
-        out.push({ title: "Name", value: ell(itemName, o) });
-      }
-      const ext = kid5(lib, "extends");
-      if (ext) out.push({ title: "Derived from", value: unescapeString(str4(ext[1])) });
-      else out.push({ title: "Library", value: nick || "Undefined!!!" });
-      const fp = ell(fieldText2(n2, "Footprint"), o);
-      out.push({ title: "Footprint", value: fp || "<Unknown>" });
-      const kw = fieldNode(lib, "ki_keywords");
-      out.push({ title: `Description: ${fieldText2(n2, "Description") || fieldText2(lib, "Description")}`, value: `Keywords: ${kw ? str4(kw[2]) : ""}` });
-    } else {
-      out.push({ title: "Reference", value: ref }, { title: "Value", value: ell(value, o) });
-      excludes();
-      out.push({ title: "Name", value: ell(itemName, o) });
-      out.push({ title: "Library", value: nick ? `Symbol not found in ${nick}!` : "No library defined!" });
-    }
-    return out;
-  }
-  var PIN_TYPE = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-state", passive: "Passive", free: "Free", unspecified: "Unspecified", power_in: "Power input", power_out: "Power output", open_collector: "Open collector", open_emitter: "Open emitter", no_connect: "Unconnected" };
-  var PIN_SHAPE = { line: "Line", inverted: "Inverted", clock: "Clock", inverted_clock: "Inverted clock", input_low: "Input low", clock_low: "Clock low", output_low: "Output low", edge_clock_high: "Falling edge clock", non_logic: "NonLogic" };
-  var PIN_ORIENT = { 0: "Right", 90: "Up", 180: "Left", 270: "Down" };
-  function pinRows(doc, it, number, o) {
-    const pin = symbolPins(doc, it).find((p) => p.number === number);
-    if (!pin) return [];
-    const n2 = it.node, lib = libOf(doc, n2), info = libUnitInfo(lib), out = [{ title: "Type", value: "Pin" }];
-    const unit2 = kid5(n2, "unit") ? num8(kid5(n2, "unit")[1], 1) : 1;
-    if (info.units > 1) out.push({ title: "Unit", value: info.names.get(unit2) || unitLetter3(unit2) });
-    if (info.styles > 1) {
-      const bs = kid5(n2, "body_style") || kid5(n2, "convert");
-      const s = bs ? num8(bs[1], 1) : 1;
-      out.push({ title: "Body Style", value: s === 1 ? "Standard" : s === 2 ? "Alternate" : `Body style ${s}` });
-    }
-    out.push(
-      { title: "Name", value: unescapeString(pin.name === "~" ? "" : pin.name) },
-      { title: "Number", value: pin.number === "~" ? "" : pin.number },
-      { title: "Type", value: PIN_TYPE[pin.type] || "Unspecified" },
-      { title: "Style", value: PIN_SHAPE[pin.shape || "line"] || "Line" },
-      { title: "Visible", value: pin.hidden ? "No" : "Yes" },
-      { title: "Length", value: len(pin.len, o) },
-      { title: "Orientation", value: PIN_ORIENT[(Math.round(pin.libRot || 0) % 360 + 360) % 360] || "Right" },
-      { title: it.ref || fieldText2(n2, "Reference"), value: unescapeString(fieldText2(n2, "Value")) }
-    );
-    return out;
-  }
-  function fieldRows(it, name, o) {
-    const f2 = fieldNode(it.node, name);
-    if (!f2) return [];
-    const h = hJust(f2), v = vJust(f2);
-    return [
-      { title: "Symbol Field", value: unescapeString(name) },
-      { title: "Text", value: ell(str4(f2[2]), o) },
-      { title: "Visible", value: hidden(f2) ? "No" : "Yes" },
-      { title: "Font", value: fontName(f2) },
-      { title: "Style", value: textStyleName(f2) },
-      { title: "Text Size", value: len(textWidth2(f2), o) },
-      { title: "H Justification", value: h === "left" ? "Left" : h === "right" ? "Right" : "Center" },
-      { title: "V Justification", value: v === "top" ? "Top" : v === "bottom" ? "Bottom" : "Center" }
-    ];
-  }
-  var LABEL_TITLE = { label: "Label", directive_label: "Directive Label", netclass_flag: "Directive Label", global_label: "Global Label", hierarchical_label: "Hierarchical Label" };
-  var LABEL_SHAPE = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-State", passive: "Passive" };
-  var SPIN_JUST = ["Align left", "Align bottom", "Align right", "Align top"];
-  function labelRows(it, o) {
-    const n2 = it.node, out = [{ title: LABEL_TITLE[it.kind], value: unescapeString(str4(n2[1])) }];
-    if (it.kind === "global_label" || it.kind === "hierarchical_label") {
-      const sh = kid5(n2, "shape");
-      out.push({ title: "Type", value: LABEL_SHAPE[sh ? str4(sh[1]) : "input"] || "???" });
-    }
-    out.push(
-      { title: "Font", value: fontName(n2) },
-      { title: "Style", value: styleName(n2) },
-      { title: "Text Size", value: len(textWidth2(n2), o) },
-      { title: "Justification", value: SPIN_JUST[spinOfNode(n2)] || "???" }
-    );
-    out.push(...connectionRows(it, o));
-    return out;
-  }
-  function textRows(it, o) {
-    const n2 = it.node, out = [{ title: "Text", value: ell(str4(n2[1]), o) }];
-    if (flag2(n2, "exclude_from_sim")) out.push({ title: "Exclude from", value: "Simulation" });
-    const h = hJust(n2);
-    out.push(
-      { title: "Font", value: fontName(n2) },
-      { title: "Style", value: styleName(n2) },
-      { title: "Text Size", value: len(textWidth2(n2), o) },
-      { title: "Justification", value: h === "left" ? "Align left" : h === "right" ? "Align right" : "Align center" }
-    );
-    return out;
-  }
-  function textBoxRows(it, o) {
-    const n2 = it.node, out = [{ title: "Text Box", value: ell(str4(n2[1]), o) }];
-    if (flag2(n2, "exclude_from_sim")) out.push({ title: "Exclude from", value: "Simulation" });
-    const [, , w, h] = boxOf22(n2);
-    out.push(
-      { title: "Font", value: fontName(n2) },
-      { title: "Style", value: styleName(n2) },
-      { title: "Text Size", value: len(textWidth2(n2), o) },
-      { title: "Box Width", value: len(Math.abs(w), o) },
-      { title: "Box Height", value: len(Math.abs(h), o) },
-      ...strokeRows(n2, o)
-    );
-    return out;
-  }
-  function boxOf22(n2) {
-    const s = kid5(n2, "start"), e = kid5(n2, "end");
-    if (s && e) return [num8(s[1]), num8(s[2]), num8(e[1]) - num8(s[1]), num8(e[2]) - num8(s[2])];
-    const a = atOf3(n2), sz = kid5(n2, "size");
-    return [a[0], a[1], sz ? num8(sz[1]) : 0, sz ? num8(sz[2]) : 0];
-  }
-  function shapeRows(it, o) {
-    const n2 = it.node, out = [];
-    const pts = () => ptsOf3(n2);
-    switch (it.kind) {
-      case "circle": {
-        const c = kid5(n2, "center"), r = kid5(n2, "radius");
-        out.push({ title: "Shape", value: "Circle" }, { title: "Radius", value: len(r ? num8(r[1]) : 0, o) });
-        void c;
-        break;
-      }
-      case "arc": {
-        const s = kid5(n2, "start"), m = kid5(n2, "mid"), e = kid5(n2, "end");
-        const A = s ? [num8(s[1]), num8(s[2])] : [0, 0], M = m ? [num8(m[1]), num8(m[2])] : A, B = e ? [num8(e[1]), num8(e[2])] : A;
-        const c = circumcentre(A, M, B), r = c ? Math.hypot(A[0] - c[0], A[1] - c[1]) : 0;
-        let ang = 0;
-        if (c) {
-          const a0 = Math.atan2(A[1] - c[1], A[0] - c[0]), am = Math.atan2(M[1] - c[1], M[0] - c[0]), a1 = Math.atan2(B[1] - c[1], B[0] - c[0]);
-          const sweep = (x) => (x % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-          const cw = sweep(am - a0) < sweep(a1 - a0);
-          ang = (cw ? sweep(a1 - a0) : -sweep(a0 - a1)) * 180 / Math.PI;
-        }
-        out.push({ title: "Shape", value: "Arc" }, { title: "Length", value: len(Math.abs(ang) * Math.PI / 180 * r, o) }, { title: "Angle", value: angleText(ang) }, { title: "Radius", value: len(r, o) });
-        break;
-      }
-      case "bezier": {
-        const p = pts();
-        out.push({ title: "Shape", value: "Curve" }, { title: "Length", value: len(bezierLength(p), o) });
-        break;
-      }
-      case "rectangle": {
-        const [, , w, h] = boxOf22(n2);
-        out.push({ title: "Shape", value: "Rectangle" }, { title: "Width", value: len(Math.abs(w), o) }, { title: "Height", value: len(Math.abs(h), o) });
-        break;
-      }
-      case "polyline":
-        out.push({ title: "Shape", value: "Polygon" }, { title: "Points", value: String(pts().length) });
-        break;
-      default:
-        break;
-    }
-    out.push(...strokeRows(n2, o));
-    return out;
-  }
-  function circumcentre(a, b, c) {
-    const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
-    if (Math.abs(d) < 1e-12) return null;
-    const a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
-    return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
-  }
-  function bezierLength(p) {
-    if (p.length < 4) return 0;
-    let l = 0, prev = p[0];
-    for (let i = 1; i <= 64; i++) {
-      const t = i / 64, u = 1 - t;
-      const q = [u * u * u * p[0][0] + 3 * u * u * t * p[1][0] + 3 * u * t * t * p[2][0] + t * t * t * p[3][0], u * u * u * p[0][1] + 3 * u * u * t * p[1][1] + 3 * u * t * t * p[2][1] + t * t * t * p[3][1]];
-      l += Math.hypot(q[0] - prev[0], q[1] - prev[1]);
-      prev = q;
-    }
-    return l;
-  }
-  function lineRows(it, o) {
-    const n2 = it.node, out = [{ title: "Line Type", value: it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphical" }];
-    const st = strokeOf2(n2);
-    if ((it.kind === "wire" || it.kind === "bus") && st.type === "default") out.push({ title: "Line Style", value: "from netclass" });
-    else out.push(...strokeRows(n2, o, true, false));
-    if (it.kind === "wire" || it.kind === "bus") out.push(...connectionRows(it, o));
-    return out;
-  }
-  function sheetRows(it, o) {
-    const n2 = it.node, name = fieldText2(n2, "Sheetname") || fieldText2(n2, "Sheet name"), file = fieldText2(n2, "Sheetfile") || fieldText2(n2, "Sheet file");
-    const out = [{ title: "Sheet Name", value: ell(name, o) }];
-    if (o.sheetPath !== void 0) {
-      const base = o.sheetPath.endsWith("/") ? o.sheetPath : o.sheetPath + "/";
-      out.push({ title: "Hierarchical Path", value: `${base}${name}/` });
-    }
-    out.push({ title: "File Name", value: ell(file, o) });
-    const m = [];
-    if (flag2(n2, "exclude_from_sim")) m.push("Simulation");
-    const bom2 = kid5(n2, "in_bom");
-    if (bom2 && str4(bom2[1]) === "no") m.push("BOM");
-    const brd = kid5(n2, "on_board");
-    if (brd && str4(brd[1]) === "no") m.push("Board");
-    if (flag2(n2, "dnp")) m.push("DNP");
-    if (m.length) out.push({ title: "Exclude from", value: m.join(", ") });
-    return out;
-  }
-  function imageInfoOf(node) {
-    let b = null;
-    try {
-      b = base64ToBytes(imageData(node));
-    } catch (e) {
-      b = null;
-    }
-    const sz = imageSize(b);
-    if (!b || !sz) return null;
-    let ppi = 300;
-    if (b[0] === 137 && b[1] === 80) {
-      for (let i = 8; i + 12 <= b.length; ) {
-        const ln = (b[i] << 24 >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3], type = String.fromCharCode(b[i + 4], b[i + 5], b[i + 6], b[i + 7]);
-        if (type === "pHYs" && ln >= 9) {
-          const ppm = (b[i + 8] << 24 >>> 0) + (b[i + 9] << 16) + (b[i + 10] << 8) + b[i + 11];
-          if (b[i + 16] === 1 && ppm > 0) ppi = Math.round(ppm * 0.0254);
-          break;
-        }
-        if (type === "IDAT" || type === "IEND") break;
-        i += 12 + ln;
-      }
-    }
-    return { ppi, px: [sz[0], sz[1]] };
-  }
-  function msgPanelInfo(doc, sel, o) {
-    const it = doc.items.get(sel.id);
-    if (!it) return [];
-    if (sel.pin !== void 0 && it.kind === "symbol") return pinRows(doc, it, sel.pin, o);
-    if (sel.field !== void 0) return fieldRows(it, sel.field, o);
-    switch (it.kind) {
-      case "symbol":
-        return symbolRows(doc, it, o);
-      case "wire":
-      case "bus":
-        return lineRows(it, o);
-      case "polyline":
-        return ptsOf3(it.node).length === 2 ? lineRows(it, o) : shapeRows(it, o);
-      case "label":
-      case "global_label":
-      case "hierarchical_label":
-      case "directive_label":
-      case "netclass_flag":
-        return labelRows(it, o);
-      case "text":
-        return textRows(it, o);
-      case "text_box":
-        return textBoxRows(it, o);
-      case "rectangle":
-      case "circle":
-      case "arc":
-      case "bezier":
-        return shapeRows(it, o);
-      case "sheet":
-        return sheetRows(it, o);
-      case "junction": {
-        const d = kid5(it.node, "diameter"), dia = d && num8(d[1], 0) > 0 ? num8(d[1]) : doc.schSettings?.junctionDiameter ?? 0.9144;
-        return [{ title: "Junction", value: "" }, { title: "Size", value: len(dia, o) }, ...connectionRows(it, o)];
-      }
-      case "bus_entry":
-        return [{ title: "Bus Entry Type", value: "Wire" }, ...connectionRows(it, o)];
-      case "image": {
-        const sc = kid5(it.node, "scale"), scale = sc ? num8(sc[1], 1) : 1, info = o.imageInfo ? o.imageInfo(it) : imageInfoOf(it.node);
-        const ppi = info && info.ppi > 0 ? info.ppi : 300, px = info ? info.px : [0, 0];
-        return [
-          { title: "Bitmap", value: "" },
-          { title: "PPI", value: `${Math.round(ppi)} ` },
-          { title: "Scale", value: `${scale.toFixed(6)} ` },
-          { title: "Width", value: len(px[0] / ppi * 25.4 * scale, o) },
-          { title: "Height", value: len(px[1] / ppi * 25.4 * scale, o) }
-        ];
-      }
-      case "rule_area": {
-        const pl = kid5(it.node, "polyline") || it.node;
-        return [{ title: "Rule Area", value: "" }, { title: "Points", value: String(ptsOf3(pl).length) }, ...strokeRows(pl, o), { title: "Resolved netclass", value: "<None>" }];
-      }
-      case "table": {
-        const c = kid5(it.node, "column_count");
-        return [{ title: "Table", value: `${c ? num8(c[1], 0) : 0} Columns` }];
-      }
-      default:
-        return [];
-    }
-  }
   root4.CollabTools = root4.CollabTools || {};
   var sch = {
     id: "sch",
@@ -78444,6 +79132,7 @@ Link '${target2}' to this file?`)) return null;
     netItems,
     // SCH_*::GetMsgPanelInfo of one selected item (the message panel); the KICURSOR the running tool switched to
     msgPanelInfo,
+    itemDescription,
     cursorNow,
     cursorPos,
     // KiCad's non-tool commands: { id: { id, label, key, run(ctx, opts) -> handled } }; app.js binds menus and keys to them
@@ -78455,8 +79144,10 @@ Link '${target2}' to this file?`)) return null;
     // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
     clipboardText,
     parseClipboard,
+    placeImported,
     ercCheck,
     annotateChanges,
+    annotateMessages,
     clearAnnotationChanges,
     fieldsTableRows,
     fieldsTableChanges,
@@ -78465,6 +79156,10 @@ Link '${target2}' to this file?`)) return null;
       setFollow(on) {
         S2.forceFollow = !!on;
       },
+      isLockedNode,
+      isLockedItem,
+      setLockedNode,
+      modifyLock,
       lineEndAt,
       lineEndDangling,
       selectThreshold,
@@ -78529,6 +79224,7 @@ Link '${target2}' to this file?`)) return null;
       subsheetDoc,
       syncSheetPins,
       cleanupSheetPins,
+      autoPlaceSheetPinsNode,
       transformNode,
       transformChanges,
       transformSelected,
@@ -78548,6 +79244,9 @@ Link '${target2}' to this file?`)) return null;
       breakWire,
       openFieldsTable,
       unfoldMembers,
+      unfoldEntries,
+      busForUnfolding,
+      printBusForUI,
       busLabelsOf,
       unfoldBus,
       unfoldAction,
@@ -78670,7 +79369,11 @@ Link '${target2}' to this file?`)) return null;
       DELETE_CURSOR,
       // sheets, sheet pins, tables, curves, polygons, rule areas, images and net highlighting
       sheetNode,
+      sheetCorner,
       sheetPinNode,
+      ellipseFromBox,
+      ellipseArcAngles,
+      ellipseNode,
       tableNode,
       drawTableNode,
       drawTableSize,
@@ -83690,7 +84393,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -84349,7 +85052,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -87214,7 +87917,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -87830,7 +88533,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function intersectD(subject, clip2, fillRule, precision = 2) {
   return booleanOpD(ClipType.Intersection, subject, clip2, fillRule, precision);
@@ -93704,7 +94407,7 @@ function storedFill(node) {
   return m;
 }
 
-// node_modules/three/src/extras/lib/earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/lib/earcut.js
 function earcut(data, holeIndices, dim = 2) {
   const hasHoles = holeIndices && holeIndices.length;
   const outerLen = hasHoles ? holeIndices[0] * dim : data.length;
@@ -94125,7 +94828,7 @@ function signedArea2(data, start, end, dim) {
   return sum;
 }
 
-// node_modules/three/src/extras/Earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/Earcut.js
 var Earcut = class {
   /**
    * Triangulates the given shape definition by returning an array of triangles.
