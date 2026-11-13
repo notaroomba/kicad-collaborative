@@ -6,6 +6,8 @@ import { trapTab } from "../../tools/kicad-dialogs/shell";
 import { E } from "../state";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 import { fromDisplayAbsAxis, toDisplayAbsAxis } from "../userorigin";
+import { evalExpr } from "../../tools/props/numeric";
+import { popupMenu } from "../../dialogs/dom";
 
 // ---------------------------------------------------------------- elements
 type Child = Node | string | null | undefined | false;
@@ -128,6 +130,19 @@ textarea.pd-text { width: 100%; min-height: 260px; font-family: var(--mono); fon
 .pd-spin > .arrows > button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, var(--panel-2)); }
 .pd-spin > .arrows > button + button { border-top: 1px solid var(--line); }
 .pd-spin.disabled > .arrows { opacity: .5; pointer-events: none; }
+.pd-warnicon { display: inline-flex; align-items: center; margin-left: 4px; cursor: help; vertical-align: middle; }
+.pd-warnicon[hidden] { display: none; }
+.pd-infobar { display: flex; gap: 8px; align-items: center; background: color-mix(in srgb, var(--warn) 18%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); border-radius: var(--r-2); padding: 5px 10px; margin: 0 0 8px; color: var(--ink); }
+.pd-infobar[hidden] { display: none; }
+.pd-infobar .msg { flex: 1; white-space: pre-wrap; }
+.pd-infobar .x { border: 0; background: none; color: var(--ink-2); padding: 0 4px; }
+.pd-grid td.cellsel input[type=text], .pd-grid td.cellsel { background: var(--sel-soft); }
+.pd-grid td.err input[type=text] { outline: 2px solid var(--err); outline-offset: -2px; }
+.pd-link { color: var(--blue); text-decoration: underline; cursor: pointer; background: none; border: 0; padding: 0; font: inherit; }
+.pd-small { font-size: var(--fs-xs); font-style: italic; color: var(--ink-2); margin: 2px 0 6px; }
+.pd-swatchbtn { width: 100%; height: 23px; border: 0; padding: 3px 6px; background: none; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.pd-swatchbtn .sw { width: 28px; height: 14px; border: 1px solid var(--line-2); background-image: linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%), linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%); background-size: 8px 8px; background-position: 0 0, 4px 4px; position: relative; }
+.pd-swatchbtn .sw > i { position: absolute; inset: 0; }
 `;
 let cssDone = false;
 /** The kit's stylesheet, for a dialog opened with KDialogs.open directly (its own button row). */
@@ -147,7 +162,10 @@ export interface DialogSpec {
   build(body: HTMLElement, api: DialogApi): void;
   /** return false to keep the dialog open */
   ok?(): boolean | void;
-  cancel?(): void;
+  /** false keeps the dialog open (DIALOG_BOARD_SETUP::canDiscardChanges) */
+  cancel?(): boolean | void;
+  /** DIALOG_SHIM control-state persistence (see DlgSpec.persist) */
+  persist?: boolean | string; restored?(): void;
   okLabel?: string; cancelLabel?: string;
   /** a dialog with only its Close button */
   noOk?: boolean; readOnly?: boolean;
@@ -164,7 +182,7 @@ export function openDialog(spec: DialogSpec): DialogApi | null {
   if (typeof KDialogs === "undefined" || !KDialogs) return null;
   ensureCss();
   let out: DialogApi | null = null;
-  KDialogs.open({ title: spec.title, width: spec.width, okLabel: spec.okLabel, readOnly: spec.readOnly, extra: spec.extra, ok: spec.ok, cancel: spec.cancel, modeless: spec.modeless,
+  KDialogs.open({ title: spec.title, width: spec.width, okLabel: spec.okLabel, readOnly: spec.readOnly, extra: spec.extra, ok: spec.ok, cancel: spec.cancel, modeless: spec.modeless, persist: spec.persist, restored: spec.restored,
     build(body: HTMLElement, a: KDialogOpenApi) {
       const dlg = body.parentElement as HTMLElement;
       if (spec.width) dlg.style.maxWidth = "96vw";
@@ -174,6 +192,8 @@ export function openDialog(spec: DialogSpec): DialogApi | null {
       if (cancelButton && spec.cancelLabel) cancelButton.textContent = spec.cancelLabel;
       if (okButton && spec.noOk) { okButton.style.display = "none"; if (cancelButton && !spec.cancelLabel) cancelButton.textContent = "Close"; }
       if (spec.noEnter) body.addEventListener("keydown", (ev) => { if (ev.key === "Enter") ev.stopPropagation(); });
+      // a grid cell, a multi-line editor or a list consumes Enter; a plain text control lets it press OK
+      else body.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && ev.target instanceof Element && ev.target.closest(".pd-grid, .pd-list, .pd-rules")) ev.stopPropagation(); });
       const title = dlg.querySelector(".kd-title span");
       out = { body, close: a.close, dialog: dlg, okButton, cancelButton, setTitle(t: string) { if (title) title.textContent = t; } };
       spec.build(body, out);
@@ -247,25 +267,51 @@ const trim = (s: string): string => (s.includes(".") ? s.replace(/0+$/, "").repl
 export function fmtLen(mm: number, units: Units = currentUnits()): string { const u = UNIT[units] || UNIT.mm; return trim((mm / u.per).toFixed(u.digits)) || "0"; }
 /** …with the unit name, as KiCad's grids and reports show it ("0.2 mm"). */
 export function fmtLenU(mm: number): string { return fmtLen(mm) + " " + unitName(); }
-/** A typed length ("0.2", "0.2mm", "8 mils", "0.01in") in millimetres; NaN when it is no number. */
+/**
+ * A typed length in millimetres; NaN when it is no number.  UNIT_BINDER runs NUMERIC_EVALUATOR over the text, so
+ * "0.2", "0.2mm", "8 mils", "0.01in", "0.2+0.3" and "1/4" are all lengths; a bare number is in the editor's units.
+ */
 export function parseLen(text: string, units: Units = currentUnits()): number {
-  const m = /^\s*(-?\d*[.,]?\d+(?:e-?\d+)?)\s*(mm|in|inch|"|mils?|thou|um|µm)?\s*$/i.exec(text);
-  if (!m) return NaN;
-  const v = Number(m[1].replace(",", ".")), s = (m[2] || "").toLowerCase();
-  const per = s === "mm" ? 1 : s === "in" || s === "inch" || s === '"' ? 25.4 : s.startsWith("mil") || s === "thou" ? 0.0254 : s === "um" || s === "µm" ? 0.001 : (UNIT[units] || UNIT.mm).per;
-  return +(v * per).toFixed(6);
+  const v = evalExpr(text.replace(/\b(mils?|thou)\b/gi, "mil").replace(/\binch\b/gi, "in"), units);
+  return isNaN(v) ? NaN : +v.toFixed(6);
+}
+/** A plain number typed into a UNIT_BINDER without units (an expression is evaluated too). */
+export function parseNum(text: string): number { const v = evalExpr(text, ""); return isNaN(v) ? NaN : v; }
+const isExpr = (text: string): boolean => /[-+*/()]/.test(text.trim().replace(/^[-+]/, "").replace(/e[-+]\d/i, ""));
+/**
+ * UNIT_BINDER::onSetFocus / onKillFocus: the formula typed last comes back when the field takes the focus again,
+ * and is evaluated when it loses it.
+ */
+function bindEval(input: HTMLInputElement, evaluate: (text: string) => string | null): void {
+  let original = "";
+  input.addEventListener("focus", () => { if (original && original !== input.value) { input.value = original; input.select(); } });
+  input.addEventListener("blur", () => { const t = input.value; const out = evaluate(t); if (out !== null) { original = isExpr(t) ? t : ""; if (out !== t) input.value = out; } });
 }
 
 export interface Field<T> { el: HTMLElement; get(): T; set(v: T): void; input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement }
 /** A length: the text control; pair it with unitLabel() in a form row. */
-export function lenField(mm: number, opts?: { ro?: boolean; key?: string; min?: number; allowEmpty?: boolean; units?: Units; onChange?: (mm: number) => void }): Field<number> {
+export function lenField(mm: number, opts?: { ro?: boolean; key?: string; min?: number; allowEmpty?: boolean; units?: Units; onChange?(v: number): void }): Field<number> & { warn: Warning } {
   let cur = mm;
   // `units`: another frame's units than the open editor's (a Preferences page of the schematic editor)
-  const u = (opts && opts.units) || undefined, fmt = (v: number): string => fmtLen(v, u), parse = (t: string): number => parseLen(t, u);
-  const input = h("input", { type: "text", value: opts && opts.allowEmpty && !isFinite(mm) ? "" : fmt(mm), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
-  input.addEventListener("change", () => { const v = parse(input.value); if (isNaN(v)) { if (opts && opts.allowEmpty && !input.value.trim()) { cur = NaN; return; } input.value = isFinite(cur) ? fmt(cur) : ""; return; } cur = opts && opts.min !== undefined ? Math.max(opts.min, v) : v; input.value = fmt(cur); if (opts && opts.onChange) opts.onChange(cur); });
+  const u = (opts && opts.units) || currentUnits(), fmt = (v: number): string => fmtLen(v, u), parse = (t: string): number => parseLen(t, u);
+  const input = h("input", { type: "text", value: opts && opts.allowEmpty && !isFinite(mm) ? "" : fmt(mm), disabled: !!(opts && opts.ro), "data-k": opts && opts.key, "data-units": u });
+  // the value is evaluated when the field loses the focus (an expression shows its result); a typed value that is no
+  // number puts the last good one back
+  bindEval(input, (t) => { const v = parse(t); return isNaN(v) ? null : fmt(opts && opts.min !== undefined ? Math.max(opts.min, v) : v); });
+  input.addEventListener("change", () => { const v = parse(input.value); if (isNaN(v)) { if (opts && opts.allowEmpty && !input.value.trim()) { cur = NaN; return; } input.value = isFinite(cur) ? fmt(cur) : ""; return; } cur = opts && opts.min !== undefined ? Math.max(opts.min, v) : v; if (!isExpr(input.value)) input.value = fmt(cur); if (opts && opts.onChange) opts.onChange(cur); });
+  const warn = warningIcon();
   // an untouched field gives back the value it was given, not its display rounding (0.58642 shown as 0.5864)
-  return { el: input, input, get: () => { if (isFinite(cur) && input.value === fmt(cur)) return cur; const v = parse(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmt(v) : ""; } };
+  return { el: input, input, warn, get: () => { if (isFinite(cur) && input.value === fmt(cur)) return cur; const v = parse(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmt(v) : ""; } };
+}
+/**
+ * FIELD_WARNING_ICON: a small warning sign beside a control, shown with its tooltip while the value breaks a rule
+ * (PANEL_SETUP_CONSTRAINTS::updateWarnings).
+ */
+export interface Warning { el: HTMLElement; set(message: string | null): void }
+export function warningIcon(): Warning {
+  const el = h("span", { class: "pd-warnicon", hidden: true, "data-k": "warning" });
+  el.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5L15 14H1z" style="fill:var(--warn)"/><path d="M8 6v4M8 11.6v.4" style="stroke:var(--paper)" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  return { el, set(m) { el.hidden = !m; el.title = m || ""; } };
 }
 /**
  * A board position (UNIT_BINDER with SetCoordType( ABS_X_COORD / ABS_Y_COORD )): shown from the user origin with the
@@ -282,8 +328,9 @@ export const unitLabel = (text?: string): HTMLElement => h("span", { class: "uni
 export function numField(v: number, opts?: { ro?: boolean; key?: string; digits?: number }): Field<number> {
   let cur = v; const fmt = (x: number): string => trim(x.toFixed(opts && opts.digits !== undefined ? opts.digits : 6)) || "0";
   const input = h("input", { type: "text", value: fmt(v), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
-  input.addEventListener("change", () => { const x = Number(input.value.replace(",", ".")); if (isNaN(x) || !input.value.trim()) input.value = fmt(cur); else { cur = x; input.value = fmt(x); } });
-  return { el: input, input, get: () => { if (input.value === fmt(cur)) return cur; const x = Number(input.value.replace(",", ".")); return isNaN(x) || !input.value.trim() ? cur : x; }, set(x) { cur = x; input.value = fmt(x); } };
+  bindEval(input, (t) => { const x = parseNum(t); return isNaN(x) ? null : fmt(x); });
+  input.addEventListener("change", () => { const x = parseNum(input.value); if (isNaN(x) || !input.value.trim()) input.value = fmt(cur); else { cur = x; if (!isExpr(input.value)) input.value = fmt(x); } });
+  return { el: input, input, get: () => { if (input.value === fmt(cur)) return cur; const x = parseNum(input.value); return isNaN(x) || !input.value.trim() ? cur : x; }, set(x) { cur = x; input.value = fmt(x); } };
 }
 /**
  * wxSpinCtrl / wxSpinCtrlDouble: a number entry with up / down arrows (and the arrow keys) that step by `step` and
@@ -363,25 +410,60 @@ export function notebook(pages: Page[], opts?: { start?: number; onShow?(i: numb
 }
 
 export interface TreeGroup { label: string; pages: Page[] }
-/** PAGED_DIALOG: groups with sub-pages down the left, the chosen page on the right. */
-export function treeBook(groups: TreeGroup[], start?: string): { el: HTMLElement; show(label: string): void; current(): string; built(label: string): boolean } {
+/**
+ * PAGED_DIALOG: groups with sub-pages down the left, the chosen page on the right.  `canLeave` is
+ * onPageChanging's Validate + TransferDataFromWindow of the page being left: false keeps it shown.
+ */
+export function treeBook(groups: TreeGroup[], start?: string, opts?: { canLeave?(label: string): boolean; onShow?(label: string, from: string): void }): { el: HTMLElement; show(label: string, force?: boolean): void; current(): string; built(label: string): boolean; rebuild(label: string): void } {
   const tree = h("div", { class: "pd-tree" }), page = h("div", { class: "pd-page" }), el = h("div", { class: "pd-book" }, tree, page);
   const built = new Map<string, HTMLElement>(), leaves = new Map<string, HTMLElement>(), specs = new Map<string, Page>();
   let cur = "";
-  const show = (label: string): void => {
+  const show = (label: string, force?: boolean): void => {
     const pg = specs.get(label); if (!pg || label === cur) return;
-    cur = label;
+    if (cur && !force && opts && opts.canLeave && !opts.canLeave(cur)) return;
+    const from = cur; cur = label;
     for (const [l, leaf] of leaves) leaf.classList.toggle("on", l === label);
     let p = built.get(label);
-    if (!p) { p = h("div"); built.set(label, p); pg.build(p); }
+    if (!p) { p = h("div", { "data-page": label }); built.set(label, p); pg.build(p); }
     page.replaceChildren(p); page.scrollTop = 0;
+    if (opts && opts.onShow) opts.onShow(label, from);
   };
   for (const g of groups) {
     tree.append(h("div", { class: "grp" }, g.label));
     for (const pg of g.pages) { const leaf = h("div", { class: "leaf" }, pg.label); leaf.addEventListener("click", () => show(pg.label)); leaves.set(pg.label, leaf); specs.set(pg.label, pg); tree.append(leaf); }
   }
   show(start && specs.has(start) ? start : groups[0].pages[0].label);
-  return { el, show, current: () => cur, built: (l) => built.has(l) };
+  // a built page is dropped and, when it is the one showing, built again from its sources
+  const rebuild = (label: string): void => {
+    if (!built.has(label)) return;
+    built.delete(label);
+    if (label === cur) { const pg = specs.get(label) as Page; const p = h("div", { "data-page": label }); built.set(label, p); pg.build(p); page.replaceChildren(p); }
+  };
+  return { el, show, current: () => cur, built: (l) => built.has(l), rebuild };
+}
+
+/** WX_INFOBAR at the top of a dialog: ShowMessage (stays) and ShowMessageFor (goes after `ms`). */
+export function infoBar(): { el: HTMLElement; show(message: string, ms?: number): void; hide(): void } {
+  const msg = h("span", { class: "msg", "data-k": "infobar-msg" });
+  const x = h("button", { class: "x", type: "button", title: "Hide this message." }, "\u00d7");
+  const el = h("div", { class: "pd-infobar", hidden: true, "data-k": "infobar" }, h("span", { class: "pd-warnicon" }), msg, x);
+  (el.firstChild as HTMLElement).innerHTML = warningIcon().el.innerHTML;
+  let timer = 0;
+  const hide = (): void => { el.hidden = true; if (timer) clearTimeout(timer); timer = 0; };
+  x.addEventListener("click", hide);
+  return { el, hide, show(m, ms) { msg.textContent = m; el.hidden = false; if (timer) clearTimeout(timer); timer = ms ? window.setTimeout(hide, ms) : 0; } };
+}
+/** PAGED_DIALOG::SetError's focus part: a text control is selected and focused; a grid cell gets the cursor. */
+export function focusError(ctrl: HTMLElement | null | undefined, row?: number, col?: number): void {
+  if (!ctrl) return;
+  let target: HTMLElement | null = ctrl;
+  if (ctrl.classList.contains("pd-grid") && row !== undefined) {
+    const tr = ctrl.querySelectorAll("tbody tr")[row] as HTMLElement | undefined;
+    const td = tr ? (tr.children[col || 0] as HTMLElement | undefined) : undefined;
+    target = td ? (td.querySelector("input,textarea,k-select") as HTMLElement | null) || td : ctrl;
+    if (td) { td.classList.add("err"); setTimeout(() => td.classList.remove("err"), 3000); td.scrollIntoView({ block: "nearest" }); }
+  }
+  setTimeout(() => { if (!target) return; target.focus(); if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) target.select(); }, 0);
 }
 
 // ---------------------------------------------------------------- grids (WX_GRID)
@@ -392,6 +474,7 @@ export const ICONS = {
   up: svg('<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>'),
   down: svg('<path d="M8 3v10M3.5 8.5L8 13l4.5-4.5"/>'),
   library: svg('<path d="M2.5 3v10M5 3v10M7.5 3.5l3 9.5M11 3l2.5 9.5" stroke-width="1.4"/>'),
+  sort: svg('<path d="M4.5 13V3M2 5.5L4.5 3 7 5.5M9 4h5M9 8h3.5M9 12h2" stroke-width="1.5"/>'),
 };
 export function iconButton(icon: keyof typeof ICONS, title: string, fn: () => void, disabled?: boolean): HTMLButtonElement {
   const b = h("button", { class: "pd-iconbtn", type: "button", title, disabled: !!disabled });
@@ -402,60 +485,109 @@ export type CellValue = string | number | boolean;
 export interface GridColumn {
   label: string; key: string; width?: string;
   /** text (default), a length in the editor's units, a number, a checkbox, a choice or read-only text */
-  type?: "text" | "len" | "num" | "check" | "select" | "ro";
+  type?: "text" | "len" | "num" | "check" | "select" | "ro" | "color";
   options?: [string | number, string][];
+  /** the column header's tooltip (PANEL_SETUP_NETCLASSES::onmouseMove) */
+  tip?: string;
+  /** hidden until shown from the header's right-click menu (WX_GRID::ShowHideColumns) */
+  hidden?: boolean;
+  /** a "color" cell: the swatch opens this picker (GRID_CELL_COLOR_SELECTOR) */
+  pick?(current: string, done: (css: string) => void): void;
   /** a per-row override: read-only cells (the Default netclass's name) */
   readOnly?(row: Record<string, CellValue>, index: number): boolean;
   /** shown for an unset length (NaN) */
   blank?: string;
 }
-export interface GridApi { el: HTMLElement; rows(): Record<string, CellValue>[]; setRows(rows: Record<string, CellValue>[]): void; selected(): number; select(i: number): void; refresh(): void }
-/** An editable table; `rows` is edited in place (commit reads grid.rows()). */
-export function grid(columns: GridColumn[], rows: Record<string, CellValue>[], opts?: { ro?: boolean; height?: string; onSelect?(i: number): void; onChange?(): void; rowClass?(row: Record<string, CellValue>, i: number): string }): GridApi {
+export interface GridApi { el: HTMLElement; rows(): Record<string, CellValue>[]; setRows(rows: Record<string, CellValue>[]): void; selected(): number; select(i: number): void; refresh(): void; columns: GridColumn[] }
+/** A CSS colour ("rgba(r, g, b, a)" as KiCad writes it, or #hex) drawn over the checkerboard that shows transparency. */
+export function swatch(css: string): HTMLElement { const sw = h("span", { class: "sw" }); const i = h("i"); i.style.background = css || "transparent"; sw.append(i); return sw; }
+/**
+ * An editable table; `rows` is edited in place (commit reads grid.rows()).  GRID_TRICKS: Ctrl+C copies the row (or
+ * the cell's selected text), Ctrl+V pastes tab- and line-separated text over the cells from the focused one on, and
+ * a right-click on the header shows or hides the optional columns.
+ */
+export function grid(columns: GridColumn[], rows: Record<string, CellValue>[], opts?: { ro?: boolean; height?: string; onSelect?(i: number): void; onChange?(): void; rowClass?(row: Record<string, CellValue>, i: number): string; key?: string }): GridApi {
   let data = rows, sel = -1;
-  const table = h("table"), wrap = h("div", { class: "pd-grid", style: opts && opts.height ? `max-height:${opts.height}` : null }, table);
+  const table = h("table"), wrap = h("div", { class: "pd-grid", style: opts && opts.height ? `max-height:${opts.height}` : null, "data-k": opts && opts.key }, table);
   const changed = (): void => { if (opts && opts.onChange) opts.onChange(); };
   const select = (i: number): void => { sel = i; Array.from(table.querySelectorAll("tbody tr")).forEach((tr, k) => tr.classList.toggle("sel", k === i)); if (opts && opts.onSelect) opts.onSelect(i); };
+  const shown = (): GridColumn[] => columns.filter((c) => !c.hidden);
+  const cellText = (c: GridColumn, v: CellValue | undefined): string => c.type === "len" ? (typeof v === "number" && isFinite(v) ? fmtLenU(v) : "") : c.type === "num" ? (typeof v === "number" && isFinite(v) ? trim(v.toFixed(6)) : "") : c.type === "check" ? (v ? "1" : "0") : c.type === "select" ? (((c.options || []).find((o) => String(o[0]) === String(v)) || [0, String(v === undefined ? "" : v)])[1]) : String(v === undefined ? "" : v);
+  /** a pasted text into one cell (the value conversions of the cell's own editor) */
+  const setCell = (row: Record<string, CellValue>, c: GridColumn, text: string): void => {
+    if (c.type === "len") { const x = parseLen(text); row[c.key] = !text.trim() ? NaN : isNaN(x) ? row[c.key] : x; }
+    else if (c.type === "num") { const x = parseNum(text); row[c.key] = !text.trim() ? NaN : isNaN(x) ? row[c.key] : x; }
+    else if (c.type === "check") row[c.key] = /^(1|true|yes)$/i.test(text.trim());
+    else if (c.type === "select") { const o = (c.options || []).find((x) => x[1] === text || String(x[0]) === text); if (o) row[c.key] = o[0]; }
+    else row[c.key] = text;
+  };
   const refresh = (): void => {
     table.replaceChildren();
-    const head = h("tr"); for (const c of columns) head.append(h("th", { style: c.width ? `width:${c.width}` : null }, c.label));
+    const head = h("tr"); for (const c of shown()) head.append(h("th", { style: c.width ? `width:${c.width}` : null, title: c.tip }, c.label));
+    head.addEventListener("contextmenu", (ev) => {
+      if (!columns.some((c) => c.hidden !== undefined)) return;
+      ev.preventDefault();
+      popupMenu(ev.clientX, ev.clientY, columns.filter((c, i) => i > 0 && c.label).map((c) => ({ label: c.label, check: true, checked: !c.hidden, run: () => { c.hidden = !c.hidden; refresh(); } })));
+    });
     table.append(h("thead", null, head));
     const body = h("tbody");
     data.forEach((row, i) => {
       const tr = h("tr", { class: (i === sel ? "sel " : "") + (opts && opts.rowClass ? opts.rowClass(row, i) : "") });
       tr.addEventListener("pointerdown", () => { if (sel !== i) select(i); });
-      for (const c of columns) {
+      shown().forEach((c, ci) => {
         const ro = !!(opts && opts.ro) || c.type === "ro" || (c.readOnly ? c.readOnly(row, i) : false);
         const v = row[c.key];
         if (c.type === "check") {
           const cb = h("input", { type: "checkbox", checked: !!v, disabled: ro }); cb.addEventListener("change", () => { row[c.key] = cb.checked; changed(); });
           tr.append(h("td", { class: "chk" }, cb));
+        } else if (c.type === "color") {
+          const b = h("button", { type: "button", class: "pd-swatchbtn", disabled: ro, title: String(v || "") }, swatch(String(v || "")));
+          b.addEventListener("click", () => { if (c.pick) c.pick(String(row[c.key] || ""), (css) => { row[c.key] = css; b.replaceChildren(swatch(css)); b.title = css; changed(); }); });
+          tr.append(h("td", null, b));
         } else if (c.type === "select" && !ro) {
           const s = h("k-select"); for (const [val, label] of c.options || []) { const o = h("option", { value: String(val) }, label); if (String(val) === String(v)) o.selected = true; s.append(o); }
           s.addEventListener("change", () => { const o = (c.options || [])[s.selectedIndex]; if (o) { row[c.key] = o[0]; changed(); } });
           tr.append(h("td", null, s));
         } else if (ro) {
-          const text = c.type === "len" ? (typeof v === "number" && isFinite(v) ? fmtLenU(v) : c.blank || "") : c.type === "select" ? (((c.options || []).find((o) => String(o[0]) === String(v)) || [0, String(v === undefined ? "" : v)])[1]) : String(v === undefined ? "" : v);
+          const text = c.type === "len" ? (typeof v === "number" && isFinite(v) ? fmtLenU(v) : c.blank || "") : cellText(c, v);
           tr.append(h("td", { class: "ro", title: text }, text));
         } else {
-          const text = c.type === "len" ? (typeof v === "number" && isFinite(v) ? fmtLenU(v) : "") : c.type === "num" ? (typeof v === "number" && isFinite(v) ? trim(v.toFixed(6)) : "") : String(v === undefined ? "" : v);
-          const inp = h("input", { type: "text", value: text, placeholder: c.blank });
+          const text = cellText(c, v);
+          const inp = h("input", { type: "text", value: text, placeholder: c.blank, "data-col": c.key });
           inp.addEventListener("change", () => {
             if (c.type === "len") { const x = parseLen(inp.value); if (!inp.value.trim()) { row[c.key] = NaN; inp.value = ""; } else if (isNaN(x)) inp.value = text; else { row[c.key] = x; inp.value = fmtLenU(x); } }
-            else if (c.type === "num") { const x = Number(inp.value.replace(",", ".")); if (!inp.value.trim()) row[c.key] = NaN; else if (isNaN(x)) inp.value = text; else row[c.key] = x; }
+            else if (c.type === "num") { const x = parseNum(inp.value); if (!inp.value.trim()) row[c.key] = NaN; else if (isNaN(x)) inp.value = text; else row[c.key] = x; }
             else row[c.key] = inp.value;
             changed();
           });
-          inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.stopPropagation(); inp.blur(); } });
+          inp.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") { ev.stopPropagation(); inp.blur(); return; }
+            const mod = ev.ctrlKey || ev.metaKey;
+            const noSel = inp.selectionStart === inp.selectionEnd;
+            if (mod && ev.key.toLowerCase() === "c" && noSel) {
+              // GRID_TRICKS::copySelectionToClipboard: the row's cells, tab-separated
+              ev.preventDefault();
+              void navigator.clipboard?.writeText(shown().map((x) => cellText(x, row[x.key])).join("\t"));
+            } else if (mod && ev.key.toLowerCase() === "v" && navigator.clipboard && navigator.clipboard.readText) {
+              ev.preventDefault();
+              void navigator.clipboard.readText().then((clip) => {
+                const lines = clip.replace(/\r/g, "").replace(/\n$/, "").split("\n");
+                if (lines.length === 1 && !lines[0].includes("\t")) { const a = inp.selectionStart || 0, b = inp.selectionEnd || 0; inp.value = inp.value.slice(0, a) + lines[0] + inp.value.slice(b); inp.dispatchEvent(new Event("change")); return; }
+                const cols = shown();
+                lines.forEach((line, k) => { const r = data[i + k]; if (!r) return; line.split("\t").forEach((cell, m) => { const col = cols[ci + m]; if (col && col.type !== "ro" && !(col.readOnly && col.readOnly(r, i + k))) setCell(r, col, cell); }); });
+                refresh(); changed();
+              });
+            }
+          });
           tr.append(h("td", null, inp));
         }
-      }
+      });
       body.append(tr);
     });
     table.append(body);
   };
   refresh();
-  return { el: wrap, rows: () => data, setRows(r) { data = r; sel = -1; refresh(); }, selected: () => sel, select, refresh };
+  return { el: wrap, rows: () => data, setRows(r) { data = r; sel = -1; refresh(); }, selected: () => sel, select, refresh, columns };
 }
 /** EDA_LIST_DIALOG: a filter box (wildcards, "*text*", case-insensitive, on the first column), "Items:" and a
  *  read-only list; OK, Enter or a double-click picks the selected row.  `onPick` gets the row's columns. */

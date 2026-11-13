@@ -110,6 +110,41 @@ function restoreGeometry(key: string, dlg: HTMLElement, resizable: boolean): voi
   if (c.height) { dlg.style.height = c.height + "px"; dlg.style.maxHeight = "none"; }
 }
 
+// ---------------------------------------------------------------- DIALOG_SHIM's control state
+const STATE_KEY = (key: string): string => "kd.state." + key;
+type ControlState = Record<string, string | boolean | { text: string; units?: string }>;
+const persistent = (body: HTMLElement): HTMLElement[] => Array.from(body.querySelectorAll<HTMLElement>("input[data-k], k-select[data-k], textarea[data-k]")).filter((e) => !e.closest("[data-nopersist]") && !e.hasAttribute("data-nopersist"));
+/** The values of the dialog's controls, by their data-k (a radio group by its name and value). */
+export function saveControlState(key: string, body: HTMLElement): void {
+  const out: ControlState = {};
+  for (const e of persistent(body)) {
+    const k = e.getAttribute("data-k") as string;
+    if (e instanceof HTMLInputElement && e.type === "checkbox") out[k] = e.checked;
+    else if (e instanceof HTMLInputElement && e.type === "radio") { if (e.checked) out[k] = "radio:" + e.value; }
+    else if (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) out[k] = e.dataset.units ? { text: e.value, units: e.dataset.units } : e.value;
+    else out[k] = "sel:" + String((e as unknown as { value: string }).value);
+  }
+  try { localStorage.setItem(STATE_KEY(key), JSON.stringify(out)); } catch (e) { /* no storage: nothing remembered */ }
+}
+/** Put remembered values back; each control gets the events its own handlers listen to (input, change). */
+export function loadControlState(key: string, body: HTMLElement): boolean {
+  let st: ControlState | null = null; try { st = JSON.parse(localStorage.getItem(STATE_KEY(key)) || "null"); } catch (e) { st = null; }
+  if (!st) return false;
+  const fire = (e: HTMLElement): void => { e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true })); };
+  for (const e of persistent(body)) {
+    const k = e.getAttribute("data-k") as string, v = st[k];
+    if (v === undefined || (e as HTMLInputElement).disabled) continue;
+    if (e instanceof HTMLInputElement && e.type === "checkbox") { if (typeof v === "boolean" && e.checked !== v) { e.checked = v; fire(e); } }
+    else if (e instanceof HTMLInputElement && e.type === "radio") { if (v === "radio:" + e.value && !e.checked) { e.checked = true; fire(e); } }
+    else if (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) {
+      // a length remembered in other units is not typed back in these (the number would mean something else)
+      const text = typeof v === "string" ? v : typeof v === "object" && v && (!v.units || v.units === e.dataset.units) ? v.text : null;
+      if (text !== null && text !== e.value) { e.value = text; fire(e); }
+    } else if (typeof v === "string" && v.startsWith("sel:")) { const sel = e as unknown as { value: string }; const want = v.slice(4); if (sel.value !== want && Array.from(e.querySelectorAll("option")).some((o) => o.getAttribute("value") === want || o.textContent === want)) { sel.value = want; fire(e); } }
+  }
+  return true;
+}
+
 /** A child window opens next to the dialog that opened it (right of it, else left of it), not on top of its controls. */
 function besideParent(dlg: HTMLElement, parent: HTMLElement): void {
   const p = parent.getBoundingClientRect(), r = dlg.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
@@ -140,7 +175,14 @@ export function open(spec: DlgSpec): DlgApi {
   dlg.tabIndex = -1; dlg.style.outline = "none";   // a click on a label or a tree node keeps the keyboard (Esc/Enter) in the dialog
   dlg.append(tt, body, foot); ov.appendChild(dlg); document.body.appendChild(ov);
   if (spec.child) ov.style.zIndex = String(60 + stack.length * 2);   // above the dialog that opened it
-  const finish = (apply: boolean): void => { if (apply) { const a = document.activeElement as HTMLElement | null; if (a && a !== document.body && dlg.contains(a)) a.blur(); if (spec.ok && spec.ok() === false) return; } closeEntry(entry); if (!apply && spec.cancel) spec.cancel(); };
+  const stateKey = spec.persist ? (typeof spec.persist === "string" ? spec.persist : dialogKeyFromTitle(spec.title)) : "";
+  const finish = (apply: boolean): void => {
+    if (apply) { const a = document.activeElement as HTMLElement | null; if (a && a !== document.body && dlg.contains(a)) a.blur(); if (spec.ok && spec.ok() === false) return; }
+    // DIALOG_SHIM::Show( false ) saves the control state whichever button closed it; a cancel hook may veto (return false)
+    if (!apply && spec.cancel && spec.cancel() === false) return;
+    if (stateKey) saveControlState(stateKey, body);
+    closeEntry(entry);
+  };
   cancel.addEventListener("click", () => finish(false)); ok.addEventListener("click", () => finish(true)); tt.querySelector(".kd-x")!.addEventListener("click", () => finish(false));
   // DIALOG_SHIM: a modal dialog ignores clicks on the frame behind it; only OK / Cancel / Esc / the close box end it
   ov.addEventListener("keydown", (ev) => {
@@ -174,6 +216,7 @@ export function open(spec: DlgSpec): DlgApi {
   ensureCss();
   const api: DlgApi = { body, close: () => closeEntry(entry), dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector<HTMLInputElement>(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
   spec.build(body, api);
+  if (stateKey && loadControlState(stateKey, body) && spec.restored) spec.restored();
   if (spec.child && stack.length > 1) besideParent(dlg, stack[stack.length - 2].dlg);
   restoreGeometry(geomKey, dlg, resizable);
   const first = body.querySelector<HTMLInputElement>("input:not([type=checkbox]), k-select, textarea, input"); if (first && !spec.readOnly && !first.disabled) { first.focus(); if (first.select && first.type === "text") first.select(); }

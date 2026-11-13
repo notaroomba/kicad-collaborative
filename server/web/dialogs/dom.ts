@@ -7,7 +7,7 @@ import { fitMenu } from "../menufit";
 export interface DlgButton { label: string; fn?: () => void; primary?: boolean; isDefault?: boolean; close?: boolean; id?: string }
 export interface DlgSpec {
   title: string; width?: number; cls?: string; modeless?: boolean; readOnly?: boolean; okLabel?: string; cancelLabel?: string;
-  build(body: HTMLElement, api: DlgApi): void; ok?(): boolean | void; cancel?(): void;
+  build(body: HTMLElement, api: DlgApi): void; ok?(): boolean | void; /** false keeps the dialog open (canDiscardChanges) */ cancel?(): boolean | void;
   extra?: { label: string; fn: () => void; id?: string }[]; buttons?: DlgButton[];
   /** DIALOG_SHIM::m_hash_key: the name its remembered geometry is kept under, when the title carries per-item text. */
   geomKey?: string;
@@ -15,6 +15,15 @@ export interface DlgSpec {
   fixedSize?: boolean;
   /** A child window of the open dialog (HTML_MESSAGE_BOX): it opens over the dialog instead of replacing it and closes with it. */
   child?: boolean;
+  /**
+   * DIALOG_SHIM::SaveControlState / LoadControlState: the controls' values (every [data-k] input, checkbox, radio
+   * and k-select not marked data-nopersist) are kept when the dialog closes and put back when it opens again.  true
+   * keys them by the title (getDialogKeyFromTitle), a string is the dialog's m_hash_key.  Item property dialogs
+   * leave it off (KiCad's OptOut).
+   */
+  persist?: boolean | string;
+  /** Called after the remembered control values were put back (enable / show rules that follow them). */
+  restored?(): void;
 }
 export interface DlgApi { body: HTMLElement; dlg: HTMLElement; foot: HTMLElement; close(): void; finish(apply: boolean): void; refocus(key?: string): void }
 export interface NotebookTab { label: string; build(page: HTMLElement): void }
