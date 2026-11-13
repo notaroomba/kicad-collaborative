@@ -24,6 +24,8 @@ export type KDialogsModule = typeof kdialogs & {
   pcbSelectionDialog?(ctx: DialogCtx, items: DialogItem[]): boolean;
   /** web/dialogs/sch-items: eeschema's item dialogs; true when one took the item. */
   schItemDialog?(ctx: DialogCtx, item: DialogItem, opts: ItemOpts): boolean;
+  /** web/editor/pcbdialogs: DIALOG_TEXT_PROPERTIES on a footprint field; true when it took the field. */
+  pcbFieldDialog?(ctx: DialogCtx, item: DialogItem, name: string): boolean;
   /** web/dialogs/sch-items: DIALOG_FIELD_PROPERTIES; true when it took the field. */
   schFieldDialog?(ctx: DialogCtx, item: DialogItem, name: string): boolean;
   /** web/dialogs/sch-items: SCH_EDIT_TOOL::Properties for the current selection. */

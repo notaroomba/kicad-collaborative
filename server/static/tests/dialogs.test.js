@@ -48,4 +48,13 @@ test("footprint fields: thickness, layer, keep-upright and legacy fp_text nodes"
   D.setFieldUnlocked(ref, true); assert.deepStrictEqual(kid(ref, "unlocked"), ["unlocked", "yes"]); D.setFieldUnlocked(ref, false); assert.strictEqual(kid(ref, "unlocked"), null);
   assert.strictEqual(D.fieldLayer(ref), "B.SilkS");
 });
+test("footprint field Keep upright: (unlocked yes) right after (at), and the legacy bare token reads as not upright", () => {
+  const p = K.parse('(property "Reference" "R1" (at 1 2 90) (layer "F.SilkS") (uuid "u") (effects (font (size 1 1))))');
+  assert.strictEqual(D.fieldUnlocked(p), false);   // Keep upright on
+  D.setFieldUnlocked(p, true);
+  assert.deepStrictEqual(p.map((c) => (Array.isArray(c) ? c[0] : c)).slice(0, 6), ["property", "Reference", "R1", "at", "unlocked", "layer"]);
+  const legacy = K.parse('(fp_text reference "R1" (at 1 2 90 unlocked) (layer "F.SilkS") (effects (font (size 1 1))))');
+  assert.strictEqual(D.fieldUnlocked(legacy), true);
+  D.setFieldUnlocked(legacy, false); assert.deepStrictEqual(kid(legacy, "at"), ["at", 1, 2, 90]);
+});
 console.log(`\n${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0);

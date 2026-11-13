@@ -45,7 +45,7 @@ interface PropsHelpers {
   netNameOf(doc: KDoc, node: SNode): string; boardNetNames(doc: KDoc): string[]; netCodeOf(doc: KDoc, name: string): number;
 }
 interface FieldFx { size: number; thick: number; bold: boolean; italic: boolean; h: string; v: string; mirror: boolean }
-interface FieldHelpers { fieldEffects(p: SNode): FieldFx; setFieldEffects(p: SNode, fx: Partial<FieldFx>): void; fieldAt(p: SNode): [number, number, number]; setFieldAt(p: SNode, x: number, y: number, rot: number): void;
+interface FieldHelpers { fieldNode(node: SNode, name: string): SNode | null; fieldUnlocked(p: SNode): boolean; setFieldUnlocked(p: SNode, on: boolean): void; fieldEffects(p: SNode): FieldFx; setFieldEffects(p: SNode, fx: Partial<FieldFx>): void; fieldAt(p: SNode): [number, number, number]; setFieldAt(p: SNode, x: number, y: number, rot: number): void;
   fieldHidden(p: SNode): boolean; setFieldHidden(node: SNode, p: SNode, hidden: boolean): void; fieldLayer(p: SNode): string; setFieldLayer(p: SNode, layer: string): void }
 const PH = (): PropsHelpers => (CollabTools as unknown as { props: { helpers: PropsHelpers } }).props.helpers;
 const FH = (): FieldHelpers => (KDialogs as unknown as { _: FieldHelpers })._;
@@ -447,75 +447,137 @@ function orientationField(deg: number, ro: boolean, key: string): Field<number> 
   comboInput(f.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);
   return f;
 }
+/** DIALOG_TEXT_PROPERTIES' shared controls over one text node (gr_text, fp_text or a footprint property):
+ *  layer, knockout, font, the toggle row, size, thickness with auto, position and orientation.  apply writes
+ *  them back to a text node and returns an error to block OK. */
+function textControls(doc: KDoc, node: SNode, ro: boolean, posLabels: [string, string]) {
+  const at = K().atOf(node), ly = kid(node, "layer"), fx = FH().fieldEffects(node);
+  const eff = kid(node, "effects"), font = eff ? kid(eff, "font") : null, sz = font ? kid(font, "size") : null;
+  const layer = selectField<string>(sval(ly), withCurrent(allLayers(doc), sval(ly)), { ro, key: "layer" });
+  const knockout = checkField(!!ly && ly.includes("knockout"), "Knockout", { ro, key: "knockout" });
+  // the BITMAP_BUTTONs: bold, italic | left, center, right | top, center, bottom | mirrored
+  const bold = iconToggle("bold", "Bold", fx.bold, { ro, key: "bold" }), italic = iconToggle("italic", "Italic", fx.italic, { ro, key: "italic" });
+  const hBtn = (v: string, icon: "alignLeft" | "alignCenter" | "alignRight", tip: string) => iconToggle(icon, tip, fx.h === v, { ro, key: "align-" + v, group: "h" });
+  const vBtn = (v: string, icon: "valignTop" | "valignCenter" | "valignBottom", tip: string) => iconToggle(icon, tip, fx.v === v, { ro, key: "valign-" + v, group: "v" });
+  const hl = hBtn("left", "alignLeft", "Align left"), hc = hBtn("center", "alignCenter", "Align horizontal center"), hr = hBtn("right", "alignRight", "Align right");
+  const vt = vBtn("top", "valignTop", "Align top"), vc = vBtn("center", "valignCenter", "Align vertical center"), vb = vBtn("bottom", "valignBottom", "Align bottom");
+  const mirror = iconToggle("mirror", "Mirrored", fx.mirror, { ro, key: "mirror" });
+  const sep = () => h("span", { class: "vsep" });
+  const toggles = h("div", { class: "pd-togrow" }, bold.el, italic.el, sep(), hl.el, hc.el, hr.el, sep(), vt.el, vc.el, vb.el, sep(), mirror.el);
+  const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" });
+  // GetAutoThickness: no (thickness) in the file; the field shows the base width, frozen
+  const auto0 = !!font && !kid(font, "thickness");
+  const th = lenField(auto0 ? penForNormal(nval(sz, 2, 1)) : fx.thick, { ro: ro || auto0, key: "thickness" });
+  const autoTh = iconToggle("link", "Adjust the text thickness", auto0, { ro, key: "autoThickness", onChange: (on) => { (th.input as HTMLInputElement).disabled = ro || on; if (on) th.set(penForNormal(w.get())); } });
+  w.input.addEventListener("change", () => { if (autoTh.get()) th.set(penForNormal(w.get())); });   // onTextSize
+  const face0 = faceOfFont(font);
+  const thRow = h("div", { class: "pd-form", style: "grid-column:1/-1" }, h("label", null, "Thickness:"), h("span", { style: "display:flex;gap:4px;align-items:center" }, th.el, autoTh.el), unitLabel());
+  // onFontSelected: the thickness only for the stroke font
+  const strokeOnly = (face: string): void => { const stroke = !face || face === KICAD_FONT; thRow.style.display = stroke ? "" : "none"; };
+  const face = fontField(doc, face0, { ro, key: "face", onChange: (v) => strokeOnly(v) });
+  const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = orientationField(at[2] || 0, ro, "orientation");
+  strokeOnly(face0);
+  const left = form([["Layer:", layer.el], knockout.el, ["Font:", face.el], toggles], true);
+  const sizes = form([["Width:", w.el, unitLabel(), "Text width"], ["Height:", ht.el, unitLabel(), "Text height"]]);
+  const place = form([[posLabels[0], x.el, unitLabel(), "Text pos X"], [posLabels[1], y.el, unitLabel(), "Text pos Y"], ["Orientation:", rot.el, unitLabel("deg"), "Text orientation"]]);
+  const apply = (n: SNode): ApplyError | undefined => {
+    const ew = sizeError("Width", w.get()); if (ew) return { msg: ew, focus: w };
+    const eh = sizeError("Height", ht.get()); if (eh) return { msg: eh, focus: ht };
+    const a = kid(n, "at"), r = norm360(rot.get());
+    if (a && a.length > 3 && typeof a[3] !== "number") { a[1] = +f6(x.get()); a[2] = +f6(y.get()); if (r) a.splice(3, 0, r); }   // (at x y unlocked)
+    else K().setAt(n, +f6(x.get()), +f6(y.get()), a && a.length < 4 && !r ? undefined : r);
+    put(n, "layer", `(layer ${quote(layer.get())}${knockout.get() ? " knockout" : ""})`, ["hide", "uuid", "tstamp", "effects"]);
+    let e = kid(n, "effects"); if (!e) { put(n, "effects", "(effects (font (size 1 1) (thickness 0.15)))"); e = kid(n, "effects") as SNode; }
+    let f = kid(e, "font"); if (!f) { e.splice(1, 0, K().parse("(font)") as SNode); f = kid(e, "font") as SNode; }
+    if (face.get() !== face0) setFaceOfFont(f, face.get());
+    put(f, "size", `(size ${f6(ht.get())} ${f6(w.get())})`, ["thickness", "bold", "italic"]);
+    let clamped = false;
+    if (autoTh.get()) { if (!auto0) put(f, "thickness", null); }
+    else {
+      let tv = th.get();
+      const maxPen = +(Math.min(Math.abs(w.get()), Math.abs(ht.get())) * 0.25).toFixed(6);
+      if (tv > maxPen) { tv = maxPen; clamped = true; }
+      if (auto0 || Math.abs(tv - fx.thick) > 1e-9) put(f, "thickness", `(thickness ${f6(tv)})`, ["bold", "italic", "color"]);
+    }
+    if (bold.get() !== fx.bold) fontFlags(doc, f, "bold", bold.get());
+    if (italic.get() !== fx.italic) fontFlags(doc, f, "italic", italic.get());
+    const hj = hl.get() ? "left" : hc.get() ? "center" : "right", vj = vb.get() ? "bottom" : vc.get() ? "center" : "top";
+    if (hj !== fx.h || vj !== fx.v || mirror.get() !== fx.mirror) {
+      const j: string[] = []; if (hj !== "center") j.push(hj); if (vj !== "center") j.push(vj); if (mirror.get()) j.push("mirror");
+      put(e, "justify", j.length ? `(justify ${j.join(" ")})` : null, ["hide", "href"]);
+    }
+    if (clamped) messageBox("Error", "The text thickness is too large for the text size.\nIt will be clamped.");
+    return undefined;
+  };
+  return { left, sizes, thRow, place, apply };
+}
 function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc;
   return itemDialog(ctx, item, "Text Properties", 600, (node, body, ro) => {
-    const at = K().atOf(node), ly = kid(node, "layer"), fx = FH().fieldEffects(node);
-    const eff = kid(node, "effects"), font = eff ? kid(eff, "font") : null, sz = font ? kid(font, "size") : null;
     const text = h("textarea", { class: "pd-text", style: "min-height:90px", readOnly: ro, "data-key": "text" }); const xref = boardXref(doc), shownText = xref.toRefs(sval(node)); text.value = shownText;   // the reader already turned the file's "\\n" into new lines; cross-references shown as ${REF:FIELD}
     text.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.stopPropagation(); if (ev.shiftKey) { ev.preventDefault(); const ok = (body.parentElement as HTMLElement).querySelector<HTMLButtonElement>(".kd-foot > button:last-child"); if (ok) ok.click(); } } });   // SCINTILLA_TRICKS: Shift+Enter accepts, Enter is a new line
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
-    const layer = selectField<string>(sval(ly), withCurrent(allLayers(doc), sval(ly)), { ro, key: "layer" });
-    const knockout = checkField(!!ly && ly.includes("knockout"), "Knockout", { ro, key: "knockout" });
-    // the BITMAP_BUTTONs: bold, italic | left, center, right | top, center, bottom | mirrored
-    const bold = iconToggle("bold", "Bold", fx.bold, { ro, key: "bold" }), italic = iconToggle("italic", "Italic", fx.italic, { ro, key: "italic" });
-    const hBtn = (v: string, icon: "alignLeft" | "alignCenter" | "alignRight", tip: string) => iconToggle(icon, tip, fx.h === v, { ro, key: "align-" + v, group: "h" });
-    const vBtn = (v: string, icon: "valignTop" | "valignCenter" | "valignBottom", tip: string) => iconToggle(icon, tip, fx.v === v, { ro, key: "valign-" + v, group: "v" });
-    const hl = hBtn("left", "alignLeft", "Align left"), hc = hBtn("center", "alignCenter", "Align horizontal center"), hr = hBtn("right", "alignRight", "Align right");
-    const vt = vBtn("top", "valignTop", "Align top"), vc = vBtn("center", "valignCenter", "Align vertical center"), vb = vBtn("bottom", "valignBottom", "Align bottom");
-    const mirror = iconToggle("mirror", "Mirrored", fx.mirror, { ro, key: "mirror" });
-    const sep = () => h("span", { class: "vsep" });
-    const toggles = h("div", { class: "pd-togrow" }, bold.el, italic.el, sep(), hl.el, hc.el, hr.el, sep(), vt.el, vc.el, vb.el, sep(), mirror.el);
-    const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" });
-    // GetAutoThickness: no (thickness) in the file; the field shows the base width, frozen
-    const auto0 = !!font && !kid(font, "thickness");
-    const th = lenField(auto0 ? penForNormal(nval(sz, 2, 1)) : fx.thick, { ro: ro || auto0, key: "thickness" });
-    const autoTh = iconToggle("link", "Adjust the text thickness", auto0, { ro, key: "autoThickness", onChange: (on) => { (th.input as HTMLInputElement).disabled = ro || on; if (on) th.set(penForNormal(w.get())); } });
-    w.input.addEventListener("change", () => { if (autoTh.get()) th.set(penForNormal(w.get())); });   // onTextSize
-    const face0 = faceOfFont(font);
-    // onFontSelected: the thickness only for the stroke font
-    const strokeOnly = (face: string): void => { const stroke = !face || face === KICAD_FONT; thRow.style.display = stroke ? "" : "none"; };
-    const face = fontField(doc, face0, { ro, key: "face", onChange: (v) => strokeOnly(v) });
-    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = orientationField(at[2] || 0, ro, "orientation");
-    const thRow = h("div", { class: "pd-form", style: "grid-column:1/-1" }, h("label", null, "Thickness:"), h("span", { style: "display:flex;gap:4px;align-items:center" }, th.el, autoTh.el), unitLabel());
-    strokeOnly(face0);
+    const c = textControls(doc, node, ro, ["Position X:", "Position Y:"]);
     const help = syntaxHelpLink(true); help.style.margin = "3px";
     body.append(h("label", { class: "pd-lbl" }, "Text:"), text, h("div", null, help), h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
-      h("div", { class: "pd-cols2" },
-        form([["Layer:", layer.el], knockout.el, ["Font:", face.el], toggles], true),
-        h("div", null, form([["Width:", w.el, unitLabel(), "Text width"], ["Height:", ht.el, unitLabel(), "Text height"]]), thRow,
-          form([["Position X:", x.el, unitLabel(), "Text pos X"], ["Position Y:", y.el, unitLabel(), "Text pos Y"], ["Orientation:", rot.el, unitLabel("deg"), "Text orientation"]]))));
+      h("div", { class: "pd-cols2" }, c.left, h("div", null, c.sizes, c.thRow, c.place)));
     return (n) => {
-      const ew = sizeError("Width", w.get()); if (ew) return { msg: ew, focus: w };
-      const eh = sizeError("Height", ht.get()); if (eh) return { msg: eh, focus: ht };
+      const err = c.apply(n); if (err) return err;
       const t = text.value.replace(/\r/g, "");   // new lines stay new lines: the writer escapes them as "\\n"
       if (t && t !== shownText) { const stored = xref.toKiids(t); if (stored !== sval(n)) n[1] = stored; }   // an emptied text keeps its old one
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
-      K().setAt(n, +f6(x.get()), +f6(y.get()), norm360(rot.get()));
-      put(n, "layer", `(layer ${quote(layer.get())}${knockout.get() ? " knockout" : ""})`, ["uuid", "tstamp", "effects"]);
-      let e = kid(n, "effects"); if (!e) { put(n, "effects", "(effects (font (size 1 1) (thickness 0.15)))"); e = kid(n, "effects") as SNode; }
-      let f = kid(e, "font"); if (!f) { e.splice(1, 0, K().parse("(font)") as SNode); f = kid(e, "font") as SNode; }
-      if (face.get() !== face0) setFaceOfFont(f, face.get());
-      put(f, "size", `(size ${f6(ht.get())} ${f6(w.get())})`, ["thickness", "bold", "italic"]);
-      let clamped = false;
-      if (autoTh.get()) { if (!auto0) put(f, "thickness", null); }
-      else {
-        let tv = th.get();
-        const maxPen = +(Math.min(Math.abs(w.get()), Math.abs(ht.get())) * 0.25).toFixed(6);
-        if (tv > maxPen) { tv = maxPen; clamped = true; }
-        if (auto0 || Math.abs(tv - fx.thick) > 1e-9) put(f, "thickness", `(thickness ${f6(tv)})`, ["bold", "italic", "color"]);
-      }
-      if (bold.get() !== fx.bold) fontFlags(doc, f, "bold", bold.get());
-      if (italic.get() !== fx.italic) fontFlags(doc, f, "italic", italic.get());
-      const hj = hl.get() ? "left" : hc.get() ? "center" : "right", vj = vb.get() ? "bottom" : vc.get() ? "center" : "top";
-      if (hj !== fx.h || vj !== fx.v || mirror.get() !== fx.mirror) {
-        const j: string[] = []; if (hj !== "center") j.push(hj); if (vj !== "center") j.push(vj); if (mirror.get()) j.push("mirror");
-        put(e, "justify", j.length ? `(justify ${j.join(" ")})` : null, ["hide", "href"]);
-      }
-      if (clamped) messageBox("Error", "The text thickness is too large for the text size.\nIt will be clamped.");
       return undefined;
     };
   }, create, "Edit Text Properties");
+}
+/** A footprint text's (locked yes): right after its name and text, before (at). */
+function setTextLocked(n: SNode, on: boolean): void {
+  const bare = n.indexOf("locked"); if (bare > 0) n.splice(bare, 1);
+  put(n, "locked", null);
+  if (!on) return;
+  const a = kid(n, "at"); n.splice(a ? n.indexOf(a) : n.length, 0, ["locked", "yes"]);
+}
+/** KIUI::SelectReferenceNumber: the number part of "R12" (or the "?" of "R?"), else everything. */
+function selectReferenceNumber(input: HTMLInputElement): void {
+  const v = input.value; let i = v.length;
+  while (i > 0 && /[0-9?]/.test(v[i - 1])) i--;
+  if (i < v.length && i > 0) input.setSelectionRange(i, v.length); else input.select();
+}
+/** DIALOG_TEXT_PROPERTIES on a footprint's field: "Footprint Reference / Value / Field Properties", a single-line
+ *  text, Show and Keep upright, Offset X / Y and the "Footprint R1 (10k), front side, rotated 90.0 deg" status line. */
+export function fpFieldDialog(ctx: ToolCtx, item: KItem, name: string): boolean {
+  const doc = ctx.doc as KDoc; if (!doc || doc.type !== "pcb" || item.kind !== "footprint") return false;
+  const p0 = FH().fieldNode(item.node, name); if (!p0) return false;
+  const isRef = name === "Reference", isVal = name === "Value";
+  const title = isRef ? "Footprint Reference Properties" : isVal ? "Footprint Value Properties" : "Footprint Field Properties";
+  return itemDialog(ctx, item, title, 600, (fp, body, ro) => {
+    const p = FH().fieldNode(fp, name) as SNode;
+    const xref = boardXref(doc), shown = xref.toRefs(sval(p, 2));
+    const text = h("input", { type: "text", class: "pd-text", readOnly: ro, "data-k": "text", value: shown }) as HTMLInputElement;
+    text.value = shown;
+    const locked = checkField(PT().isLocked(p), "Locked", { ro, key: "locked" });
+    const c = textControls(doc, p, ro, ["Offset X:", "Offset Y:"]);
+    const visible = checkField(!FH().fieldHidden(p), "Visible", { ro, key: "visible" });
+    const upright = checkField(!FH().fieldUnlocked(p), "Keep upright", { ro, key: "keepUpright" });
+    const fa = K().atOf(fp), fref = sval(FH().fieldNode(fp, "Reference"), 2), fval = sval(FH().fieldNode(fp, "Value"), 2);
+    const back = sval(kid(fp, "layer")) === "B.Cu";
+    const status = h("div", { class: "pd-status", "data-key": "status" }, `Footprint ${fref} (${fval}), ${back ? "back side (mirrored)" : "front side"}, rotated ${(fa[2] || 0).toFixed(1)} deg`);
+    body.append(h("div", { class: "pd-form" }, h("label", null, isRef ? "Reference:" : isVal ? "Value:" : "Text:"), text),
+      h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
+      h("div", { class: "pd-cols2" }, h("div", null, c.left, h("div", { class: "pd-row" }, visible.el), h("div", { class: "pd-row" }, upright.el)), h("div", null, c.sizes, c.thRow, c.place)),
+      status);
+    requestAnimationFrame(() => { text.focus(); if (isRef) selectReferenceNumber(text); else text.select(); });
+    return (n) => {
+      const q = FH().fieldNode(n, name); if (!q) return undefined;
+      const err = c.apply(q); if (err) return err;
+      const t = text.value;
+      if (t && t !== shown) { const stored = xref.toKiids(t); if (stored !== sval(q, 2)) q[2] = stored; }   // an empty text keeps its old one
+      if (locked.get() !== PT().isLocked(q)) setTextLocked(q, locked.get());
+      if (visible.get() === FH().fieldHidden(q)) FH().setFieldHidden(n, q, !visible.get());
+      if (upright.get() === FH().fieldUnlocked(q)) FH().setFieldUnlocked(q, !upright.get());
+      return undefined;
+    };
+  }, undefined, "Edit " + name + " Field");
 }
 /** DIALOG_TEXT_PROPERTIES on a new text (DRAWING_TOOL::PlaceText): done gets the edited node, or null on Cancel. */
 export function newTextDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean {

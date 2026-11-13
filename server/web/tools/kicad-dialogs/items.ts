@@ -75,6 +75,7 @@ type Opt = [string | number, string];
 const H_OPTS: Opt[] = [["left", "Left"], ["center", "Center"], ["right", "Right"]], V_OPTS: Opt[] = [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]];
 export function openField(ctx: DialogCtx, item: DialogItem, name: string): DlgApi | null {
   if (root.KDialogs.schFieldDialog && ctx.doc && ctx.doc.type === "sch" && root.KDialogs.schFieldDialog(ctx, item, name)) return null;   // DIALOG_FIELD_PROPERTIES
+  if (root.KDialogs.pcbFieldDialog && ctx.doc && ctx.doc.type === "pcb" && root.KDialogs.pcbFieldDialog(ctx, item, name)) return null;   // DIALOG_TEXT_PROPERTIES
   const p0 = fieldNode(item.node, name); if (!p0) { if (ctx.toast) ctx.toast("No field named " + name); return null; }
   const isPcb = !ctx.isSch, Kc = K(), doc = ctx.doc;
   const fx = fieldEffects(p0), [x, y, rot] = fieldAt(p0), hidden = fieldHidden(p0), text = fieldText(p0);
@@ -95,7 +96,7 @@ export function openField(ctx: DialogCtx, item: DialogItem, name: string): DlgAp
           <div class="kv"><label></label>${cb("kd-bold", fx.bold, "Bold")}<label></label>${cb("kd-italic", fx.italic, "Italic")}${isPcb ? `<label></label>${cb("kd-mirror", fx.mirror, "Mirrored")}` : ""}</div>
         </div>
         <h3>Orientation and justification</h3><div class="kd-cols">
-          <div class="kv"><label>${isPcb ? "Rotation (°)" : "Orientation"}</label>${orient}${isPcb ? `<label></label>${cb("kd-upright", fieldUnlocked(p0), "Keep upright")}` : ""}</div>
+          <div class="kv"><label>${isPcb ? "Rotation (°)" : "Orientation"}</label>${orient}${isPcb ? `<label></label>${cb("kd-upright", !fieldUnlocked(p0), "Keep upright")}` : ""}</div>
           <div class="kv"><label>Horizontal</label>${sel("kd-h", fx.h, H_OPTS)}<label>Vertical</label>${sel("kd-v", fx.v, V_OPTS)}</div>
         </div>
         <h3>Position</h3><div class="kd-cols">
@@ -116,7 +117,7 @@ export function openField(ctx: DialogCtx, item: DialogItem, name: string): DlgAp
       setFieldEffects(p, nfx);
       const nrot = isPcb ? num(g("kd-rot").value, rot) : num(g("kd-rot").value, 0);
       setFieldAt(p, num(g("kd-x").value, x), num(g("kd-y").value, y), nrot);
-      if (isPcb) { setFieldLayer(p, g("kd-layer").value); setFieldUnlocked(p, g("kd-upright").checked); }
+      if (isPcb) { setFieldLayer(p, g("kd-layer").value); setFieldUnlocked(p, !g("kd-upright").checked); }
       if (JSON.stringify(staged) === JSON.stringify(item.node)) return;
       ctx.commit([Kc.replaceChange(doc!, Object.assign({}, item, { node: staged, geom: [], bbox: null }) as KItem)], name.toLowerCase() + " field");
       if (ctx.setSelected) ctx.setSelected((ctx.items || []).find((f) => f.id === item.id) || { id: item.id });

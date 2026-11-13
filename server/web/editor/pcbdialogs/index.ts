@@ -8,7 +8,7 @@ import "./find";   // Edit > Find (DIALOG_FIND): registers E.hooks.boardFind / b
 import { openFootprintFields } from "./fp-fields";
 import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, prevMarker } from "./inspect";
 import { showPane } from "../panes";
-import { newTextDialog, newZoneDialog, openZoneManager, pcbItemDialog } from "./item-props";
+import { fpFieldDialog, newTextDialog, newZoneDialog, openZoneManager, pcbItemDialog } from "./item-props";
 import { tracksOnly, trackViaDialog } from "./track-via";
 import { newTextBoxDialog } from "./textbox";
 import { newTableDialog } from "./table";
@@ -38,7 +38,7 @@ let installed = false;
 export function installPcbDialogs(): void {
   if (installed || typeof CollabTools === "undefined" || !CollabTools.pcb) return;
   installed = true;
-  if (typeof KDialogs !== "undefined" && KDialogs) (KDialogs as KDialogsApi & { pcbItemDialog?: typeof pcbItemDialog }).pcbItemDialog = pcbItemDialog;   // KDialogs.openItem asks it first
+  if (typeof KDialogs !== "undefined" && KDialogs) { const kd = KDialogs as KDialogsApi & { pcbItemDialog?: typeof pcbItemDialog; pcbFieldDialog?: typeof fpFieldDialog }; kd.pcbItemDialog = pcbItemDialog; kd.pcbFieldDialog = fpFieldDialog; }   // KDialogs.openItem / openField ask them first
   if (typeof KDialogs !== "undefined" && KDialogs) KDialogs.pcbSelectionDialog = (ctx, items) => tracksOnly(items) && trackViaDialog(ctx, items);
   (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;
   installTransformDialogs();   // Move Item, Position Relative, Swap Layers, Cleanup Tracks and Vias   // DIALOG_PAD_PROPERTIES in place of the module's short form
