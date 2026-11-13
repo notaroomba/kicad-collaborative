@@ -355,7 +355,7 @@ export const fab: Record<string, (a: any) => Promise<unknown>> = {
     const text = typeof a.text === "string" && a.text.length <= 64 * 1024 * 1024 ? a.text : undefined;
     const r = await tools.drcReport({ parity: a.parity !== false, text }); if (!r) throw new ApiError("The Design Rules Checker needs a board.", "not_board");
     return { parityError: r.parityError, markers: r.markers.map((m: any) => ({ code: m.code, severity: m.severity, text: m.text, x: r3(m.x), y: r3(m.y), group: m.group, items: m.items })),
-      note: "The web editor checks clearance, edge clearance, unconnected items, shorts, dangling tracks, annular width, courtyards and schematic parity; KiCad's desktop DRC checks more rules." };
+      note: "This is the web editor's Design Rules Checker. It does not have KiCad's checks for creepage, microvia stacks, net chains, tuning profiles, via counts and unresolved text variables yet." };
   },
   /** `kicad-cli sch export netlist` and `sch export bom`: the project's schematic as components and nets (what Update PCB from Schematic reads). */
   netlist: async () => {

@@ -419,3 +419,8 @@ with a plugin for the IPC interface and with requests to a web service of its ow
 server with `KC_PCM_REPOSITORY=http://127.0.0.1:8096/repository.json KC_PLUGIN_NETWORK=test`;
 `test` lets an address on this machine stand in for one on the internet and is for tests only).
 `cargo test net_tests` covers which addresses the server will carry a request to.
+
+In the headless harness (`scripts/plugins-python.mjs`) `kicad-cli pcb drc` and the
+netlist behind it are answered by the editor's own Design Rules Checker, custom
+rules and schematic parity over the sibling schematics, not by a placeholder.
+`KC_DRC_STANDIN=1` restores the placeholder.

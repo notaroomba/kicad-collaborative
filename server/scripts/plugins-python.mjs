@@ -181,7 +181,7 @@ async function one(dir, boardPath, boardGiven) {
   // (many plugins only say "select something first" otherwise).  A drive's own "# select:" wins.
   if (process.env.SELECT && !startSelection.length) startSelection.push(...topLevelIds(board, process.env.SELECT));
   // the project file and schematics beside the board, as the editor hands them over
-  const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro|sym)$|^(sym|fp)-lib-table$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
+  const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro|sym|dru)$|^(sym|fp)-lib-table$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
   const calls = []; const said = []; let edited = false;
   // "# again": the drive is run a second time in a fresh interpreter that has only the plugin's storage from the first
   // run, as when the person comes back the next day (kc_run.RUN says which run it is).
@@ -357,6 +357,50 @@ _kj.dumps(_ko)
       const r = globalThis.KiCadFab.writeVrml({ doc, setup: text, projectName: stem }, { unit: a.unit, separateModels: !!a.separateModels, relativePaths: !!a.relativePaths, subdir: String(a.subdir || ""), xref: a.xref || 0, yref: a.yref || 0,
         includeUnspecified: a.includeUnspecified !== false, includeDnp: a.includeDnp !== false, fileName: String(a.fileName || "board.wrl") }, meshOf);
       return JSON.stringify({ text: r.text, models: r.models, stats: r.stats });
+    }
+    // The design rule check and the project's netlist are the editor's own as well (static/pcb-tools.js, canvas/pcb-netlist
+    // over the schematics beside the board), as web/plugins/api.ts and editor/pcbdialogs/inspect.ts call them, so a
+    // drive sees the violations a plugin's `kicad-cli pcb drc` sees in the editor.  KC_DRC_STANDIN=1 answers "nothing found".
+    if ((method === "fab.drc" || method === "fab.netlist") && process.env.KC_DRC_STANDIN !== "1") {
+      if (!globalThis.PcbTools || !globalThis.PcbTools.drc) { require(path.join(server, "static", "kicad-canvas.js")); require(path.join(server, "static", "pcb-tools.js")); }
+      if (!(globalThis.CollabTools && globalThis.CollabTools.sch && globalThis.CollabTools.sch._)) require(path.join(server, "static", "sch-tools.js"));
+      const K = globalThis.KiCadCanvas, P = globalThis.PcbTools, sch = globalThis.CollabTools.sch;
+      const projectNetlist = () => {
+        const schs = siblings.filter((f) => /\.kicad_sch$/.test(f.path)); const root = schs.find((f) => f.path === `${stem}.kicad_sch`) || schs[0];
+        if (!root) return { error: "This project has no schematic." };
+        const files = new Map(schs.map((f) => [f.path, { doc: K.parseDoc(f.text, "kicad_sch"), uuid: (/\(uuid\s+"?([0-9a-fA-F-]{36})"?\s*\)/.exec(f.text.slice(0, 4000)) || [])[1] || "", file: f.path }]));
+        const resolve = (file, parent) => { const out = []; for (const part of [...parent.file.split("/").slice(0, -1), ...file.split("/")].filter((x) => x && x !== ".")) { if (part === "..") out.pop(); else out.push(part); } return files.get(out.join("/")) || files.get(file) || null; };
+        const helpers = { symbolPins: sch._.symbolPins, isPower: (d, it) => sch._.isPowerSymbol(d, String((K.kid(it.node, "lib_id") || [])[1])) };
+        return { netlist: K.pcbNetlist.buildNetlist(files.get(root.path), resolve, helpers, root.path.split("/").pop().replace(/\.kicad_sch$/, "")), root: root.path };
+      };
+      if (method === "fab.netlist") {
+        const res = projectNetlist(); if (res.error) return JSON.stringify({ error: res.error, code: "not_found" });
+        const n = res.netlist;
+        return JSON.stringify({ root: res.root, warnings: n.warnings,
+          components: n.components.map((c) => ({ ref: c.ref, value: c.value, footprint: c.footprint, libId: c.libId, paths: c.paths, fields: c.fields, sheetName: c.sheetName, sheetFile: c.sheetFile, dnp: !!c.dnp,
+            excludeFromBom: !!c.excludeFromBom, excludeFromBoard: !!c.excludeFromBoard, pins: Array.from(c.pins).map(([num, pin]) => ({ num, net: pin.net, name: pin.name, type: pin.type })) })),
+          nets: Array.from(n.nets).map(([name, nodes]) => ({ name, nodes: nodes.map((x) => ({ ref: x.ref, pin: x.pin })) })) });
+      }
+      let text = typeof a.text === "string" && a.text ? a.text : board;
+      if (!(typeof a.text === "string" && a.text) && edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
+      const doc = K.parseDoc(text, "kicad_pcb"); const pro = (siblings.find((f) => /\.kicad_pro$/.test(f.path)) || {}).text || null; const dru = (siblings.find((f) => /\.kicad_dru$/.test(f.path)) || {}).text || "";
+      const st = P.designSettings(pro); try { const h = K.boardSetup.boardHeader(text); if (h && h.setup) st.boardSetup = h.setup; } catch { /* the defaults */ }
+      let markers = P.drc(doc, st, { rules: dru }); if (P.customRuleMarkers && dru) markers = markers.concat(P.customRuleMarkers(doc, st, dru));
+      const items = K.DRC_ITEMS, title = (code) => (items.find((i) => i[1] === code) || [code])[0];
+      let parityError = a.parity === false ? "not requested" : "";
+      if (a.parity !== false) {
+        const res = projectNetlist();
+        if (res.error) parityError = res.error;
+        else for (const pm of K.pcbNetlist.schematicParity(doc, res.netlist)) { const sev = st.severities[pm.code] || (items.find((i) => i[1] === pm.code) || ["", "", "warning"])[2]; if (sev !== "ignore") markers.push({ ...pm, severity: sev }); }
+      }
+      markers = markers.map((m) => (m.text.startsWith(title(m.code)) || m.message || !items.some((i) => i[1] === m.code) ? m : { ...m, text: `${title(m.code)}: ${m.text}` }));
+      const parity = new Set(items.slice(items.findIndex((i) => i[0] === "Schematic Parity") + 1, items.findIndex((i) => i[0] === "Signal Integrity")).map((i) => i[1]).filter((c) => c !== "unconnected_items"));
+      const describe = (id) => { const it = doc.items.get(id); if (!it) return ""; const net = K.netNameOf ? String(K.netNameOf(doc, it.node) || "") : ""; const layer = it.layer || String((K.kid(it.node, "layer") || [])[1] || "");
+        const on = (what) => `${what}${net ? ` [${net}]` : ""}${layer ? ` on ${layer}` : ""}`;
+        return it.kind === "footprint" ? `Footprint ${it.ref || it.lib || ""}` : it.kind === "segment" ? on("Track") : it.kind === "arc" ? on("Track (arc)") : it.kind === "via" ? `Via${net ? ` [${net}]` : ""}` : it.kind === "zone" ? on("Zone") : on(it.kind.replace(/^gr_/, "Graphic ").replace(/_/g, " ")); };
+      const r3 = (v) => Math.round(v * 1000) / 1000;
+      return JSON.stringify({ parityError, markers: markers.map((m) => ({ code: m.code, severity: m.severity, text: m.text, x: r3(m.x), y: r3(m.y), group: m.code === "unconnected_items" ? "unconnected" : parity.has(m.code) ? "parity" : "violation",
+        items: (m.ids || []).map((id) => ({ id, description: describe(id) })) })), note: "the web editor's Design Rules Checker, run headless" });
     }
     if (method === "fab.drc") return JSON.stringify({ markers: [], parityError: "", note: "stand-in design rule check" });
     if (method === "fab.netlist") return JSON.stringify({ root: `${stem}.kicad_sch`, warnings: [], components: [], nets: [] });

@@ -34,8 +34,8 @@
       "note": "Its router runs on the processor here, in the page: the graphics card acceleration it uses on the desktop (CUDA) is not available in a browser, so large boards route slowly."
     },
     "com.github.danielboston38.prefab-gate": {
-      "status": "partly",
-      "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
+      "status": "works",
+      "note": "Driven end to end on the editor's own Design Rules Checker and schematic comparison: it blocks a board with footprint mismatches and a short, and passes once they are fixed. A few rare desktop checks are not in the web checker yet (creepage, microvia stacks, net chains, tuning profiles), so a board that relies on those still needs KiCad's own DRC."
     },
     "com.github.samuelcicuitstudio.traceforge-kicad": {
       "status": "works",
