@@ -51,6 +51,17 @@ def _on_segment(p, a, b, eps=1e-3) -> bool:
     return min(ax, bx) - eps <= px <= max(ax, bx) + eps and min(ay, by) - eps <= py <= max(ay, by) + eps
 
 
+def _num(v: float) -> str:
+    """A coordinate as the file writes it: 43.18, 96.5, 100."""
+    return ("%.4f" % v).rstrip("0").rstrip(".")
+
+
+def _wire_is(sexpr: str, w) -> bool:
+    """Is this wire's text the wire (x0, y0, x1, y1), in either direction?"""
+    pts = [(float(x), float(y)) for x, y in re.findall(r"\(xy ([-0-9.]+) ([-0-9.]+)\)", sexpr)]
+    return len(pts) == 2 and ((_same(pts[0], (w[0], w[1])) and _same(pts[1], (w[2], w[3]))) or (_same(pts[1], (w[0], w[1])) and _same(pts[0], (w[2], w[3]))))
+
+
 def _same(p, q, eps=1e-3) -> bool:
     return abs(p[0] - q[0]) < eps and abs(p[1] - q[1]) < eps
 
@@ -1038,6 +1049,7 @@ class Schematic(_Doc):
                 problems.append(str(e))
         self.flush()
         self._repair(nets)
+        self._join_labels(nets, groups, set(labels or []))
         if global_labels:      # a name at the end of a wire sends the net elsewhere: it is a global label with a direction, not text
             self.globalize()
         # ---- 3. measure each block as drawn, and what its heading and notes need
@@ -1106,12 +1118,11 @@ class Schematic(_Doc):
                 self.supplies(supplies)
             except HarnessError as e:
                 problems.append(str(e))
-        # ---- 6. a sheet that had something on it was packed onto the page it had: now that all of it is drawn, the page is
-        #         made to fit (an empty sheet was packed onto the smallest page already)
-        if used:
-            fit = self.fit_page()
-            if fit["fits"]:
-                paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
+        # ---- 6. the page fits the drawing: the smallest paper it sits on (a sheet that had something on it was packed
+        #         onto the page it had), and the drawing in the middle of it instead of up in a corner
+        fit = self.fit_page()
+        if fit["fits"]:
+            paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
         # ---- 7. what was asked for against what is there
         wrong = self._miswired(nets)
         lay = self.layout(limit=8)
@@ -1148,6 +1159,65 @@ class Schematic(_Doc):
             if extra:
                 out.append(f"{name}: also joined to {', '.join(sorted(extra))}")
         return out
+
+    def _join_labels(self, nets: dict, groups: dict, keep: set) -> int:
+        """A net that stays inside its block and ended up as two names facing each other along a clear straight line is one
+        wire instead: names are for nets that leave the block.  Returns how many nets were joined."""
+        home = {r: g for g, refs in (groups or {}).items() for r in refs}
+        joined = 0
+        for name, pins in nets.items():
+            refs = {q["ref"] for spec in pins for q in self._try_pins(spec)}
+            if name in keep or len({home.get(r, "") for r in refs}) != 1:
+                continue
+            g = self.geometry()
+            labs = [l for l in g["labels"] if l[0] == name]
+            if len(labs) != 2:
+                continue
+            ends, gone = [], []
+            for l in labs:
+                at = (l[1], l[2])
+                on = [w for w in g["wires"] if _same((w[0], w[1]), at) or _same((w[2], w[3]), at)]
+                if len(on) == 1:      # the wire that runs under the name: the net is at its other end
+                    w = on[0]
+                    ends.append((w[2], w[3]) if _same((w[0], w[1]), at) else (w[0], w[1]))
+                    gone.append(w)
+                else:
+                    ends.append(at)
+            a, b = ends
+            if _same(a, b) or (abs(a[0] - b[0]) > 1e-3 and abs(a[1] - b[1]) > 1e-3):
+                continue
+            rest = dict(g, wires=[w for w in g["wires"] if w not in gone], labels=[l for l in g["labels"] if l[0] != name])
+            if self._blocked([a, b], rest, (a, b)) or self._through_part([a, b], rest):
+                continue
+            ids = []
+            for l in labs:      # the two names and the wires under them, by where they are
+                for it in self._call("get_items", near={"x": l[1], "y": l[2], "radius": 40.0}).get("items", []):
+                    sx = it.get("sexpr", "")
+                    if it.get("kind") in ("label", "global_label") and f'label "{name}"' in sx and re.search(rf"\(at {re.escape(_num(l[1]))} {re.escape(_num(l[2]))}[ )]", sx):
+                        ids.append(it["id"])
+                    elif it.get("kind") == "wire" and any(_wire_is(sx, w) for w in gone):
+                        ids.append(it["id"])
+            if len(set(ids)) != 2 + len(gone):
+                continue
+            for i in dict.fromkeys(ids):
+                self._edit({"op": "remove", "id": i})
+            self._edit({"op": "add_wire", "points": [list(a), list(b)]})
+            self.flush()
+            joined += 1
+        return joined
+
+    def _through_part(self, path, g) -> bool:
+        """Would a wire along `path` run through a part's body (between its pins) without ending on it?"""
+        a, b = path[0], path[-1]
+        x0, x1, y0, y1 = min(a[0], b[0]), max(a[0], b[0]), min(a[1], b[1]), max(a[1], b[1])
+        for p in g["parts"]:
+            xs, ys = [q[3] for q in p["pins"]], [q[4] for q in p["pins"]]
+            if not xs or any(_same((q[3], q[4]), e) for q in p["pins"] for e in (a, b)):
+                continue
+            bx0, bx1, by0, by1 = min(xs) - 1.27, max(xs) + 1.27, min(ys) - 1.27, max(ys) + 1.27
+            if x0 < bx1 and x1 > bx0 and y0 < by1 and y1 > by0:
+                return True
+        return False
 
     def _repair(self, nets: dict) -> None:
         """Whatever the drawing left open gets its name on every pin, so the sheet is right even where it is not pretty."""

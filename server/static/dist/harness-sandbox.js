@@ -141,6 +141,17 @@ def _on_segment(p, a, b, eps=1e-3) -> bool:
     return min(ax, bx) - eps <= px <= max(ax, bx) + eps and min(ay, by) - eps <= py <= max(ay, by) + eps
 
 
+def _num(v: float) -> str:
+    """A coordinate as the file writes it: 43.18, 96.5, 100."""
+    return ("%.4f" % v).rstrip("0").rstrip(".")
+
+
+def _wire_is(sexpr: str, w) -> bool:
+    """Is this wire's text the wire (x0, y0, x1, y1), in either direction?"""
+    pts = [(float(x), float(y)) for x, y in re.findall(r"\\(xy ([-0-9.]+) ([-0-9.]+)\\)", sexpr)]
+    return len(pts) == 2 and ((_same(pts[0], (w[0], w[1])) and _same(pts[1], (w[2], w[3]))) or (_same(pts[1], (w[0], w[1])) and _same(pts[0], (w[2], w[3]))))
+
+
 def _same(p, q, eps=1e-3) -> bool:
     return abs(p[0] - q[0]) < eps and abs(p[1] - q[1]) < eps
 
@@ -1128,6 +1139,7 @@ class Schematic(_Doc):
                 problems.append(str(e))
         self.flush()
         self._repair(nets)
+        self._join_labels(nets, groups, set(labels or []))
         if global_labels:      # a name at the end of a wire sends the net elsewhere: it is a global label with a direction, not text
             self.globalize()
         # ---- 3. measure each block as drawn, and what its heading and notes need
@@ -1196,12 +1208,11 @@ class Schematic(_Doc):
                 self.supplies(supplies)
             except HarnessError as e:
                 problems.append(str(e))
-        # ---- 6. a sheet that had something on it was packed onto the page it had: now that all of it is drawn, the page is
-        #         made to fit (an empty sheet was packed onto the smallest page already)
-        if used:
-            fit = self.fit_page()
-            if fit["fits"]:
-                paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
+        # ---- 6. the page fits the drawing: the smallest paper it sits on (a sheet that had something on it was packed
+        #         onto the page it had), and the drawing in the middle of it instead of up in a corner
+        fit = self.fit_page()
+        if fit["fits"]:
+            paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
         # ---- 7. what was asked for against what is there
         wrong = self._miswired(nets)
         lay = self.layout(limit=8)
@@ -1238,6 +1249,65 @@ class Schematic(_Doc):
             if extra:
                 out.append(f"{name}: also joined to {', '.join(sorted(extra))}")
         return out
+
+    def _join_labels(self, nets: dict, groups: dict, keep: set) -> int:
+        """A net that stays inside its block and ended up as two names facing each other along a clear straight line is one
+        wire instead: names are for nets that leave the block.  Returns how many nets were joined."""
+        home = {r: g for g, refs in (groups or {}).items() for r in refs}
+        joined = 0
+        for name, pins in nets.items():
+            refs = {q["ref"] for spec in pins for q in self._try_pins(spec)}
+            if name in keep or len({home.get(r, "") for r in refs}) != 1:
+                continue
+            g = self.geometry()
+            labs = [l for l in g["labels"] if l[0] == name]
+            if len(labs) != 2:
+                continue
+            ends, gone = [], []
+            for l in labs:
+                at = (l[1], l[2])
+                on = [w for w in g["wires"] if _same((w[0], w[1]), at) or _same((w[2], w[3]), at)]
+                if len(on) == 1:      # the wire that runs under the name: the net is at its other end
+                    w = on[0]
+                    ends.append((w[2], w[3]) if _same((w[0], w[1]), at) else (w[0], w[1]))
+                    gone.append(w)
+                else:
+                    ends.append(at)
+            a, b = ends
+            if _same(a, b) or (abs(a[0] - b[0]) > 1e-3 and abs(a[1] - b[1]) > 1e-3):
+                continue
+            rest = dict(g, wires=[w for w in g["wires"] if w not in gone], labels=[l for l in g["labels"] if l[0] != name])
+            if self._blocked([a, b], rest, (a, b)) or self._through_part([a, b], rest):
+                continue
+            ids = []
+            for l in labs:      # the two names and the wires under them, by where they are
+                for it in self._call("get_items", near={"x": l[1], "y": l[2], "radius": 40.0}).get("items", []):
+                    sx = it.get("sexpr", "")
+                    if it.get("kind") in ("label", "global_label") and f'label "{name}"' in sx and re.search(rf"\\(at {re.escape(_num(l[1]))} {re.escape(_num(l[2]))}[ )]", sx):
+                        ids.append(it["id"])
+                    elif it.get("kind") == "wire" and any(_wire_is(sx, w) for w in gone):
+                        ids.append(it["id"])
+            if len(set(ids)) != 2 + len(gone):
+                continue
+            for i in dict.fromkeys(ids):
+                self._edit({"op": "remove", "id": i})
+            self._edit({"op": "add_wire", "points": [list(a), list(b)]})
+            self.flush()
+            joined += 1
+        return joined
+
+    def _through_part(self, path, g) -> bool:
+        """Would a wire along \`path\` run through a part's body (between its pins) without ending on it?"""
+        a, b = path[0], path[-1]
+        x0, x1, y0, y1 = min(a[0], b[0]), max(a[0], b[0]), min(a[1], b[1]), max(a[1], b[1])
+        for p in g["parts"]:
+            xs, ys = [q[3] for q in p["pins"]], [q[4] for q in p["pins"]]
+            if not xs or any(_same((q[3], q[4]), e) for q in p["pins"] for e in (a, b)):
+                continue
+            bx0, bx1, by0, by1 = min(xs) - 1.27, max(xs) + 1.27, min(ys) - 1.27, max(ys) + 1.27
+            if x0 < bx1 and x1 > bx0 and y0 < by1 and y1 > by0:
+                return True
+        return False
 
     def _repair(self, nets: dict) -> None:
         """Whatever the drawing left open gets its name on every pin, so the sheet is right even where it is not pretty."""
@@ -2666,6 +2736,18 @@ class Blocks:
                 if any(on_bus(q) for op in plan["ops"] if op[0] == "wire" for q in op[1][1:]) or any(on_bus(e[0]) for e in plan["ends"]):
                     return False        # a wire may cross a bus, but a corner or an end on it would join the two nets
                 return not any(_hit(a, b) for a in plan["rects"] for b, net in (soft if sf is None else sf) if net not in mine)
+            def start(net, origin, k, wired, low, prior, used=None):
+                """The lead a row's search starts at: beside a row that ends on the same rail, its in-line part goes as far
+                out as that row's, so series resistors on neighbouring pins stand in one column instead of stepping apart."""
+                kw = {"used": tuple(used)} if used is not None else {}
+                probe = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=low * G, wired=wired, **kw)
+                if not probe or not probe["inline"]:
+                    return low
+                near = [lead_of[key(p)] for e in probe["ends"] for p in prior
+                        if p[1] == e[1] and p[2] == e[2] and abs(p[0][1] - e[0][1]) <= 2 * G + 1e-6 and key(p) in lead_of]
+                return max([low] + near)
+            key = lambda e: (round(e[0][0], 2), round(e[0][1], 2), e[1])
+            lead_of: dict = {}
             # a supply or ground on several pins of one side: one bus beside the pins and one symbol, above for a supply, below for ground
             rows = [p["y"] for p in ps]
             pending = [e[3][1] for e in later]
@@ -2711,17 +2793,21 @@ class Blocks:
             # room, the rows planned before it start further out, past everything that row needs, and the planning runs again
             first_lead: dict = {}
             for _ in range(4):
+                lead_of.clear()
                 tk, sf, used, bad, pe = list(taken), list(soft), [], None, list(ends)
                 for idx, (run, net, k, origin, wired, busy, barred, _b) in enumerate(later):
                     if not busy:
                         continue
                     plan = None
-                    for i in range(first_lead.get(idx, 1), 44):
+                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), pe, used), 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, used=tuple(used), wired=wired)
                         if not plan or fits(plan, tk, sf, pe):
                             break
                         plan = None
                     if plan:
+                        if plan["inline"]:
+                            for e in plan["ends"]:
+                                lead_of[key(e)] = i
                         pe += plan["ends"]
                         tk += plan["rects"]
                         sf += [(self.sym_rect(e[1], e[0]), e[1]) for e in plan["ends"]]
@@ -2745,14 +2831,18 @@ class Blocks:
                     break
                 for i in before:
                     first_lead[i] = max(first_lead.get(i, 1), steps)
+            lead_of.clear()
             for idx, (run, net, k, origin, wired, busy, barred, _) in enumerate(later):
                 plan = None
                 if busy:
-                    for i in range(first_lead.get(idx, 1), 44):
+                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), ends), 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, wired=wired)
                         if not plan or fits(plan):
                             break
                         plan = None
+                    if plan and plan["inline"]:
+                        for e in plan["ends"]:
+                            lead_of[key(e)] = i
                 if DEBUG and busy and not plan:
                     print("no room", ref, net, k, first_lead.get(idx, 1), [p["number"] for p in run])
                 if plan:
@@ -3397,7 +3487,7 @@ def install(Project, Schematic, Board) -> None:
     Board.fiducials = _board_fiducials
     Board.mark = _mark
     Board.stitch = _stitch
-`;var _=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
+`;var b=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
 
     from kicad_harness import parts
     part = parts.from_datasheet("W25Q64JV.pdf", name="W25Q64JV", package="SOIC-8")
@@ -3859,7 +3949,7 @@ def _same_family(header: str, want: dict) -> bool:
 def _title_matches(title: str, pk: dict) -> bool:
     got = ds.packages(title + " ")
     return any(g["family"] == pk["family"] and g["pins"] == pk["pins"] for g in got)
-`;var b=`"""Reading a datasheet without a model: page text, the pin table and the package drawing's numbers.
+`;var _=`"""Reading a datasheet without a model: page text, the pin table and the package drawing's numbers.
 
 Datasheets are laid out for people, so this is a set of careful heuristics, and it says how sure
 it is.  What it cannot read is reported as missing, and only that small remainder needs a
@@ -5027,9 +5117,9 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var d=require("node:fs"),O=globalThis,R=d.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
-`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function p(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=d.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var B=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",_],["kicad_harness/parts/datasheet.py",b],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],G=`
+`;var p=require("node:fs"),O=globalThis,R=p.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
+`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var B=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",b],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],G=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -5060,6 +5150,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(p({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of B)i.FS.writeFile("/kh/"+r,l);i.runPython(G);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of B)i.FS.writeFile("/kh/"+r,l);i.runPython(G);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
 `).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
-`),p(o),process.exit(0)}L().catch(e=>{try{p({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`),d(o),process.exit(0)}L().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

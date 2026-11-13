@@ -645,6 +645,18 @@ class Blocks:
                 if any(on_bus(q) for op in plan["ops"] if op[0] == "wire" for q in op[1][1:]) or any(on_bus(e[0]) for e in plan["ends"]):
                     return False        # a wire may cross a bus, but a corner or an end on it would join the two nets
                 return not any(_hit(a, b) for a in plan["rects"] for b, net in (soft if sf is None else sf) if net not in mine)
+            def start(net, origin, k, wired, low, prior, used=None):
+                """The lead a row's search starts at: beside a row that ends on the same rail, its in-line part goes as far
+                out as that row's, so series resistors on neighbouring pins stand in one column instead of stepping apart."""
+                kw = {"used": tuple(used)} if used is not None else {}
+                probe = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=low * G, wired=wired, **kw)
+                if not probe or not probe["inline"]:
+                    return low
+                near = [lead_of[key(p)] for e in probe["ends"] for p in prior
+                        if p[1] == e[1] and p[2] == e[2] and abs(p[0][1] - e[0][1]) <= 2 * G + 1e-6 and key(p) in lead_of]
+                return max([low] + near)
+            key = lambda e: (round(e[0][0], 2), round(e[0][1], 2), e[1])
+            lead_of: dict = {}
             # a supply or ground on several pins of one side: one bus beside the pins and one symbol, above for a supply, below for ground
             rows = [p["y"] for p in ps]
             pending = [e[3][1] for e in later]
@@ -690,17 +702,21 @@ class Blocks:
             # room, the rows planned before it start further out, past everything that row needs, and the planning runs again
             first_lead: dict = {}
             for _ in range(4):
+                lead_of.clear()
                 tk, sf, used, bad, pe = list(taken), list(soft), [], None, list(ends)
                 for idx, (run, net, k, origin, wired, busy, barred, _b) in enumerate(later):
                     if not busy:
                         continue
                     plan = None
-                    for i in range(first_lead.get(idx, 1), 44):
+                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), pe, used), 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, used=tuple(used), wired=wired)
                         if not plan or fits(plan, tk, sf, pe):
                             break
                         plan = None
                     if plan:
+                        if plan["inline"]:
+                            for e in plan["ends"]:
+                                lead_of[key(e)] = i
                         pe += plan["ends"]
                         tk += plan["rects"]
                         sf += [(self.sym_rect(e[1], e[0]), e[1]) for e in plan["ends"]]
@@ -724,14 +740,18 @@ class Blocks:
                     break
                 for i in before:
                     first_lead[i] = max(first_lead.get(i, 1), steps)
+            lead_of.clear()
             for idx, (run, net, k, origin, wired, busy, barred, _) in enumerate(later):
                 plan = None
                 if busy:
-                    for i in range(first_lead.get(idx, 1), 44):
+                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), ends), 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, wired=wired)
                         if not plan or fits(plan):
                             break
                         plan = None
+                    if plan and plan["inline"]:
+                        for e in plan["ends"]:
+                            lead_of[key(e)] = i
                 if DEBUG and busy and not plan:
                     print("no room", ref, net, k, first_lead.get(idx, 1), [p["number"] for p in run])
                 if plan:
