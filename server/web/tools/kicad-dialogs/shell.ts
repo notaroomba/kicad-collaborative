@@ -125,7 +125,7 @@ export function open(spec: DlgSpec): DlgApi {
   const ov = el("div", "kd-overlay"), dlg = el("div", "kd-dialog"); if (spec.width) dlg.style.width = spec.width + "px";
   const tt = el("div", "kd-title", `<span>${esc(spec.title)}</span><span class="kd-x" title="Close (Esc)">×</span>`);
   const body = el("div", "kd-body"), foot = el("div", "kd-foot");
-  for (const b of spec.extra || []) { const btn = el("button", "btn", esc(b.label)); btn.addEventListener("click", () => b.fn()); foot.appendChild(btn); }
+  for (const b of spec.extra || []) { const btn = el("button", "btn", esc(b.label)); if (b.id) btn.id = b.id; btn.addEventListener("click", () => b.fn()); foot.appendChild(btn); }
   foot.appendChild(el("span", "spacer"));
   const cancel = el("button", "btn", spec.cancelLabel || "Cancel") as HTMLButtonElement, ok = el("button", "btn primary", spec.okLabel || "OK") as HTMLButtonElement;
   if (spec.readOnly) ok.disabled = true;
@@ -134,6 +134,8 @@ export function open(spec: DlgSpec): DlgApi {
   let defaultBtn: HTMLButtonElement | null = null;
   if (spec.buttons) for (const b of spec.buttons) { const btn = el("button", "btn" + (b.primary ? " primary" : ""), esc(b.label)) as HTMLButtonElement; if (b.id) btn.dataset.btn = b.id; if (b.isDefault) defaultBtn = btn; btn.addEventListener("click", () => { if (b.close) finish(false); else if (b.fn) b.fn(); }); foot.appendChild(btn); }
   else foot.append(cancel, ok);
+  // an empty button row (HTML_MESSAGE_BOX::ShowModeless hides m_sdbSizer1): no footer at all
+  if (spec.buttons && !spec.buttons.length && !(spec.extra || []).length) foot.style.display = "none";
   if (spec.cls) dlg.classList.add(...String(spec.cls).split(" ")); if (spec.modeless) ov.classList.add("kd-modeless");
   dlg.tabIndex = -1; dlg.style.outline = "none";   // a click on a label or a tree node keeps the keyboard (Esc/Enter) in the dialog
   dlg.append(tt, body, foot); ov.appendChild(dlg); document.body.appendChild(ov);

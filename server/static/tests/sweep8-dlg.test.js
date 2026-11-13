@@ -205,6 +205,17 @@ test("ERC_REPORT::GetTextReport: shown severities, ShowReport lines, counts and 
   const t2 = RP.ercTextReport(list, { ...o, errors: false, exclusions: false, units: "mil", ignored: ["Pin to pin"] });
   assert.ok(/Report includes: None/.test(t2) && /ERC messages: 0/.test(t2) && /    - Pin to pin\n$/.test(t2));
 });
+test("ERC report: a block per sheet in page order, the main and aux items' own lines, an exclusion's comment", () => {
+  const list = [
+    { code: "pin_to_pin_error", severity: "error", x: 5, y: 5, text: "x", ids: ["a", "b"], items: [{ x: 1, y: 2, desc: "Symbol U1 Pin 1 [Output, Line]" }, { x: 3, y: 4, desc: "Symbol U2 Pin 2 [Output, Line]" }], sheet: "/sub/" },
+    { code: "wire_dangling", severity: "exclusion", base: "error", x: 0, y: 0, text: "w", ids: ["w"], comment: "on purpose", items: [{ x: 0, y: 0, desc: "Horizontal Wire, length %L", len: 2.54 }], sheet: "/" },
+  ];
+  const t = RP.ercTextReport(list, { errors: true, warnings: true, exclusions: true, units: "mm", date: "D", ignored: [], sheets: ["/", "/sub/"], sheetOf: (m) => m.sheet, title: (m) => m.code });
+  assert.equal(t, "ERC report (D, Encoding UTF8)\nReport includes: Errors, Warnings, Exclusions\n" +
+    "\n***** Sheet /\n[wire_dangling]: wire_dangling\n    ; error (excluded)\n    @(0.00 mm, 0.00 mm): Horizontal Wire, length 2.54 mm\n    on purpose\n" +
+    "\n***** Sheet /sub/\n[pin_to_pin_error]: pin_to_pin_error\n    ; error\n    @(1.00 mm, 2.00 mm): Symbol U1 Pin 1 [Output, Line]\n    @(3.00 mm, 4.00 mm): Symbol U2 Pin 2 [Output, Line]\n" +
+    "\n ** ERC messages: 2  Errors 2  Warnings 0\n\n ** Ignored checks:\n    - None\n");
+});
 const AN = load(["tools", "sch-tools", "annotate.ts"]), AL = load(["dialogs", "annotate-logic.ts"]);
 {
   const F = "(effects (font (size 1.27 1.27)))";
@@ -225,7 +236,7 @@ const AN = load(["tools", "sch-tools", "annotate.ts"]), AL = load(["dialogs", "a
   test("AnnotateSymbols / DeleteAnnotation report lines", () => {
     const d = K.parseDoc(ANN);
     assert.deepEqual(AN.annotateMessages(d, AN.annotateChanges(d, { keep: false })),
-      ["Annotated 10k as R1.", "Updated DUAL (unit A) from U7 to U1.", "Annotated DUAL (unit B) as U2.", "Updated DUAL (unit B) from U7 to U1."]);
+      ["Annotated 10k as R1.", "Updated DUAL (unit A) from U7A to U1A.", "Annotated DUAL (unit B) as U2B.", "Updated DUAL (unit B) from U7B to U1B."]);
     assert.deepEqual(AN.annotateMessages(d, AN.clearAnnotationChanges(d), true), ["Cleared annotation for DUAL (unit A).", "Cleared annotation for DUAL (unit B)."]);
   });
   test("Recurse into subsheets: sheet files resolved beside the sheet that names them", () => {

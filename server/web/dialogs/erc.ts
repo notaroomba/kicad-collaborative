@@ -9,7 +9,7 @@
 //
 // Exclusions are kept in the project's erc_exclusions (ERC_SETTINGS::m_ErcExclusions) in the form its erc schema
 // already uses, so a re-run excludes the same violations again (SCHEMATIC::ResolveERCExclusions).
-import { E, applyView, centerOn, requestRender, toast, toolCtx } from "./editor";
+import { E, appState, applyView, centerOn, requestRender, toast, toolCtx } from "./editor";
 import { syntaxHelp } from "../editor/syntax-help";
 import { KD, checkbox, download, h, popupMenu, type DlgApi, type PopItem } from "./dom";
 import { ERC_RULES, defaultSeverity, stepMarker } from "./erc-rules";
@@ -19,9 +19,10 @@ import { openSchematicSetup } from "./schematic-setup";
 import { messageBox, textEntryBox } from "../editor/pcbdialogs/ui";
 import type { Units } from "../store";
 import { ercTextReport, sevOf, shownBy } from "./erc-report";
+import { sheetList, type SheetInstance } from "./sch-hierarchy";
 export { ercTextReport, sevOf, shownBy };
 
-export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean }
+export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean; items?: { x: number; y: number; desc: string; len?: number }[] }
 
 const RULE_TITLE = new Map<string, string>(ERC_RULES.filter((r): r is [string, string] => r.length === 2).map(([title, key]) => [key, title]));
 /** The rule title KiCad shows for a violation (ERC_ITEM::GetErrorText), falling back to the marker's own text. */
@@ -251,10 +252,18 @@ export function openErc(): void {
     messageBox("Delete All Markers", "Delete exclusions too?", [{ label: "Cancel" }, { label: "Errors, Warnings and Exclusions", fn: () => wipe(true) }, { label: "Errors and Warnings Only", fn: () => wipe(false) }], 0);
   };
   // OnSaveReport: ERC.rpt with the shown severities (the browser saves it; KiCad asks for the path first)
-  const save = () => {
+  const save = async (): Promise<void> => {
     const u = (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units;
-    const sheet = ((E.kdoc as KDoc & { sheetPath?: string } | null)?.sheetPath) || "/";
-    download("ERC.rpt", ercTextReport(markers(), { ...show, units: u, date: isoNow(), ignored: ignoredTests(severities()), sheet, title: ruleTitle, text: unescape }), "text/plain;charset=utf-8");
+    // BuildSheetListSortedByPageNumbers: a "***** Sheet" block per sheet; a marker goes under its main item's sheet
+    let list: SheetInstance[] = []; try { list = await sheetList(); } catch { list = []; }
+    const here = list.find((x) => x.docId === appState.docId);
+    const sheetOf = (m: ErcViolation): string | null => {
+      const ms = (m as { mainSheet?: unknown }).mainSheet;
+      if (typeof ms === "string" && here) { const child = list.find((x) => x.parentDocId === here.docId && x.sheetItemId === ms && x.uuidPath.slice(0, -1).join("/") === here.uuidPath.join("/")); if (child) return child.sheetPath; }
+      return here ? here.sheetPath : null;
+    };
+    const sheets = list.length ? list.map((x) => x.sheetPath) : undefined;
+    download("ERC.rpt", ercTextReport(markers(), { ...show, units: u, date: isoNow(), ignored: ignoredTests(severities()), sheets, sheetOf, title: ruleTitle, text: unescape }), "text/plain;charset=utf-8");
   };
   api = KD().open({
     title: "Electrical Rules Checker", width: 640, modeless: true,
@@ -286,13 +295,12 @@ export function openErc(): void {
         checkbox("Warnings", show.warnings, (on) => { show.warnings = on; syncBoxes(); refresh(); }, { id: "kd-erc-warnings" }), h("span", { "data-erc-count": "warnings", class: "kd-badge" }),
         checkbox("Exclusions", show.exclusions, (on) => { show.exclusions = on; syncBoxes(); refresh(); setRender(); }, { id: "kd-erc-excl" }), h("span", { "data-erc-count": "exclusions", class: "kd-badge" }),
         h("span", { style: "flex:1" }),
-        h("button", { class: "btn sm", type: "button", id: "kd-erc-save", onclick: save }, "Save..."));
-      const del = h("div", { style: "display:flex;gap:8px;margin-top:8px" },
-        h("button", { class: "btn sm", type: "button", id: "kd-erc-delete", onclick: delOne }, "Delete Marker"),
-        h("button", { class: "btn sm", type: "button", id: "kd-erc-delall", onclick: delAll }, "Delete All Markers"));
-      body.append(filt, del);
+        h("button", { class: "btn sm", type: "button", id: "kd-erc-save", onclick: () => { void save(); } }, "Save..."));
+      body.append(filt);
       const tabs = book.el.querySelectorAll<HTMLElement>(".kd-nb-tab"); vioTab = tabs[0] || null; ignTab = tabs[1] || null;
     },
+    // m_buttonsSizer: Delete Marker / Delete All Markers on the left, then Run ERC / Close
+    extra: [{ label: "Delete Marker", fn: delOne, id: "kd-erc-del" }, { label: "Delete All Markers", fn: delAll, id: "kd-erc-delall" }],
     buttons: [{ label: "Run ERC", primary: true, isDefault: true, fn: run, id: "kd-erc-run" }, { label: "Close", close: true }],
     cancel() { live = null; },
   });

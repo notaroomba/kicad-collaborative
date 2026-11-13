@@ -93,10 +93,13 @@ export function annotateMessages(doc: KDoc, changes: KChange[], clear = false): 
     const val = (() => { const v = kids(it.node, "property").find((q) => str(q[1]) === "Value"); return v ? str(v[2]) : ""; })();
     const multi = libUnits(doc, it.node).units > 1, u = kid(it.node, "unit"), sub = multi ? unitLetter(u ? num(u[1], 1) : 1) : "";
     if (clear) { out.push(multi ? `Cleared annotation for ${val} (unit ${sub}).` : `Cleared annotation for ${val}.`); continue; }
-    const n = typeof c.sexpr === "string" ? K.parseAll(c.sexpr).find((t) => Array.isArray(t) && t[0] !== "lib_symbols") : null, p1 = n ? refField(n as SNode) : null, ref = p1 ? str(p1[2]) : "";
-    if (annotated && ref === prev) continue;
-    if (annotated) out.push(multi ? `Updated ${val} (unit ${sub}) from ${prev} to ${ref}.` : `Updated ${val} from ${prev} to ${ref}.`);
-    else out.push(multi ? `Annotated ${val} (unit ${sub}) as ${ref}.` : `Annotated ${val} as ${ref}.`);
+    const n = typeof c.sexpr === "string" ? K.parseAll(c.sexpr).find((t) => Array.isArray(t) && t[0] !== "lib_symbols") : null, p1 = n ? refField(n as SNode) : null;
+    // GetRef( sheet, true ): a multi-unit symbol's reference carries its unit letter (mapExistingAnnotation stores it the same way)
+    const u1 = n ? kid(n as SNode, "unit") : null, sub1 = multi ? unitLetter(u1 ? num(u1[1], 1) : u ? num(u[1], 1) : 1) : "";
+    const ref = (p1 ? str(p1[2]) : "") + sub1, prevRef = prev + sub;
+    if (annotated && ref === prevRef) continue;
+    if (annotated) out.push(multi ? `Updated ${val} (unit ${sub1}) from ${prevRef} to ${ref}.` : `Updated ${val} from ${prevRef} to ${ref}.`);
+    else out.push(multi ? `Annotated ${val} (unit ${sub1}) as ${ref}.` : `Annotated ${val} as ${ref}.`);
   }
   return out;
 }

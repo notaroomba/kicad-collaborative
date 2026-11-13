@@ -10,6 +10,7 @@ import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
 import { obj, projectDocs, projectJson, readDoc, saveProject, sub, submitDocOp } from "./project";
 import { effectiveTheme } from "../theme";
 import { subsheetFiles } from "./annotate-logic";
+import { reportPanel, type ReportLine } from "../editor/pcbdialogs/ui";
 export { subsheetFiles };
 
 /** BITMAPS::annotate_down_right / annotate_right_down (24 px, light and dark), beside the two sort orders. */
@@ -57,8 +58,14 @@ export async function refreshOtherRefs(): Promise<void> {
 }
 
 let api: DlgApi | null = null;   // the dialog this module opened last (KDialogs keeps one dialog at a time)
-let msgs: HTMLElement | null = null;
-const say = (text: string, bad = false) => { if (!msgs) return; msgs.append(h("div", { style: bad ? "color:var(--err)" : "" }, text)); msgs.scrollTop = msgs.scrollHeight; };
+/** m_MessageWindow (WX_HTML_REPORT_PANEL): the lines AnnotateSymbols reports, actions unless they are errors. */
+let report: { el: HTMLElement; set(lines: ReportLine[]): void } | null = null;
+let reportLines: ReportLine[] = [];
+const say = (text: string, bad = false) => {
+  if (!report) return; reportLines.push({ severity: bad ? "error" : "action", text }); report.set(reportLines);
+  const list = report.el.firstElementChild as HTMLElement | null; if (list) list.scrollTop = list.scrollHeight;
+};
+const clearReport = (): void => { reportLines = []; if (report) report.set(reportLines); };
 
 const dirOf = (path: string): string => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 /** The sheets below this one (Recurse into subsheets): the sheet files its sheets name, then theirs. */
@@ -80,7 +87,7 @@ async function otherSheets(): Promise<{ docId: string; path: string; doc: KDoc }
 
 async function runAnnotate(): Promise<void> {
   const S = sch(); if (!S || !E.kdoc) return;
-  if (msgs) msgs.innerHTML = "";
+  clearReport();
   if (E.viewOnly) { say("View-only access", true); return; }
   const interval = A.numbering === "100" ? 100 : A.numbering === "1000" ? 1000 : 0;
   await storeReusedSheetMode();   // annotation reads the mode from the project
@@ -116,7 +123,7 @@ async function runAnnotate(): Promise<void> {
 
 async function runClear(): Promise<void> {
   const S = sch(); if (!S || !E.kdoc) return;
-  if (msgs) msgs.innerHTML = "";
+  clearReport();
   if (E.viewOnly) { say("View-only access", true); return; }
   const only = A.scope === "selection" ? new Set<string>(E.selection) : null;
   if (only && E.selected) only.add(E.selected.id);
@@ -151,6 +158,11 @@ export function openAnnotate(): void {
   api = KD().open({
     title: "Annotate Schematic", width: 600,
     build(body) {
+      // m_MessageWindow: WX_HTML_REPORT_PANEL labelled "Annotation Messages:", saved as report.txt (SetFileName)
+      reportLines = []; report = reportPanel("160px", { fileName: "report.txt", empty: "" });
+      (report.el.firstElementChild as HTMLElement).setAttribute("data-ann-msgs", "1");
+      report.set(reportLines);
+      const messages = h("div", { style: "margin-top:10px" }); KD().staticBox(messages, "Annotation Messages:").append(report.el);
       const hasSel = E.selection.size > 0 || !!E.selected;
       const start = textInput(String(A.start), (v) => { A.start = Math.max(0, parseInt(v, 10) || 0); }, { id: "kd-ann-start", style: "width:70px", type: "number", min: "0" });
       const dark = effectiveTheme() === "dark";
@@ -179,8 +191,7 @@ export function openAnnotate(): void {
           radio("reuse", "separate", "Number each sheet instance separately (R1, R2 ...)", !reuseSuffix, () => { reuseSuffix = false; }),
           withTip(radio("reuse", "suffix", "Number each file once and add the sheet's reference suffix (R1_M1, R1_M2 ...)", reuseSuffix, () => { reuseSuffix = true; }),
             "Repeated instances of one sheet file need distinct full reference suffixes. Set Reference Suffix in Sheet Properties."))),
-        h("div", { style: "margin-top:10px;font-size:12px" }, "Annotation Messages:"),
-        msgs = h("div", { "data-ann-msgs": "1", style: "margin-top:4px;height:160px;overflow:auto;border:1px solid var(--line);background:var(--panel);padding:4px 6px;font-size:12px" }));
+        messages);
       if (A.scope === "selection" && !hasSel) { A.scope = "all"; const r = body.querySelector<HTMLInputElement>("#kd-ann-scope-all"); if (r) r.checked = true; }
     },
     buttons: [

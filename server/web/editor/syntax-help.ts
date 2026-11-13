@@ -12,7 +12,7 @@ export function syntaxHelpHtml(isPcb: boolean): string { return isPcb ? PCB_TEXT
 /** Open the modeless Syntax Help window. */
 export function syntaxHelp(isPcb: boolean): void {
   if (typeof document === "undefined" || typeof KDialogs === "undefined" || !KDialogs) return;
-  KDialogs.open({ title: "Syntax Help", width: 640, modeless: true, child: true, okLabel: "Close",
+  KDialogs.open({ title: "Syntax Help", width: 640, modeless: true, child: true, buttons: [],   // ShowModeless: m_sdbSizer1->Show( false ), no buttons
     build(body: HTMLElement) {
       const div = document.createElement("div");
       div.className = "kd-help kd-syntax-help"; div.setAttribute("data-k", "syntax-help-body");
@@ -20,8 +20,7 @@ export function syntaxHelp(isPcb: boolean): void {
       div.innerHTML = syntaxHelpHtml(isPcb);   // KiCad's own static help text
       for (const t of Array.from(div.querySelectorAll("table"))) (t as HTMLElement).style.borderSpacing = "6px 0";
       body.append(div);
-    },
-    ok: () => true });
+    } });
 }
 
 /** The "Syntax help" hyperlink the dialogs put beside or below their text entry. */
