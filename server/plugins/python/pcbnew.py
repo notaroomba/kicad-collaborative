@@ -3027,6 +3027,16 @@ class PAD(BOARD_CONNECTED_ITEM):
                 "pad_prop_testpoint": PAD_PROP_TESTPOINT, "pad_prop_heatsink": PAD_PROP_HEATSINK, "pad_prop_castellated": PAD_PROP_CASTELLATED,
                 "pad_prop_mechanical": PAD_PROP_MECHANICAL}.get(str(k[1]) if k is not None and len(k) > 1 else "", PAD_PROP_NONE)
 
+    def SetProperty(self, prop):
+        word = {PAD_PROP_BGA: "pad_prop_bga", PAD_PROP_FIDUCIAL_GLBL: "pad_prop_fiducial_glob", PAD_PROP_FIDUCIAL_LOCAL: "pad_prop_fiducial_loc",
+                PAD_PROP_TESTPOINT: "pad_prop_testpoint", PAD_PROP_HEATSINK: "pad_prop_heatsink", PAD_PROP_CASTELLATED: "pad_prop_castellated",
+                PAD_PROP_MECHANICAL: "pad_prop_mechanical"}.get(int(prop))
+        if word is None:
+            _drop_kid(self._node, "property")
+        else:
+            _set_kid(self._node, "property", Sym(word))
+        self._touch()
+
     def GetPos0(self):
         k = _kid(self._node, "at")
         return VECTOR2I(FromMM(_f(k[1])), FromMM(_f(k[2]))) if k is not None and len(k) > 2 else VECTOR2I(0, 0)
@@ -6392,6 +6402,11 @@ def FootprintLoad(lib, name, *_):
         text = (r or {}).get("footprint")
     if not text:
         return None
+    return _footprint_from_text(text, _lib_nick(lib), name)
+
+
+def _footprint_from_text(text, lib="", name=""):
+    """A FOOTPRINT that is not on a board yet, from the text of a .kicad_mod file or of a footprint on KiCad's clipboard."""
     node = _parse(text)[0]
     if node and node[0] == "module":        # a library file from before KiCad 6: the same footprint under its old name
         node[0] = Sym("footprint")
@@ -6400,8 +6415,8 @@ def FootprintLoad(lib, name, *_):
             node[1] = str(node[1])
     if _kid(node, "at") is None:
         node.insert(2, [Sym("at"), _n(0), _n(0)])
-    if len(node) > 1 and not isinstance(node[1], list):
-        node[1] = "%s:%s" % (_lib_nick(lib), name)
+    if len(node) > 1 and not isinstance(node[1], list) and name:
+        node[1] = "%s:%s" % (lib, name)
 
     def new_ids(n):         # every copy placed on a board is its own item, with its own ids
         for k in n:
@@ -6414,7 +6429,7 @@ def FootprintLoad(lib, name, *_):
     if _kid(node, "uuid") is None:
         _set_kid(node, "uuid", str(_uuid.uuid4()))
     fp = FOOTPRINT._wrap(node, None)
-    fp._library = _lib_nick(lib)
+    fp._library = lib
     return fp
 
 

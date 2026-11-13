@@ -203,6 +203,30 @@ class _WxFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             module.HyperlinkCtrl = wx.HyperlinkCtrl
             module.EVT_HYPERLINK = wx.EVT_HYPERLINK
             module.HL_DEFAULT_STYLE = 0
+        elif name == "wx.lib.buttons":       # the "generic" buttons wxPython draws itself: here they are the ordinary ones
+            class GenButton(wx.Button):
+                SetBezelWidth = SetUseFocusIndicator = SetInitialSize = lambda self, *a, **k: None
+
+            class GenBitmapButton(wx.BitmapButton):
+                SetBezelWidth = SetUseFocusIndicator = SetInitialSize = lambda self, *a, **k: None
+
+            class GenToggleButton(wx.ToggleButton):
+                SetBezelWidth = SetUseFocusIndicator = SetInitialSize = lambda self, *a, **k: None
+                GetToggle = lambda self: self.GetValue()
+                SetToggle = lambda self, on: self.SetValue(on)
+
+            class GenBitmapTextButton(GenButton):
+                def __init__(self, parent=None, id=-1, bitmap=None, label="", *a, **k):
+                    super().__init__(parent, id, label, *a, **k)
+                    if bitmap is not None:
+                        self.SetBitmap(bitmap)
+
+            module.GenButton = module.ThemedGenButton = GenButton
+            module.GenBitmapButton = module.ThemedGenBitmapButton = GenBitmapButton
+            module.GenToggleButton = module.ThemedGenToggleButton = GenToggleButton
+            module.GenBitmapToggleButton = module.ThemedGenBitmapToggleButton = GenToggleButton
+            module.GenBitmapTextButton = module.ThemedGenBitmapTextButton = GenBitmapTextButton
+            module.GenBitmapTextToggleButton = module.ThemedGenBitmapTextToggleButton = GenToggleButton
         elif name.startswith("wx.lib.agw.persist"):
             _persist_module(module)
         elif name == "wx.xrc":
@@ -1543,6 +1567,42 @@ def _key_name(event):
     return frozenset(mods), name
 
 
+def _editor_paste():
+    """Ctrl+V in the board editor, as a plugin presses it after putting a footprint on the clipboard (KiCad pastes the
+    clipboard's text when it is board items).  The footprints in that text are added to the board as one change, at
+    the place they name; one that names none goes to the middle of what is on the board.  True when something was pasted."""
+    text = (wx.TheClipboard._wx_last or "").strip()
+    if not text.startswith("("):
+        return False
+    b = pcbnew.GetBoard()
+    try:
+        root = pcbnew._parse(text)[0]
+    except Exception:
+        return False
+    kind = str(root[0]) if root else ""
+    texts = [text] if kind in ("footprint", "module") else []
+    if kind == "kicad_pcb":
+        texts = [pcbnew._dump(k) for k in root if isinstance(k, list) and k and str(k[0]) in ("footprint", "module")] if hasattr(pcbnew, "_dump") else []
+    if not texts:
+        log.warning("paste: the clipboard holds no footprint (it starts with (%s …)", kind)
+        return False
+    box = b.GetBoardEdgesBoundingBox() if b.GetBoardEdgesBoundingBox().GetWidth() > 0 else b.ComputeBoundingBox(False)
+    middle = box.GetCenter() if box.GetWidth() > 0 else pcbnew.VECTOR2I(pcbnew.FromMM(100), pcbnew.FromMM(100))
+    for item in list(b.GetCurrentSelection()):
+        item.ClearSelected()
+    added = 0
+    for t in texts:
+        fp = pcbnew._footprint_from_text(t)
+        at = fp.GetPosition()
+        if at.x == 0 and at.y == 0:
+            fp.SetPosition(middle)
+        b.Add(fp)
+        fp.SetSelected()
+        added += 1
+    flush()
+    return added > 0
+
+
 def _editor_key(event):
     """A key sent to the board editor's canvas: the editor action that key stands for is done.  The actions a plugin
     can work this way are the ones about highlighting nets; True when the key was one of them."""
@@ -1550,6 +1610,10 @@ def _editor_key(event):
     b = pcbnew._Host.board
     if pressed is None or b is None:
         return False
+    if pressed == (frozenset(("Ctrl",)), "V"):
+        return _editor_paste()
+    if pressed[1] == "Esc":                 # "leave the tool I am in": there is none to leave
+        return True
     for action, text in _hotkey_actions().items():
         parts = [p for p in str(text).split("+") if p]
         if not parts or (frozenset(parts[:-1]), parts[-1].upper()) != (pressed[0], pressed[1].upper()):
@@ -1759,6 +1823,7 @@ def press_modal(dialog):
         return wx.ID_OK
     _pressed_in_modal.append(str(pick.GetLabel()))
     pick._wx_clicked()
+    wx._run_later()
     return wx.ID_OK
 
 
@@ -1774,10 +1839,12 @@ def press_default():
         for top in list(wx._top_windows):
             if not getattr(top, "_wx_visible", False):
                 continue
+            wx._run_later()
             pick = _main_button(top)
             if pick is not None:
                 pressed.append(str(pick.GetLabel()))
                 pick._wx_clicked()
+        wx._run_later()
         flush()
         _export_outputs()
     except SystemExit:

@@ -16,15 +16,13 @@
   "status": "works"
  },
  "com.github.DIaLOGIKa-GmbH.kicad-coil-creator": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.HaydenHu.Space-Filling-Curve": {
   "status": "works"
  },
  "com.github.HaydenHu.kicad-text-postion-size": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.Huaqiu-Electronics.kicad-hqdfm-plugin": {
   "status": "works"
@@ -80,12 +78,10 @@
   "note": "It opens, but the test run did not see it do its work (it said: \"Open Directory Failed: Unable to open directory: /project\"). Nobody has checked its result here yet."
  },
  "com.github.TheJigsApp.kicad-parts-placer-pcm": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.TheJigsApp.kicadtestpoints-pcm": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.adamws.kicad-git": {
   "status": "works",
@@ -95,8 +91,7 @@
   "status": "works"
  },
  "com.github.adamws.kicad-via-patterns": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.adrianwest.bakery": {
   "status": "works"
@@ -168,8 +163,8 @@
   "note": "It makes the Gerber archive and hands it over as a download. Passing it straight to the Gerber2Png page needs a local network port: open that page and load the archive there."
  },
  "com.github.g200kg.kicad-gerberzipper2": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works",
+  "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
  },
  "com.github.gauravmm.hierarchicalpcb": {
   "status": "works"
@@ -178,8 +173,7 @@
   "status": "works"
  },
  "com.github.gregdavill.KiBuzzard": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.heronitec-solutions.kicomlib": {
   "status": "opens",
@@ -194,8 +188,7 @@
   "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.github.jacmie.PosOrient": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.jarrettr.stretch": {
   "status": "works"
@@ -236,8 +229,7 @@
   "status": "works"
  },
  "com.github.ozzysv.holefinder": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.ozzysv.viafence": {
   "status": "opens",

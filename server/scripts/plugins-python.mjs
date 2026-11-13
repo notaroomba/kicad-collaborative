@@ -118,7 +118,7 @@ async function one(dir, boardPath, boardGiven) {
   const require = createRequire(path.join(server, "package.json"));
   let driveSrc = null;
   { let id = path.basename(dir); try { id = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf8")).identifier || id; } catch { /* none */ }
-    const f = path.join(here, "plugin-drives", id + ".py");
+    const f = process.env.DRIVE ? path.resolve(process.env.DRIVE) : path.join(here, "plugin-drives", id + ".py");   // DRIVE=<file>: one drive for whatever runs (a probe)
     if (!process.env.NO_DRIVE && fs.existsSync(f)) { driveSrc = fs.readFileSync(f, "utf8"); const m = /^# board: (\S+)/m.exec(driveSrc); if (m && !boardGiven) boardPath = path.resolve(server, "..", m[1]); } }
   const { loadPyodide } = require("pyodide");
   const logs = []; if (process.env.KICAD_WEB_DEBUG) { /* set below, inside Python */ }

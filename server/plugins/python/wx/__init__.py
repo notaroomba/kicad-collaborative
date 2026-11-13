@@ -1757,8 +1757,16 @@ CommandEvent = PyCommandEvent = PyEvent = CloseEvent = KeyEvent = MouseEvent = S
 ThreadEvent = Event
 
 
+def _binder_of(type_id):
+    """The binder (EVT_X) of an event type number (wxEVT_X), for events a plugin makes itself: wx.KeyEvent(wx.wxEVT_CHAR_HOOK)."""
+    for value in list(globals().values()):
+        if isinstance(value, PyEventBinder) and getattr(value, "typeId", None) == type_id:
+            return value
+    return None
+
+
 def PostEvent(target, event):
-    if target is not None and event._binder is not None:
+    if target is not None and (event._binder is not None or target is _pcb_frame):
         target._wx_fire(event._binder, event)
 
 
@@ -1960,9 +1968,46 @@ class Window(EvtHandler):
         if self._wx_parent is not None:
             self._wx_parent._wx_children.append(self)
             self._wx_parent._wx_adopt(self)
+        v = kw.get("validator")
+        if v is None:
+            v = next((m for m in more if hasattr(m, "TransferToWindow") and hasattr(m, "Clone")), None)
+        self._wx_validator = None
+        if v is not None and type(v).__name__ != "Validator":
+            self.SetValidator(v)
         size = kw.get("size", size)
         if size is not None and tuple(size) != (-1, -1):
             self.SetMinSize(size)
+
+    def SetValidator(self, validator):
+        v = validator.Clone() if validator is not None else None
+        if v is not None:
+            v.SetWindow(self)
+        self._wx_validator = v
+
+    def GetValidator(self):
+        return self.__dict__.get("_wx_validator")
+
+    def _wx_validators(self):
+        out, stack = [], [self]
+        while stack:
+            w = stack.pop(0)
+            v = w.__dict__.get("_wx_validator")
+            if v is not None and w.__dict__.get("_wx_enabled", True):
+                out.append(v)
+            stack[0:0] = [c for c in w.__dict__.get("_wx_children", []) if not isinstance(c, TopLevelWindow)]
+        return out
+
+    def Validate(self):
+        return all(v.Validate(self) is not False for v in self._wx_validators())
+
+    def TransferDataToWindow(self):
+        return all(v.TransferToWindow() is not False for v in self._wx_validators())
+
+    def TransferDataFromWindow(self):
+        return all(v.TransferFromWindow() is not False for v in self._wx_validators())
+
+    def InitDialog(self):
+        self.TransferDataToWindow()
 
     def _wx_build(self, kw):
         pass
@@ -4670,11 +4715,17 @@ class Dialog(TopLevelWindow):
     def ShowModal(self):
         self._wx_modal = True
         self._wx_return = ID_CANCEL
-        self._wx_fire(EVT_INIT_DIALOG, Event(self, EVT_INIT_DIALOG))          # noqa: F821
+        if not self._wx_fire(EVT_INIT_DIALOG, Event(self, EVT_INIT_DIALOG)):          # noqa: F821
+            try:
+                self.TransferDataToWindow()
+            except Exception:
+                pass
         if not _DOM:
             self._wx_visible = self._wx_shown = True
             self._wx_fire(EVT_SHOW, Event(self, EVT_SHOW))          # noqa: F821
+            _run_later()                    # work the dialog starts by itself (wx.CallLater) is done before it is answered
             code = _headless_modal(self) if _headless_modal is not None else ID_CANCEL
+            _run_later()
             if self._wx_modal:              # the stand-in answered; a dialog that ended itself keeps its own code
                 self._wx_return = code
             self._wx_modal = self._wx_visible = self._wx_shown = False
@@ -4716,6 +4767,10 @@ class Dialog(TopLevelWindow):
 
     def _wx_default_button(self, bid):
         if bid in (ID_OK, ID_YES, ID_NO, ID_CANCEL, ID_CLOSE, ID_APPLY, ID_SAVE) or bid == self._affirmative:
+            if bid in (ID_OK, ID_YES, ID_APPLY, ID_SAVE) or bid == self._affirmative:
+                # accepting a dialog asks its validators first, and stays open when one says no
+                if not (self.Validate() and self.TransferDataFromWindow()):
+                    return
             if self._wx_modal:
                 self.EndModal(bid)
             elif bid in (ID_CANCEL, ID_CLOSE, ID_OK):
@@ -5301,6 +5356,11 @@ class _PcbFrame(Frame):
         return self._bar
 
     def _wx_fire(self, binder, event=None):
+        if isinstance(event, _paint.KeyEvent) and callable(_editor.get("key")):
+            # a key sent to the editor's window (Ctrl+V after a plugin filled the clipboard, a hotkey): the editor acts on it
+            if binder is None or binder in (EVT_CHAR_HOOK, EVT_KEY_DOWN, EVT_CHAR):          # noqa: F821
+                if _editor["key"](event):
+                    return True
         if binder is EVT_MENU and event is not None:          # noqa: F821
             eid = event.GetId()
             if eid in self._plugin_items and callable(_editor.get("run")):
@@ -5486,11 +5546,32 @@ def CallAfter(fn, *a, **k):
         fn(*a, **k)
 
 
+_later = []                # headless: CallLater calls that are due, soonest first (there is no clock to wait on)
+
+
+def _run_later(limit=400):
+    """Headless: run the delayed calls that are waiting, in the order they would fall due, and those they start in
+    turn.  A plugin that steps through its work with wx.CallLater does that work here.  Returns how many ran."""
+    done = 0
+    while _later and done < limit:
+        _later.sort(key=lambda c: c._due)
+        call = _later.pop(0)
+        done += 1
+        call._go()
+    return done
+
+
 class CallLater:
+    _clock = [0]
+
     def __init__(self, millis, fn, *a, **k):
         self._fn, self._a, self._k, self._running = fn, a, k, True
         if _DOM:
             _kc().later(_once(self._go), int(millis))
+        else:
+            CallLater._clock[0] += 1
+            self._due = (int(millis), CallLater._clock[0])
+            _later.append(self)
 
     def _go(self):
         if self._running:
@@ -5718,6 +5799,32 @@ class _Clipboard:
         return False
 
 
+class UIActionSimulator:
+    """Plugins use it to press keys in KiCad's window (Ctrl+V after filling the clipboard).  Keys go to the board editor;
+    there is no pointer to move."""
+
+    def _key(self, keycode, modifiers=0):
+        ev = _paint.KeyEvent(_pcb_frame, EVT_CHAR_HOOK, int(keycode))          # noqa: F821
+        ev.SetControlDown(bool(modifiers & (MOD_CONTROL | MOD_CMD)))
+        ev.SetShiftDown(bool(modifiers & MOD_SHIFT))
+        ev.SetAltDown(bool(modifiers & MOD_ALT))
+        return bool(_pcb_frame._wx_fire(EVT_CHAR_HOOK, ev))          # noqa: F821
+
+    def Char(self, keycode, modifiers=0):
+        return self._key(keycode, modifiers)
+
+    def KeyDown(self, keycode, modifiers=0):
+        return self._key(keycode, modifiers)
+
+    def KeyUp(self, keycode, modifiers=0):
+        return True
+
+    def Text(self, text):
+        return True
+
+    MouseMove = MouseDown = MouseUp = MouseClick = MouseDblClick = MouseDragDrop = lambda self, *a, **k: True
+
+
 TheClipboard = _Clipboard()
 Clipboard = _Clipboard
 
@@ -5780,12 +5887,33 @@ class EventFilter(_Thing):
     Event_Skip, Event_Ignore, Event_Processed = -1, 0, 1
 
 
-class Validator:
+class SingleInstanceChecker:
+    """Each run of a plugin in the web editor is the only one of its kind."""
+
     def __init__(self, *a, **k):
         pass
 
+    Create = lambda self, *a, **k: True
+    IsAnotherRunning = lambda self: False
+    CreateDefault = lambda self: True
+
+
+class Validator(EvtHandler):
+    """A control's validator: asked when the person accepts the dialog, as on the desktop."""
+
+    def __init__(self, *a, **k):
+        EvtHandler.__init__(self)
+        self._wx_window = None
+
     Clone = lambda self: self
     Validate = TransferToWindow = TransferFromWindow = lambda self, *a: True
+    GetWindow = lambda self: self._wx_window
+
+    def SetWindow(self, window):
+        self._wx_window = window
+
+    IsSilent = staticmethod(lambda: True)
+    SuppressBellOnError = staticmethod(lambda *a: None)
 
 
 PyValidator = DefaultValidator = Validator
@@ -6498,7 +6626,12 @@ _focus = [None]          # the window that has the keyboard
 
 
 def FindFocus():
-    return _focus[0]
+    """The window with the keyboard.  When none of the plugin's own windows has it, it is where the person was when they
+    started the plugin: the board editor's canvas."""
+    w = _focus[0]
+    if w is not None and not getattr(w, "_wx_destroyed", False) and getattr(w, "_wx_shown", True):
+        return w
+    return _pcb_frame.GetChildren()[0]
 
 
 Window.FindFocus = staticmethod(FindFocus)
@@ -6954,7 +7087,12 @@ def __getattr__(name):
         globals()[name] = b
         return b
     if name.startswith("wxEVT_"):
-        return hash(name) & 0xFFFF
+        b = globals().get("EVT_" + name[6:])
+        if b is None:
+            b = _binder("EVT_" + name[6:])
+            globals()["EVT_" + name[6:]] = b
+        globals()[name] = b.typeId
+        return b.typeId
     if name.isupper() or (name[:1].isupper() and "_" in name and name.replace("_", "").isupper()):
         return _Zero(0)
     if name[:1].isupper():

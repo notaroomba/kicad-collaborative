@@ -40,6 +40,10 @@
     "com.github.drewsum.kipi": {
       "status": "unsupported",
       "note": "Its Qt window and its numpy, scipy and matplotlib parts load. Its solver meshes the copper with the Triangle library, which is compiled code that has no build for the browser."
+    },
+    "com.github.g200kg.kicad-gerberzipper2": {
+      "status": "works",
+      "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
     }
   }
 }

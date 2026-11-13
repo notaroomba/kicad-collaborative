@@ -1271,6 +1271,8 @@ class KeyEvent(_wx.Event):
     """A key pressed or released in a window, with wxWidgets' key codes."""
 
     def __init__(self, source=None, binder=None, dom=None, char=False):
+        if isinstance(source, int) and not isinstance(source, bool):          # wx.KeyEvent(wx.wxEVT_CHAR_HOOK): an event type
+            source, binder = None, _wx._binder_of(source)
         _wx.Event.__init__(self, source, binder)
         self._ctrl = self._shift = self._alt = self._meta = self._repeat = False
         self._uni = 0
