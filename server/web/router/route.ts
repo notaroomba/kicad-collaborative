@@ -61,6 +61,7 @@ export interface RouteOptions {
   weights?: Partial<Weights>;
   powerWidth?: number;           // track width for supply nets (GND, +3V3, VBUS …) that have no class of their own; 0 keeps the class width.  Default: twice the class width, 0.3 to 0.5 mm
   impedance?: boolean;           // size tracks for the impedance their nets call for (a plan's impedance, else by name: USB 90 Ω, HDMI/Ethernet 100 Ω, antenna feeds 50 Ω); default true
+  fanoutLanes?: boolean | number; // keep a lane (mm, default 0.25) out from each fine-pitch chip pin for its own net only; false turns it off
   matchLengths?: boolean;        // lengthen the shorter members of a matched group with serpentines; default true
   match?: { nets: string[]; tolerance?: number; length?: number }[];   // nets to bring to one length (the longest, or the length given), within the tolerance in mm (default 0.25)
   skewTolerance?: number;        // the most the two tracks of a pair may differ in length, mm; default 0.1
@@ -154,6 +155,24 @@ export class Router {
       push({ net: "", layers: all, shape: P.padShape({ shape: w === h ? "circle" : "oval", x: p.x, y: p.y, w, h, rot: p.rot }), clr: Math.max(s.clearance, s.holeClearance !== undefined ? s.holeClearance : 0.25) });   // Board Setup > Constraints: hole clearance
     }
     for (const e of P.edgeShapes(doc).shapes) push({ net: "", layers: all, shape: e, clr: 0, edge: true });
+    // Fan-out lanes.  Each pin of a fine-pitch chip (QFN, QFP, 0.5 mm pitch and finer) keeps a short straight lane
+    // out from the end of its pad that only its own net may use: a neighbour's track may not jog across in front of
+    // it, so every pin can still get out, as a person fans a chip out before routing anything else.
+    if (this.opts.fanoutLanes !== false) {
+      const lane = typeof this.opts.fanoutLanes === "number" ? this.opts.fanoutLanes : 0.25;
+      const byPart = new Map<any, any[]>(); for (const c of nl.conductors) if (c.kind === "pad" && c.pad && c.pad.type === "smd" && c.item) { let l = byPart.get(c.item); if (!l) byPart.set(c.item, l = []); l.push(c); }
+      for (const cs of byPart.values()) {
+        if (cs.length < 8) continue; const cx = cs.reduce((a, c) => a + c.pad.x, 0) / cs.length, cy = cs.reduce((a, c) => a + c.pad.y, 0) / cs.length;
+        for (const c of cs) {
+          const p = c.pad; if (!c.net || Math.min(p.w, p.h) > 0.35 || Math.max(p.w, p.h) < 1.2 * Math.min(p.w, p.h)) continue;
+          const ax = padAxis(p); const sg = ax[0] * (p.x - cx) + ax[1] * (p.y - cy) >= 0 ? 1 : -1; const half = Math.max(p.w, p.h) / 2;
+          if (Math.hypot(p.x - cx, p.y - cy) < half) continue;   // a pin in the middle
+          const layers = Array.from(c.layers as Set<string>).map((l) => copper.indexOf(l)).filter((i) => i >= 0); if (!layers.length) continue;
+          const a: Pt = [p.x + sg * ax[0] * half, p.y + sg * ax[1] * half], b: Pt = [a[0] + sg * ax[0] * lane, a[1] + sg * ax[1] * lane];
+          push({ net: c.net, layers, shape: { t: "seg", a, b, r: 0.05 } as Shape, clr: P.netClearance(s, c.net) });
+        }
+      }
+    }
     return obstacles;
   }
   /** The board may have changed under a long run (other people edit it too): check the routes against it as it is now. */

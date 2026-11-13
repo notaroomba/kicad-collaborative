@@ -1984,7 +1984,7 @@ class Board(_Doc):
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
               fill: bool = True, max_vias: int | None = None, kinds: dict | None = None, separate=None, fence=None,
-              ground_vias: bool = True) -> dict:
+              ground_vias: bool = True, fanout_lanes=None) -> dict:
         """Autoroute the missing connections (every unrouted net by default) and report what was done.
 
         order: the few nets to lay first (USB pair, crystal); widths: {net: mm} for supply nets; net_options and
@@ -2009,6 +2009,9 @@ class Board(_Doc):
         ground_vias: before a whole-board route, the ground pads of small parts (resistors, capacitors, diodes) that
         would hang on the pour alone get their own via to the plane first, so the signal tracks are laid round them
         instead of taking the room (board.ground_pads(max_pads=4)).  False skips it.
+        fanout_lanes: each pin of a fine-pitch chip keeps a straight lane this long (mm, 0.25 by default) out from its
+        pad that only its own net may use, so neighbours cannot box a pin in; raise it (0.8 to 1.2) when a QFN's pins
+        are left "blocked", False turns it off.
         """
         self.flush()
         fix = self._net
@@ -2048,6 +2051,8 @@ class Board(_Doc):
             e["max_vias"] = max_vias
         if separate is not None:
             e["separate"] = separate
+        if fanout_lanes is not None:
+            e["fanout_lanes"] = fanout_lanes
         if fence is not None:
             e["fence"] = dict(fence, nets=[fix(n) for n in fence["nets"]]) if isinstance(fence, dict) and fence.get("nets") else fence
         pre = None

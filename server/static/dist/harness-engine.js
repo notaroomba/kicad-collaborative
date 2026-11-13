@@ -80165,6 +80165,31 @@ var Router = class _Router {
       }
     }
     for (const e of P.edgeShapes(doc).shapes) push({ net: "", layers: all2, shape: e, clr: 0, edge: true });
+    if (this.opts.fanoutLanes !== false) {
+      const lane = typeof this.opts.fanoutLanes === "number" ? this.opts.fanoutLanes : 0.25;
+      const byPart = /* @__PURE__ */ new Map();
+      for (const c of nl.conductors) if (c.kind === "pad" && c.pad && c.pad.type === "smd" && c.item) {
+        let l = byPart.get(c.item);
+        if (!l) byPart.set(c.item, l = []);
+        l.push(c);
+      }
+      for (const cs of byPart.values()) {
+        if (cs.length < 8) continue;
+        const cx = cs.reduce((a, c) => a + c.pad.x, 0) / cs.length, cy = cs.reduce((a, c) => a + c.pad.y, 0) / cs.length;
+        for (const c of cs) {
+          const p = c.pad;
+          if (!c.net || Math.min(p.w, p.h) > 0.35 || Math.max(p.w, p.h) < 1.2 * Math.min(p.w, p.h)) continue;
+          const ax = padAxis(p);
+          const sg = ax[0] * (p.x - cx) + ax[1] * (p.y - cy) >= 0 ? 1 : -1;
+          const half = Math.max(p.w, p.h) / 2;
+          if (Math.hypot(p.x - cx, p.y - cy) < half) continue;
+          const layers = Array.from(c.layers).map((l) => copper.indexOf(l)).filter((i) => i >= 0);
+          if (!layers.length) continue;
+          const a = [p.x + sg * ax[0] * half, p.y + sg * ax[1] * half], b = [a[0] + sg * ax[0] * lane, a[1] + sg * ax[1] * lane];
+          push({ net: c.net, layers, shape: { t: "seg", a, b, r: 0.05 }, clr: P.netClearance(s, c.net) });
+        }
+      }
+    }
     return obstacles;
   }
   /** The board may have changed under a long run (other people edit it too): check the routes against it as it is now. */
@@ -100915,13 +100940,57 @@ function reviewPhysics(doc, P, k, settings, add) {
     for (const f2 of fps) for (const p of f2.pads) if (isGnd(p.net) && p.type === "thru_hole") holes.push([p.x, p.y]);
     const near = (x, y, r) => holes.some((h) => Math.hypot(h[0] - x, h[1] - y) <= r);
     if (planeLayers.some((l) => !outer.has(l)) || planeLayers.length >= 2) {
+      const gid = /* @__PURE__ */ new Map();
+      const gpts = [];
+      const gadj = [];
+      const gnode = (q) => {
+        const k2 = q[0].toFixed(3) + "," + q[1].toFixed(3);
+        let i = gid.get(k2);
+        if (i === void 0) {
+          gid.set(k2, i = gpts.length);
+          gpts.push(q);
+          gadj.push([]);
+        }
+        return i;
+      };
+      for (const [net, ts] of S2.tracksOf) if (isGnd(net)) for (const t of ts) {
+        if (!t.shape || t.shape.t !== "seg") continue;
+        const a = gnode(t.shape.a), b = gnode(t.shape.b);
+        const w = Math.hypot(t.shape.a[0] - t.shape.b[0], t.shape.a[1] - t.shape.b[1]);
+        gadj[a].push([b, w]);
+        gadj[b].push([a, w]);
+      }
+      const atHole = (q) => holes.some((h) => Math.hypot(h[0] - q[0], h[1] - q[1]) <= 0.35);
+      const tied = (p, maxLen = 6) => {
+        const dist = /* @__PURE__ */ new Map();
+        const open2 = [];
+        gpts.forEach((q, i) => {
+          if (inBox(p.box, q[0], q[1])) {
+            dist.set(i, 0);
+            open2.push(i);
+          }
+        });
+        while (open2.length) {
+          const u = open2.shift();
+          const du = dist.get(u);
+          if (atHole(gpts[u])) return true;
+          for (const [v, w] of gadj[u]) {
+            const d = du + w;
+            if (d <= maxLen && (dist.get(v) === void 0 || d < dist.get(v) - 1e-9)) {
+              dist.set(v, d);
+              open2.push(v);
+            }
+          }
+        }
+        return false;
+      };
       const lone = [];
       for (const f2 of fps) for (const p of f2.pads) {
         if (!isGnd(p.net) || p.type !== "smd" || antennas.includes(f2)) continue;
         const reach2 = Math.max(LIMITS.groundViaReach, Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1]) / 2 + 0.6);
-        if (!near(p.x, p.y, reach2)) lone.push(`${f2.ref}.${p.number} at ${at(p.x, p.y)}`);
+        if (!near(p.x, p.y, reach2) && !tied(p)) lone.push(`${f2.ref}.${p.number} at ${at(p.x, p.y)}`);
       }
-      if (lone.length) add("ground.pour_only", "warning", `These ground pads reach the ground plane only through the pour on their own layer: no ground via within ${LIMITS.groundViaReach} mm. Such a joint lasts only while that piece of pour is filled and unbroken; a track routed past it later, or a pour that was never refilled, leaves the pad on its own (the ratsnest lines to ground pads). Give each its own via to the plane: board.ground_pads().`, few(lone, 12));
+      if (lone.length) add("ground.pour_only", "warning", `These ground pads reach the ground plane only through the pour on their own layer: no ground via within ${LIMITS.groundViaReach} mm and no short ground track to one. Such a joint lasts only while that piece of pour is filled and unbroken; a track routed past it later, or a pour that was never refilled, leaves the pad on its own (the ratsnest lines to ground pads). Give each its own via to the plane: board.ground_pads().`, few(lone, 12));
     }
     const islands = [];
     let pieces3 = 0;
@@ -103492,7 +103561,7 @@ function build(input) {
           const num8 = (v) => typeof v === "number" && v >= 0 ? v : void 0;
           const separate = e.separate === false ? false : e.separate && typeof e.separate === "object" ? { quiet: num8(e.separate.quiet), noisy: num8(e.separate.noisy) } : void 0;
           const fence = e.fence === false ? false : e.fence && typeof e.fence === "object" ? { spacing: num8(e.fence.spacing), nets: Array.isArray(e.fence.nets) ? e.fence.nets.map((n2) => boardNet(doc, text(n2, "net")).name) : void 0, returnVias: e.fence.return_vias === false ? false : void 0 } : void 0;
-          const res = R2.route(k, P, doc, P.designSettings(ed.proSettings || null), { separate, fence, nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : void 0, timeMs: Math.round(1e3 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : void 0 });
+          const res = R2.route(k, P, doc, P.designSettings(ed.proSettings || null), { separate, fence, nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : void 0, timeMs: Math.round(1e3 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : void 0, fanoutLanes: e.fanout_lanes === false ? false : typeof e.fanout_lanes === "number" ? e.fanout_lanes : void 0 });
           const failed = (res.failed || []).map((f2) => ({ net: f2.net, from: f2.a.map(r44), to: f2.b.map(r44) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);

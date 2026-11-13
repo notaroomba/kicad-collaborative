@@ -731,13 +731,24 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
     const holes: Pt[] = []; for (const v of S.vias) if (isGnd(v.net)) holes.push([v.shape.x, v.shape.y]); for (const f of fps) for (const p of f.pads) if (isGnd(p.net) && p.type === "thru_hole") holes.push([p.x, p.y]);
     const near = (x: number, y: number, r: number) => holes.some((h) => Math.hypot(h[0] - x, h[1] - y) <= r);
     if (planeLayers.some((l) => !outer.has(l)) || planeLayers.length >= 2) {
+      // a pad tied by a short ground track to a via (under a sensor, between two pads) reaches the plane too
+      const gid = new Map<string, number>(); const gpts: Pt[] = []; const gadj: [number, number][][] = [];
+      const gnode = (q: Pt) => { const k = q[0].toFixed(3) + "," + q[1].toFixed(3); let i = gid.get(k); if (i === undefined) { gid.set(k, i = gpts.length); gpts.push(q); gadj.push([]); } return i; };
+      for (const [net, ts] of S.tracksOf) if (isGnd(net)) for (const t of ts) { if (!t.shape || t.shape.t !== "seg") continue; const a = gnode(t.shape.a), b = gnode(t.shape.b); const w = Math.hypot(t.shape.a[0] - t.shape.b[0], t.shape.a[1] - t.shape.b[1]); gadj[a].push([b, w]); gadj[b].push([a, w]); }
+      const atHole = (q: Pt) => holes.some((h) => Math.hypot(h[0] - q[0], h[1] - q[1]) <= 0.35);
+      const tied = (p: Pad, maxLen = 6): boolean => {
+        const dist = new Map<number, number>(); const open: number[] = [];
+        gpts.forEach((q, i) => { if (inBox(p.box, q[0], q[1])) { dist.set(i, 0); open.push(i); } });
+        while (open.length) { const u = open.shift()!; const du = dist.get(u)!; if (atHole(gpts[u])) return true; for (const [v, w] of gadj[u]) { const d = du + w; if (d <= maxLen && (dist.get(v) === undefined || d < dist.get(v)! - 1e-9)) { dist.set(v, d); open.push(v); } } }
+        return false;
+      };
       const lone: string[] = [];
       for (const f of fps) for (const p of f.pads) {
         if (!isGnd(p.net) || p.type !== "smd" || antennas.includes(f)) continue;
         const reach = Math.max(LIMITS.groundViaReach, (Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1])) / 2 + 0.6);
-        if (!near(p.x, p.y, reach)) lone.push(`${f.ref}.${p.number} at ${at(p.x, p.y)}`);
+        if (!near(p.x, p.y, reach) && !tied(p)) lone.push(`${f.ref}.${p.number} at ${at(p.x, p.y)}`);
       }
-      if (lone.length) add("ground.pour_only", "warning", `These ground pads reach the ground plane only through the pour on their own layer: no ground via within ${LIMITS.groundViaReach} mm. Such a joint lasts only while that piece of pour is filled and unbroken; a track routed past it later, or a pour that was never refilled, leaves the pad on its own (the ratsnest lines to ground pads). Give each its own via to the plane: board.ground_pads().`, few(lone, 12));
+      if (lone.length) add("ground.pour_only", "warning", `These ground pads reach the ground plane only through the pour on their own layer: no ground via within ${LIMITS.groundViaReach} mm and no short ground track to one. Such a joint lasts only while that piece of pour is filled and unbroken; a track routed past it later, or a pour that was never refilled, leaves the pad on its own (the ratsnest lines to ground pads). Give each its own via to the plane: board.ground_pads().`, few(lone, 12));
     }
     // pieces of an outer ground pour with no via or through-hole pad in them: islands the plane does not reach
     const islands: string[] = []; let pieces = 0;
