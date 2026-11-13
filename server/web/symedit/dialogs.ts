@@ -4,7 +4,7 @@
 // shape properties and the import / export commands.
 import * as M from "./model";
 import { KD, h, checkbox, select, textInput, form, promptText, confirmBox, download, type GridColumn, type GridApi, type NotebookApi } from "../dialogs/dom";
-import { messageBox, fieldsGrid, openFieldDialog, openTextDialog } from "../dialogs/sch-items";
+import { messageBox, fieldsGrid, openFieldDialog, openTextDialog, swatch } from "../dialogs/sch-items";
 import * as L from "../dialogs/sch-items-logic";
 import { E, appState, api } from "../dialogs/editor";
 import { saveTextDocument } from "../editor/projectfile";
@@ -236,25 +236,69 @@ export async function editText(se: SymbolEditor, id: string): Promise<void> {
 }
 const setBool = M.setBool, setHide = M.setHide;
 export const isHidden = M.isHidden;
-const FILLS: [string, string][] = [["none", "Do not fill"], ["outline", "Fill with body outline color"], ["background", "Fill with body background color"]];
+/**
+ * DIALOG_SHAPE_PROPERTIES in the Symbol Editor: Border (Width, Color, Style), the "Fill Style" box (Do not fill / Fill
+ * with body outline color / Fill with body background color / Fill with: <color>), Private to Symbol Editor, and Common
+ * to all units / body styles (enabled only for a multi-unit / multi-body-style symbol).
+ */
 export function editShape(se: SymbolEditor, id: string): void {
   const sym = se.symbol(); if (!sym) return; const n = nodeOf(sym, id); if (!n) return;
-  const st = K().kid(n as unknown as SNode, "stroke"); const w = st ? K().kid(st, "width") : null; const fl = K().kid(n as unknown as SNode, "fill"); const ft = fl ? K().kid(fl, "type") : null;
+  const root = se.rootSym(sym); const multiUnit = M.unitCount(root) > 1, multiBody = M.bodyStyles(root).count > 1;
+  const sn = n as unknown as SNode;
+  const st = L.readStroke(sn); const fl = K().kid(sn, "fill"); const ft = fl ? K().kid(fl, "type") : null; const fmode = ft ? K().str(ft[1]) : "none";
+  const fcol = L.readFill(sn).color;
   const ref = M.findRef(sym, n)!;
-  const width = lenInput(w ? Number(w[1]) : 0, "shape-width"); const fill = select(FILLS, ft ? K().str(ft[1]) : "none", undefined, { id: "shape-fill" });
-  const allUnits = checkbox("Common to all units in symbol", ref.unit === 0, undefined, { id: "shape-all-units" }), allBodies = checkbox("Common to all body styles", ref.body === 0, undefined, { id: "shape-all-bodies" });
-  const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
+  const ro = se.readOnly();
+  const width = lenInput(Math.max(0, st.width), "shape-width");
+  const style = select(L.LINE_STYLES.map(([v, l]) => [v, l] as [string, string]), st.style, undefined, { id: "shape-style" });
+  const bc = swatch(st.color, "shape-bcolor", undefined, ro);
+  const cbIn = (l: HTMLLabelElement) => l.querySelector("input") as HTMLInputElement;
+  const enableBorder = (on: boolean) => { width.disabled = !on; style.disabled = !on; bc.enable(on && !ro); };
+  const border = checkbox("Border", st.width >= 0, (on) => { enableBorder(on); if (on && !(parseLen(width.value) ?? 0)) width.value = toUser(0); }, { id: "shape-border" });
+  // the fill radios (FILL_T: NO_FILL / FILLED_SHAPE / FILLED_WITH_BG_BODYCOLOR / FILLED_WITH_COLOR)
+  const cur = fmode === "outline" ? "outline" : fmode === "background" ? "background" : fmode === "color" ? "color" : "none";
+  const radio = (v: string, label: string, extra?: Node) => {
+    const i = h("input", { type: "radio", name: "shape-fill", value: v, id: "shape-fill-" + v, style: "width:auto;margin:0" }) as HTMLInputElement; i.checked = cur === v; i.disabled = ro;
+    return h("label", { style: "display:flex;gap:6px;align-items:center" }, i, label, ...(extra ? [extra] : []));
+  };
+  const fc = swatch(cur === "color" ? fcol : null, "shape-fcolor", () => { (document.getElementById("shape-fill-color") as HTMLInputElement).checked = true; }, ro);
+  const priv = checkbox("Private to Symbol Editor", n[1] === "private", undefined, { id: "shape-private" });
+  const allUnits = checkbox("Common to all units in symbol", multiUnit && ref.unit === 0, undefined, { id: "shape-all-units", disabled: !multiUnit });
+  const allBodies = checkbox("Common to all body styles", multiBody && ref.body === 0, undefined, { id: "shape-all-bodies", disabled: !multiBody });
   KD().open({
-    title: `${kindLabel(String(n[0]))} Properties`, width: 420, readOnly: se.readOnly(),
-    build(body) { body.append(form([["Line width:", width, unitName(units())], ["Fill style:", fill, ""]], 3), h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:8px" }, allUnits, allBodies)); },
+    title: `${kindLabel(String(n[0]))} Properties`, width: 440, readOnly: ro,
+    build(body) {
+      const u = unitName(units());
+      body.append(border, form([["Width:", width, u], ["Color:", bc.el, ""], ["Style:", style, ""]], 3),
+        h("div", { style: "font-size:11px;color:var(--ink-3);margin:4px 0 8px" }, "Set border width to 0 to use schematic's default line width."));
+      const box = KD().staticBox(body, "Fill Style");
+      box.append(h("div", { style: "display:flex;flex-direction:column;gap:4px" }, radio("none", "Do not fill"), radio("outline", "Fill with body outline color"), radio("background", "Fill with body background color"),
+        radio("color", "Fill with:", h("span", { style: "margin-left:6px" }, fc.el))));
+      body.append(h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:10px" }, priv, h("div", { style: "height:6px" }), allUnits, allBodies));
+      enableBorder(st.width >= 0);
+    },
     ok() {
       const t = se.tab!;
+      const on = cbIn(border).checked;
+      const mode = (document.querySelector('input[name="shape-fill"]:checked') as HTMLInputElement | null)?.value || "none";
       se.edit("Edit Shape Properties", (s) => {
         const m = nodeOf(s, id); if (!m) return false;
-        const st2 = K().kid(m as unknown as SNode, "stroke"); const w2 = st2 ? K().kid(st2, "width") : null; if (w2) w2[1] = lenOf(width, 0);
-        const f2 = K().kid(m as unknown as SNode, "fill"); const t2 = f2 ? K().kid(f2, "type") : null; if (t2) t2[1] = fill.value;
-        const u = cb(allUnits) ? 0 : t.unit, b = cb(allBodies) ? 0 : t.body; const r2 = M.findRef(s, m)!;
-        if (r2.unit !== u || r2.body !== b) { M.removeDrawItem(s, r2); M.addDrawItem(s, u, b, m); }
+        const ms = m as unknown as SNode; const was = M.text(m);
+        // only what the dialog changed is rewritten, so an untouched shape keeps its text
+        const wNew = on ? Math.max(0, lenOf(width, 0)) : -1;
+        if (wNew !== st.width) { if (wNew >= 0) L.writeStroke(ms, { width: wNew }); else { L.writeStroke(ms, {}); const sk = K().kid(ms, "stroke"); const wd = sk && K().kid(sk, "width"); if (wd) wd[1] = -1 as unknown as SNode; } }
+        if (style.value !== st.style) L.writeStroke(ms, { style: style.value });
+        if (JSON.stringify(bc.get()) !== JSON.stringify(st.color)) L.writeStroke(ms, { color: bc.get() });
+        // the library writer keeps a fill colour only for FILLED_WITH_COLOR
+        if (mode === "color") { if (cur !== "color" || JSON.stringify(fc.get()) !== JSON.stringify(fcol)) L.writeFill(ms, "solid", fc.get()); }
+        else if (mode !== cur) L.put(ms, "fill", [["type", mode]], ["effects", "uuid"]);
+        const isPriv = m[1] === "private"; const want = cbIn(priv).checked;
+        if (want !== isPriv) { if (want) m.splice(1, 0, "private"); else m.splice(1, 1); }
+        const r2 = M.findRef(s, m)!;
+        // a disabled box (one unit / one body style) leaves the item where it is
+        const uu = !multiUnit ? r2.unit : cbIn(allUnits).checked ? 0 : t.unit, bb = !multiBody ? r2.body : cbIn(allBodies).checked ? 0 : t.body;
+        if (r2.unit !== uu || r2.body !== bb) { M.removeDrawItem(s, r2); M.addDrawItem(s, uu, bb, m); }
+        else if (M.text(m) === was) return false;
         return [m];
       });
     },
