@@ -74,6 +74,8 @@ W.KiCadParts = {
 };
 
 installActions();
+// the board tools arrive after the page has started (web/editor/pcbtools-loader.ts): their menu gets the entries then
+window.addEventListener("kc-pcb-tools", installActions);
 if (!registerSource()) {
   // the library module may load after this script
   let tries = 0; const t = setInterval(() => { if (registerSource() || ++tries > 40) clearInterval(t); }, 250);

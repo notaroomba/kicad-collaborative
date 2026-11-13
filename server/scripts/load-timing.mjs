@@ -6,7 +6,7 @@
 // scripts loaded, project info, document text, first picture of the sheet, live session joined.
 //
 //   E2E_PG_URL=… E2E_JWT_SECRET=… [E2E_BASE=http://127.0.0.1:8099] [DEMO=stickhub] [RUNS=5]
-//   [LATENCY=60] [MBPS=20] [OUT=timing.json] node load-timing.mjs
+//   [LATENCY=60] [MBPS=20] [BOARD=1] [OUT=timing.json] node load-timing.mjs
 //
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -47,6 +47,14 @@ const form = new FormData(); form.append('name', DEMO); form.append('archive', n
 const made = await (await fetch(BASE + '/api/projects', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form })).json();
 const projectId = made.projectId;
 if (!projectId) { console.error('upload failed', made); process.exit(1); }
+// BOARD=1 opens the project's board by link instead of its root schematic
+let query = '';
+if (process.env.BOARD) {
+  const info = await (await fetch(`${BASE}/api/projects/${projectId}/info`, { headers: { authorization: `Bearer ${token}`, cookie: `kc_session=${token}` } })).json().catch(() => ({}));
+  const board = (info.docs || []).find((d) => d.docType === 'kicad_pcb');
+  if (!board) { console.error('no board in this project (or the info request was refused)'); process.exit(1); }
+  query = `?doc=${board.docId}`;
+}
 
 const browser = await chromium.launch();
 const median = (a) => { const s = a.filter((v) => v != null).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
@@ -74,7 +82,7 @@ async function load(ctx) {
   const sockets = [];
   page.on('websocket', (ws) => ws.on('framereceived', (f) => { try { const m = JSON.parse(f.payload); if (m.type === 'doc_info' || m.type === 'snapshot') sockets.push([m.type, Date.now()]); } catch { /* binary */ } }));
   const started = Date.now();
-  await page.goto(`${BASE}/p/${projectId}/edit`);
+  await page.goto(`${BASE}/p/${projectId}/edit${query}`);
   await page.waitForFunction(() => window.__t && window.__t.painted, null, { timeout: 30000 });
   await page.waitForTimeout(1500);   // let the live session join
   const r = await page.evaluate(() => {
@@ -90,7 +98,7 @@ async function load(ctx) {
     scripts: end(/\/static\/.*\.js(\?|$)/), scriptsRun: r.dcl,
     jsKb: Math.round(js.reduce((s, x) => s + x.size, 0) / 1024), jsRequests: js.filter((x) => x.size > 0).length,
     me: end(/\/api\/me$/), info: end(/\/api\/projects\/[^/]+\/info/), content: end(/\/api\/(docs\/[^/]+\/content|projects\/[^/]+\/first-doc)/),
-    shown: r.t.shown, painted: r.t.painted,
+    shown: r.marks['kc:doc-parsed'] || r.t.shown, painted: r.marks['kc:first-paint'] || r.t.painted,   // the editor's own marks, where the build has them
     live: sockets.find((s) => s[0] === 'doc_info') ? sockets.find((s) => s[0] === 'doc_info')[1] - started : null,
     requests: r.res.length, marks: r.marks,
   };
@@ -118,7 +126,7 @@ await db.query('DELETE FROM projects WHERE id = $1', [projectId]).catch(() => {}
 await db.end();
 
 const label = { html: 'page', scripts: 'scripts downloaded', scriptsRun: 'scripts run', me: 'who am I', info: 'project info', content: 'schematic text', shown: 'sheet parsed', painted: 'sheet on screen', live: 'live session joined', jsKb: 'script kB over the wire', jsRequests: 'script downloads', requests: 'requests' };
-console.log(`\n${DEMO}, ${LATENCY} ms round trip, ${MBPS} Mbit/s, median of ${RUNS} (ms since navigation)\n`);
+console.log(`\n${DEMO}${query ? ' (board)' : ''}, ${LATENCY} ms round trip, ${MBPS} Mbit/s, median of ${RUNS} (ms since navigation)\n`);
 console.log('stage'.padEnd(26) + 'first visit'.padStart(13) + 'return visit'.padStart(14));
 for (const k of Object.keys(label)) console.log(label[k].padEnd(26) + String(report['first visit'][k]).padStart(13) + String(report['return visit'][k]).padStart(14));
 if (process.env.OUT) fs.writeFileSync(process.env.OUT, JSON.stringify(report, null, 2));

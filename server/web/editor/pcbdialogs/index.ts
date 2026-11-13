@@ -21,8 +21,11 @@ function action(id: string, label: string, key: string, run: Run): void {
   pcb.actions[id] = { label, key: key || null, run: (ctx) => { run(ctx); } };
 }
 
+/** Wire the dialogs into the board tools.  Runs once they are loaded (pcbtools-loader.ts announces it): at start-up they are not. */
+let installed = false;
 export function installPcbDialogs(): void {
-  if (typeof CollabTools === "undefined" || !CollabTools.pcb) return;
+  if (installed || typeof CollabTools === "undefined" || !CollabTools.pcb) return;
+  installed = true;
   if (typeof KDialogs !== "undefined" && KDialogs) (KDialogs as KDialogsApi & { pcbItemDialog?: typeof pcbItemDialog }).pcbItemDialog = pcbItemDialog;   // KDialogs.openItem asks it first
   (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;   // DIALOG_PAD_PROPERTIES in place of the module's short form
   Object.assign(CollabTools.pcb as object, { drcReport, projectNetlist });   // the DRC dialog's run and the project's netlist as data (plugins' kicad-cli)
@@ -46,8 +49,13 @@ export function installPcbDialogs(): void {
   action("zoneFill", "Draft Fill Selected Zone(s)", "", zoneFillSelected);
   (window as unknown as { PcbZoneFill: unknown }).PcbZoneFill = { fillAll: zoneFillAll, fillSelected: zoneFillSelected, run: runZoneFill };
   commitObservers.push((phase, changes, label) => noteCommit(phase, changes as KChange[], label, () => toolCtx({}) as ToolCtx));
-  // the schematic editor's Tools > Update PCB from Schematic… (F8) opens the board and runs the same dialog there
+}
+/** The schematic editor's Tools > Update PCB from Schematic… (F8) opens the board and runs the same dialog there. */
+function installSchActions(): void {
+  if (typeof CollabTools === "undefined") return;
   const sch = CollabTools.sch as (ToolModule & { actions?: Record<string, unknown> }) | undefined;
   if (sch && sch.actions) (sch.actions as Record<string, unknown>).updatePcbFromSchematic = { id: "updatePcbFromSchematic", label: "Update PCB from Schematic...", key: "F8", run: (ctx: ToolCtx) => { void updatePcbFromSchematicEditor(ctx); return true; } };
 }
 installPcbDialogs();
+window.addEventListener("kc-pcb-tools", installPcbDialogs);
+installSchActions();

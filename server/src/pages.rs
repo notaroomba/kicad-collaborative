@@ -97,7 +97,7 @@ pub async fn app_page() -> Response {
     static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let page = PAGE.get_or_init(|| {
         let v = asset_version();
-        let html = include_str!("../static/app.html").replacen("/*BOOT*/", include_str!("../static/dist/boot.js").trim_end(), 1);
+        let html = include_str!("../static/app.html").replacen("/*BOOT*/", &format!("window.__kcAssetV=\"{v}\";{}", include_str!("../static/dist/boot.js").trim_end()), 1);
         let mut out = String::with_capacity(html.len() + 512);
         let mut rest = html.as_str();
         while let Some(at) = rest.find("\"/static/") {

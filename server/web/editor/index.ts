@@ -18,6 +18,7 @@ import "./actions";
 import "./panes";
 import { installSymbolEditor } from "../symedit";
 import "./pcbdialogs";
+import { preloadPcbToolsWhenIdle } from "./pcbtools-loader";
 import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
 import { closeThread, placeComment } from "./comments";
@@ -561,6 +562,8 @@ installLibrary();   // window.KiCadLibrary + the placeFootprint / library browse
 applyTheme();
 
 (async () => { await loadMe(); route(); })();
+// wherever the page started (the projects home included), the board tools are in before a board is likely to be opened
+setTimeout(preloadPcbToolsWhenIdle, 2500);
 
 // exposed for tests and tooling (window.CollabEditor.api)
 E.hotkeys = { comboOf, runKicadAction, kicadActionAvailable };

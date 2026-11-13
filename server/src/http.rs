@@ -1973,6 +1973,8 @@ pub async fn first_doc_content(
     let value = |s: String| axum::http::HeaderValue::from_str(&s).unwrap();
     response.headers_mut().insert(axum::http::HeaderName::from_static("x-snapshot-seq"), value(seq.to_string()));
     response.headers_mut().insert(axum::http::HeaderName::from_static("x-doc-id"), value(doc.id.to_string()));
+    // a board needs the board tools, which the page then starts fetching at once (web/editor/boot.ts)
+    response.headers_mut().insert(axum::http::HeaderName::from_static("x-doc-type"), value(doc.doc_type.clone()));
     Ok(response)
 }
 

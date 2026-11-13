@@ -29,3 +29,6 @@ export function rootSchematicOf<T extends BootDoc>(shown: T[], all: BootDoc[]): 
 export function firstDoc<T extends BootDoc>(shown: T[], all: BootDoc[], wanted: string | null): T | null {
   return shown.find((d) => d.docId === wanted) || rootSchematicOf(shown, all) || shown.find((d) => d.docType === "kicad_pcb") || null;
 }
+
+/** localStorage: the documents (and projects that open on one) this browser has seen to be boards, space separated. */
+export const BOARD_HINT = "kui.boardDocs";

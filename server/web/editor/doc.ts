@@ -17,6 +17,7 @@ import { notePreviewDirty } from "./thumbpush";
 import { releaseLayers } from "./paint";
 import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
 import { editorDocs, firstDoc, rootSchematicOf } from "./bootpick";
+import { ensurePcbTools, noteBoardOpened, preloadPcbToolsWhenIdle } from "./pcbtools-loader";
 import type { Boot } from "./boot";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { GridDef } from "../units";
@@ -362,21 +363,26 @@ export async function openDoc(doc: DocEntry) {
   // The document itself, drawn here and kept current by the op stream; the
   // desktop-pushed render is only a fallback when the file can't be read.
   let ok = false;
+  // a board or a footprint is drawn and edited by the board tools, which the page no longer runs up front
+  const tools = isSch() ? null : ensurePcbTools().catch((e) => { console.warn(e); });
+  if (tools && doc.docType === "kicad_pcb") noteBoardOpened(doc.docId, firstDoc(state.docs!, state.project!.docs, null) === doc ? state.project!.projectId : null);
   try {
-    const own = privateText(doc);   // a board footprint's private copy: no document on the server
+    const own = privateText(doc);
+    if (own !== null && tools) await tools;   // a board footprint's private copy: no document on the server
     if (own !== null) ok = setDocFromText(own);
     else {
       // the document the page asked for as it arrived (boot.ts), when it is this one; otherwise ask now
       const early = takeBoot("content", state.project!.projectId);
       const had = early ? await early : null;
+      if (tools) await tools;
       if (state.docId !== docId) return;
       if (had && had.docId === docId) { performance.mark("kc:doc-text"); ok = setDocFromText(had.text); if (ok) { E.loadedText = had.text; E.loadedOpN = E.opN; } }
       else {
         const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
-        if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; performance.mark("kc:doc-text"); ok = setDocFromText(text); if (ok) { E.loadedText = text; E.loadedOpN = E.opN; } if (ok && doc.docType === "footprint") onFootprintOpened(Number(r.headers.get("x-snapshot-seq")) || 0); }
+        if (r.ok) { const text = await r.text(); if (tools) await tools; if (state.docId !== docId) return; performance.mark("kc:doc-text"); ok = setDocFromText(text); if (ok) { E.loadedText = text; E.loadedOpN = E.opN; } if (ok && doc.docType === "footprint") onFootprintOpened(Number(r.headers.get("x-snapshot-seq")) || 0); }
       }
       // DevTools' Performance panel shows these three (text here, parsed, on screen); scripts/load-timing.mjs reads them
-      if (ok) { performance.mark("kc:doc-parsed"); requestAnimationFrame(() => performance.mark("kc:first-paint")); }
+      if (ok) { performance.mark("kc:doc-parsed"); requestAnimationFrame(() => { performance.mark("kc:first-paint"); if (isSch()) preloadPcbToolsWhenIdle(); }); }
     }
     if (ok && own !== null) onFootprintOpened(0);
   } catch (e) { console.warn(e); }
