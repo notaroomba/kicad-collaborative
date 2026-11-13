@@ -91,7 +91,8 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
 .hp-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 8px; opacity: 0; transition: opacity .25s; }
 .hp-thumb.ok img { opacity: 1; }
 .hp-thumb svg { width: 46%; fill: none; stroke: color-mix(in srgb, var(--blue) 55%, var(--canvas)); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.hp-thumb.load::before { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, #ffffff0d 50%, transparent 70%); background-size: 200% 100%; animation: hp-shimmer 1.4s infinite; }
+.hp-thumb.load svg { opacity: .45; }   /* never an empty box: the outline stands in until the picture is there */
+.hp-thumb.load::before { content: ""; position: absolute; inset: 0; z-index: 1; background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--blue) 16%, transparent) 50%, transparent 70%); background-size: 200% 100%; animation: hp-shimmer 1.4s infinite; }
 @keyframes hp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .hp-item-body { padding: 9px 11px 10px; min-width: 0; }
 .hp-item-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

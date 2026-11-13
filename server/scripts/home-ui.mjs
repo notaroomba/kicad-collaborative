@@ -89,6 +89,8 @@ async function open(token, opts = { viewport: { width: 1280, height: 800 } }, ne
 // List changes run as view transitions, which apply a frame or two after the click.
 const settle = (p) => p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 30)))));
 /** Poll until `fn` is true (the UI answers first and tells the server right after). */
+// The home's drop-downs are <k-select> (web/components/kselect.ts): set the value and say so, as a pick does.
+const pick = (loc, value) => loc.evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, value);
 const until = async (fn, ms = 4000) => { const t = Date.now(); for (;;) { if (await fn()) return true; if (Date.now() - t > ms) return false; await new Promise((r) => setTimeout(r, 100)); } };
 const names = async (p) => { await settle(p); return p.locator('.hp-item:not(.skel) .hp-item-name').allTextContents(); };
 const card = (p, name) => p.locator('.hp-item', { has: p.locator('.hp-item-name', { hasText: new RegExp('^' + name + '$') }) });
@@ -104,6 +106,16 @@ await step('list', async () => {
     gap: innerHeight - document.querySelector('.hp').getBoundingClientRect().bottom, out: [...document.querySelectorAll('#logoutBtn, .hp-logout')].filter((e) => e.getBoundingClientRect().width > 0).length }));
   check('the dashboard has no editor status bar or menus, and fills the window', frame.sb === 0 && frame.menus === 0 && Math.abs(frame.gap) < 1, JSON.stringify(frame));
   check('Log out is one click away, in the top bar and the sidebar', frame.out === 2, JSON.stringify(frame));
+  const unnamed = await a.evaluate(() => [...document.querySelectorAll('.hp-side a, .hp-side button')].filter((e) => !(e.getAttribute('aria-label') || '').trim()).map((e) => e.outerHTML.slice(0, 80)));
+  check('every sidebar link and button has an accessible name', unnamed.length === 0, unnamed.join(' | '));
+  // a picture drawn here is left with the server, so the next visit gets it in one request
+  const drawn = await until(() => a.evaluate(() => [...document.querySelectorAll('.hp-item .hp-thumb')].every((t) => !t.classList.contains('load'))), 20000);
+  const kept = await until(() => a.evaluate((id) => fetch(`/api/projects/${id}/preview.svg`).then((r) => r.status === 200), ids.p3), 8000);
+  check('thumbnails drawn in the browser are kept on the server for next time', drawn && kept, `drawn ${drawn}, kept ${kept}`);
+  const again = await open(ids.ta); await again.waitForSelector('.hp-item:not(.skel)');
+  const t0 = Date.now(); const quick = await until(() => again.evaluate(() => [...document.querySelectorAll('.hp-item .hp-thumb')].every((t) => t.classList.contains('ok') || t.classList.contains('none'))), 5000);
+  check('…so a second visit shows every picture at once', quick && Date.now() - t0 < 2500, `${Date.now() - t0} ms`);
+  await again.close();
   check('alice sees her 3 projects and the one shared with her', (await names(a)).length === 4, (await names(a)).join(', '));
   check('role pills: owner on own, editor on shared', await card(a, 'StickHub').locator('.pill.owner').count() === 1 && await card(a, 'Video card').locator('.pill.editor').count() === 1);
   await a.click('.hp-seg button:has-text("Shared with me")'); check('"Shared with me" filter', (await names(a)).join() === 'Video card');
@@ -112,9 +124,9 @@ await step('list', async () => {
   await a.keyboard.press('/'); await a.keyboard.type('ecc'); check('"/" focuses search and it filters', (await names(a)).join() === 'ECC83 preamp');
   await a.keyboard.type('zzz'); check('no-match message offers a way back', await a.locator('.hp-empty.small button').count() === 1);
   await a.click('.hp-empty.small button'); check('"Show all projects" clears the search', (await names(a)).length === 4);
-  await a.selectOption('select[aria-label="Sort by"]', 'name'); check('sort by name', (await names(a)).join() === 'ECC83 preamp,PIC programmer,StickHub,Video card', (await names(a)).join());
+  await pick(a.locator('k-select[aria-label="Sort by"]'), 'name'); check('sort by name', (await names(a)).join() === 'ECC83 preamp,PIC programmer,StickHub,Video card', (await names(a)).join());
   await a.reload(); await a.waitForSelector('.hp-item:not(.skel)'); check('sort choice survives a reload', (await names(a))[0] === 'ECC83 preamp');
-  await a.selectOption('select[aria-label="Sort by"]', 'updated');
+  await pick(a.locator('k-select[aria-label="Sort by"]'), 'updated');
 });
 
 await step('upload', async () => {
@@ -190,7 +202,7 @@ await step('share', async () => {
   check('invite by username grants access immediately, with an inline note', /bob can now edit/.test(await a.locator('.hp-invite .hp-note').textContent()));
   await b.reload(); await b.waitForSelector('.hp-item:not(.skel)');
   check('bob now sees StickHub as editor', await card(b, 'StickHub').locator('.pill.editor').count() === 1);
-  await a.locator('.hp-people li:has-text("bob") select').selectOption('viewer');
+  await pick(a.locator('.hp-people li:has-text("bob") k-select'), 'viewer');
   await a.waitForTimeout(400);
   const m1 = (await api(ids.ta, `/api/projects/${ids.p3}/members`)).body;
   check('owner changes bob to viewer (server agrees)', m1.members.find((m) => m.login === 'bob')?.role === 'viewer');
@@ -198,7 +210,7 @@ await step('share', async () => {
   await a.locator('.hp-combo input').fill('erin@example.com'); await a.keyboard.press('Enter');
   await a.waitForSelector('.hp-people li.pending');
   check('email invite is pending, and says so', /first time they sign in/.test(await a.locator('.hp-invite .hp-note').textContent()));
-  await a.locator('.hp-people li.pending select').selectOption('viewer');
+  await pick(a.locator('.hp-people li.pending k-select'), 'viewer');
   let m2; for (let i = 0; i < 20; i++) { m2 = (await api(ids.ta, `/api/projects/${ids.p3}/members`)).body; if (m2.pending[0]?.role === 'viewer') break; await a.waitForTimeout(150); }
   check('pending invite role can be changed', m2.pending[0]?.role === 'viewer');
   await a.locator('.hp-combo input').fill('bob'); await a.locator('.hp-combo input').press('Enter');
@@ -234,8 +246,8 @@ await step('share', async () => {
   await a.locator('.hp-people li:has-text("carol") .hp-iconbtn').click(); await a.click('.hp-modal-f .hp-danger');
   await a.waitForSelector('.hp-people li:has-text("carol")', { state: 'detached' });
   check('removing a member takes their access away', (await api(ids.tc, `/api/projects/${ids.p3}`)).status === 403);
-  await a.locator('select[aria-label="General access"]').selectOption('public'); check('general access toggles from the dialog', await toastText(a, /Listed in Explore/));
-  await a.locator('select[aria-label="General access"]').selectOption('private'); await a.waitForTimeout(300);
+  await pick(a.locator('k-select[aria-label="General access"]'), 'public'); check('general access toggles from the dialog', await toastText(a, /Listed in Explore/));
+  await pick(a.locator('k-select[aria-label="General access"]'), 'private'); await a.waitForTimeout(300);
   await a.keyboard.press('Escape'); await a.waitForSelector('.hp-modal', { state: 'detached' });
   check('people count on the card follows the dialog', (await card(a, 'StickHub').locator('.hp-chip').textContent()).trim() === '2', await card(a, 'StickHub').locator('.hp-chip').textContent());
   await c.context().close();
@@ -326,7 +338,7 @@ await step('transfer ownership', async () => {
   await api(ids.ta, `/api/projects/${ids.p1}/invites`, { method: 'POST', json: { login: 'bob', role: 'editor' } });
   const p1 = (await api(ids.ta, '/api/projects')).body.projects.find((x) => x.projectId === ids.p1);
   await menu(a, p1.name, 'Share'); await a.waitForSelector('.hp-people li:has-text("bob")');
-  await a.locator('.hp-people li:has-text("bob") select').selectOption('owner'); await a.waitForSelector('.hp-modal >> text=Transfer ownership'); await a.screenshot({ path: `${out}/18-transfer.png` });
+  await pick(a.locator('.hp-people li:has-text("bob") k-select'), 'owner'); await a.waitForSelector('.hp-modal >> text=Transfer ownership'); await a.screenshot({ path: `${out}/18-transfer.png` });
   await a.locator('.hp-modal-f .btn', { hasText: 'Make owner' }).click(); await toastText(a, /now owns/);
   const after = (await api(ids.tb, `/api/projects/${ids.p1}/members`)).body;
   check('ownership moves to bob and alice stays as an editor', after.owner.login === 'bob' && after.members.some((m) => m.login === 'alice' && m.role === 'editor') && after.canManage === true);
@@ -487,16 +499,16 @@ await step('menu placement', async () => {
 
 await step('share dialog: answers out of order, files dropped on it', async () => {
   await menu(a, 'StickHub 2', 'Share'); await a.waitForSelector('.hp-people li:has-text("bob")');
-  const before = await a.locator('.hp-people li:has-text("bob") select').inputValue();
+  const before = await a.locator('.hp-people li:has-text("bob") k-select').evaluate((el) => el.value);
   const next = before === 'viewer' ? 'editor' : 'viewer';
   let held = 0;
   await a.route(`**/api/projects/${ids.p3}/members`, async (r) => { if (r.request().method() !== 'GET' || held++) return r.continue(); const resp = await r.fetch(); await new Promise((x) => setTimeout(x, 1500)); return r.fulfill({ response: resp }).catch(() => {}); });
   const asked = a.waitForRequest((q) => q.method() === 'GET' && q.url().endsWith(`/api/projects/${ids.p3}/members`));
   await a.locator('.hp-combo input').fill('frank@example.com'); await a.keyboard.press('Enter'); await asked; await a.waitForTimeout(150);
-  await a.locator('.hp-people li:has-text("bob") select').selectOption(next);
+  await pick(a.locator('.hp-people li:has-text("bob") k-select'), next);
   await a.waitForTimeout(2200);
   const srv = (await api(ids.ta, `/api/projects/${ids.p3}/members`)).body.members.find((m) => m.login === 'bob')?.role;
-  check('a member list fetched before a role change does not put the old role back', await a.locator('.hp-people li:has-text("bob") select').inputValue() === next && srv === next, `shown ${await a.locator('.hp-people li:has-text("bob") select').inputValue()}, server ${srv}`);
+  check('a member list fetched before a role change does not put the old role back', await a.locator('.hp-people li:has-text("bob") k-select').evaluate((el) => el.value) === next && srv === next, `shown ${await a.locator('.hp-people li:has-text("bob") k-select').evaluate((el) => el.value)}, server ${srv}`);
   await a.unroute(`**/api/projects/${ids.p3}/members`);
   const dragOver = (sel) => a.evaluate((s) => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.txt')); const ev = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }); document.querySelector(s).dispatchEvent(ev); return ev.defaultPrevented; }, sel);
   check('a file dragged over the Share dialog or its backdrop is not left to the browser', await dragOver('.hp-scrim') && await dragOver('.hp-modal'));

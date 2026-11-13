@@ -137,7 +137,7 @@ function useProjects(kind: "mine" | "gallery", enabled: boolean, userId: number 
 
 // ---------------------------------------------------------------- one project (card or row)
 /** The server's preview when it has one, else the board drawn right here (web/home/thumb.ts) once the card is on screen. */
-function Thumb({ id, stamp }: { id: string; stamp: string }) {
+function Thumb({ id, stamp, canKeep }: { id: string; stamp: string; canKeep?: boolean }) {
   const local = cachedThumb(id, stamp);
   const [src, setSrc] = useState<string | null>(local || `/api/projects/${id}/preview.svg?v=${encodeURIComponent(stamp)}`);
   const [state, setState] = useState<"load" | "ok" | "none">(local ? "ok" : local === null ? "none" : "load");
@@ -146,17 +146,17 @@ function Thumb({ id, stamp }: { id: string; stamp: string }) {
   useEffect(() => {
     if (!fallback) return;
     let live = true;
-    const start = () => localThumb(id, stamp).then((url) => { if (!live) return; if (url) { setSrc(url); setState("ok"); } else setState("none"); });
+    const start = () => localThumb(id, stamp, !!canKeep).then((url) => { if (!live) return; if (url) { setSrc(url); setState("ok"); } else setState("none"); });
     const el = box.current;
     if (!el || typeof IntersectionObserver !== "function") { start(); return () => { live = false; }; }
     const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); start(); } }, { rootMargin: "200px" });
     io.observe(el);
     return () => { live = false; io.disconnect(); };
-  }, [fallback, id, stamp]);
+  }, [fallback, id, stamp, canKeep]);
   return (
     <div className={"hp-thumb " + state} ref={box}>
       {state !== "none" && src && !(fallback && state === "load") ? <img loading="lazy" decoding="async" src={src} alt="" onLoad={() => setState("ok")} onError={() => { if (!fallback) setFallback(true); else setState("none"); }} /> : null}
-      {state === "none" ? <svg viewBox="0 0 64 48" aria-hidden="true"><path d="M10 34h14l6-10h10l6 10h8M24 34v-8M40 24V14h10" /><circle cx="24" cy="24" r="2.5" /><circle cx="50" cy="14" r="2.5" /><circle cx="10" cy="34" r="2.5" /></svg> : null}
+      {state !== "ok" ? <svg viewBox="0 0 64 48" aria-hidden="true"><path d="M10 34h14l6-10h10l6 10h8M24 34v-8M40 24V14h10" /><circle cx="24" cy="24" r="2.5" /><circle cx="50" cy="14" r="2.5" /><circle cx="10" cy="34" r="2.5" /></svg> : null}
     </div>
   );
 }
@@ -199,7 +199,7 @@ function ProjectItem({ p, me, layout, renaming, fresh, onMenu, onRename, onStart
       {picked !== undefined ? <span className="hp-pick" aria-hidden="true">{picked ? <Ic name="check" size={14} /> : null}</span> : null}
       <a className="hp-item-link" ref={link} aria-selected={picked} href={editUrl(p.projectId)} onClick={open} onKeyDown={key} draggable={false}
         onContextMenu={(ev) => { ev.preventDefault(); onMenu(p, { x: ev.clientX, y: ev.clientY }); }} aria-label={`Open ${p.name}`}>
-        <Thumb id={p.projectId} stamp={p.updatedAt} />
+        <Thumb id={p.projectId} stamp={p.updatedAt} canKeep={owned || p.role === "editor"} />
         <div className="hp-item-body">
           {renaming ? (
             <input className="hp-input hp-rename" defaultValue={p.name} maxLength={120} autoFocus aria-label="Project name"
@@ -806,8 +806,8 @@ export function Home() {
 
   const nav = (
     <>
-      <a className={tab === "projects" ? "on" : undefined} href="/" aria-current={tab === "projects" ? "page" : undefined} onClick={(ev) => { ev.preventDefault(); go("/"); }}><Ic name="projects" size={18} /><span>Projects</span></a>
-      <a className={tab === "explore" ? "on" : undefined} href="/gallery" aria-current={tab === "explore" ? "page" : undefined} onClick={(ev) => { ev.preventDefault(); go("/gallery"); }}><Ic name="explore" size={18} /><span>Explore</span></a>
+      <a aria-label="Projects" className={tab === "projects" ? "on" : undefined} href="/" aria-current={tab === "projects" ? "page" : undefined} onClick={(ev) => { ev.preventDefault(); go("/"); }}><Ic name="projects" size={18} /><span>Projects</span></a>
+      <a aria-label="Explore" className={tab === "explore" ? "on" : undefined} href="/gallery" aria-current={tab === "explore" ? "page" : undefined} onClick={(ev) => { ev.preventDefault(); go("/gallery"); }}><Ic name="explore" size={18} /><span>Explore</span></a>
     </>
   );
   const accountBtn = me ? (
@@ -820,21 +820,21 @@ export function Home() {
     <>
       {home ? (
         <div className="hp">
-          <aside className="hp-side">
-            <nav className="hp-nav" aria-label="Home">{nav}</nav>
+          <aside className="hp-side" aria-label="Projects navigation">
+            <nav className="hp-nav" aria-label="Views">{nav}</nav>
             <div className="hp-side-acts">
-              <button type="button" className="hp-side-btn" onClick={() => startUpload()}><Ic name="plus" size={18} /><span>New project</span></button>
-              <button type="button" className="hp-side-btn" onClick={() => setJoin(true)}><Ic name="link" size={18} /><span>Join with link</span></button>
-              {me ? <a className={"hp-side-btn" + (tab === "trash" ? " on" : "")} href="/trash" onClick={(ev) => { ev.preventDefault(); go("/trash"); }}><Ic name="trash" size={18} /><span>Trash</span></a> : null}
-              {me ? <a className="hp-side-btn" href="/github"><Ic name="branch" size={18} /><span>Import from GitHub</span></a> : null}
-              {me ? <button type="button" id="homeParts" className="hp-side-btn" onClick={() => (window as unknown as { KiCadParts?: { open(o: { tab: string }): void } }).KiCadParts?.open({ tab: "libraries" })}><Ic name="grid" size={18} /><span>Part libraries</span></button> : null}
-              {me ? <button type="button" id="homePlugins" className="hp-side-btn" onClick={() => (window as unknown as { KcPlugins?: { openManager(): void } }).KcPlugins?.openManager()}><Ic name="plugin" size={18} /><span>Plugins</span></button> : null}
-              {me ? <a className="hp-side-btn" id="homeConnect" href="/connect"><Ic name="link" size={18} /><span>Connect AI</span></a> : null}
+              <button type="button" aria-label="New project" className="hp-side-btn" onClick={() => startUpload()}><Ic name="plus" size={18} /><span>New project</span></button>
+              <button type="button" aria-label="Join with link" className="hp-side-btn" onClick={() => setJoin(true)}><Ic name="link" size={18} /><span>Join with link</span></button>
+              {me ? <a aria-label="Trash" aria-current={tab === "trash" ? "page" : undefined} className={"hp-side-btn" + (tab === "trash" ? " on" : "")} href="/trash" onClick={(ev) => { ev.preventDefault(); go("/trash"); }}><Ic name="trash" size={18} /><span>Trash</span></a> : null}
+              {me ? <a aria-label="Import from GitHub" className="hp-side-btn" href="/github"><Ic name="branch" size={18} /><span>Import from GitHub</span></a> : null}
+              {me ? <button type="button" id="homeParts" aria-label="Part libraries" className="hp-side-btn" onClick={() => (window as unknown as { KiCadParts?: { open(o: { tab: string }): void } }).KiCadParts?.open({ tab: "libraries" })}><Ic name="grid" size={18} /><span>Part libraries</span></button> : null}
+              {me ? <button type="button" id="homePlugins" aria-label="Plugins" className="hp-side-btn" onClick={() => (window as unknown as { KcPlugins?: { openManager(): void } }).KcPlugins?.openManager()}><Ic name="plugin" size={18} /><span>Plugins</span></button> : null}
+              {me ? <a aria-label="Connect AI" className="hp-side-btn" id="homeConnect" href="/connect"><Ic name="link" size={18} /><span>Connect AI</span></a> : null}
             </div>
             <div className="hp-side-foot">
-              <a className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>
+              <a aria-label="Get the desktop app" className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>
               {accountBtn}
-              {me ? <button type="button" className="hp-side-btn hp-logout" onClick={() => signOut()}><Ic name="signout" size={18} /><span>Log out</span></button> : null}
+              {me ? <button type="button" aria-label="Log out" className="hp-side-btn hp-logout" onClick={() => signOut()}><Ic name="signout" size={18} /><span>Log out</span></button> : null}
             </div>
           </aside>
           <main className="hp-main" id="homeMain">
