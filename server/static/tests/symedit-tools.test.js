@@ -196,6 +196,38 @@ await test("ARC_TANGENT seed: a polyline end or an arc end gives the direction t
   assert.deepStrictEqual(n(M.arcTangentSeed(sym, [20, 0])), [0, -1], "leaving the start backwards");
   assert.strictEqual(M.arcTangentSeed(sym, [5, 5]), null);
 });
+await test("Properties panel: SCH_PIN rows in internal Y-down coordinates, edits go back to the file", () => {
+  const SP = load("symedit/props.ts");
+  const sym = M.node('(symbol "R" (property "Reference" "R" (at 0 0 0) (show_name no) (do_not_autoplace no) (effects (font (size 1.27 1.27)))) (property "Value" "R" (at 0 0 0) (effects (font (size 1.27 1.27)))) (symbol "R_1_1" (rectangle (start -1.016 2.54) (end 1.016 -2.54) (stroke (width 0.254) (type default)) (fill (type none))) (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))');
+  const pin = M.allPins(sym)[0];
+  const rows = SP.itemRows(sym, { node: pin.node, unit: 1, body: 1 });
+  assert.deepStrictEqual(rows.map((r) => r.name), ["Pin Name", "Pin Number", "Electrical Type", "Graphic Style", "Position X", "Position Y", "Orientation", "Length", "Name Text Size", "Number Text Size", "Visible"]);
+  assert.strictEqual(rows.find((r) => r.name === "Position Y").value, "-3.81", "eeschema shows Y down");
+  SP.setItemProp(sym, { node: pin.node, unit: 1, body: 1 }, "Position Y", "-5.08");
+  assert.match(M.text(pin.node), /\(at 0 5\.08 270\)/);
+  SP.setItemProp(sym, { node: pin.node, unit: 1, body: 1 }, "Length", "2.54");   // ChangeLength keeps the body end
+  assert.match(M.text(pin.node), /\(at 0 6\.35 270\) \(length 2\.54\)/);
+  const rect = M.drawItems(sym).find((d) => d.node[0] === "rectangle");
+  const rr = SP.itemRows(sym, { node: rect.node, unit: 1, body: 1 });
+  assert.deepStrictEqual(rr.map((r) => r.name), ["Private", "Shape", "Start X", "Start Y", "End X", "End Y", "Width", "Height", "Line Width", "Line Style", "Fill Mode"]);
+  assert.strictEqual(rr.find((r) => r.name === "Line Style").value, "solid", "a default stroke shows Solid");
+  assert.strictEqual(rr.find((r) => r.name === "Height").value, "5.08");
+  SP.setItemProp(sym, { node: rect.node, unit: 1, body: 1 }, "Fill Mode", "background");
+  SP.setItemProp(sym, { node: rect.node, unit: 1, body: 1 }, "Private", "1");
+  assert.match(M.text(rect.node), /^\(rectangle private .*\(fill \(type background\)\)/);
+  const f = M.fieldOf(sym, "Reference");
+  const fr = SP.itemRows(sym, { node: f, unit: 0, body: 0 });
+  assert.ok(!fr.some((r) => r.name === "Private"), "a mandatory field has no Private");
+  SP.setItemProp(sym, { node: f, unit: 0, body: 0 }, "Show Field Name", "1");
+  SP.setItemProp(sym, { node: f, unit: 0, body: 0 }, "Bold", "1");
+  assert.match(M.text(f), /\(show_name yes\) \(do_not_autoplace no\) \(effects \(font \(size 1\.27 1\.27\) \(bold yes\)\)\)/);
+  const sr = SP.symbolRows(sym, sym);
+  assert.deepStrictEqual([...new Set(sr.map((r) => r.group))], ["Fields", "Symbol Definition", "Pin Display", "Attributes", "Units and Body Styles"]);
+  assert.ok(SP.setSymbolProp(sym, "Units are Interchangeable", "0")); assert.ok(M.unitsLocked(sym));
+  assert.ok(SP.setSymbolProp(sym, "Exclude from Board", "1")); assert.match(M.text(sym), /\(on_board no\)/);
+  const mixed = SP.sharedRows([[{ group: "G", name: "A", type: "text", value: "x" }], [{ group: "G", name: "A", type: "text", value: "y" }, { group: "G", name: "B", type: "text", value: "z" }]]);
+  assert.deepStrictEqual(mixed.map((r) => [r.name, r.value, r.mixed]), [["A", "", true]]);
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();

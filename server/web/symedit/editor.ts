@@ -20,6 +20,7 @@ import { toolCursor } from "../editor/cursors";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
 import { fitMenu } from "../menufit";
 import * as D from "./dialogs";
+import * as SP from "./props";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
@@ -74,6 +75,7 @@ export class SymbolEditor {
   cur = -1;
   tool: ToolId = "select";
   showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = true; showTree = true; showProps = true;
+  propsCollapsed = new Set<string>();
   /** the window's grid.show and cursor shape (COMMON_TOOLS::ToggleGrid, CursorSmall/Full/45Crosshairs), remembered per browser */
   showGrid = viewPref("grid", true) as boolean; crosshair = viewPref("crosshair", "small") as "small" | "full" | "45";
   /** ACTION_TOOLBAR groups: the action each group's button shows (SelectToolbarAction) */
@@ -805,22 +807,71 @@ export class SymbolEditor {
   }
 
   // properties panel / message panel ------------------------------------------
+  /** SCH_PROPERTIES_PANEL: the selection's PROPERTY_MANAGER rows, editable; nothing selected = the symbol itself. */
   renderProps(): void {
-    const p = this.el.props; if (!p || !this.showProps) return; p.innerHTML = "";
-    const sym = this.symbol(); const t = this.tab; if (!sym || !t) { p.append(h("h4", null, "Properties"), h("div", { style: "color:var(--ink-3)" }, "No symbol")); return; }
-    const sel = [...t.sel]; const kv = h("div", { class: "kv" });
-    const add = (k: string, v: string) => kv.append(h("span", null, k), h("span", null, v));
-    if (sel.length === 1) {
-      const n = nodeOf(sym, sel[0]);
-      if (n && n[0] === "pin") { const i = M.pinInfo(n); p.append(h("h4", null, "Pin")); add("Name", i.name); add("Number", i.number); add("Type", D.typeLabel(i.type)); add("Style", D.shapeLabel(i.shape)); add("Length", this.fmt(i.length)); add("Position X", this.fmt(i.x)); add("Position Y", this.fmt(i.y)); add("Orientation", D.orientLabel(i.orient)); add("Visible", i.visible ? "Yes" : "No"); }
-      else if (n && n[0] === "property") { p.append(h("h4", null, "Field")); add("Name", String(n[1])); add("Text", String(n[2])); }
-      else if (n) { p.append(h("h4", null, D.kindLabel(String(n[0])))); }
-    } else if (sel.length > 1) p.append(h("h4", null, `${sel.length} items selected`));
-    else {
-      p.append(h("h4", null, "Symbol"));
-      add("Name", M.symName(sym)); add("Reference", M.fieldValue(sym, "Reference")); add("Value", M.fieldValue(sym, "Value")); add("Units", String(M.unitCount(this.rootSym(sym)))); add("Pins", String(M.allPins(sym).length));
+    const p = this.el.props; if (!p || !this.showProps) return;
+    const keep = p.querySelector<HTMLElement>(".se-pgrid"); const scroll = keep ? keep.scrollTop : 0;
+    p.innerHTML = "";
+    const sym = this.symbol(); const t = this.tab; if (!sym || !t) { p.append(h("div", { class: "se-pcap" }, "No objects selected")); return; }
+    const root = this.rootSym(sym); const ro = this.readOnly();
+    const items: SP.SPItem[] = [];
+    for (const id of t.sel) { const n = nodeOf(sym, id); if (!n) continue; const r = n[0] === "property" ? null : M.findRef(sym, n); items.push({ node: n, unit: r ? r.unit : 0, body: r ? r.body : 0 }); }
+    const rows = items.length ? SP.sharedRows(items.map((it) => SP.itemRows(root, it))) : SP.symbolRows(sym, root).map((r) => ({ ...r, mixed: false }));
+    const title = items.length > 1 ? `${items.length} objects selected` : items.length ? SP.friendlyName(items[0].node) : "Symbol";
+    p.append(h("div", { class: "se-pcap", "data-prop-title": "" }, title));
+    const grid = h("div", { class: "se-pgrid" }); p.append(grid);
+    const commit = (row: SP.SPRow, value: string): void => {
+      const ids = [...t.sel]; let ok = true;
+      const label = "Edit Properties";   // SCH_PROPERTIES_PANEL::valueChanged
+      if (!ids.length) this.edit(label, (s) => { if (SP.setSymbolProp(s, row.name, value)) return; ok = false; return false; });
+      else this.edit(label, (s) => {
+        const out: M.Node[] = [];
+        for (const id of ids) {
+          const n = nodeOf(s, id); if (!n) continue; const r = n[0] === "property" ? null : M.findRef(s, n);
+          const got = SP.setItemProp(s, { node: n, unit: r ? r.unit : 0, body: r ? r.body : 0 }, row.name, value);
+          if (!got) { ok = false; return false; } out.push(got);
+        }
+        return out;
+      });
+      if (!ok) this.infoBarError(`Invalid value for ${row.name}`);
+      this.renderProps();
+    };
+    let group = "";
+    for (const r of rows) {
+      if (r.group !== group) {
+        group = r.group; const g = group; const shut = this.propsCollapsed.has(g);
+        const head = h("div", { class: "se-pgroup", "data-prop-group": g }, h("span", { class: "tw" }, shut ? "\u25b8" : "\u25be"), g);
+        head.addEventListener("click", () => { if (this.propsCollapsed.has(g)) this.propsCollapsed.delete(g); else this.propsCollapsed.add(g); this.renderProps(); });
+        grid.append(head);
+      }
+      if (this.propsCollapsed.has(group)) continue;
+      const dis = ro || !!r.readOnly;
+      let ed: HTMLElement;
+      if (r.type === "bool") {
+        const c = h("input", { type: "checkbox", "data-prop": r.name, disabled: dis }) as HTMLInputElement; c.checked = r.value === "1"; c.indeterminate = r.mixed;
+        c.addEventListener("change", () => commit(r, c.checked ? "1" : "0")); ed = h("span", { class: "cb" }, c);
+      } else if (r.type === "enum") {
+        const s = h("k-select", { "data-prop": r.name, disabled: dis, "aria-label": r.name }) as HTMLSelectElement;
+        if (r.mixed) s.append(h("option", { value: "" }, ""));
+        for (const [k, l] of r.choices || []) s.append(h("option", { value: k }, l));
+        s.value = r.value; s.addEventListener("change", () => { if (s.value !== "") commit(r, s.value); }); ed = s;
+      } else {
+        const len = r.type === "length" || r.type === "coord";
+        const shown = r.mixed ? "" : len ? this.fmt(Number(r.value)) : r.value;
+        const i = h("input", { type: "text", "data-prop": r.name, value: shown, disabled: dis, spellcheck: "false", autocomplete: "off" }) as HTMLInputElement;
+        const done = () => {
+          if (i.value === shown) return;
+          let v = i.value;
+          if (len) { const mm = D.parseLen(v); if (mm === null) { this.infoBarError(`Invalid value for ${r.name}`); i.value = shown; return; } v = M.fmt(mm); }
+          else if (r.type === "int") { if (!/^\s*\d+\s*$/.test(v)) { i.value = shown; return; } v = String(parseInt(v, 10)); }
+          commit(r, v);
+        };
+        i.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(); } else if (ev.key === "Escape") { i.value = shown; i.blur(); } });
+        i.addEventListener("change", done); ed = i;
+      }
+      grid.append(h("div", { class: "se-prow" + (dis ? " ro" : ""), "data-prop-row": r.group + "/" + r.name }, h("span", { class: "k", title: r.name }, r.name), h("span", { class: "v" }, ed)));
     }
-    p.append(kv);
+    grid.scrollTop = scroll;
   }
   renderMsg(): void {
     const el = this.el.msg; if (!el) return; el.innerHTML = "";
