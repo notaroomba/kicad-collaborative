@@ -136,6 +136,8 @@ export interface SheetContext {
   fileName?: string; filePath?: string; fileRoot?: string; sheetName?: string; sheetPath?: string; projectName?: string;
   projectVars?: Record<string, string> | null; kicadVersion?: string; sheetLayer?: string; sheetVars?: Record<string, string> | null;
   isFirstPage?: boolean;
+  /** the session's current design variant (${VARIANT}, empty for the default) and its description (${VARIANT_DESC}) */
+  variantName?: string; variantDesc?: string;
   /** the document's own (kicad_wks …), parsed; null for KiCad's built-in sheet */
   drawingSheet?: import("./sheet").DrawingSheet | null;
 }

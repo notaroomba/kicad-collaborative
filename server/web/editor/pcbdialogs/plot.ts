@@ -87,8 +87,9 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
   // ---------------------------------------------------------------- the controls
   const fmtSel = selectField<number>(FORMATS.some(([f]) => f === p.format) ? p.format : 1, FORMATS, { key: "format", onChange: () => setPlotFormat() });
   const outDir = textField(opts.outputDir !== undefined ? opts.outputDir : p.outputDirectory, { key: "outputDir" });
-  // Design variant: GetVariantNamesForUI, the default first (the board has no current variant in the web editor)
-  const variantSel = selectField<string>(opts.variant && variants.includes(opts.variant) ? opts.variant : variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
+  // Design variant: GetVariantNamesForUI, the default first; it opens on the board's current variant (the toolbar's)
+  const cur = String((E as { currentVariant?: string }).currentVariant || "");
+  const variantSel = selectField<string>(cur && variants.includes(cur) ? cur : opts.variant && variants.includes(opts.variant) ? opts.variant : variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
   /** getSelectedVariant: empty for the default */
   const selectedVariant = (): string => (variantSel.get() !== variants[0] ? variantSel.get() : "");
   outDir.input.title = "Target directory for plot files. Can be absolute or relative to the board file location.";

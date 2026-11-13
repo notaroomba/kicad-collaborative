@@ -7,10 +7,12 @@
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { box, checkField, form, grid, h, coordField, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { E } from "../state";
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
 import { tableDialog } from "./table";
 import { boardXref } from "./xref";
+import * as VM from "../../canvas/variant-model";
 import { syntaxHelpLink } from "../syntax-help";
 import { refImageDialog } from "./refimage";
 
@@ -469,9 +471,13 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const MAND = ["Reference", "Value", "Datasheet", "Description"];
     const label = (n: string): string => (n === "Reference" ? "Reference designator" : n);
     const xref = boardXref(doc);   // field text shows cross-references as ${REF:FIELD} (dialog_footprint_properties.cpp:272, 603)
+    // the board's current variant (the toolbar's): fields and the DNP / BOM / position-file / simulation flags show
+    // and write the footprint's (variant …) (dialog_footprint_properties.cpp:263-312, 586-715)
+    const variant = String((E as { currentVariant?: string }).currentVariant || "");
+    const fieldText = (p: SNode): string => (variant ? VM.footprintFieldForVariant(node, variant, String(p[1])) : sval(p, 2));
     const rows: Record<string, CellValue>[] = props(node).map((p) => {
       const fx = FH().fieldEffects(p), a = FH().fieldAt(p), e = kid(p, "effects"), f = e ? kid(e, "font") : null, sz = f ? kid(f, "size") : null;
-      return { name: String(p[1]), label: label(String(p[1])), value: xref.toRefs(sval(p, 2)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
+      return { name: String(p[1]), label: label(String(p[1])), value: xref.toRefs(fieldText(p)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
     });
     const g = grid([{ label: "Name", key: "label", type: "ro", width: "130px" }, { label: "Value", key: "value" }, { label: "Show", key: "show", type: "check" }, { label: "Width", key: "w", type: "len" }, { label: "Height", key: "ht", type: "len" }, { label: "Thickness", key: "th", type: "len" },
       { label: "Italic", key: "italic", type: "check" }, { label: "Layer", key: "layer", type: "select", options: allLayers(doc), width: "120px" }, { label: "Orientation", key: "rot", type: "num" }, { label: "X Offset", key: "x", type: "len" }, { label: "Y Offset", key: "y", type: "len" }], rows, { ro, height: "170px" });
@@ -482,7 +488,9 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const attrs = PH().footprintAttrs(node);
     const type = selectField<string>(attrs.type, [["through_hole", "Through hole"], ["smd", "SMD"], ["", "Unspecified"]], { ro, key: "fpType" });
     const FLAGS: [string, string][] = [["board_only", "Not in schematic"], ["dnp", "Do not populate"], ["exclude_from_bom", "Exclude from bill of materials"], ["exclude_from_pos_files", "Exclude from position files"]];
-    const flags = FLAGS.map(([k, l]) => ({ k, f: checkField(!!attrs[k], l, { ro, key: k }) }));
+    const vflags = variant ? VM.footprintFlagsForVariant(node, variant) : null;
+    const flagOf = (k: string): boolean => (vflags && k in vflags ? vflags[k as keyof VM.FpFlags] : !!attrs[k]);
+    const flags = FLAGS.map(([k, l]) => ({ k, f: checkField(flagOf(k), l, { ro, key: k }) }));
     // clearance overrides: blank means "use the Board Setup value"
     const ov = (key: string, k: string): Field<number> => lenField(kid(node, key) ? nval(kid(node, key)) : NaN, { ro, key: k, allowEmpty: true });
     const clr = ov("clearance", "padClearance"), mask = ov("solder_mask_margin", "maskExpansion"), paste = ov("solder_paste_margin", "pasteClearance");
@@ -497,12 +505,13 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
       box("Pad Connections", form([["Pad connection to zones:", zone.el]], true)));
     body.append(notebook([{ label: "General", build: (el) => el.append(general) }, { label: "Clearance Overrides & Pad Connections", build: (el) => el.append(clearances) }]).el);
     return (n) => {
-      const list = props(n);
+      const list = props(n); const variantFields: Record<string, string> = {};
       for (const r of g.rows()) {
         const p = list.find((q) => String(q[1]) === r.name); if (!p) continue;
         if (MAND.slice(0, 1).includes(String(r.name)) && !String(r.value).trim()) return "Reference designator cannot be empty.";
         const fx = FH().fieldEffects(p), a = FH().fieldAt(p), e = kid(p, "effects"), f = e ? kid(e, "font") : null, sz = f ? kid(f, "size") : null;
-        if (String(r.value) !== xref.toRefs(sval(p, 2))) { const v = xref.toKiids(String(r.value)); if (v !== sval(p, 2)) p[2] = v; }
+        if (variant) { if (String(r.value) !== xref.toRefs(fieldText(p))) variantFields[String(r.name)] = xref.toKiids(String(r.value)); }
+        else if (String(r.value) !== xref.toRefs(sval(p, 2))) { const v = xref.toKiids(String(r.value)); if (v !== sval(p, 2)) p[2] = v; }
         if (!!r.show === FH().fieldHidden(p)) FH().setFieldHidden(n, p, !r.show);
         const w = Number(r.w), ht = Number(r.ht), th = Number(r.th);
         if (isFinite(w) && isFinite(ht) && f && (w !== nval(sz, 2, fx.size) || ht !== nval(sz, 1, fx.size))) put(f, "size", `(size ${f6(ht)} ${f6(w)})`, ["thickness", "bold", "italic"]);
@@ -516,8 +525,15 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
       if (rot.get() !== (side.get() !== side0 ? now[2] || 0 : at[2] || 0)) PH().setFootprintRotation(n, rot.get());
       if (x.get() !== at[0] || y.get() !== at[1]) PH().setFootprintPosition(n, x.get(), y.get());
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
-      const next: Record<string, unknown> = { type: type.get() }; for (const f of flags) next[f.k] = f.f.get();
-      if (next.type !== attrs.type || flags.some((f) => f.f.get() !== !!attrs[f.k])) PH().setFootprintAttrs(n, next);
+      const next: Record<string, unknown> = { type: type.get() };
+      if (variant) {
+        // the variant takes the flags and the field values; the footprint keeps its own (board_only stays the footprint's)
+        for (const f of flags) next[f.k] = f.k in (vflags || {}) ? !!attrs[f.k] : f.f.get();
+        const vpatch: Partial<VM.FpFlags> = {}; let vchanged = Object.keys(variantFields).length > 0;
+        for (const f of flags) if (vflags && f.k in vflags && f.f.get() !== vflags[f.k as keyof VM.FpFlags]) { vpatch[f.k as keyof VM.FpFlags] = f.f.get(); vchanged = true; }
+        if (vchanged) { const out = VM.setFootprintVariant(n, variant, { flags: vpatch, fields: variantFields }); n.splice(0, n.length, ...out); }
+      } else for (const f of flags) next[f.k] = f.f.get();
+      if (next.type !== attrs.type || flags.some((f) => !!next[f.k] !== !!attrs[f.k])) PH().setFootprintAttrs(n, next);
       const AFTER = ["solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "attr", "net_tie_pad_groups", "fp_text", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "pad", "embedded_fonts", "model"];
       const setOv = (key: string, f: Field<number>, before: string[]): void => { const v = f.get(); if (isFinite(v)) { if (!kid(n, key) || nval(kid(n, key)) !== v) put(n, key, `(${key} ${f6(v)})`, before); } else put(n, key, null); };
       setOv("solder_mask_margin", mask, AFTER); setOv("solder_paste_margin", paste, AFTER.slice(1)); setOv("clearance", clr, AFTER.slice(3));

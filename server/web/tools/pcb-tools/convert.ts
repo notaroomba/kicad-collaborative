@@ -10,6 +10,7 @@ import { lineNode, polyNode, ruleAreaNode, segmentNode, zoneNode } from "./nodes
 import { netUnder, padCovers, padOnLayer, padsOf } from "./route-geom";
 import { K } from "./state";
 import { transformChanges } from "./transforms";
+import * as VM from "../../canvas/variant-model";
 import { corners, isList, layerOf, pt, r6 } from "./util";
 
 // ---------------------------------------------------------------- pads
@@ -85,10 +86,24 @@ export function zonePriorityChanges(doc: BoardDoc, ids: Iterable<string>, how: s
     const p = K.kid(n, "priority"); if (want) { if (p) p[1] = want; else n.splice(n.indexOf((K.kid(n, "connect_pads") || K.kid(n, "min_thickness"))!), 0, ["priority", want]); } else if (p) n.splice(n.indexOf(p), 1);
   });
 }
-export function footprintAttrChanges(doc: BoardDoc, ids: Iterable<string>, flag: string) {
-  return transformChanges(doc, ids, (n, it: KItem) => {
-    if (it.kind !== "footprint") return false; let a = K.kid(n, "attr"); const toks = a ? a.slice(1).map(K.str) : []; const i = toks.indexOf(flag);
+/** EDIT_TOOL::ToggleFootprintAttribute: the flag goes on for every selected footprint when any of them lacks it (as
+ *  the current variant shows it), else off for all.  With a current variant (the toolbar's) the footprint's
+ *  (variant …) takes the flag (created from the footprint's own flags, FOOTPRINT::AddVariant), not its (attr …). */
+export function footprintAttrChanges(doc: BoardDoc, ids: Iterable<string>, flag: string, variant?: string) {
+  const list = [...ids];
+  const v = variant !== undefined ? variant : String(((globalThis as unknown as { CollabEditor?: { currentVariant?: string } }).CollabEditor || {}).currentVariant || "");
+  const key = flag as keyof VM.FpFlags;
+  let on = false;
+  for (const id of list) { const it = doc.items.get(id); if (it && it.kind === "footprint" && !VM.footprintFlagsForVariant(it.node, v)[key]) { on = true; break; } }
+  return transformChanges(doc, list, (n, it: KItem) => {
+    if (it.kind !== "footprint") return false;
+    if (v && !VM.isDefaultVariant(v)) { const out = VM.setFootprintVariant(n, v, { flags: { [key]: on } }); n.splice(0, n.length, ...out); return; }
+    let a = K.kid(n, "attr"); const toks = a ? a.slice(1).map(K.str) : []; const i = toks.indexOf(flag);
+    if (on === (i >= 0)) return;
     if (i >= 0) toks.splice(i, 1); else toks.push(flag);
+    // the writer's token order (pcb_io_kicad_sexpr.cpp format footprint (attr …))
+    const ORDER = ["smd", "through_hole", "board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "allow_missing_courtyard", "dnp", "allow_soldermask_bridges"];
+    toks.sort((x, y) => { const a1 = ORDER.indexOf(x), b1 = ORDER.indexOf(y); return (a1 < 0 ? 99 : a1) - (b1 < 0 ? 99 : b1); });
     if (!toks.length) { n.splice(n.indexOf(a!), 1); return; } if (a) a.splice(1, a.length - 1, ...toks); else { const before = n.find((c) => isList(c) && /^(fp_|pad|model|embedded_fonts)/.test(c[0] as string)); n.splice(before ? n.indexOf(before) : n.length, 0, ["attr", ...toks]); }
   });
 }

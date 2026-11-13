@@ -1,4 +1,5 @@
 import type { SAtom, SchCtx } from "./types";
+import * as VM from "../../canvas/variant-model";
 import { root } from "../root";
 import { symbolLibId } from "./autoplace";
 import { refField, setReference, unannotated } from "./clipboard";
@@ -109,6 +110,8 @@ export function editFieldPrompt(ctx: SchCtx, name: string, title: string, quiet:
   return true;
 }
 export function insertField(node: SNode, p: SNode) { const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances")); if (at >= 0) node.splice(at, 0, p); else node.push(p); }
+/** The variant flag (SCH_SYMBOL_VARIANT) each attribute token sets. */
+const VARIANT_FLAG: Record<string, keyof VM.SymFlags> = { dnp: "dnp", in_bom: "excludedFromBOM", exclude_from_sim: "excludedFromSim", on_board: "excludedFromBoard", in_pos_files: "excludedFromPosFiles" };
 export const FLAG_KEYS: Record<string, string[]> = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"], setExcludeFromPosFiles: ["in_pos_files", "no", "yes"] };
 /** The token the s-expression writer puts each attribute flag after, for a node that does not have it yet. */
 const FLAG_AFTER: Record<string, string[]> = { exclude_from_sim: ["body_style", "convert", "unit", "mirror", "at", "lib_id"], in_bom: ["exclude_from_sim"], on_board: ["in_bom"], in_pos_files: ["on_board"], dnp: ["in_pos_files", "on_board"] };
@@ -133,8 +136,14 @@ export function toggleSymbolFlag(ctx: SchCtx, which: string) {
   const kinds = which === "setExcludeFromPosFiles" ? ["symbol"] : ["symbol", "sheet", "rule_area"];
   const items = selectedItems(ctx).filter((it) => kinds.includes(it.kind)); if (!items.length) return false;
   // KiCad's defaults when the token is missing: in the BOM, on the board and in the position files; not DNP or excluded from simulation
-  const isOn = (n: SNode) => { const k = kid(n, key); return !!k && str(k[1]) === onVal; };
-  const set = (n: SNode, on: boolean) => withFlag(n, key, on ? onVal : offVal);
+  // with a current variant (the toolbar's) the symbol's instance variant takes the flag (SCH_EDIT_TOOL::SetAttribute
+  // per variant); the variant is created from the symbol's own flags and dropped once it differs in nothing
+  const variant = String((root.CollabEditor && (root.CollabEditor as { currentVariant?: string }).currentVariant) || "");
+  const vf = VARIANT_FLAG[key];
+  const isOn = variant && vf ? (n: SNode) => VM.symbolFlagsForVariant(n, variant)[vf]
+    : (n: SNode) => { const k = kid(n, key); return !!k && str(k[1]) === onVal; };
+  const set = variant && vf ? (n: SNode, on: boolean) => VM.setSymbolVariant(n, variant, { flags: { [vf]: on } })
+    : (n: SNode, on: boolean) => withFlag(n, key, on ? onVal : offVal);
   const hook = root.CollabEditor && root.CollabEditor.toggleAttribute;
   if (hook) return hook(ctx, items, isOn, set);
   let on = false; for (const it of items) if (!isOn(it.node)) { on = true; break; }

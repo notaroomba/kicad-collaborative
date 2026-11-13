@@ -9,6 +9,7 @@ import { E } from "./state";
 import { isSch } from "./view";
 import { selectionIds } from "./gestures";
 import { nameOfPick, netMap } from "./schnets";
+import { variantView } from "./variant";
 
 export interface MsgItem { title: string; value: string }
 type PcbApi = { msgPanelInfo?: (doc: KDoc, ids: string[], opts: Record<string, unknown>) => MsgItem[]; designSettings?: (src: unknown) => unknown };
@@ -39,13 +40,13 @@ export function updateMsgPanel(): void {
   const pad = pcb && pcb.padSel ? pcb.padSel : null;
   const ids = pad ? [pad] : selectionIds();
   const ver = (store.get() as { document: { version: number } }).document.version;
-  const key = [ver, E.units, ids.join(","), rt ? `${rt.netKey}|${rt.width}|${rt.layer}` : "", doc.items.size, pcb && pcb.highlightNet ? pcb.highlightNet : ""].join("§");
+  const key = [ver, E.currentVariant || "", E.units, ids.join(","), rt ? `${rt.netKey}|${rt.width}|${rt.layer}` : "", doc.items.size, pcb && pcb.highlightNet ? pcb.highlightNet : ""].join("§");
   if (key === lastKey) return; lastKey = key;
   const src = E.proSettings;
   if (src !== settingsSrc) { settingsSrc = src; settings = P.designSettings ? P.designSettings(src || null) : null; }
   let items: MsgItem[] = [];
   if (doc.fpEditor && !ids.length && !rt) { store.set({ msgPanel: { items: footprintMsgPanel(doc) } }); return; }
-  try { items = P.msgPanelInfo(doc, ids, { settings, units: E.units, route: rt && rt.width ? rt : null, net: pcb && pcb.highlightNet && E.highlightIds ? pcb.highlightNet : null }); } catch (e) { console.warn(e); }
+  try { items = P.msgPanelInfo(variantView(doc) as KDoc, ids, { settings, units: E.units, route: rt && rt.width ? rt : null, net: pcb && pcb.highlightNet && E.highlightIds ? pcb.highlightNet : null }); } catch (e) { console.warn(e); }
   if (doc.fpEditor && !items.length) items = footprintMsgPanel(doc);
   store.set({ msgPanel: { items } });
 }

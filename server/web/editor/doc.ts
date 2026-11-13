@@ -15,6 +15,7 @@ import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
 import { notePreviewDirty } from "./thumbpush";
 import { releaseLayers } from "./paint";
+import { applyVariantToDoc, refreshVariantNames } from "./variant";
 import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
 import { editorDocs, firstDoc, rootSchematicOf } from "./bootpick";
 import { ensurePcbTools, noteBoardOpened, preloadPcbToolsWhenIdle } from "./pcbtools-loader";
@@ -152,7 +153,10 @@ export function setDocFromText(text: string, then?: WireChange[] | null) {
   try { d = KiCadCanvas.parseDoc(text, E.DOC_TYPE); } catch (e) { console.warn("document parse failed", e); return false; }
   applySheetContext(d);
   cancelRemoteFlush();
+  // the board's (variants …) header section (the toolbar's variant list) and the session's current variant
+  if (d.type === "pcb") { try { (d as KDoc & { variantsNode?: SNode | null }).variantsNode = (KiCadCanvas as unknown as { boardSetup: { boardHeader(t: string): { variants?: SNode | null } } }).boardSetup.boardHeader(text).variants || null; } catch (e) { /* none */ } }
   E.kdoc = d; E.vbPerMm = 1; notePreviewDirty();
+  applyVariantToDoc(d); refreshVariantNames();
   if (then && then.length) { mutateDoc(then); if (!isSch()) KiCadCanvas.computeBBox(E.kdoc); }
   if (isSch()) E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
   else { const b = E.kdoc.bbox, m = 5; E.vb = [b[0] - m, b[1] - m, (b[2] - b[0]) + 2 * m, (b[3] - b[1]) + 2 * m]; }
@@ -198,7 +202,7 @@ function mutateDoc(changes: WireChange[] | null | undefined): boolean {
   for (const c of changes || []) {
     // a document-level change (Page Settings: paper and title block) addresses no item — web/dialogs/project.ts
     if (c && c.docProps) { if (KiCadCanvas.applyDocProps(E.kdoc, c.docProps)) { any = true; if (isSch()) { E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]]; base.setAttribute("viewBox", E.vb.join(" ")); overlay.setAttribute("viewBox", E.vb.join(" ")); applyView(); } } continue; }
-    if (c && c.typeName === "BOARD_SETUP") { if (KiCadCanvas.boardSetup && KiCadCanvas.boardSetup.applyBoardSetup(E.kdoc, c)) { any = true; renderLayersFromDoc(); } continue; }   // board-level sections (canvas/board-setup.ts)
+    if (c && c.typeName === "BOARD_SETUP") { if (KiCadCanvas.boardSetup && KiCadCanvas.boardSetup.applyBoardSetup(E.kdoc, c)) { any = true; renderLayersFromDoc(); refreshVariantNames(); applyVariantToDoc(E.kdoc); } continue; }   // board-level sections (canvas/board-setup.ts)
     let ok = false;
     try { ok = KiCadCanvas.applyChange(E.kdoc, c, E.IU); } catch (e) { console.warn("change not applied", e); }
     if (ok) { any = true; continue; }

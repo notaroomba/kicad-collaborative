@@ -203,12 +203,23 @@ function ZoomSelect() {
   return <Select id="zoomSel" className={KSEL} title="Zoom" options={options} value={preset < 0 ? "custom" : String(list[preset])} blurOnPick
     onChange={(v) => { if (v === "auto") dispatch({ type: "setZoom", zoom: "auto" }); else if (v !== "custom") dispatch({ type: "setZoom", zoom: Number(v) }); }} />;
 }
+/** PCB_ACTION_TOOLBAR_CONTROLS::currentVariant: GetVariantNamesForUI, and in the schematic editor a "---" separator
+ *  and "Add New Design Variant..." (UpdateVariantSelectionCtrl); choosing calls onVariantSelected. */
+function VariantSelect() {
+  const v = useApp((s) => s.variant);
+  const names = v && v.names.length ? v.names : ["< Default >"];
+  const value = v && v.current ? v.current : names[0];
+  const options: SelectOption[] = names.map((n) => ({ value: n, label: n }));
+  if (v && v.sch) options.push({ value: "---", label: "---", sep: true }, { value: "Add New Design Variant...", label: "Add New Design Variant..." });
+  return <Select className={KSEL} title="Select the current variant to display and edit." data={{ k: "current-variant" }} options={options} value={value} blurOnPick
+    onChange={(name) => dispatch({ type: "setVariant", name })} />;
+}
 
 function Control({ item }: { item: ControlItem }) {
   const c = item.control;
   if (c === "ipcScripting") return null;
   let inner: ReactElement | null = null;
-  if (c === "currentVariant") inner = <Select className={KSEL} title="Select the current variant to display and edit." options={[{ value: "default", label: "< Default >" }]} value="default" blurOnPick />;
+  if (c === "currentVariant") inner = <VariantSelect />;
   else if (c === "overrideLocks") inner = <label className="kcheck inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Allow editing locked items"><input type="checkbox" onChange={(ev) => { const ed = (window as unknown as { CollabEditor?: { overrideLocks?: boolean } }).CollabEditor; if (ed) ed.overrideLocks = ev.currentTarget.checked; }} /> Override locks</label>;
   else if (c === "trackWidth") inner = <TrackWidthSelect />;
   else if (c === "viaDiameter") inner = <ViaSizeSelect />;

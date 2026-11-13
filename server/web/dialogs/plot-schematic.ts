@@ -60,7 +60,8 @@ function docForVariant(doc: KDoc, uuidPath: string[], variant: string): KDoc {
 function show(fab: KiCadFabApi, variants: string[]): void {
   const pref = loadPrefs(KEY, SCH_PLOT_DEFAULTS);
   const pro = projectJson();
-  const variantSel = selectField<string>(variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
+  const cur = String((E as { currentVariant?: string }).currentVariant || "");   // the schematic's current variant (the toolbar's)
+  const variantSel = selectField<string>(cur && variants.includes(cur) ? cur : variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
   /** getSelectedVariant: empty for the default */
   const selectedVariant = (): string => (variantSel.get() !== variants[0] ? variantSel.get() : "");
   const storedDir = String(obj(pro.schematic).plot_directory || "");

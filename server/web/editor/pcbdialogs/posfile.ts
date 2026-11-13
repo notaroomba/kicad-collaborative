@@ -32,7 +32,8 @@ export async function openPosFile(): Promise<void> {
 
 function show(fab: KiCadFabApi, boardOutDir: string, plotAux: boolean, variants: string[]): void {
   const pref = loadPrefs(KEY, DEFAULTS);
-  const variant = selectField<string>(variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
+  const cur = String((E as { currentVariant?: string }).currentVariant || "");   // the board's current variant (the toolbar's)
+  const variant = selectField<string>(cur && variants.includes(cur) ? cur : variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
   const selectedVariant = (): string => (variant.get() !== variants[0] ? variant.get() : "");
   const outDir = textField(pref.outputDir !== null ? pref.outputDir : boardOutDir, { key: "outputDir" });
   outDir.input.title = "Target directory for plot files. Can be absolute or relative to the board file location.";

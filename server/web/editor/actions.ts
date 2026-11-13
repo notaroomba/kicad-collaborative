@@ -11,6 +11,7 @@ import { contextMenuAction, openArcEditModeMenu, openGridButtonMenu, openRouterM
 import { cycleFollow, followAction } from "./peers";
 import { setFilter } from "./selection";
 import { E } from "./state";
+import { addVariant, copyVariant, editVariantDescription, onVariantSelected, removeVariant, renameVariant } from "./variant-ops";
 import { activeModule, deleteAction, orientSelected, redoLast, runModuleAction, selectAll, setTool, toolCtx, undoLast } from "./tools";
 import { api, esc, setRadio, showPopover, toast } from "./util";
 import { applyView, fitObjects, fitView, isSch, kicadZoom, requestRender, zoomBy, zoomStep } from "./view";
@@ -114,6 +115,9 @@ export const HANDLERS: Record<string, ActionHandler> = {
   generateGerbers: () => { void openPlotDialog({ gerber: true }); }, generateDrillFiles: () => { void openGendrill(); }, generatePosFile: () => { void openPosFile(); },
   fabPackage: () => openFabOutputs("gerber"),
   print: () => printDialog(),
+  // Tools > Variants (SCH_EDIT_FRAME::AddVariant … CopyVariant)
+  addVariant: () => { if (isSch()) addVariant(); }, removeVariant: () => { if (isSch()) void removeVariant(); }, editVariantDescription: () => { if (isSch()) void editVariantDescription(); },
+  renameVariant: () => { if (isSch()) void renameVariant(); }, copyVariant: () => { if (isSch()) void copyVariant(); },
   // the Line Modes radio: the schematic's wire modes, or the board's angle snap (PCB_ACTIONS::lineModeFree / 90 / 45)
   lineModeFree: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "free"); else runModuleAction("lineModeFree"); syncSchModes(); },
   lineMode90: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "90"); else runModuleAction("lineMode90"); syncSchModes(); },
@@ -168,6 +172,7 @@ export function dispatchAction(a: AppAction) {
       case "setGrid": setGridPitch(a.pitch); return;
       // EDA_DRAW_FRAME::OnSelectZoom: Zoom Auto is ACTIONS::zoomFitScreen, a preset is ACTIONS::zoomPreset (a KiCad zoom factor)
       case "setZoom": if (a.zoom === "auto") fitView(); else { const cur = kicadZoom(); if (cur > 0 && Number(a.zoom) > 0) zoomBy(Number(a.zoom) / cur); } return;
+      case "setVariant": onVariantSelected(a.name); return;
       case "setFilter": setFilter(a.key, a.on); return;
       case "follow": followAction(a.cid); return;
       case "openThread": if (a.docId) openThreadOnDoc(a.docId, a.id); else openThreadAction(a.id); return;

@@ -238,6 +238,8 @@ export interface AppState {
   popover: PopoverState | null;
   contextMenu: ContextMenuState | null;
   routing: RoutingState;
+  /** the toolbar's "Current variant": this client's session choice ("" = default) and GetVariantNamesForUI */
+  variant?: { current: string; names: string[]; sch: boolean };
 }
 
 // ---------------------------------------------------------------- actions (chrome → app.js)
@@ -269,7 +271,10 @@ export type AppAction =
   | { type: "popover"; popover: PopoverState | null }
   /** the right-click menu: run a row (then it closes), brighten a row's item, or just close */
   | { type: "contextMenu"; run?: number; hover?: string | null }
-  | { type: "toastDone"; id: number };
+  | { type: "toastDone"; id: number }
+  /** the toolbar's Current variant combo (onVariantSelected): a variant name, "< Default >", or the schematic's
+   *  "Add New Design Variant..." entry */
+  | { type: "setVariant"; name: string };
 
 export interface CollabAppApi {
   getState(): AppState;

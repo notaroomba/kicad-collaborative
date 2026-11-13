@@ -333,7 +333,9 @@ export function sheetTextVars(doc: Partial<SheetContext> | null | undefined): Sh
     PROJECTNAME: str(doc && doc.projectName),
     PAPER: str(doc && doc.paper) || "A4",
     LAYER: str(doc && doc.sheetLayer),
-    VARIANT: "", VARIANT_DESC: "",
+    // the drawing sheet's ${VARIANT} / ${VARIANT_DESC}: the current variant (PCB_EDIT_FRAME / SCH_EDIT_FRAME
+    // SetCurrentVariant hand them to the drawing sheet; empty for the default)
+    VARIANT: str(doc && doc.variantName), VARIANT_DESC: str(doc && doc.variantDesc),
     ISSUE_DATE: str(tb.date),
     CURRENT_DATE: `${now.getFullYear()}-${TWO(now.getMonth() + 1)}-${TWO(now.getDate())}`,
     CURRENT_TIME_HH_MM_SS: `${TWO(now.getHours())}:${TWO(now.getMinutes())}:${TWO(now.getSeconds())}`,

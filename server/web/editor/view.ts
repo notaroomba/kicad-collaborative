@@ -10,6 +10,7 @@ import { anchorMm, breakFollow, peerName, renderPeers, sendPresence } from "./pe
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
 import { paintConfig, paintDocument, settledFrame, stats as paintStats } from "./paint";
+import { variantView } from "./variant";
 import { activeModule, toolCtx } from "./tools";
 import { drawAppOverlays } from "./overlays";
 import { toast } from "./util";
@@ -140,7 +141,7 @@ export function drawCanvas() {
   if (force && E.comments && E.comments.length) drawComments();
   updateMsgPanel();
   const selected = boardSelected();
-  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected, highlight: E.highlightIds, brightened: boardBrightened(), enteredGroup: boardEnteredGroup(), skip: skip || undefined, rollover: E.hyperHover ? E.hyperHover.id : undefined, rolloverGeom: E.hyperHover && E.hyperHover.geom || null, rolloverRun: E.hyperHover && E.hyperHover.run || null }, schPaintState(selected), E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
+  paintDocument(variantView(E.kdoc) as KDoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected, highlight: E.highlightIds, brightened: boardBrightened(), enteredGroup: boardEnteredGroup(), skip: skip || undefined, rollover: E.hyperHover ? E.hyperHover.id : undefined, rolloverGeom: E.hyperHover && E.hyperHover.geom || null, rolloverRun: E.hyperHover && E.hyperHover.run || null }, schPaintState(selected), E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off: HTMLCanvasElement = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));

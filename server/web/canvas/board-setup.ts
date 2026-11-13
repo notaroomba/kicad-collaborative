@@ -305,7 +305,7 @@ export function applyHeaderChange(header: BoardHeader, change: KChange): BoardHe
   if (change.typeName !== BOARD_SETUP_TYPE) return out;
   for (const p of change.properties || []) {
     const v = p.after && typeof p.after.v === "string" ? (parse(p.after.v) as SNode | null) : null; if (!v) continue;
-    if (p.name === "layers") out.layers = v; else if (p.name === "setup") out.setup = v; else if (p.name === "general") out.general = v;
+    if (p.name === "layers") out.layers = v; else if (p.name === "setup") out.setup = v; else if (p.name === "general") out.general = v; else if (p.name === "variants") out.variants = v;
   }
   return out;
 }

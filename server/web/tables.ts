@@ -112,7 +112,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       ["Locking", ["toggleLock", "lock", "unlock"]],
       ["Create from Selection", ["convertToPoly", "convertToZone", "convertToKeepout", "convertToLines", "convertToTracks"]],
       ["Zones", ["zoneDuplicate", "-", ["Zone Priority", ["zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower", "zonePriorityMoveToBottom"]]]],
-      ["Attributes", ["toggleExcludeFromBOM", "toggleExcludeFromPosFiles", "module:toggleDNP"]],
+      ["Attributes", ["toggleExcludeFromBOM", "toggleExcludeFromSim", "toggleExcludeFromPosFiles", "module:toggleDNP"]],
       ["Text Justification", ["leftJustify", "centerJustify", "rightJustify"]]]],
     ["&View", [["Panels", ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments"]],
       "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw", "-",
@@ -228,7 +228,7 @@ export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete",
   "setExcludeFromSim", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromPosFiles", "setDNP", "selectNet", "deselectNet", "selectSameSheet", "filterSelection", "createArray",
   "changeTrackWidth", "module:setTrackWidthFromNetclass", "changeTrackLayerNext", "changeTrackLayerPrev", "breakTrack", "unrouteSelected", "deleteFull", "group", "ungroup", "addToGroup", "removeFromGroup",
   "toggleLock", "lock", "unlock", "convertToPoly", "convertToZone", "convertToKeepout", "convertToLines", "convertToTracks", "zoneDuplicate", "zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower",
-  "zonePriorityMoveToBottom", "toggleExcludeFromBOM", "toggleExcludeFromPosFiles", "module:toggleDNP", "leftJustify", "centerJustify", "rightJustify", "hideNetInRatsnest", "showNetInRatsnest"]);
+  "zonePriorityMoveToBottom", "toggleExcludeFromBOM", "toggleExcludeFromSim", "toggleExcludeFromPosFiles", "module:toggleDNP", "leftJustify", "centerJustify", "rightJustify", "hideNetInRatsnest", "showNetInRatsnest"]);
 /** Entries that never change the document: everything else is greyed out for a view-only visitor, as in a read-only frame. */
 export const READ_ONLY_OK = new Set(["compareSchematicWithFile", "compareSchematicWithHistory", "compareBoardWithFile", "compareBoardWithHistory", "saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
   "openInKicad", "print", "plot", "home", "copy", "copyAsText", "selectAll", "unselectAll", "selectConnection", "selectNode", "nextNetItem", "previousNetItem", "find", "showDatasheet",
