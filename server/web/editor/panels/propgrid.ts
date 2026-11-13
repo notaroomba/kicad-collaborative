@@ -753,26 +753,42 @@ function pcbProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
       { group: BASIC, name: "Width", type: "length", get: (x) => h.num((h.kid(x.node, "width") || [])[1], 0.25), set: (n, v) => { if (!((v as number) > 0)) return false; h.setWidth(n, v as number); } },
       layerProp(doc, true, "F.Cu"), lockedProp(), ...netProps(doc)];
     case "via": return viaProps(doc);
+    case "pad": if ((doc as unknown as { fpEditor?: boolean }).fpEditor) return fpEditorPadProps(doc, it); break;
     case "zone": return zoneProps(it, doc);
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return boardShapeProps(it, doc);
     case "gr_text": return boardTextProps(doc);
     case "gr_text_box": return h.kid(it.node, "start") ? boardTextBoxProps(doc) : boardTextProps(doc).filter((d) => !/^Position|^Orientation/.test(d.name));
     case "dimension": return [layerProp(doc, false, "Dwgs.User"), lockedProp(),
       { group: "Dimension Properties", name: "Value", type: "text", get: (x) => { const t = h.kid(x.node, "gr_text"); return t ? h.str(t[1]) : ""; } }];
-    default: {
-      const out: PropDef[] = [];
-      if (h.kid(it.node, "at")) out.push(atProp("Position X", 1), atProp("Position Y", 2));
-      if (h.kid(it.node, "layer")) out.push(layerProp(doc, false, "Dwgs.User"));
-      out.push(lockedProp());
-      return out;
-    }
+    default: break;
   }
+  const out: PropDef[] = [];
+  if (h.kid(it.node, "at")) out.push(atProp("Position X", 1), atProp("Position Y", 2));
+  if (h.kid(it.node, "layer")) out.push(layerProp(doc, false, "Dwgs.User"));
+  out.push(lockedProp());
+  return out;
+}
+/**
+ * A pad of the footprint open in the Footprint Editor is its own item (its node is the (pad …)): PAD_DESC's rows as the
+ * board shows them for a footprint's pad, run over the pad wrapped in a footprint at the origin (the editor's footprint
+ * sits at 0,0 unrotated, so its local position and angle are the absolute ones).  A library footprint has no nets, so
+ * the Net rows are left out.
+ */
+function fpEditorPadProps(doc: KDoc, it: KItem): PropDef[] {
+  const wrapNode = (n: SNode): SNode => ["footprint", "", ["at", 0, 0], n] as unknown as SNode;
+  const wrap = (x: KItem): KItem => Object.assign({}, x, { node: wrapNode(x.node) });
+  return padDefs(doc, 0).filter((d) => d.group !== "Net" && (!d.avail || d.avail(wrap(it)))).map((d): PropDef => Object.assign({}, d, {
+    get: (x: KItem) => d.get(wrap(x)),
+    avail: d.avail ? (x: KItem) => d.avail!(wrap(x)) : undefined,
+    canWrite: d.canWrite ? (x: KItem) => d.canWrite!(wrap(x)) : undefined,
+    set: d.set ? (n: SNode, v: Raw, it: KItem) => d.set!(wrapNode(n), v, wrap(it)) : undefined,
+  }));
 }
 
 // ---------------------------------------------------------------- the grid
 const FRIENDLY: Record<string, string> = { symbol: "Symbol", footprint: "Footprint", wire: "Wire", bus: "Bus", polyline: "Graphic Line", segment: "Track", arc: "Arc", via: "Via", label: "Label", global_label: "Global Label",
   hierarchical_label: "Hierarchical Label", netclass_flag: "Directive Label", directive_label: "Directive Label", text: "Text", gr_text: "Text", text_box: "Text Box", gr_text_box: "Text Box", junction: "Junction", zone: "Zone",
-  no_connect: "No-Connect", bus_entry: "Bus Entry", sheet: "Sheet", gr_line: "Line", gr_rect: "Rectangle", gr_circle: "Circle", gr_arc: "Arc", gr_poly: "Polygon", gr_curve: "Bezier", rectangle: "Rectangle", circle: "Circle",
+  no_connect: "No-Connect", bus_entry: "Bus Entry", pad: "Pad", sheet: "Sheet", gr_line: "Line", gr_rect: "Rectangle", gr_circle: "Circle", gr_arc: "Arc", gr_poly: "Polygon", gr_curve: "Bezier", rectangle: "Rectangle", circle: "Circle",
   bezier: "Bezier", rule_area: "Rule Area", dimension: "Dimension", group: "Group", image: "Image", table: "Table" };
 const friendly = (it: KItem) => (it.kind === "arc" && it.docType === "pcb" ? "Track" : it.kind === "generated" ? "Tuning Pattern" : FRIENDLY[it.kind] || it.kind);
 
