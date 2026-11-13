@@ -173,6 +173,30 @@ class Dialog(pcbnew.ActionPlugin):
             print("PYTOOL models", fp.GetReference(), len(fp.Models()))
             dlg.Destroy()
             return
+        if dlg.text.GetValue().startswith("vrml:"):
+            # File > Export > VRML from a plugin: the board file in pcbnew's layout and a model file for the part that names one
+            import re
+            here = os.path.dirname(board.GetFileName())
+            fp = sorted(board.GetFootprints(), key=lambda x: x.GetReference())[0]
+            models = fp.Models()
+            while len(models):
+                models.pop()
+            m = pcbnew.FP_3DMODEL()
+            m.m_Filename = "$" + "{KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step"
+            models.push_back(m)
+            ok = pcbnew.ExportVRML(os.path.join(here, "out.wrl"), 1.0, True, True, True, True, os.path.join(here, "shapes3D"), 0.0, 0.0)
+            with open(os.path.join(here, "out.wrl")) as f:
+                text = f.read()
+            parts = sorted(os.listdir(os.path.join(here, "shapes3D")))
+            faces = 0
+            for name in parts:
+                with open(os.path.join(here, "shapes3D", name)) as f:
+                    faces += f.read().count(", -1")
+            urls = re.findall(r'url "([^"]*)"', text)
+            print("PYTOOL vrml ok=%s shapes=%d head=%r inline=%d files=%d all=%s new=%s faces=%d" % (ok, text.count("IndexedFaceSet"), text[:15], len(urls), len(parts),
+                  all(u.startswith("shapes3D/") and u[9:] in parts for u in urls), "shapes3D/R_0603_1608Metric.wrl" in urls, faces))
+            dlg.Destroy()
+            return
         if dlg.text.GetValue().startswith("file:"):
             # a plugin that writes the board's own file (edited elsewhere and read back): R2 is 3 mm further right in it,
             # written its own way (everything on one line, no ids kept in order)
@@ -1072,6 +1096,21 @@ await idle(a, ID);
     return { docType: doc && doc.docType, url, head: text.slice(0, 12), named, other: window.KiCadProjectModel('packages3D/Nope') };
   });
   check('it is a document of the project that the 3D viewer reads for that footprint', got.docType === 'model3d' && /^\/api\/docs\/[0-9a-f-]+\/content$/.test(got.url || '') && got.head === 'ISO-10303-21' && got.named === '${KIPRJMOD}/packages3D/PyBox.wrl' && got.other === null, JSON.stringify(got));
+}
+
+// ---- pcbnew.ExportVRML: the board and its parts' models as pcbnew writes them, the model tessellated by the 3D viewer
+{
+  await run(a, await act(a, 'Py: dialog'));
+  await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+  const d6 = inner(a); await d6.waitForSelector('input[type="text"]');
+  await d6.fill('input[type="text"]', 'vrml:');
+  await d6.locator('button', { hasText: /^OK$/ }).click();
+  await waitLog(a, ID, /PYTOOL vrml/, 180000);
+  const line = (await logOf(a, ID)).find((l) => l.includes('PYTOOL vrml')) || '';
+  check('a plugin exports the board as VRML: ten layer shapes after the placed model', /ok=True shapes=10 /.test(line) && /head='#VRML V2\.0 utf8'/.test(line), line.slice(0, 400));
+  check('each part\'s model is a file of its own, tessellated from KiCad\'s STEP file, and the board file names it', / all=True new=True /.test(line) && Number((/inline=(\d+)/.exec(line) || [])[1]) >= 2 && Number((/files=(\d+)/.exec(line) || [])[1]) >= 2 && Number((/faces=(\d+)/.exec(line) || [])[1]) > 500, line.slice(0, 400));
+  await a.keyboard.press('Escape').catch(() => {});
+  await idle(a, ID);
 }
 
 // ---- a board file a plugin writes itself is carried into the board as an edit

@@ -202,6 +202,7 @@ export function pythonRuntime(): void {
       case "fab.netlist": out = await kicad.fab.netlist(); break;
       case "fab.render": out = await kicad.fab.render(a); break;
       case "fab.model": out = await kicad.fab.model(a); break;
+      case "fab.vrml": out = await kicad.fab.vrml(a); break;
       case "project.versions": out = await kicad.project.versions(); break;
       case "libs.libraries": out = await kicad.libs.libraries(); break;
       case "libs.footprints": out = await kicad.libs.footprints(a); break;

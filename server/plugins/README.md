@@ -266,6 +266,18 @@ How it works:
   a plugin opens or copies one). A model file a plugin puts in the project folder that a footprint of the board
   then names (`${KIPRJMOD}/packages3D/R_0603.step`) is offered to the project like a library file, and the 3D
   viewer reads it from there; a footprint may name the `.wrl` where the project keeps the `.step`.
+- **VRML export.** `pcbnew.ExportVRML` writes what File → Export → VRML writes (`fab.vrml`, `web/fab/vrml.ts`): the
+  placed models, then the board body, copper, paste, solder mask, plated holes and silkscreen, in pcbnew's order and
+  node layout. The shapes are the editor's own plot of each layer, merged, cut to the outline and triangulated, so
+  the triangles are not pcbnew's. A part's model is the mesh the 3D viewer tessellates from its STEP file, written
+  as a `.wrl` in tenths of an inch like KiCad's own; a model that cannot be read is left out, as pcbnew does. Both
+  the KiCad 6 and the KiCad 8 argument lists are taken.
+- **A plugin written for KiCad 6 is answered in KiCad 6's terms.** Once a plugin uses an interface only KiCad 6
+  has (`getWxRect`, the seven-argument `ExportVRML`), SVG plots come in KiCad 6's units (whole nanometres), which
+  is what such a plugin goes on to assume (`pcbnew._Host.kicad6`).
+- **A "save as" file picker** (`wx.FilePickerCtrl` with `FLP_SAVE`) starts on the board's name in the project
+  folder, and the name it holds stands for a chosen file: an empty file keeps its place until the plugin writes it
+  (it is not handed over if the plugin never does).
 - **A schematic a plugin rewrites as a file is carried into the project.** Desktop plugins that change the
   schematic write the `.kicad_sch` file. The server works out what really changed, item by item, however the
   plugin laid the file out (`POST /api/docs/{id}/rewrite`, `merge::in_layout_of`), the editor lists it and asks,

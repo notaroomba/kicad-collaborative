@@ -10,8 +10,8 @@
   "status": "works"
  },
  "com.github.30350n.pcb2blender": {
-  "status": "unsupported",
-  "note": "It loads, but fails when run: VRML export is not available in the web editor"
+  "status": "works",
+  "note": "It writes the .pcb3d file: the board as VRML in KiCad's own layout, each part's 3D model as a file of its own (KiCad's STEP models, tessellated by the editor's 3D viewer), and the layer drawings. The file's contents are checked here; opening it in Blender has not been tried. This package is the plugin's KiCad 6 version, so it is answered in KiCad 6's terms. A model file the project does not hold is left out."
  },
  "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": {
   "status": "works"

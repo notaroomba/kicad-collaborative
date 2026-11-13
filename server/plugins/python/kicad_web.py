@@ -2194,6 +2194,9 @@ def _hand_over_outputs():
     fresh = sorted(p for p, sig in now.items() if _seen_files.get(p) != sig and p not in skip
                    and not any(part.startswith(".") for part in os.path.relpath(p, PROJECT_DIR).split(os.sep)))   # hidden files and folders are a plugin's own housekeeping
     _seen_files = now
+    # a name a "save as" picker held the place of, which the plugin never wrote: nothing to hand over
+    held = _state.get("placeholders") or ()
+    fresh = [p for p in fresh if not (os.path.abspath(p) in held and os.path.getsize(p) == 0)]
     if not fresh or _bridge is None:
         return fresh
     fresh = _offer_libraries(fresh)
@@ -2399,7 +2402,7 @@ def _fab_plot_page(board, opts, layers, suffix, fmt):
         "blackAndWhite": bool(opts.get("BlackAndWhite", True)), "plotReference": bool(opts.get("PlotReference", True)),
         "plotValue": bool(opts.get("PlotValue", True)), "useAuxOrigin": bool(opts.get("UseAuxOrigin")),
         "scale": float(scale) if isinstance(scale, (int, float)) else 1.0, "autoScale": bool(opts.get("AutoScale")),
-        "svgPrecision": int(opts.get("SvgPrecision") or 4), "svgFitPageToBoard": bool(opts.get("SvgFitPageToBoard")),
+        "svgPrecision": 4 if getattr(pcbnew._Host, "kicad6", False) else int(opts.get("SvgPrecision") or 4), "svgFitPageToBoard": bool(opts.get("SvgFitPageToBoard")),
         "sketchPadsOnFab": bool(opts.get("SketchPadsOnFabLayers")), "plotPadNumbers": bool(opts.get("PlotPadNumbers")),
         "sketchDnpOnFab": bool(opts.get("SketchDNPFPsOnFabLayers", True)), "hideDnpOnFab": bool(opts.get("HideDNPFPsOnFabLayers")),
         "crossoutDnpOnFab": bool(opts.get("CrossoutDNPFPsOnFabLayers", True)), "subtractMaskFromSilk": bool(opts.get("SubtractMaskFromSilk")),
@@ -2414,8 +2417,32 @@ def _fab_plot_page(board, opts, layers, suffix, fmt):
         raise pcbnew.WebUnsupported("Plotting without a board open")
     ext = os.path.splitext(res.get("name") or "")[1] or ".plt"
     path = os.path.join(_out_dir(opts.get("OutputDirectory")), _plot_name(suffix, ext))
-    _write(path, base64.b64decode(res["base64"]))
+    data = base64.b64decode(res["base64"])
+    if int(fmt) == pcbnew.PLOT_FORMAT_SVG and getattr(pcbnew._Host, "kicad6", False):
+        data = _svg_kicad6(data, opts.get("SvgPrecision"))
+    _write(path, data)
     return path
+
+
+def _svg_kicad6(data, precision):
+    """An SVG plot in the units KiCad 6 wrote: whole numbers of 10^-precision mm (nanometres at the default 6), where
+    KiCad 7 and later write millimetres with decimals.  A plugin that has used an interface only KiCad 6 has (see
+    pcbnew._Host.kicad6) goes on to read or re-frame the drawing in those units, so the drawing is given to it that
+    way: the same shapes inside one group that scales them, and the viewBox in the same units."""
+    import re
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    # KiCad 6's SetSvgPrecision took (precision, use inches) and its default was 6; a bare 4 is this shim's KiCad 7 default
+    given = precision[0] if isinstance(precision, (tuple, list)) and precision else None
+    k = 10 ** (int(given) if isinstance(given, int) and 3 <= given <= 6 else 6)
+    head = re.search(r"<svg\b[^>]*>", text)
+    tail = text.rfind("</svg>")
+    if not head or tail < 0:
+        return data
+    tag = re.sub(r'viewBox="([^"]*)"', lambda m: 'viewBox="' + " ".join(str(int(round(float(v) * k))) for v in m.group(1).replace(",", " ").split()) + '"', head.group(0))
+    return (text[:head.start()] + tag + f'\n<g transform="scale({k} {k})">' + text[head.end():tail] + "</g>\n" + text[tail:]).encode("utf-8")
 
 
 def _fab_plot(board, opts, layers, suffix, fmt, sheet_desc):

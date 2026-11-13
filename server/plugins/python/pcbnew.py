@@ -518,6 +518,12 @@ class BOX2I:
         b = cls(VECTOR2I(min(x0, x1), min(y0, y1)), VECTOR2I(abs(x1 - x0), abs(y1 - y0)))
         return b
 
+    def getWxRect(self):
+        """KiCad 6's EDA_RECT.getWxRect: x, y, width, height."""
+        import wx
+        _Host.kicad6 = True
+        return wx.Rect(int(self._x), int(self._y), int(self._w), int(self._h))
+
     def GetX(self):
         return self._x
 
@@ -6076,7 +6082,9 @@ class BOARD(EDA_ITEM):
                     b.Merge(s.GetBoundingBox())
         return b if b._valid else self.ComputeBoundingBox(False)
 
-    def ComputeBoundingBox(self, edges_only=False, *_):
+    def ComputeBoundingBox(self, edges_only=False, *_, aBoardEdgesOnly=None):
+        if aBoardEdgesOnly is not None:
+            edges_only = aBoardEdgesOnly
         if edges_only:
             return self.GetBoardEdgesBoundingBox()
         b = BOX2I()
@@ -6370,6 +6378,7 @@ class _Host:
     focus = None
     highlight = None         # called with the names of the nets to show brightly (none: no highlight)
     version = "10.0.0"
+    kicad6 = False           # set once a plugin uses an interface only KiCad 6 has: it is then answered in KiCad 6's terms (SVG plot units)
     plugins = []             # registered ActionPlugins
     plugin_dir = "/plugins"
     config_dir = "/config"
@@ -7418,8 +7427,39 @@ def ImportSpecctraSES(*_):
     _unsupported("Specctra session import")
 
 
-def ExportVRML(*_):
-    _unsupported("VRML export")
+def ExportVRML(aFullFileName, aMMtoWRMLunit=1.0, *rest):
+    """File > Export > VRML, written by the editor (web/fab/vrml.ts) in pcbnew's own layout: the placed 3D models, then
+    the board body, copper, paste, solder mask, plated holes and silkscreen.  Takes KiCad 6 and 7's seven arguments
+    (file, unit, export 3D files, relative paths, 3D folder, x and y reference) and KiCad 8's nine, which add "include
+    unspecified" and "include DNP" after the unit."""
+    import os
+    if len(rest) >= 7:
+        unspecified, dnp, separate, relative, subdir, xref, yref = rest[:7]
+    else:
+        separate, relative, subdir, xref, yref = (list(rest) + [False, False, "", 0.0, 0.0][len(rest):])[:5]
+        unspecified = dnp = True
+        _Host.kicad6 = True
+    name, subdir = os.fspath(aFullFileName), os.fspath(subdir) if subdir else ""
+    if subdir and not os.path.isabs(subdir):
+        subdir = os.path.join(os.path.dirname(os.path.abspath(name)), subdir)
+    import kicad_web
+    kicad_web.flush()
+    res = kicad_web._call("fab.vrml", {"unit": float(aMMtoWRMLunit), "separateModels": bool(separate), "relativePaths": bool(relative), "subdir": subdir,
+                                       "xref": float(xref), "yref": float(yref), "includeUnspecified": bool(unspecified), "includeDnp": bool(dnp), "fileName": name})
+    if not isinstance(res, dict) or not res.get("text"):
+        return False
+    models = res.get("models") or []
+    if separate and (models or subdir):
+        os.makedirs(subdir or os.path.dirname(os.path.abspath(name)), exist_ok=True)
+    for m in models:
+        with open(os.path.join(subdir or os.path.dirname(os.path.abspath(name)), os.path.basename(str(m.get("name")))), "w", encoding="utf-8") as fh:
+            fh.write(m.get("text") or "")
+    with open(name, "w", encoding="utf-8") as fh:
+        fh.write(res["text"])
+    missing = (res.get("stats") or {}).get("missing") or []
+    if missing:
+        _logging.getLogger("pcbnew").info("VRML export: %d model(s) could not be read and were left out: %s", len(missing), ", ".join(missing[:8]))
+    return True
 
 
 def ExportFootprintsToLibrary(*_):

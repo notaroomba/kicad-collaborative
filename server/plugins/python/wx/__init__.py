@@ -3967,7 +3967,36 @@ class _Picker(Window):
     def __init__(self, parent=None, id=ID_ANY, path="", message="", wildcard="*.*", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._wild = kw.get("wildcard", wildcard)
         Window.__init__(self, parent, id, pos, size, style, *more, **kw)
-        self.SetPath(kw.get("path", path))
+        self.SetPath(kw.get("path", path) or self._wx_save_default())
+
+    def _wx_save_default(self):
+        """A "save as" picker starts on a name in the project folder: there is no file dialog to browse a computer's
+        folders here, and what a plugin writes in the project folder is handed over as a download."""
+        if self._DIR or not (self._wx_style & FLP_SAVE):
+            return ""
+        import os
+        import re
+        ext = re.search(r"\*(\.[A-Za-z0-9_]+)", str(self._wild or ""))
+        try:
+            import kicad_web
+            return os.path.join(kicad_web.PROJECT_DIR, kicad_web._board_stem() + (ext.group(1) if ext else ""))
+        except Exception:
+            return ""
+
+    def _wx_save_place(self, p):
+        """The name picked to save to stands for a file a person chose in a save dialog.  Some plugins only accept a
+        path that is already there, and here nothing is, so an empty file holds the place (it is not handed over
+        unless the plugin goes on to write it)."""
+        import os
+        if not p or self._DIR or not (self._wx_style & FLP_SAVE) or os.path.exists(p):
+            return
+        try:
+            import kicad_web
+            os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+            open(p, "wb").close()
+            kicad_web._state.setdefault("placeholders", set()).add(os.path.abspath(p))
+        except Exception:
+            pass
 
     def _wx_build(self, kw):
         self._text = _el("input")
@@ -3994,7 +4023,9 @@ class _Picker(Window):
             self._wx_changed()
 
     def GetPath(self):
-        return str(self._text.value)
+        p = str(self._text.value)
+        self._wx_save_place(p)
+        return p
 
     def SetPath(self, p):
         self._text.value = str(p or "")

@@ -29,6 +29,7 @@ import { gerberJobFile } from "./gbrjob";
 import { boardPage } from "./pageplot";
 import { type FillProgress, type FillRules, type ZoneFillResult, ZoneFiller, filledZoneNode, polyArea, storedFill } from "./zonefill";
 
+import { meshVrml, vrmlModels, writeVrml, type VrmlOptions } from "./vrml";
 export const VERSION_SUFFIX = "-web";
 
 // ---------------------------------------------------------------- layer names
@@ -228,7 +229,7 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
   return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
 }
 
-export const api = { plotBoard, pluginPlot, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, dxfTextString, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+export const api = { vrmlModels: (ctx: FabContext) => vrmlModels(modelOf(ctx)), writeVrml: (ctx: FabContext, o: VrmlOptions, meshOf: Parameters<typeof writeVrml>[2]) => writeVrml(modelOf(ctx), o, meshOf), meshVrml, plotBoard, pluginPlot, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, dxfTextString, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

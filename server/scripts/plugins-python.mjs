@@ -156,6 +156,11 @@ async function one(dir, boardPath, boardGiven) {
     const f = process.env.DRIVE ? path.resolve(process.env.DRIVE) : path.join(here, "plugin-drives", id + ".py");   // DRIVE=<file>: one drive for whatever runs (a probe)
     if (!process.env.NO_DRIVE && fs.existsSync(f)) { driveSrc = fs.readFileSync(f, "utf8"); const m = /^# board: (\S+)/m.exec(driveSrc); if (m && !boardGiven) boardPath = path.resolve(server, "..", m[1]); } }
   const { loadPyodide } = require("pyodide");
+  // the STEP reader, for a plugin that exports the board with its parts' models (it starts up asynchronously, so before the run)
+  let occt = null;
+  if (process.env.KC_OCCT !== "0" && fs.readdirSync(dir, { recursive: true }).some((f) => String(f).endsWith(".py") && /ExportVRML/.test(fs.readFileSync(path.join(dir, String(f)), "utf8")))) {
+    try { occt = await require(path.join(server, "node_modules", "occt-import-js", "dist", "occt-import-js.js"))(); } catch { occt = null; }
+  }
   const logs = []; if (process.env.KICAD_WEB_DEBUG) { /* set below, inside Python */ }
   // the packages the build put beside the interpreter (static/dist/pyodide), loaded when the plugin imports them
   const dist = path.join(server, "static", "dist", "pyodide"); const lockPath = path.join(dist, "pyodide-lock.json"); const built = fs.existsSync(lockPath);
@@ -296,6 +301,27 @@ _kj.dumps(_ko)
       if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
       const K = globalThis.KiCadCanvas, doc = K.parseDoc(text, "kicad_pcb");
       return JSON.stringify(globalThis.KiCadFab.pluginPlot({ doc, setup: text, projectName: stem }, a, (l) => String(K.pcbColor(l))));
+    }
+    // pcbnew.ExportVRML: the editor's own writer (static/dist/fab.js) over the board as it stands; the parts' models are
+    // KiCad's STEP files tessellated by the same OpenCascade build the 3D viewer runs in the page (occt-import-js)
+    if (method === "fab.vrml") {
+      if (!globalThis.KiCadFab || !globalThis.KiCadFab.writeVrml) { require(path.join(server, "static", "kicad-canvas.js")); require(path.join(server, "static", "dist", "fab.js")); }
+      if (!globalThis.KiCadViewer3D) require(path.join(server, "static", "dist", "viewer3d.js"));
+      let text = board;
+      if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
+      const K = globalThis.KiCadCanvas, doc = K.parseDoc(text, "kicad_pcb"); const have = new Map();
+      const meshOf = (url) => {
+        if (have.has(url)) return have.get(url);
+        let mesh = null; const q = new URL(url, "http://editor.test").searchParams;
+        if (occt && q.get("lib") && q.get("name")) {
+          const got = library("model", { lib: q.get("lib"), name: q.get("name") });
+          if (got && got.step) mesh = globalThis.KiCadViewer3D.geometry.flattenOcct(occt.ReadStepFile(new Uint8Array(Buffer.from(got.step, "utf8")), { linearUnit: "millimeter", linearDeflectionType: "absolute_value", linearDeflection: 0.02, angularDeflection: 0.5 }));
+        }
+        have.set(url, mesh); return mesh;
+      };
+      const r = globalThis.KiCadFab.writeVrml({ doc, setup: text, projectName: stem }, { unit: a.unit, separateModels: !!a.separateModels, relativePaths: !!a.relativePaths, subdir: String(a.subdir || ""), xref: a.xref || 0, yref: a.yref || 0,
+        includeUnspecified: a.includeUnspecified !== false, includeDnp: a.includeDnp !== false, fileName: String(a.fileName || "board.wrl") }, meshOf);
+      return JSON.stringify({ text: r.text, models: r.models, stats: r.stats });
     }
     if (method === "fab.drc") return JSON.stringify({ markers: [], parityError: "", note: "stand-in design rule check" });
     if (method === "fab.netlist") return JSON.stringify({ root: `${stem}.kicad_sch`, warnings: [], components: [], nets: [] });

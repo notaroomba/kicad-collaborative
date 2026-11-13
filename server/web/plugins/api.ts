@@ -442,6 +442,23 @@ Object.assign(fab, {
     const glb: ArrayBuffer = await st.viewer.exportGLB();
     return { base64: bytesBase64(new Uint8Array(glb)), bytes: glb.byteLength };
   },
+  /**
+   * pcbnew.ExportVRML: the board as File → Export → VRML writes it (web/fab/vrml.ts), its parts' models being the meshes
+   * the 3D viewer tessellates from their STEP files.  A model that cannot be had is left out and named, as pcbnew does.
+   */
+  vrml: async (a: any) => {
+    const { F, ctx } = await fabContext();
+    const refs: { url: string }[] = F.vrmlModels(ctx); let meshOf = (_url: string): unknown => null;
+    if (refs.length) {
+      const V = await loadViewer3d(); const store = V.models();
+      store.want(refs); await Promise.race([store.settled(), new Promise((r) => setTimeout(r, 90000))]);
+      meshOf = (url) => { const m = store.get(url); return m && m !== "missing" ? m : null; };
+    }
+    const n = (v: unknown, d: number): number => (typeof v === "number" && isFinite(v) ? v : d);
+    const r = F.writeVrml(ctx, { unit: n(a.unit, 1), separateModels: !!a.separateModels, relativePaths: !!a.relativePaths, subdir: String(a.subdir || "").slice(0, 400), xref: n(a.xref, 0), yref: n(a.yref, 0),
+      includeUnspecified: a.includeUnspecified !== false, includeDnp: a.includeDnp !== false, fileName: String(a.fileName || "board.wrl").slice(0, 400) }, meshOf);
+    return { text: r.text, models: r.models, stats: r.stats };
+  },
 });
 
 // ---------------------------------------------------------------- the project's versions

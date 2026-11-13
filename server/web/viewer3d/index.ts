@@ -20,7 +20,7 @@ import { arcPoints, assignHoles, boardHoles, boardShape, chainLoops, circlePoint
 import { stencilGeom, textureExtent } from "./textures";
 import { OpenOptions, ViewerWindow } from "./ui";
 import { Viewer } from "./viewer";
-import { flattenOcct, footprintModels, placeMesh } from "./models";
+import { flattenOcct, footprintModels, modelStore, placeMesh } from "./models";
 
 let current: ViewerWindow | null = null;
 
@@ -34,6 +34,8 @@ export const api = {
   /** The bare 3D canvas without the window around it, for a page that shows a board (the home page's last chapter). */
   embed(host: HTMLElement, opts?: { wheel?: boolean }): Viewer { return new Viewer(host, opts); },
   isOpen(): boolean { return !!current && !current.closed; },
+  /** The page's store of tessellated part models, for a writer that needs the meshes themselves (the VRML export). */
+  models: modelStore,
   get current(): ViewerWindow | null { return current && !current.closed ? current : null; },
   /** the pure geometry behind the scene, for the node tests (static/tests/viewer3d.test.js) */
   geometry: { boardShape, boardHoles, assignHoles, chainLoops, nestLoops, arcPoints, circlePoints, ovalPoints, polyArea, boardBodies, bodyStyle, footprintAttrs, stencilGeom, textureExtent, partSolids, localPads, footprintModels, placeMesh, flattenOcct },
