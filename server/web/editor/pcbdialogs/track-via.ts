@@ -106,7 +106,7 @@ export function trackViaDialog(ctx: ToolCtx, items: KItem[]): boolean {
   let applyItems: (n: SNode, it: KItem) => void = () => undefined;
   let apply: () => M.Backdrill | string | { msg: string; focus?: { input: HTMLElement } } | void = () => undefined;
 
-  api = openDialog({ title: "Track & Via Properties", width: 760, readOnly: ro,
+  api = openDialog({ title: "Track & Via Properties", width: 800, readOnly: ro,
     build(body) {
       body.style.maxHeight = "86vh"; body.style.overflow = "auto";
       // ---- Common
@@ -208,7 +208,7 @@ export function trackViaDialog(ctx: ToolCtx, items: KItem[]): boolean {
         const s0 = common(lay.map((l) => l[0])), e0 = common(lay.map((l) => l[1]));
         const vtype = mixChoice<string>(t0, VIA_TYPES, "viaType", () => onViaEdit());
         const l0 = mixChoice<string>(s0, layerOpts(), "startLayer", () => onViaEdit()), l1 = mixChoice<string>(e0, layerOpts(), "endLayer", () => onViaEdit());
-        const ringLabel = h("label", null, "Annular rings:");
+        const ringLabel = h("label", null, "Annular rings:"), ringPad = h("span");
         const ring = mixChoice<number>(common(vias.map((v) => M.annularMode(v.node))), [[0, "All copper layers"], [1, "Start, end, and connected layers"], [2, "Connected layers only"], [3, "Start and end layers only"]], "annularRings");
         const prot0 = common(vias.map((v) => M.protectionPreset(v.node)));
         const protOpts: [number, string][] = M.IPC4761.map(([name], i): [number, string] => [i, name]);
@@ -279,7 +279,7 @@ export function trackViaDialog(ctx: ToolCtx, items: KItem[]): boolean {
           const top = Math.min(ia, ib), bot = Math.max(ia, ib), reachF = thru || top === 0, reachB = thru || bot === copper.length - 1;
           if ((t === "blind" || t === "buried") && a && b) { if (reachF !== reachB) vtype.set("blind"); else if (!reachF && !reachB) vtype.set("buried"); }
           const depth = thru ? copper.length - 1 : bot - top;
-          ring.el.style.display = ringLabel.style.display = depth > 1 ? "" : "none";
+          ring.el.style.display = ringLabel.style.display = ringPad.style.display = depth > 1 ? "" : "none";
           syncBackdrill(false); pmF.sync(false); pmB.sync(false);
           bdMode.enable(thru && !ro); disable(bdLabel, thru);
           if (!thru) { bfSize.enable(false); bbSize.enable(false); bfLayer.enable(false); bbLayer.enable(false); [...bfLabels, ...bbLabels].forEach((l) => disable(l, false)); }
@@ -305,11 +305,15 @@ export function trackViaDialog(ctx: ToolCtx, items: KItem[]): boolean {
         const section = (title: string): HTMLElement => h("div", { class: "pd-row", style: "margin:10px 0 4px;gap:6px" }, h("span", { class: "pd-note", style: "margin:0" }, title), h("span", { style: "flex:1;border-top:1px solid var(--line)" }));
         const pmRow = (pm: ReturnType<typeof pmCtl>): HTMLElement => h("div", { class: "pd-row" }, pm.label, pm.mode.el, pm.sizeLabel, pm.size.el, unitLabel(), pm.secondLabel, pm.second.el, pm.secondUnit);
         const left = h("div", null, form([xy("Position X:", vx, vy), ["Pre-defined sizes:", predefVia.el, unitLabel()],
-          h("div", { class: "pd-row" }, h("label", null, "Padstack mode:"), modeSel.el, h("label", null, "Edit layer:"), editSel),
+          // m_sbPadstackSettings: one horizontal row spanning the grid
+          h("div", { class: "pd-row", style: "flex-wrap:nowrap;gap:6px;margin:0" }, h("label", { style: "white-space:nowrap" }, "Padstack mode:"), modeSel.el, h("label", { style: "white-space:nowrap" }, "Edit layer:"), editSel),
           ["Via diameter:", dia.el, unitLabel()], ["Via hole:", drill.el, unitLabel()]], true));
         const ringForm = form([["Via type:", vtype.el], ["Start layer:", l0.el], ["End layer:", l1.el]], true);
         ringForm.style.gridTemplateColumns = "max-content minmax(0, 1fr) max-content";
-        ringForm.append(ringLabel, ring.el, h("span"), h("label", null, "Protection features:"), prot.el, h("span"));
+        ringForm.append(ringLabel, ring.el, ringPad, h("label", null, "Protection features:"), prot.el, h("span"));
+        // the choices fill their grid cell (wxEXPAND in gbSizer4) instead of shrinking to their arrow
+        for (const c of [vtype.el, l0.el, l1.el]) { c.style.width = "100%"; c.style.minWidth = "0"; }
+        modeSel.el.style.flex = "0 1 auto"; editSel.style.flex = "0 0 auto"; editSel.style.minWidth = "104px";
         const viaBox = box("Vias", h("div", { class: "pd-cols2" }, left, ringForm),
           section("Backdrill"),
           h("div", { class: "pd-row" }, bdLabel, bdMode.el),
