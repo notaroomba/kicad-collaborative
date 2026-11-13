@@ -94,7 +94,7 @@ const names = async (p) => { await settle(p); return p.locator('.hp-item:not(.sk
 const card = (p, name) => p.locator('.hp-item', { has: p.locator('.hp-item-name', { hasText: new RegExp('^' + name + '$') }) });
 const menu = async (p, name, item) => { await card(p, name).locator('.hp-iconbtn').click(); await p.locator('.hp-menu button', { hasText: item }).click(); };
 const toastText = async (p, re) => { try { await p.locator('.hp-toast', { hasText: re }).first().waitFor({ timeout: 5000 }); return true; } catch { return false; } };
-const step = async (name, fn) => { try { await fn(); } catch (e) { check(name, false, String(e.message).split('\n').slice(0, 4).join(' / ')); console.log(netlog.slice(-25).join('\n')); await a.screenshot({ path: out + '/FAIL-' + name.replace(/\W+/g, '-') + '.png' }).catch(() => {}); } };
+const step = async (name, fn) => { try { await fn(); } catch (e) { check(name, false, String(e.message).split('\n').slice(0, 10).join(' / ')); console.log(netlog.slice(-25).join('\n')); await a.screenshot({ path: out + '/FAIL-' + name.replace(/\W+/g, '-') + '.png' }).catch(() => {}); } };
 
 const a = await open(ids.ta); const b = await open(ids.tb);
 await a.waitForSelector('.hp-item:not(.skel)'); await b.waitForSelector('.hp-item:not(.skel)');
@@ -214,10 +214,10 @@ await step('share', async () => {
   check('share link is created, listed and on the clipboard', /\/j\//.test(url) && (await a.evaluate(() => navigator.clipboard.readText())) === url, url);
   await a.screenshot({ path: `${out}/05-share-full.png` });
   // carol joins with it through the Join dialog
-  const c = await open(ids.tc); await c.waitForSelector('.hp-empty');
-  check('a new user sees the empty state with both ways in', await c.locator('.hp-empty button').count() === 2);
+  const c = await open(ids.tc); await c.waitForSelector('.fp');
+  check('a new user sees the first-project page with both ways in for an existing design', await c.locator('.fp-own button').count() === 2);
   await c.screenshot({ path: `${out}/06-empty-state.png` });
-  await c.click('.hp-empty button:has-text("Join with link")'); await c.locator('.hp-modal input').fill(url); await c.click('.hp-modal-f .btn.primary');
+  await c.click('.fp-own button:has-text("Join with link")'); await c.locator('.hp-modal input').fill(url); await c.click('.hp-modal-f .btn.primary');
   await c.waitForURL(/\/p\/.*\/edit/); check('carol joins by pasting the link and lands in the project', c.url().includes(ids.p3));
   await c.waitForTimeout(1500); await c.screenshot({ path: `${out}/07-carol-in-editor.png` });
   // the editor's own Share entry opens the same dialog, read-only for carol
@@ -505,6 +505,35 @@ await step('share dialog: answers out of order, files dropped on it', async () =
   check('…nor over the Join dialog', await dragOver('.hp-scrim'));
   await a.keyboard.press('Escape'); await a.waitForSelector('.hp-modal', { state: 'detached' });
   check('…and over the bare page it still offers an upload', await dragOver('.hp-page'));
+});
+
+await step('a project built in the browser gets a picture', async () => {
+  // Nothing but ops on top of a blank first file: the stored file stays empty, so the picture can only
+  // come from the editor that has the real document (web/editor/thumbpush.ts).
+  const made = (await api(ids.ta, '/api/projects/blank', { method: 'POST', json: { name: 'Browser built' } })).body;
+  const sch = made.docs.find((d) => d.docType === 'kicad_sch');
+  const ws = new WebSocket(BASE.replace(/^http/, 'ws') + '/ws');
+  const got = []; ws.onmessage = (e) => got.push(JSON.parse(e.data));
+  await new Promise((r) => { ws.onopen = r; });
+  ws.send(JSON.stringify({ type: 'hello', proto: 1, token: ids.ta, clientId: 'thumb-1' }));
+  ws.send(JSON.stringify({ type: 'join_doc', docId: sch.docId }));
+  await until(async () => got.some((m) => m.type === 'doc_info'), 8000);
+  const wire = (n, x1, y1, x2, y2) => ({ id: `0000000${n}-aaaa-4bbb-8ccc-00000000000${n}`, typeName: 'SCH_LINE', kind: 'ADDED',
+    sexpr: `(wire (pts (xy ${x1} ${y1}) (xy ${x2} ${y2})) (stroke (width 0) (type default)) (uuid "0000000${n}-aaaa-4bbb-8ccc-00000000000${n}"))` });
+  ws.send(JSON.stringify({ type: 'op', docId: sch.docId, clientOpId: 'thumb-1:1', changes: [wire(1, 50.8, 50.8, 152.4, 50.8), wire(2, 152.4, 50.8, 152.4, 101.6), wire(3, 50.8, 101.6, 152.4, 101.6)] }));
+  await until(async () => got.some((m) => m.type === 'ack'), 8000); ws.close();
+  const before = { status: await a.evaluate((u) => fetch(u).then((r) => r.status), `/api/projects/${made.projectId}/preview.svg`) };
+  const x = await open(ids.ta, undefined, `/p/${made.projectId}/edit?doc=${sch.docId}`);
+  let pic = null;
+  const sent = await until(async () => { const r = await x.evaluate((u) => fetch(u).then(async (r) => ({ s: r.status, t: (await r.text()).slice(0, 200), n: +r.headers.get('content-length') || 0 })), `/api/projects/${made.projectId}/preview.svg`); pic = r; return r.s === 200; }, 20000);
+  check('opening it in the browser editor sends a picture of the sheet', before.status === 404 && sent && /^<svg[^>]*><image /.test(pic.t), `before ${before.status}, after ${JSON.stringify(pic).slice(0, 120)}`);
+  await x.close();
+  await a.goto(BASE + '/'); await a.waitForSelector('.hp-item-name:has-text("Browser built")');
+  const shown = await until(() => card(a, 'Browser built').locator('.hp-thumb.ok img').evaluate((i) => i.naturalWidth > 100 && /preview\.svg/.test(i.src)).catch(() => false), 10000);
+  check('…and its card shows that picture', shown, await card(a, 'Browser built').locator('.hp-thumb').getAttribute('class'));
+  await a.screenshot({ path: `${out}/23-browser-built.png` });
+  await api(ids.ta, `/api/projects/${made.projectId}?permanent=true`, { method: 'DELETE' });
+  await a.goto(BASE + '/'); await a.waitForSelector('.hp-item:not(.skel)');
 });
 
 await step('blank thumbnail + empty trash that fails part-way', async () => {

@@ -440,21 +440,25 @@ pub async fn preview_svg(
     let Some(kicad_cli) = state.cfg.kicad_cli.clone() else {
         // No renderer on this server: serve the latest client-pushed preview.
         let docs = persist::project_documents(&state.pool, id).await?;
-        // Board first; a schematic-only project shows its root sheet.
-        let doc = docs
-            .iter()
-            .find(|d| d.doc_type == "kicad_pcb")
-            .or_else(|| root_schematic(&docs))
-            .ok_or_else(|| AppError::BadRequest("project has no board or schematic".into()))?;
-
-        let Some((_seq, svg)) = persist::get_preview(&state.pool, doc.id, q.fit.unwrap_or(true)).await? else {
+        // Board first.  A project with no board, or whose board has nothing on it yet (nobody
+        // pushes a picture of an empty board), shows its root sheet.
+        let fit = q.fit.unwrap_or(true);
+        let mut svg = None;
+        for doc in docs.iter().find(|d| d.doc_type == "kicad_pcb").into_iter().chain(root_schematic(&docs)) {
+            if let Some((_seq, found)) = persist::get_preview(&state.pool, doc.id, fit).await? {
+                svg = Some(found);
+                break;
+            }
+        }
+        let Some(svg) = svg else {
             return Err(AppError::NotFound);
         };
 
         return Ok((
             [
                 (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
-                (axum::http::header::CACHE_CONTROL, "public, max-age=60"),
+                // not "public": a private project's picture must not sit in a shared cache
+                (axum::http::header::CACHE_CONTROL, "private, max-age=60"),
             ],
             svg,
         )

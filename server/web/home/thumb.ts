@@ -19,33 +19,35 @@ let running = false;
 const MAX_BYTES = 8 * 1024 * 1024;
 const LONG_SIDE = 520;   // px: a card is ~240 css px wide, so this is sharp on a 2× screen
 
-function pickDoc(docs: DocEntry[]): DocEntry | null {
+/** What to try, in order: the board, then the root schematic sheet (a board with nothing on it yet draws nothing). */
+function pickDocs(docs: DocEntry[]): DocEntry[] {
   const board = docs.find((d) => d.docType === "kicad_pcb");
-  if (board) return board;
   const sheets = docs.filter((d) => d.docType === "kicad_sch");
   const pro = docs.find((d) => d.docType === "kicad_pro");
   const stem = pro ? (pro.path.split("/").pop() || "").replace(/\.kicad_pro$/, "") : null;
-  return (stem && sheets.find((d) => d.path.split("/").pop() === `${stem}.kicad_sch`))
+  const root = (stem && sheets.find((d) => d.path.split("/").pop() === `${stem}.kicad_sch`))
     || sheets.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.length - b.path.length)[0] || null;
+  return [board, root].filter((d): d is DocEntry => !!d);
 }
 
 async function draw(projectId: string): Promise<string | null> {
   const K = (window as unknown as { KiCadCanvas?: CanvasApi }).KiCadCanvas;
   if (!K) throw new Error("renderer not loaded yet");
   const info = await api<{ docs: DocEntry[] }>(`/api/projects/${projectId}/info`);
-  const doc = pickDoc(info.docs || []);
-  if (!doc) return null;
-  const text = await api<string>(`/api/docs/${doc.docId}/content`);
-  if (typeof text !== "string" || !text || text.length > MAX_BYTES) return null;
-  const parsed = K.parseDoc(text, doc.docType);
-  // Nothing placed yet (a project that was started blank): a picture of an empty sheet reads as a
-  // broken image, so the card shows its placeholder instead.
-  if (parsed.items && parsed.items.size === 0) return null;
-  const box = parsed.type === "pcb" ? parsed.bbox : [0, 0, parsed.page[0], parsed.page[1]];
-  if (!box || box[2] - box[0] < 0.5 || box[3] - box[1] < 0.5) return null;
-  const long = Math.max(box[2] - box[0], box[3] - box[1], 1);
-  const blob = await K.renderPng(parsed, { dpi: (LONG_SIDE / long) * 25.4, padNumbers: false });
-  return URL.createObjectURL(blob);
+  for (const doc of pickDocs(info.docs || [])) {
+    const text = await api<string>(`/api/docs/${doc.docId}/content`);
+    if (typeof text !== "string" || !text || text.length > MAX_BYTES) continue;
+    const parsed = K.parseDoc(text, doc.docType);
+    // Nothing placed yet: a picture of an empty board or sheet reads as a broken image.  Try the
+    // next document; with nothing anywhere the card shows its placeholder.
+    if (parsed.items && parsed.items.size === 0) continue;
+    const box = parsed.type === "pcb" ? parsed.bbox : [0, 0, parsed.page[0], parsed.page[1]];
+    if (!box || box[2] - box[0] < 0.5 || box[3] - box[1] < 0.5) continue;
+    const long = Math.max(box[2] - box[0], box[3] - box[1], 1);
+    const blob = await K.renderPng(parsed, { dpi: (LONG_SIDE / long) * 25.4, padNumbers: false });
+    return URL.createObjectURL(blob);
+  }
+  return null;
 }
 
 const idle = (fn: () => void) => { const w = window as unknown as { requestIdleCallback?: (f: () => void, o: { timeout: number }) => void }; if (w.requestIdleCallback) w.requestIdleCallback(fn, { timeout: 1500 }); else setTimeout(fn, 60); };

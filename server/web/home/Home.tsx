@@ -138,7 +138,7 @@ function useProjects(kind: "mine" | "gallery", enabled: boolean, userId: number 
 /** The server's preview when it has one, else the board drawn right here (web/home/thumb.ts) once the card is on screen. */
 function Thumb({ id, stamp }: { id: string; stamp: string }) {
   const local = cachedThumb(id, stamp);
-  const [src, setSrc] = useState<string | null>(local || `/api/projects/${id}/preview.svg`);
+  const [src, setSrc] = useState<string | null>(local || `/api/projects/${id}/preview.svg?v=${encodeURIComponent(stamp)}`);
   const [state, setState] = useState<"load" | "ok" | "none">(local ? "ok" : local === null ? "none" : "load");
   const [fallback, setFallback] = useState(false);
   const box = useRef<HTMLDivElement>(null);

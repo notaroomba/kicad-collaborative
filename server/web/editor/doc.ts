@@ -13,6 +13,7 @@ import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
 import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
+import { notePreviewDirty } from "./thumbpush";
 import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ItemSummary, SheetEntry, SvgLayer, WireChange } from "./types";
@@ -123,7 +124,7 @@ export function setDocFromText(text: string) {
   let d: KDoc;
   try { d = KiCadCanvas.parseDoc(text, E.DOC_TYPE); } catch (e) { console.warn("document parse failed", e); return false; }
   applySheetContext(d);
-  E.kdoc = d; E.vbPerMm = 1;
+  E.kdoc = d; E.vbPerMm = 1; notePreviewDirty();
   if (isSch()) E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
   else { const b = E.kdoc.bbox, m = 5; E.vb = [b[0] - m, b[1] - m, (b[2] - b[0]) + 2 * m, (b[3] - b[1]) + 2 * m]; }
   base.replaceChildren(); base.setAttribute("viewBox", E.vb.join(" ")); overlay.setAttribute("viewBox", E.vb.join(" "));
@@ -159,7 +160,7 @@ export function setLayerVisible(key: string, visible: boolean) {
 }
 
 /** Every applied change bumps the document version (the Properties island re-reads on it). */
-export function bumpDoc() { store.slice("document", { version: store.get().document.version + 1 }); if (E.comments.length) drawComments(); }   // pins follow the items they are on
+export function bumpDoc() { notePreviewDirty(); store.slice("document", { version: store.get().document.version + 1 }); if (E.comments.length) drawComments(); }   // pins follow the items they are on
 
 export function applyChanges(changes: WireChange[] | null | undefined) {
   if (!E.kdoc) return;
