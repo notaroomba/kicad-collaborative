@@ -44,6 +44,8 @@ export interface FpPropsModel {
   fields: FpFieldRow[];
   /** attr tokens this dialog does not edit (kept as they are) */
   otherAttrs: string[];
+  /** PANEL_EMBEDDED_FILES: the footprint's (embedded_files (file (name …) …)) by name, and (embedded_fonts) */
+  embeddedFiles: string[]; embedFonts: boolean;
 }
 
 const header = (doc: BoardDoc): SNode | null => { const st = (doc as unknown as { fpState?: { fp: SNode } }).fpState; return st ? st.fp : null; };
@@ -99,6 +101,8 @@ export function readFpProps(doc: BoardDoc): FpPropsModel {
     netTieGroups: nt ? nt.slice(1).map(str).filter(Boolean) : [], dupPadsAreJumpers: yes(one("duplicate_pad_numbers_are_jumpers")),
     jumperGroups: jg ? jg.slice(1).filter(isList).map((g: SNode) => g.map(str).join(", ")) : [],
     models, fields: fieldItems(doc).map(fieldRow), otherAttrs: attrs.filter((a: string) => !known.includes(a)),
+    embeddedFiles: K.kids(one("embedded_files") || ["embedded_files"], "file").map((f: SNode) => str((K.kid(f, "name") || [])[1])).filter(Boolean),
+    embedFonts: yes(one("embedded_fonts")),
   };
 }
 
@@ -268,6 +272,13 @@ export function fpPropsChanges(doc: BoardDoc, m: FpPropsModel): PcbChange[] {
     const oldBySig = new Map<string, SNode>(); old.forEach((n, i) => oldBySig.set(modelSig(before.models[i]), n));
     for (const n of old) h.splice(h.indexOf(n), 1);
     for (const mm of m.models.filter((x) => x.file)) h.push(oldBySig.get(modelSig(mm)) || modelNode(mm));
+  }
+  if (m.embedFonts !== before.embedFonts) setHeader(h, "embedded_fonts", [m.embedFonts ? "yes" : "no"]);
+  if ((m.embeddedFiles || []).join("\n") !== before.embeddedFiles.join("\n")) {
+    // only removal happens here: a file dropped from the list goes, and an empty list drops (embedded_files) as the writer does
+    const ef = K.kid(h, "embedded_files"); const keepNames = new Set(m.embeddedFiles || []);
+    if (ef) { for (let j = ef.length - 1; j >= 1; j--) { const c = ef[j]; if (isList(c) && c[0] === "file" && !keepNames.has(str((K.kid(c, "name") || [])[1]))) ef.splice(j, 1); }
+      if (!K.kids(ef, "file").length) setHeader(h, "embedded_files", null); }
   }
   const changes: PcbChange[] = [];
   if (K.serialize(h) !== K.serialize(h0)) changes.push({ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: K.serialize(h) } as PcbChange);

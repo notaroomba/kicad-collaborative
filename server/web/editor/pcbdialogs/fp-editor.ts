@@ -6,6 +6,7 @@
 //   Renumber Pads          DIALOG_ENUM_PADS (the parameters; the clicking is the pad tool's)
 //   Footprint Checker      DIALOG_FOOTPRINT_CHECKER (markers list, Run Checks, Delete All Markers)
 // The logic is pcb-tools' (fp-props.ts, fp-pads.ts, fp-check.ts); these build the controls and commit the changes.
+import { zstdDecompress } from "../../dialogs/zstd";
 import { box, checkField, download, errorMessage, fmtLenU, form, grid, gridButtons, h, lenField, messageBox, note, notebook, numField, openDialog, parseLen, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -79,6 +80,10 @@ export function footprintPropertiesDialog(ctx: ToolCtx, host: FpPropsHost = {}):
   };
 
   let api: Any = null;
+  // Embedded Files
+  const efRows: Record<string, CellValue>[] = m.embeddedFiles.map((n: string) => ({ name: n, ref: "kicad-embed://" + n }));
+  let efGrid: ReturnType<typeof grid> | null = null;
+  const embedFonts = checkField(m.embedFonts, "Embed fonts", { ro, key: "embedFonts", tip: "Store a copy of all fonts used" });
   const tabs = notebook([
     { label: "General", build(el) {
       const fg = fieldsGrid = grid([{ label: "", key: "name", width: "120px", readOnly: (r) => FPP().isMandatoryName(String(r.name)) && !!r.id }, { label: "Text Items", key: "value" }, { label: "Show", key: "show", type: "check" },
@@ -127,6 +132,21 @@ export function footprintPropertiesDialog(ctx: ToolCtx, host: FpPropsHost = {}):
       modelGrid.el.addEventListener("change", () => syncModels());
       if (models.length) { modelGrid.select(0); }
     } },
+    // PANEL_EMBEDDED_FILES: Filename / Embedded Reference, delete, Embed fonts, Export...
+    { label: "Embedded Files", build(el) {
+      const ref = (n: string) => "kicad-embed://" + n;
+      efGrid = grid([{ label: "Filename", key: "name", readOnly: () => true }, { label: "Embedded Reference", key: "ref", readOnly: () => true }], efRows, { ro: true, height: "260px" });
+      let efSel = -1; efGrid.el.addEventListener("click", (ev) => { const tr = (ev.target as HTMLElement).closest("tr"); if (tr && tr.parentElement && tr.parentElement.tagName === "TBODY") efSel = Array.from(tr.parentElement.children).indexOf(tr); });
+      const del = h("button", { type: "button", class: "kbtn", disabled: ro, title: "Remove embedded file", "data-k": "efDelete" }, "🗑");
+      del.addEventListener("click", () => { const rows = efGrid!.rows(); if (efSel < 0 || efSel >= rows.length) return; rows.splice(efSel, 1); efSel = Math.min(efSel, rows.length - 1); efGrid!.refresh(); });
+      const exp = h("button", { type: "button", class: "kbtn", "data-k": "efExport" }, "Export...");
+      exp.addEventListener("click", () => {
+        const rows = efGrid!.rows(); const names = efSel >= 0 && efSel < rows.length ? [String(rows[efSel].name)] : rows.map((r) => String(r.name));
+        for (const n of names) { const bytes = embeddedFileBytes(doc, n); if (bytes) downloadBytes(n, bytes); else errorMessage(`Could not read the embedded file '${n}'.`); }
+      });
+      el.append(efGrid.el, h("div", { class: "pd-row", style: "margin-top:6px;gap:8px" }, del, h("span", { style: "flex:1" }), embedFonts.el, exp));
+      void ref;
+    } },
   ]);
   const collect = (): Any => {
     syncModels();
@@ -138,6 +158,7 @@ export function footprintPropertiesDialog(ctx: ToolCtx, host: FpPropsHost = {}):
     const p = FPP().parsePaste(pasteT.get(), parseLen); if (p) { out.pasteMargin = p.offset; out.pasteRatio = p.ratio; }
     out.netTieGroups = ntGrid.rows().map((r) => String(r.g || "")); out.dupPadsAreJumpers = dupJ.get(); out.jumperGroups = jgGrid.rows().map((r) => String(r.g || "")).filter((g) => g.trim());
     out.models = models.filter((x: Any) => x.file);
+    out.embeddedFiles = (efGrid ? efGrid.rows() : efRows).map((r) => String(r.name)); out.embedFonts = embedFonts.get();
     out.fields = (fieldsGrid ? fieldsGrid.rows() : fieldRows).map((r: Record<string, CellValue>) => ({ ...r, w: Number(r.w), h: Number(r.h), thick: Number(r.thick), rot: Number(r.rot) || 0, x: Number(r.x) || 0, y: Number(r.y) || 0, show: !!r.show, italic: !!r.italic, unconstrained: !!r.unconstrained, name: String(r.name), value: String(r.value), layer: String(r.layer), id: String(r.id || "") }));
     return out;
   };
@@ -343,4 +364,19 @@ export function footprintUsersDialog(fp: { lib: string; name: string; padCount: 
     },
     ok() { return true; } });
   return !!api;
+}
+
+// ---------------------------------------------------------------- embedded files
+/** EMBEDDED_FILES::DecompressAndDecode of the open footprint's file `name`: base64, then the zstd frame. */
+function embeddedFileBytes(doc: KDoc, name: string): Uint8Array | null {
+  const fp = (doc as unknown as { fpState?: { fp: SNode } }).fpState?.fp; if (!fp) return null;
+  const ef = KiCadCanvas.kid(fp, "embedded_files"); if (!ef) return null;
+  const f = (KiCadCanvas.kids(ef, "file") as SNode[]).find((x) => String((KiCadCanvas.kid(x, "name") || [])[1] ?? "") === name); if (!f) return null;
+  const d = KiCadCanvas.kid(f, "data"); if (!d) return null;
+  const b64 = d.slice(1).map((x) => String(x)).join("").replace(/[|\s]/g, "");
+  try { const bin = atob(b64); const raw = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i); return zstdDecompress(raw); } catch { return null; }
+}
+function downloadBytes(name: string, bytes: Uint8Array): void {
+  const a = h("a", { href: URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" })), download: name }) as HTMLAnchorElement;
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }

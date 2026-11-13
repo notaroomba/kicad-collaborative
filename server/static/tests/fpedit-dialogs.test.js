@@ -197,3 +197,18 @@ test("Footprint users: filters, the footprint field (inherited), pin maps, deriv
   const lim = U.footprintUsers(libs, { lib: "Resistor_SMD", name: "R_0603_1608Metric", max: 1 });
   assert.equal(lim.limited, true); assert.equal(U.usersStatus(lim.matches.length, lim.limited), "This footprint is referenced by more than 1 symbols");
 });
+
+test("Footprint Properties Embedded Files: lists the files, Delete drops one (and the empty block), Embed fonts toggles", () => {
+  const src = FP.replace(/\)\n$/, `	(embedded_fonts no)
+	(embedded_files (file (name "a.step") (type model) (data |KLUv/SAEIQAAYWJjZA==|) (checksum "00")) (file (name "b.pdf") (type datasheet) (data |KLUv/SAEIQAAYWJjZA==|) (checksum "11")))
+)
+`);
+  const doc = fpDoc(src); const m = FPP.readFpProps(doc);
+  assert.deepEqual(m.embeddedFiles, ["a.step", "b.pdf"]); assert.equal(m.embedFonts, false);
+  assert.deepEqual(FPP.fpPropsChanges(doc, FPP.readFpProps(doc)), []);
+  m.embeddedFiles = ["b.pdf"]; m.embedFonts = true;
+  const h = FPP.fpPropsChanges(doc, m).find((c) => c.id === "footprint"); assert.ok(h);
+  assert.match(h.sexpr, /\(embedded_fonts yes\)/); assert.ok(!/a\.step/.test(h.sexpr)); assert.match(h.sexpr, /b\.pdf/);
+  const m2 = FPP.readFpProps(doc); m2.embeddedFiles = [];
+  const h2 = FPP.fpPropsChanges(doc, m2).find((c) => c.id === "footprint"); assert.ok(!/embedded_files/.test(h2.sexpr));
+});
