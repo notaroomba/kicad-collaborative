@@ -11,6 +11,7 @@ import { fitBox } from "../view";
 import { layerDisplayName, netClassOf } from "./appearance";
 import { KC, currentDocId, isSchDoc, kdoc, pcbTools, tctx } from "./core";
 import { pageOfDoc, schDocs, sheetDoc } from "./hierarchy";
+import { drillCells, drillLines, groupLeafIds, groupName } from "./search-model";
 
 interface PropsHelpers { formatLength(mm: number, unit: string): string; netNameOf(doc: KDoc, n: SNode): string; yes(n: SNode, k: string, d: boolean): boolean }
 const H = (): PropsHelpers => (window.CollabTools.props as unknown as { helpers: PropsHelpers }).helpers;
@@ -22,12 +23,15 @@ const PCB_TABS: SearchTab[] = [
   { id: "nets", label: "Nets", columns: ["Name", "Class"] },
   { id: "ratsnest", label: "Ratsnest", columns: ["Name", "Class"] },
   { id: "text", label: "Text", columns: ["Type", "Text", "Layer", "X", "Y"] },
+  { id: "groups", label: "Groups", columns: ["Type", "Name", "X", "Y"] },
+  { id: "drills", label: "Drills", columns: ["Count", "Shape", "X Size", "Y Size", "Plated", "Via/Pad", "Start Layer", "Stop Layer"] },
 ];
 const SCH_TABS: SearchTab[] = [
   { id: "symbols", label: "Symbols", columns: ["Reference", "Value", "Footprint", "Page", "X", "Y", "Excl. Sim", "Excl. BOM", "Excl. Board", "Excl. Pos Files", "DNP", "Library Link", "Library Description"] },
   { id: "power", label: "Power", columns: ["Reference", "Value", "Page", "X", "Y"] },
   { id: "text", label: "Text", columns: ["Type", "Text", "Page", "X", "Y"] },
   { id: "labels", label: "Labels", columns: ["Type", "Name", "Page", "X", "Y"] },
+  { id: "groups", label: "Groups", columns: ["Name", "Page", "X", "Y"] },
 ];
 export function searchTabs(): SearchTab[] { return isSchDoc() ? SCH_TABS : PCB_TABS; }
 
@@ -63,6 +67,18 @@ function pcbRows(tab: string, doc: KDoc): SearchRow[] {
       const b = it.bbox; const x = K.kid(it.kind === "dimension" && t ? t : n, "at") ? at[0] : b ? (b[0] + b[2]) / 2 : 0, y = K.kid(it.kind === "dimension" && t ? t : n, "at") ? at[1] : b ? (b[1] + b[3]) / 2 : 0;
       rows.push({ key: it.id, ids: [it.id], cells: [it.kind === "gr_text" ? "Text" : it.kind === "gr_text_box" ? "Textbox" : "Dimension", t ? K.str(t[1]) : "", layerDisplayName(doc, K.str((K.kid(n, "layer") || [])[1])), len(x), len(y)] });
     }
+  } else if (tab === "groups") {
+    // generators (tuning patterns) are internal, not user-facing grouping
+    const groups = new Map<string, unknown[]>(); for (const it of doc.items.values()) if (it.kind === "group") groups.set(it.id, it.node as unknown[]);
+    for (const it of doc.items.values()) {
+      if (it.kind !== "group") continue; const b = KC().bboxOf(doc, groupLeafIds(it.node as unknown[], groups));
+      rows.push({ key: it.id, ids: [it.id], cells: ["Group", groupName(it.node as unknown[]), b ? len((b[0] + b[2]) / 2) : "", b ? len((b[1] + b[3]) / 2) : ""] });
+    }
+  } else if (tab === "drills") {
+    const copper = (doc as unknown as { copper?: string[] }).copper || [];
+    // KiCad selects the pads and vias of the row; the web selects the vias and the footprints that hold the pads
+    for (const d of drillLines(doc.items.values() as Iterable<{ id: string; kind: string; node: unknown[] }>, copper))
+      rows.push({ key: "drill:" + [d.xSize, d.ySize, d.slot, d.plated, d.pad, d.start, d.stop].join("|"), ids: d.ids, cells: drillCells(d, len, (l) => layerDisplayName(doc, l)) });
   }
   return rows;
 }
@@ -81,10 +97,15 @@ function schRows(tab: string): SearchRow[] {
         if (tab === "power" && power) row([ref, field(n, "Value"), page, len(at()[0]), len(at()[1])]);
       } else if (tab === "text" && (it.kind === "text" || it.kind === "text_box")) row([it.kind === "text" ? "Text" : "Text Box", K.str(n[1]), page, len(at()[0]), len(at()[1])]);
       else if (tab === "labels" && LABEL_TYPES[it.kind]) row([LABEL_TYPES[it.kind], K.str(n[1]), page, len(at()[0]), len(at()[1])]);
+      else if (tab === "groups" && it.kind === "group") {
+        const groups = new Map<string, unknown[]>(); for (const g of doc.items.values()) if (g.kind === "group") groups.set(g.id, g.node as unknown[]);
+        const b = K.bboxOf(doc, groupLeafIds(n as unknown[], groups));
+        row([groupName(n as unknown[]), page, b ? len((b[0] + b[2]) / 2) : "", b ? len((b[1] + b[3]) / 2) : ""]);
+      }
     }
   }
   const col = tab === "text" || tab === "labels" ? 1 : 0;
-  rows.sort((a, b) => a.cells[col].localeCompare(b.cells[col], undefined, { numeric: true }));
+  if (tab !== "groups") rows.sort((a, b) => a.cells[col].localeCompare(b.cells[col], undefined, { numeric: true }));
   return rows;
 }
 
