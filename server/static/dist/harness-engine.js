@@ -5696,7 +5696,7 @@ function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
           const tg = g2;
           const pen = tg.w > 0 ? tg.w : tg.size / 8;
           ctx.save();
-          drawTextStroke(ctx, Object.assign({}, tg, { w: pen + extra, knockout: false }), minW + extra, halo, base, false);
+          drawTextStroke(ctx, Object.assign({}, tg, { w: pen + extra, knockout: false, layoutW: tg.layoutW !== void 0 ? tg.layoutW : pen }), minW + extra, halo, base, false);
           ctx.restore();
           continue;
         }
@@ -5797,6 +5797,7 @@ function drawTextStroke(ctx, g2, minW, color, base, flip, bgColor) {
     drawStrokeText(ctx, base, Object.assign(spec, { layoutPen: lay }), bgColor || PCB_BG, minW);
     return;
   }
+  if (g2.layoutW !== void 0) spec.layoutPen = g2.layoutW;
   if (g2.multiline && text2.indexOf("\n") >= 0) {
     const lines = splitLines(text2), step = g2.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g2.v);
     for (let i = 0; i < lines.length; i++) {
@@ -51059,7 +51060,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -51718,7 +51719,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -54583,7 +54584,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -55199,7 +55200,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
   if (typeof clipOrFillRule === "number") {
