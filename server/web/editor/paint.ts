@@ -21,6 +21,8 @@ export interface PaintStats {
   full: number; strips: number; blits: number; scaled: number; lastFullMs: number;
   /** zoom frames drawn from a level (scaled down), level renders made for a frame, prefetch chunks rendered in idle time */
   down: number; levels: number; prefetch: number;
+  /** zoom frames of those shown as a composited plate (no copy) */
+  plates: number;
   /** the largest frame-to-level scale ratio a zoom frame was drawn with (≤ 1: never scaled up) */
   maxDownK: number;
   /** what the last painted frame was: "full" | "strip" | "blit" | "scaled" | "down", and its view */
@@ -43,7 +45,7 @@ const SCALED_MIN_MS = 33;
 // zoom frames come from zoom levels; a faster one is simply redone every frame.
 const SLOW_MS = 12;
 let wasScaling = false;
-export const stats: PaintStats = { full: 0, strips: 0, blits: 0, scaled: 0, lastFullMs: 0, down: 0, levels: 0, prefetch: 0, maxDownK: 0, last: "", view: null };
+export const stats: PaintStats = { full: 0, strips: 0, blits: 0, scaled: 0, lastFullMs: 0, down: 0, levels: 0, prefetch: 0, plates: 0, maxDownK: 0, last: "", view: null };
 
 function ensureLayer(w: number, h: number): Layer | null {
   if (!layer) {
@@ -161,8 +163,14 @@ const REST_DELAY_MS = 150;
 let restPending = false;
 
 function dropLevels(): void {
+  hidePlate();
   for (const L of levels) { L.cv.width = 0; L.cv.height = 0; }
   levels = []; queue = []; levelKey = null;
+}
+/** Let go of the cached pass and the zoom levels (the document closed): their memory is freed at once. */
+export function releaseLayers(): void {
+  dropLevels();
+  if (layer) { layer.cv.width = 0; layer.cv.height = 0; layer = null; }
 }
 function levelsValid(doc: KDoc, opts: Record<string, unknown>): boolean {
   return !!levelKey && levelKey.doc === doc && sameOpts(opts, levelKey.opts) && sameGeoms(doc, levelKey.geoms);
@@ -210,7 +218,7 @@ function newLevel(view: KView, S: number, x0: number, y0: number, x1: number, y1
   const byAge = levels.filter((x) => x !== L).sort((a, b) => a.used - b.used);
   for (const x of byAge) {
     if (total <= budget) break;
-    total -= x.w * x.h; x.cv.width = 0; x.cv.height = 0;
+    total -= x.w * x.h; if (x.cv === plate) hidePlate(); x.cv.width = 0; x.cv.height = 0;
     levels = levels.filter((y) => y !== x); queue = queue.filter((y) => y !== x);
   }
   return L;
@@ -302,16 +310,48 @@ function idleStep(): void {
   if (queue.length) scheduleIdle();
 }
 
+// A zoom frame shows its level as a plate: the level's own canvas, placed under the (cleared) target canvas with a CSS
+// transform, so the compositor scales it — on the GPU where there is one, and off the main thread where there is not —
+// instead of a scaled copy into the target on every frame.  The overlays the frame draws next land on the cleared target,
+// over the plate, as they would over the copy.  The plate goes as soon as a frame draws the document into the target.
+let plate: HTMLCanvasElement | null = null;
+/** Paint tuning the perf probes flip: plate — zoom frames composited from a plate (false: copied into the target). */
+export const paintConfig = { plate: true };
+function hidePlate(): void {
+  if (!plate) return;
+  if (plate.parentNode) plate.parentNode.removeChild(plate);
+  plate = null;
+}
+function showPlate(target: CanvasRenderingContext2D, L: Level, k: number, ox: number, oy: number): boolean {
+  const cv = target.canvas as HTMLCanvasElement, parent = cv.parentNode;
+  if (!paintConfig.plate || !parent || typeof cv.getBoundingClientRect !== "function") return false;
+  const st = L.cv.style, dpr = L.dpr;
+  if (plate !== L.cv) {
+    hidePlate();
+    st.position = "absolute"; st.left = "0"; st.top = "0"; st.margin = "0"; st.transformOrigin = "0 0"; st.pointerEvents = "none"; st.willChange = "transform";
+    parent.insertBefore(L.cv, cv);
+    plate = L.cv;
+  }
+  const wc = L.w / dpr + "px", hc = L.h / dpr + "px";
+  if (st.width !== wc) st.width = wc;
+  if (st.height !== hc) st.height = hc;
+  st.transform = `translate(${ox / dpr}px, ${oy / dpr}px) scale(${k})`;
+  target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.clearRect(0, 0, cv.width, cv.height); target.restore();
+  return true;
+}
+
 function blitLevel(target: CanvasRenderingContext2D, L: Level, view: KView): void {
   const { k, ox, oy } = placement(L, view);
+  L.used = performance.now();
+  stats.down++; stats.maxDownK = Math.max(stats.maxDownK, k); stats.last = "down";
+  if (showPlate(target, L, k, ox, oy)) { stats.plates++; return; }
+  hidePlate();
   target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
   // bilinear: a level is never more than LEVEL_SPAN above the frame, so every source pixel is sampled (mipmaps would
   // only soften it), and it is the cheapest filter where the canvas rasters on the CPU
   target.imageSmoothingEnabled = true; target.imageSmoothingQuality = "low";
   target.drawImage(L.cv, ox, oy, L.w * k, L.h * k);
   target.restore();
-  L.used = performance.now();
-  stats.down++; stats.maxDownK = Math.max(stats.maxDownK, k); stats.last = "down";
 }
 
 /**
@@ -327,7 +367,7 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
   stats.view = view;
   const now = performance.now(), sincePaint = now - lastPaint; lastPaint = now;
   const l = ensureLayer(W, H);
-  if (!l) { KiCadCanvas.render(doc, target, view, opts as KRenderOpts); wasScaling = !!zoom; return; }
+  if (!l) { hidePlate(); KiCadCanvas.render(doc, target, view, opts as KRenderOpts); wasScaling = !!zoom; return; }
   // the cost of a pass: what render and its raster took, or — where the raster runs elsewhere (a GPU) — the interval
   // between two frames that were both full passes
   if (lastWasFull && zoom && sincePaint < 250) frameMs = frameMs ? (frameMs + sincePaint - 2) / 2 : sincePaint - 2;
@@ -353,7 +393,7 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
       const dpr = view.dpr || 1, k = view.zoom / lv.zoom;
       const ox = view.panX * dpr - lv.panX * dpr * k, oy = view.panY * dpr - lv.panY * dpr * k;
       const bg = backgroundOf(doc, opts);
-      target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1;
+      hidePlate(); target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1;
       if (bg) { target.fillStyle = bg; target.fillRect(0, 0, W, H); } else target.clearRect(0, 0, W, H);
       target.imageSmoothingEnabled = true; target.drawImage(l.cv, ox, oy, W * k, H * k); target.restore();
       stats.scaled++; stats.last = "scaled"; wasScaling = true;
@@ -387,7 +427,7 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
     } else { fullAndBlit(l, doc, view, opts, target, now); return finishFull(doc, view, opts, zoom, W, H); }
   } else { fullAndBlit(l, doc, view, opts, target, now); return finishFull(doc, view, opts, zoom, W, H); }
   wasScaling = !!zoom;
-  target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
+  hidePlate(); target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
   target.drawImage(l.cv, 0, 0); target.restore();
   if (stand) scheduleRest(() => { invalidateLayerOnly(); onRest(); }, 160);
 }
@@ -397,7 +437,7 @@ function invalidateLayerOnly(): void { if (layer) layer.view = null; }
 /** A full pass into the layer and onto the target, timed with its raster (the blit reads the layer). */
 function fullAndBlit(l: Layer, doc: KDoc, view: KView, opts: Record<string, unknown>, target: CanvasRenderingContext2D, t0: number): void {
   full(l, doc, view, opts);
-  target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
+  hidePlate(); target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
   target.drawImage(l.cv, 0, 0); target.restore();
   l.ms = performance.now() - t0; stats.lastFullMs = l.ms; stats.last = "full";
   jsMs = Math.max(jsMs * 0.7, l.ms);

@@ -14,6 +14,7 @@ import { E } from "./state";
 import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
 import { notePreviewDirty } from "./thumbpush";
+import { releaseLayers } from "./paint";
 import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
 import { editorDocs, firstDoc, rootSchematicOf } from "./bootpick";
 import type { Boot } from "./boot";
@@ -331,6 +332,7 @@ export function leaveDoc() {
   clearInterval(E.renderTimer); E.renderTimer = 0;
   E.items = []; E.sheets = []; E.selected = null; E.drag = null; E.boxSel = null; E.measure = null; E.selection = new Set(); E.highlightIds = null; E.peerState = {}; E.comments = []; E.followPeer = null; E.layers = {};
   E.kdoc = null; E.loadedText = null; E.layersSeeded = false; canvas.style.display = "none"; if (E.renderReq) { cancelAnimationFrame(E.renderReq); E.renderReq = 0; }
+  releaseLayers();   // the cached pass and the zoom levels of the document left
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
   closeThread();
   store.slice("document", { layers: [], hiddenLayers: [], copperLayers: [], items: [], sheets: [], hasDoc: false, notice: null });

@@ -9,7 +9,7 @@ import { drawHover } from "./gestures";
 import { anchorMm, breakFollow, peerName, renderPeers, sendPresence } from "./peers";
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
-import { paintDocument, stats as paintStats } from "./paint";
+import { paintConfig, paintDocument, stats as paintStats } from "./paint";
 import { activeModule, toolCtx } from "./tools";
 import { drawAppOverlays } from "./overlays";
 import { toast } from "./util";
@@ -53,8 +53,10 @@ export function requestZoomEnd() { if (E.renderFull !== true && E.renderFull !==
 /** The full pass once the view rests after a zoom or pan stand-in (the zoom levels are kept). */
 function requestRestRender() { if (E.renderFull !== true) E.renderFull = "rest"; requestRepaint(); }
 E.paintStats = paintStats;   // frame counters (full passes, strip pans, blits, scaled zoom frames) for the perf tests
+E.paintConfig = paintConfig;   // paint tuning the perf tests flip (paint.ts)
 /** Repaint on the next frame, re-rendering the document only when it, the options or the view changed (paint.ts). */
 export function requestRepaint() { if (E.renderReq || !E.kdoc) return; E.renderReq = requestAnimationFrame(() => { E.renderReq = 0; drawCanvas(); }); }
+E.requestRepaint = requestRepaint;
    // bitmaps decode asynchronously; repaint once they are ready
 export function sizeCanvas() {
   // the backing store is the stage in device pixels exactly (E.canvasPx, from the device-pixel-content-box
