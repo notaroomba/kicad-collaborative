@@ -269,6 +269,8 @@ function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { retu
 function describe(it: KItem | string): string {
   const P = (window as unknown as { PcbTools?: { itemDescription?: (d: KDoc, id: string, u: string) => string } }).PcbTools;
   if (!isSch() && P && P.itemDescription && E.kdoc) { const t = P.itemDescription(E.kdoc as KDoc, typeof it === "string" ? it : it.id, E.units); if (t) return t; }
+  const S = CollabTools.sch as unknown as { itemDescription?: (d: KDoc, id: string, u: string) => string } | undefined;
+  if (isSch() && S && S.itemDescription && E.kdoc) { const t = S.itemDescription(E.kdoc as KDoc, typeof it === "string" ? it : it.id, E.units); if (t) return t; }
   if (typeof it === "string") return it;
   const names = (CollabTools.props && CollabTools.props.KIND_NAMES) || {};
   const kind = names[it.kind] || it.kind.replace(/^gr_/, "").replace(/_/g, " ").replace(/^./, (ch) => ch.toUpperCase());

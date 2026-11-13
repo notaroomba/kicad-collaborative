@@ -67,5 +67,21 @@ test("an unmoved drag that was only turned still commits the turn", () => {
   assert.strictEqual(K.atOf(doc.items.get("l1").node)[2], 90);
 });
 
+test("Clarify Selection rows use GetItemDescription wording", () => {
+  const doc = K.parseDoc(HEAD + W("w1", [10.16, 10.16], [20.32, 10.16]) + L("l1", [15.24, 10.16]) +
+    '(bus (pts (xy 0 0) (xy 0 5.08)) (stroke (width 0) (type default)) (uuid "b1"))' +
+    '(polyline (pts (xy 0 0) (xy 5.08 5.08) (xy 10.16 0)) (stroke (width 0) (type default)) (uuid "p1"))' +
+    '(polyline (pts (xy 0 0) (xy 5.08 5.08)) (stroke (width 0) (type default)) (uuid "p2"))' +
+    '(junction (at 1 1) (diameter 0) (color 0 0 0 0) (uuid "j1"))' +
+    '(global_label "A_VERY_LONG_GLOBAL_LABEL_NAME_THAT_GOES_ON_AND_ON" (shape input) (at 3 3 0) (effects (font (size 1.27 1.27))) (uuid "g1"))' + ")");
+  assert.strictEqual(sch.itemDescription(doc, "w1", "mm"), "Horizontal Wire, length 10.16 mm");
+  assert.strictEqual(sch.itemDescription(doc, "b1", "mil"), "Vertical Bus, length 200 mils");
+  assert.strictEqual(sch.itemDescription(doc, "p1", "mm"), "Polyline, 3 points");
+  assert.ok(/^Graphic Line, length /.test(sch.itemDescription(doc, "p2", "mm")));
+  assert.strictEqual(sch.itemDescription(doc, "l1", "mm"), "Label 'N1'");
+  assert.strictEqual(sch.itemDescription(doc, "j1", "mm"), "Junction");
+  assert.strictEqual(sch.itemDescription(doc, "g1", "mm"), "Global Label 'A_VERY_LONG_GLOBAL_LABEL_NAME_THAT...'");
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

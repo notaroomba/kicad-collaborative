@@ -316,3 +316,73 @@ export function msgPanelInfo(doc: KDoc, sel: SchMsgSel, o: SchMsgOpts): MsgItem[
     default: return [];   // SCH_NO_CONNECT and the rest: SCH_ITEM::GetMsgPanelInfo, nothing outside a symbol
   }
 }
+
+/** KIUI::EllipsizeMenuText: escapes undone, line breaks and tabs folded, anything past 36 characters cut to 34 and "...". */
+export function ellipsizeMenuText(s: string): string {
+  const t = unescapeString(s).replace(/[\n\r\t]/g, " ");
+  return t.length > 36 ? t.slice(0, 34) + "..." : t;
+}
+/**
+ * EDA_ITEM::GetItemDescription( aUnitsProvider, aFull = false ) of a schematic item: the wording of the Clarify Selection
+ * menu (SELECTION_TOOL::doSelectionMenu), from sch_line.cpp, sch_symbol.cpp, sch_label.cpp, sch_shape.cpp, sch_sheet.cpp …
+ * `field` names a symbol / sheet field (SCH_FIELD::GetItemDescription), `pin` a symbol pin by number.
+ */
+export function itemDescription(doc: KDoc, id: string, units: Units, sub?: { field?: string; pin?: string }): string {
+  const it = doc.items.get(id); if (!it) return "";
+  const n = it.node, L = (mm: number) => messageText(mm, units, "sch", true), text = () => ellipsizeMenuText(str(n[1]));
+  if (sub && sub.field !== undefined) {
+    const f = fieldNode(n, sub.field), content = f ? ellipsizeMenuText(str(f[2])) : "";
+    return content ? `Field ${unescapeString(sub.field)} '${content}'` : `Field ${unescapeString(sub.field)} (empty)`;
+  }
+  switch (it.kind) {
+    case "symbol": {
+      const libId = str((kid(n, "lib_id") || [])[1]), name = libId.slice(libId.indexOf(":") + 1);
+      const ref = ellipsizeMenuText(it.ref || fieldText(n, "Reference"));
+      if (sub && sub.pin !== undefined) return `Symbol ${ref} Pin ${sub.pin}`;
+      return `Symbol ${ref} [${ellipsizeMenuText(name)}]`;
+    }
+    case "wire": case "bus": case "polyline": {
+      const p = ptsOf(n);
+      if (it.kind === "polyline" && p.length !== 2) return `Polyline, ${p.length} points`;   // SCH_SHAPE POLY
+      const what = it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphic Line";
+      const [a, b] = p.length >= 2 ? [p[0], p[p.length - 1]] : [[0, 0], [0, 0]];
+      const dir = a[0] === b[0] ? "Vertical " : a[1] === b[1] ? "Horizontal " : "";
+      return `${dir}${what}, length ${L(Math.hypot(b[0] - a[0], b[1] - a[1]))}`;
+    }
+    case "junction": return "Junction";
+    case "no_connect": return "No Connect";
+    case "bus_entry": return "Bus to wire entry";
+    case "label": return `Label '${text()}'`;
+    case "global_label": return `Global Label '${text()}'`;
+    case "hierarchical_label": return `Hierarchical Label '${text()}'`;
+    case "directive_label": case "netclass_flag": {
+      const f = kids(n, "property")[0]; if (!f) return "Directive Label";
+      const content = ellipsizeMenuText(str(f[2])), name = unescapeString(str(f[1]));
+      return content ? `Directive Label [${name} ${content}]` : `Directive Label [${name} (empty)]`;
+    }
+    case "text": return `Graphic Text '${text()}'`;
+    case "text_box": return `Text box '${text()}'`;
+    case "sheet": return `Hierarchical Sheet '${ellipsizeMenuText(fieldText(n, "Sheetname") || fieldText(n, "Sheet name"))}'`;
+    case "image": return "Image";
+    case "rule_area": return "Schematic rule area";
+    case "table": { const c = kid(n, "column_count"); return `${c ? num(c[1], 0) : 0} Column Table`; }
+    case "rectangle": { const [, , w, h] = boxOf(n); return `Rectangle, width ${L(Math.abs(w))} height ${L(Math.abs(h))}`; }
+    case "circle": {
+      const c = kid(n, "center"), r = kid(n, "radius"), e = kid(n, "end");
+      const rad = r ? num(r[1]) : c && e ? Math.hypot(num(e[1]) - num(c[1]), num(e[2]) - num(c[2])) : 0;
+      return `Circle, radius ${L(rad)}`;
+    }
+    case "arc": {
+      const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end");
+      const A = s ? [num(s[1]), num(s[2])] : [0, 0], M = m ? [num(m[1]), num(m[2])] : A, B = e ? [num(e[1]), num(e[2])] : A;
+      const c = circumcentre(A, M, B); return `Arc, radius ${L(c ? Math.hypot(A[0] - c[0], A[1] - c[1]) : 0)}`;
+    }
+    case "bezier": return `Bezier Curve, ${ptsOf(n).length} points`;
+    case "ellipse": case "ellipse_arc": {
+      const v = (k: string) => num((kid(n, k) || [])[1], 0);
+      return `${it.kind === "ellipse" ? "Ellipse" : "Elliptical Arc"}, ${L(v("major_radius"))} x ${L(v("minor_radius"))}`;
+    }
+    case "group": { const nm = kid(n, "name") ? str(kid(n, "name")![1]) : str(n[1]), m = kid(n, "members"); const cnt = m ? m.length - 1 : 0; return nm ? `Group '${nm}', ${cnt} members` : `Unnamed Group, ${cnt} members`; }
+    default: return it.kind;
+  }
+}
