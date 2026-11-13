@@ -1,12 +1,12 @@
 // FirstProject.tsx — what the projects home shows someone with no projects yet: one clear way to
-// begin (the guided first project), the starter templates, and the ways in for people who already
+// begin (the guided first project), and the ways in for people who already
 // have a design (upload it, or join one that was shared).
 import { useEffect, useState } from "react";
 import { listTemplates, type Template } from "../home/api";
 import { Ic } from "../home/ui";
 
-export function FirstProject({ onGuided, onTemplate, onUpload, onJoin, releases }: {
-  onGuided: () => void; onTemplate: (id?: string) => void; onUpload: () => void; onJoin: () => void; releases: string;
+export function FirstProject({ onGuided, onUpload, onJoin, releases }: {
+  onGuided: () => void; onUpload: () => void; onJoin: () => void; releases: string;
 }) {
   const [list, setList] = useState<Template[] | null>(null);
   const [starting, setStarting] = useState(false);
@@ -23,20 +23,6 @@ export function FirstProject({ onGuided, onTemplate, onUpload, onJoin, releases 
           <div className="fp-acts">
             <button type="button" className="btn primary" disabled={starting} onClick={() => { setStarting(true); onGuided(); window.setTimeout(() => setStarting(false), 4000); }}>{starting ? "Creating…" : "Start the guided project"}</button>
           </div>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="fp-h">Or start from a template</h3>
-        <div className="fp-grid">
-          {(list || []).map((t) => (
-            <button type="button" key={t.id} className="fp-card" onClick={() => onTemplate(t.id)}>
-              <span className="fp-thumb"><img src={t.board} alt="" loading="lazy" /></span>
-              <b>{t.title}</b>
-              <span>{t.summary}</span>
-            </button>
-          ))}
-          {!list ? [0, 1, 2, 3].map((i) => <div key={i} className="fp-card skel"><span className="fp-thumb" /><b>&nbsp;</b><span>&nbsp;</span></div>) : null}
         </div>
       </section>
 

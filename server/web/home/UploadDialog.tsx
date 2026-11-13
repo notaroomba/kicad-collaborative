@@ -1,12 +1,10 @@
 // UploadDialog.tsx — put a KiCad project online from the browser: pick or drop a project folder,
 // its files, or a .zip.  Only KiCad project files are sent; everything else is listed as left out.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createBlank, createFromTemplate, isLocalState, isProjectFile, uploadProject, type UploadFile, type UploadResult } from "./api";
+import { createBlank, isLocalState, isProjectFile, uploadProject, type UploadFile, type UploadResult } from "./api";
 import { Ic, Modal, PHONE, useMedia } from "./ui";
-import { TemplatePicker, type TemplateChoice } from "./TemplatePicker";
-import { setGuide } from "../onboarding/state";
 
-export type NewMode = "upload" | "blank" | "template";
+export type NewMode = "upload" | "blank";
 
 /** Files of a drop, walking dropped folders (DataTransferItem.webkitGetAsEntry). */
 export async function filesFromDrop(dt: DataTransfer): Promise<UploadFile[]> {
@@ -40,9 +38,8 @@ const stem = (p: string) => (p.split("/").pop() || p).replace(/\.[^.]+$/, "");
 const fmtSize = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} kB` : `${(n / 1048576).toFixed(1)} MB`);
 const MAX_TOTAL = 50 * 1024 * 1024;   // the server's request body limit (main.rs DefaultBodyLimit)
 
-export function UploadDialog({ initial, start, template, onClose, onDone, onBlank, onBusy }: { initial?: UploadFile[]; start?: NewMode; template?: string; onClose: () => void; onDone: (r: UploadResult) => void; onBlank: (r: UploadResult) => void; onBusy?: (busy: boolean) => void }) {
+export function UploadDialog({ initial, start, onClose, onDone, onBlank, onBusy }: { initial?: UploadFile[]; start?: NewMode; onClose: () => void; onDone: (r: UploadResult) => void; onBlank: (r: UploadResult) => void; onBusy?: (busy: boolean) => void }) {
   const [mode, setMode] = useState<NewMode>(initial && initial.length ? "upload" : start || "upload");
-  const [tpl, setTpl] = useState<TemplateChoice>({ template: template || "", name: "", guided: false });
   // A phone has no drag and drop, and iOS cannot pick a folder: one "choose files" button, worded for that.
   const touch = useMedia(PHONE) || !("webkitdirectory" in HTMLInputElement.prototype);
   const [blankName, setBlankName] = useState("");
@@ -95,19 +92,8 @@ export function UploadDialog({ initial, start, template, onClose, onDone, onBlan
     setCreating(true); setError(null);
     try { onBlank(await createBlank(blankName.trim())); } catch (e) { setCreating(false); setError(e instanceof Error ? e.message : String(e)); }
   };
-  // A project from a template opens straight away, like a blank one; the guided one brings its guide.
-  const createTemplate = async () => {
-    if (creating || !tpl.template || !tpl.name.trim()) return;
-    setCreating(true); setError(null);
-    try {
-      const r = await createFromTemplate({ template: tpl.template, name: tpl.name.trim(), guided: tpl.guided });
-      if (tpl.guided) setGuide({ projectId: r.projectId, from: "home", done: {} });
-      onBlank(r);
-    } catch (e) { setCreating(false); setError(e instanceof Error ? e.message : String(e)); }
-  };
   const go = () => {
     if (mode === "blank") { createEmpty(); return; }
-    if (mode === "template") { createTemplate(); return; }
     if (busy || problem || !kept.length) return;
     setError(null); setProgress(0);
     const up = uploadProject(name, kept, setProgress);
@@ -116,18 +102,15 @@ export function UploadDialog({ initial, start, template, onClose, onDone, onBlan
   };
 
   return (
-    <Modal title="New online project" onClose={onClose} width={mode === "template" ? 760 : 520} busy={busy || creating}
+    <Modal title="New online project" onClose={onClose} width={520} busy={busy || creating}
       footer={<><button type="button" className="btn" disabled={creating} onClick={() => { if (busy) abort.current?.(); else onClose(); }}>{busy ? "Cancel upload" : "Cancel"}</button>
-        {mode === "template" ? <button type="button" className="btn primary" onClick={go} disabled={creating || !tpl.template || !tpl.name.trim()}>{creating ? "Creating…" : "Create and open"}</button>
-          : mode === "blank" ? <button type="button" className="btn primary" onClick={go} disabled={creating || !blankName.trim()}>{creating ? "Creating…" : "Create and open"}</button>
+        {mode === "blank" ? <button type="button" className="btn primary" onClick={go} disabled={creating || !blankName.trim()}>{creating ? "Creating…" : "Create and open"}</button>
           : <button type="button" className="btn primary" onClick={go} disabled={busy || !kept.length || !!problem || !name.trim()}>{busy ? ((progress || 0) >= 1 ? "Saving…" : "Uploading…") : "Upload"}</button>}</>}>
       <div className="hp-seg hp-modes" role="tablist" aria-label="How to start">
         <button type="button" role="tab" aria-selected={mode === "upload"} className={mode === "upload" ? "on" : undefined} onClick={() => { setMode("upload"); setError(null); }} disabled={busy || creating}>Upload a KiCad project</button>
-        <button type="button" role="tab" aria-selected={mode === "template"} className={mode === "template" ? "on" : undefined} onClick={() => { setMode("template"); setError(null); }} disabled={busy || creating}>From a template</button>
         <button type="button" role="tab" aria-selected={mode === "blank"} className={mode === "blank" ? "on" : undefined} onClick={() => { setMode("blank"); setError(null); }} disabled={busy || creating}>Blank project</button>
       </div>
-      {mode === "template" ? <TemplatePicker value={tpl} onChange={setTpl} onSubmit={createTemplate} disabled={creating} />
-      : mode === "blank" ? (
+      {mode === "blank" ? (
         <>
           <label className="hp-field"><span>Project name</span>
             <input className="hp-input" autoFocus value={blankName} maxLength={120} placeholder="My board" disabled={creating} onChange={(ev) => setBlankName(ev.target.value)}

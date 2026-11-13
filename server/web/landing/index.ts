@@ -56,7 +56,6 @@ function reveals(): void {
  *  server marks the document, so there is no request to make. */
 function session(): void {
   if (!document.documentElement.dataset.me) return;
-  document.querySelectorAll<HTMLAnchorElement>("[data-template]").forEach((a) => { a.href = "/?new=template"; });
   document.querySelectorAll<HTMLAnchorElement>("[data-signin]").forEach((a) => {
     a.href = "/";
     const label = a.dataset.long !== undefined ? "Open your projects" : "Projects";

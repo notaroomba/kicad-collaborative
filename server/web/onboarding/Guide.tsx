@@ -173,8 +173,7 @@ function Panel({ guide }: { guide: GuideState }) {
           <h3>That is the whole loop</h3>
           <p>You read a schematic, routed a board, checked it and know how to share it. This project stays in your list, so keep going with it, or start your own.</p>
           <div className="kg-acts">
-            <a className="btn primary sm" href="/?new=template">Start from a template</a>
-            <a className="btn sm" href="/">Your projects</a>
+            <a className="btn primary sm" href="/">Your projects</a>
           </div>
           <button type="button" className="kg-skip" onClick={() => setGuide(null)}>Close the guide</button>
         </div>

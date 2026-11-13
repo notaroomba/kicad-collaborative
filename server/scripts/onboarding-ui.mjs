@@ -1,6 +1,5 @@
-// Browser test of onboarding (server/web/onboarding, the template picker in server/web/home, and the
-// hand-off from the home page's small editor): a new person's empty projects home, a project from a
-// template, the guided first project from its first step to its last with tracks routed by hand and by
+// Browser test of onboarding (server/web/onboarding and the
+// hand-off from the home page's small editor): a new person's empty projects home, the guided first project from its first step to its last with tracks routed by hand and by
 // the autorouter, and a board carried over from the public home page through sign-in.
 // Needs a local server with KC_DEV_LOGIN=1 on a throwaway database, and Playwright.
 //
@@ -76,51 +75,20 @@ const board = (page) => page.evaluate(() => {
 // ================================================================ a new person's projects home
 const a = await context({ colorScheme: 'light' });
 await signIn(a, nova);
-await a.waitForSelector('.fp-card:not(.skel)'); await a.waitForFunction(() => [...document.querySelectorAll('.fp img')].every((i) => i.complete && i.naturalWidth > 0));
-check('with no projects, the home offers a guided first project and four templates', await a.locator('.fp-first .btn.primary').count() === 1 && await a.locator('.fp-card:not(.skel)').count() === 4, await a.textContent('.fp-first h2'));
+await a.waitForSelector('.fp-first .btn.primary'); await a.waitForSelector('.fp-pic img'); await a.waitForFunction(() => [...document.querySelectorAll('.fp img')].every((i) => i.complete && i.naturalWidth > 0));
+check('with no projects, the home offers a guided first project', await a.locator('.fp-first .btn.primary').count() === 1, await a.textContent('.fp-first h2'));
 check('there is one primary button in the panel', await a.locator('.fp .btn.primary').count() === 1);
 check('…and it still offers upload and joining by link', await a.locator('.fp-own .btn').count() === 2);
+check('the home has no template cards', await a.locator('.fp-card').count() === 0 && !/template/i.test(await a.textContent('.fp')));
 await shot(a, '01-first-project-home');
-
-// ---- a project from a template
-await a.locator('.fp-card', { hasText: 'I2C temperature sensor' }).click();
-await a.waitForSelector('.tp-detail'); await a.waitForFunction(() => [...document.querySelectorAll('.tp img')].every((i) => i.complete && i.naturalWidth > 0));
-check('a template card opens New project on that template', await a.getAttribute('.hp-modes button.on', 'aria-selected') === 'true' && await a.textContent('.hp-modes button.on') === 'From a template' && /I2C temperature/.test(await a.textContent('.tp-card.on')));
-check('the name starts as the template title', await a.inputValue('.tp .hp-input') === 'I2C temperature sensor breakout');
-check('it says what is in it', /\d+ parts · \d+ nets · \d+ × \d+ mm/.test(await a.textContent('.tp-about')) && /Passes KiCad/.test(await a.textContent('.tp-about')));
-check('only the blinker offers the walk-through', await a.locator('.tp-guided').count() === 0);
-await shot(a, '02-template-picker');
-await a.click('.tp-sides >> text=Schematic'); await a.waitForFunction(() => { const i = document.querySelector('.tp-view img'); return i && i.complete && i.naturalWidth > 0 && /schematic/.test(i.src); });
-await shot(a, '03-template-schematic');
-await a.locator('.tp-card', { hasText: 'ATtiny85' }).click();
-check('choosing another template follows with the name', await a.inputValue('.tp .hp-input') === 'ATtiny85 development board');
-await a.fill('.tp .hp-input', 'Tiny dev board');
-await a.locator('.tp-card', { hasText: 'USB-C 3.3 V' }).click();
-check('a name the person typed is kept', await a.inputValue('.tp .hp-input') === 'Tiny dev board');
-await a.locator('.tp-card', { hasText: 'ATtiny85' }).click();
-await a.click('.hp-modal .btn.primary');
-await inEditor(a);
-const tiny = await a.evaluate(() => { const s = window.CollabApp.getState(); return { name: s.project.name, docs: s.document.docs.map((d) => d.path).sort(), view: s.view }; });
-check('Create and open makes the project and opens it in the editor', tiny.name === 'Tiny dev board' && JSON.stringify(tiny.docs) === JSON.stringify(['Tiny_dev_board.kicad_pcb', 'Tiny_dev_board.kicad_sch']), JSON.stringify(tiny));
-check('a plain template project has no guide', await a.locator('.kg').count() === 0 && await guide(a) === null);
-await a.waitForTimeout(1200);
-if (await a.evaluate(() => window.CollabApp.getState().document.editor) === 'pcb') {
-  const t = await board(a); check('the template board opens fully routed and clean in the web editor', t.open === 0 && t.violations.length === 0 && t.segment > 30, JSON.stringify(t));
-}
-await shot(a, '04-template-in-editor');
-
-// ---- the same picker from New project, with the walk-through ticked
-await a.goto(BASE + '/'); await a.waitForSelector('.hp-item');
-check('with a project in the list the first-project panel is gone', await a.locator('.fp').count() === 0);
-await a.click('.hp-side-btn >> text=New project'); await a.waitForSelector('.hp-modes');
-check('New project has a From a template tab', await a.locator('.hp-modes button', { hasText: 'From a template' }).count() === 1);
-await a.click('.hp-modes >> text=From a template'); await a.waitForSelector('.tp-guided');
-check('the blinker is first and offers the walk-through', /555 LED blinker/.test(await a.textContent('.tp-card.on')) && !(await a.isChecked('.tp-guided input')));
-await a.check('.tp-guided input');
-await a.click('.hp-modal .btn.primary');
-await inEditor(a); await a.waitForSelector('.kg');
-const viaPicker = await a.evaluate(() => window.PcbTools.ratsnest(window.CollabEditor.kdoc).length).catch(() => -1);
-check('ticking it opens the project with the guide and four open connections', (await guide(a))?.from === 'home' && (viaPicker === 4 || viaPicker === -1), String(viaPicker));
+await a.click('.fp-own >> text=Upload a KiCad project'); await a.waitForSelector('.hp-modes');
+const tabs = await a.locator('.hp-modes button').allTextContents();
+check('New project has only Upload and Blank project', tabs.length === 2 && !tabs.some((t) => /template/i.test(t)), tabs.join(' | '));
+await shot(a, '02-new-project-dialog');
+await a.click('.hp-modes >> text=Blank project'); await a.fill('.hp-modal .hp-input', 'Blank one'); await a.click('.hp-modal .btn.primary');
+await inEditor(a).catch(() => {});
+check('Blank project still creates and opens a project', await a.evaluate(() => window.CollabApp.getState().project && window.CollabApp.getState().project.name) === 'Blank one');
+check('a blank project has no guide', await a.locator('.kg').count() === 0 && await guide(a) === null);
 
 // ================================================================ the guided first project, start to finish
 const g = await context({ colorScheme: 'light' });
@@ -207,7 +175,7 @@ await g.waitForSelector('.hp-modal');
 check('Open Share opens the Share dialog', /Share/.test(await g.textContent('.hp-modal')));
 check('…and the guide is finished', await stepIs(g, 'finished'));
 await g.keyboard.press('Escape'); await g.waitForTimeout(300);
-check('the last panel offers what comes next', await g.locator('.kg-done a', { hasText: 'Start from a template' }).count() === 1 && await g.locator('.kg-done a', { hasText: 'Your projects' }).count() === 1);
+check('the last panel leads back to the projects', await g.locator('.kg-done a', { hasText: 'Your projects' }).count() === 1 && !/template/i.test(await g.textContent('.kg-done')));
 await shot(g, '12-guide-finished');
 
 // stored: someone opening the project afresh gets what was routed
@@ -221,10 +189,6 @@ check('the routed board is what the server holds', b4.segment === b3.segment && 
 check('a browser that never started the guide does not show it', await again.locator('.kg').count() === 0);
 await again.close();
 
-await g.click('.kg-done a >> text=Start from a template');
-await g.waitForSelector('.tp-detail');
-check('Start from a template lands on the picker, and the address is clean again', await g.evaluate(() => location.pathname + location.search) === '/');
-await g.keyboard.press('Escape');
 await g.goto(`${BASE}/p/${st0.id}/edit`); await inEditor(g);
 await g.click('.kg-done .kg-skip');
 check('Close the guide removes it for good', await g.locator('.kg').count() === 0 && await guide(g) === null);
@@ -247,7 +211,7 @@ await m.goto(BASE + '/'); await m.waitForSelector('[data-keep]');
 await m.waitForFunction(() => /Unrouted 4/.test(document.querySelector('[data-unrouted]').textContent));
 const keepHref = await m.getAttribute('[data-keep]', 'href');
 check('signed out, Keep going in a real project goes through sign-in and back to the hand-off', keepHref === '/auth/github/login?next=' + encodeURIComponent('/?start=mini'), keepHref);
-check('…and Start from a template does too', await m.getAttribute('[data-template]', 'href') === '/auth/github/login?next=' + encodeURIComponent('/?new=template'));
+check('the home page has no template button', await m.locator('[data-template]').count() === 0);
 // route one connection in the small editor: the route tool, a pad, the corners, a pad
 const canvas = m.locator('#hero canvas'); await canvas.scrollIntoViewIfNeeded();
 await m.click('#hero [data-tool-btn="route"]');
@@ -288,23 +252,20 @@ await shot(m, '16-handed-over-board');
 // signed in already: the buttons go straight there
 const w = await context({ colorScheme: 'light' });
 await signIn(w, pax, '/welcome'); await w.waitForSelector('[data-keep]');
-check('signed in, the home page buttons skip sign-in', await w.getAttribute('[data-keep]', 'href') === '/?start=mini' && await w.getAttribute('[data-template]', 'href') === '/?new=template');
+check('signed in, the home page buttons skip sign-in', await w.getAttribute('[data-keep]', 'href') === '/?start=mini');
 await w.locator('[data-keep]').scrollIntoViewIfNeeded(); await w.click('[data-keep]');
 await inEditor(w); await w.waitForSelector('.kg');
 check('…and Keep going opens the project', (await guide(w))?.from === 'mini');
-await w.goto(BASE + '/?new=template&t=usb-c-3v3-regulator'); await w.waitForSelector('.tp-detail');
-check('/?new=template&t=… opens the picker on that template', /USB-C 3.3 V/.test(await w.textContent('.tp-card.on')) && await w.evaluate(() => location.search) === '');
+await w.goto(BASE + '/?new=template&t=usb-c-3v3-regulator'); await w.waitForSelector('.hp-item'); await w.waitForTimeout(500);
+check('an old /?new=template link opens no dialog', await w.locator('.hp-modal').count() === 0);
 
 // ================================================================ a phone
 const ph = await browser.newContext({ ...devices['iPhone 13'] }); const p = await ph.newPage();
 p.on('pageerror', (e) => errors.push(String(e)));
 await db.query('DELETE FROM projects WHERE owner_id = $1', [pax.id]);
-await signIn(p, pax); await p.waitForSelector('.fp-card:not(.skel)'); await p.waitForFunction(() => [...document.querySelectorAll('.fp img')].every((i) => i.complete && i.naturalWidth > 0));
+await signIn(p, pax); await p.waitForSelector('.fp-first .btn.primary'); await p.waitForSelector('.fp-pic img'); await p.waitForFunction(() => [...document.querySelectorAll('.fp img')].every((i) => i.complete && i.naturalWidth > 0));
 check('on a phone the first-project panel fits the screen', await p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
 await p.waitForTimeout(500); await p.screenshot({ path: path.join(out, '17-phone-first-project.png') });
-await p.locator('.fp-card').first().click(); await p.waitForSelector('.tp-detail'); await p.waitForTimeout(500);
-check('…and so does the template picker', await p.evaluate(() => { const m = document.querySelector('.hp-modal').getBoundingClientRect(); return m.left >= 0 && m.right <= window.innerWidth + 1; }));
-await p.screenshot({ path: path.join(out, '18-phone-template-picker.png') });
 
 check('no page errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 await browser.close();
