@@ -1361,6 +1361,8 @@ pub async fn download_archive(
         ));
     }
 
+    // the files as the design is now, not as the last desktop save left them
+    crate::compact::fold_project(&state.pool, id).await;
     let docs = persist::project_documents(&state.pool, id).await?;
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut manifest_docs = serde_json::Map::new();

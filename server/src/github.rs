@@ -580,6 +580,9 @@ async fn freshen(state: &AppState, project_id: Uuid) -> AppResult<()> {
         }
         waiting = still;
     }
+    // Whatever is still behind has no desktop editor to save it (a browser-only project, or
+    // nobody has it open): the server folds those edits into the file itself.
+    crate::compact::fold_project(&state.pool, project_id).await;
     Ok(())
 }
 

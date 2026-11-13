@@ -3,6 +3,7 @@ mod ai;
 mod datasheet;
 mod kicadlib;
 mod auth;
+mod compact;
 mod doc_actor;
 mod error;
 mod fonts;

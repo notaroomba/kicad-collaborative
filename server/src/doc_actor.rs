@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
 use crate::persist::{self, Document};
@@ -174,6 +175,7 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
     let mut presence_dirty: HashMap<String, Option<Value>> = HashMap::new();
     let mut empty_since = Some(Instant::now());
     let mut last_snapshot_request = Instant::now() - SNAPSHOT_REQUEST_COOLDOWN;
+    let folding = Arc::new(FoldState::default());
     let mut last_snapshot_check = Instant::now();
     let mut flush = tokio::time::interval(PRESENCE_FLUSH);
     flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -284,7 +286,7 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                                 }).to_string();
                                 broadcast_except(&mut clients, &mut presence_dirty, doc_id, &client_id, &msg);
                                 relay.publish(json!({ "t": "op", "d": doc_id, "seq": next }));
-                                maybe_request_snapshot(&pool, doc_id, head_seq, &clients,
+                                maybe_request_snapshot(&pool, &doc, head_seq, &clients, &folding,
                                                        &mut last_snapshot_request).await;
                             }
                             Ok((_, Some(existing_seq))) => {
@@ -333,6 +335,9 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                     }
                     DocMsg::SnapshotNow => {
                         request_snapshot_now(&clients, doc_id, &mut last_snapshot_request);
+                        if !clients.values().any(|c| c.role == "editor" && c.can_snapshot) {
+                            start_fold(&pool, &doc, head_seq, &folding);
+                        }
                     }
                     DocMsg::Request { client_id, action } => {
                         touch(&mut clients, &client_id);
@@ -527,7 +532,7 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                     .min(snapshot_fresh_interval())
                 {
                     last_snapshot_check = Instant::now();
-                    maybe_request_snapshot(&pool, doc_id, head_seq, &clients,
+                    maybe_request_snapshot(&pool, &doc, head_seq, &clients, &folding,
                                            &mut last_snapshot_request).await;
                 }
                 // Evict stale presence (client stopped refreshing but is still connected).
@@ -569,6 +574,11 @@ async fn run(pool: PgPool, doc: Document, relay: Arc<Relay>, mut rx: mpsc::Recei
                             rx.close();
                             if !rx.is_empty() {
                                 continue;
+                            }
+                            // Everyone has left: what they did since the last snapshot becomes one, so the
+                            // next open (and every reader of the stored file) starts from the design as it is.
+                            if persist::latest_snapshot_seq(&pool, doc_id).await.is_ok_and(|s| s < head_seq) {
+                                start_fold(&pool, &doc, head_seq, &folding);
                             }
                             break;
                         }
@@ -917,13 +927,54 @@ fn reap_closed(
     }
 }
 
+/// A document's folding: whether one is running, and the head at which the last one was refused.
+#[derive(Default)]
+struct FoldState {
+    busy: AtomicBool,
+    refused_at: AtomicI64,
+}
+
+/// Fold the journal into a snapshot on the server (compact.rs), one fold of a document at a time.
+fn start_fold(pool: &PgPool, doc: &Document, head_seq: i64, folding: &Arc<FoldState>) {
+    if !crate::compact::foldable(&doc.doc_type) {
+        return;
+    }
+    // A journal that could not be folded is not tried again on every check: only once it
+    // has grown by another batch (an edit since may be what makes it foldable).
+    let refused = folding.refused_at.load(Ordering::Acquire);
+    if refused > 0 && head_seq < refused + SNAPSHOT_LAG_OPS {
+        return;
+    }
+    if folding.busy.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let (pool, doc, folding) = (pool.clone(), doc.clone(), folding.clone());
+    tokio::spawn(async move {
+        match crate::compact::fold(&pool, &doc).await {
+            Ok(Some(seq)) => {
+                folding.refused_at.store(0, Ordering::Release);
+                tracing::info!(doc = %doc.id, seq, "journal folded into a snapshot");
+            }
+            Ok(None) => {}
+            // The document stays snapshot + ops, which is correct.
+            Err(why) => {
+                tracing::warn!(doc = %doc.id, "journal not folded: {why}");
+                folding.refused_at.store(head_seq.max(1), Ordering::Release);
+            }
+        }
+        folding.busy.store(false, Ordering::Release);
+    });
+}
+
 async fn maybe_request_snapshot(
     pool: &PgPool,
-    doc_id: Uuid,
+    doc: &Document,
     head_seq: i64,
     clients: &HashMap<String, ClientState>,
+    folding: &Arc<FoldState>,
     last_request: &mut Instant,
 ) {
+    let doc_id = doc.id;
     if last_request.elapsed() < SNAPSHOT_REQUEST_COOLDOWN.min(snapshot_fresh_interval()) {
         return;
     }
@@ -951,5 +1002,9 @@ async fn maybe_request_snapshot(
     if let Some((_, c)) = editor {
         *last_request = Instant::now();
         let _ = c.tx.try_send(json!({ "type": "snapshot_request", "docId": doc_id }).to_string());
+    } else {
+        // Nobody here can write the file (browsers, the tools): the server folds the journal itself.
+        *last_request = Instant::now();
+        start_fold(pool, doc, head_seq, folding);
     }
 }

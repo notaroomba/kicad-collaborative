@@ -1166,7 +1166,12 @@ pub async fn create_branch(
             version_points(&state.pool, vid).await?
         }
         (None, Some(at)) => points_at(&state.pool, id, (at.doc_id, at.seq)).await?,
-        _ => head_points(&state.pool, id).await?,
+        _ => {
+            // A branch of the project as it stands starts from whole files, not from an old
+            // snapshot with every edit since to replay (which is how a browser-only project opened).
+            crate::compact::fold_project(&state.pool, id).await;
+            head_points(&state.pool, id).await?
+        }
     };
     if points.is_empty() {
         return Err(bad("This project has no files to branch from yet."));

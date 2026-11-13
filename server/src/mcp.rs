@@ -206,7 +206,7 @@ fn catalog() -> &'static [Tool] {
     CATALOG.get_or_init(build_catalog)
 }
 
-fn hosts() -> &'static HostPool {
+pub(crate) fn hosts() -> &'static HostPool {
     static POOL: OnceLock<HostPool> = OnceLock::new();
     POOL.get_or_init(HostPool::new)
 }
