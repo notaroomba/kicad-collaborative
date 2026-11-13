@@ -222,7 +222,7 @@ function gridRows(c: MenuCtx): CtxItem[] {
 }
 function row(act: string, check: boolean, c: MenuCtx): CtxItem {
   const meta = metaOf(act), r = resolve(act, c);
-  const it: CtxItem = { act, label: meta ? meta.label.replace(/\.\.\.$/, "…") : (act.split("::").pop() as string), icon: meta && meta.icon ? meta.icon : undefined, key: r.key || (meta && meta.key) || undefined };
+  const it: CtxItem = { act, label: meta ? meta.label : (act.split("::").pop() as string), icon: meta && meta.icon ? meta.icon : undefined, key: r.key || (meta && meta.key) || undefined };
   if (check) { it.check = true; it.checked = !!c.checks[act]; }
   if (r.run) it.run = runRow(r.run); else it.why = r.why || DESKTOP;
   return it;
