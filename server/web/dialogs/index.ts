@@ -50,6 +50,11 @@ function wrapErc(): void {
   };
 }
 
+// the board editor's Find (editor/pcbdialogs/find.ts) registers itself on E.hooks: importing it here would pull the
+// editor's view modules in ahead of their DOM setup
+const openBoardFind = (): void => { const f = (E as unknown as { hooks: { boardFind?: () => void } }).hooks.boardFind; if (f) f(); };
+const boardFindNext = (reverse: boolean): void => { const f = (E as unknown as { hooks: { boardFindNext?: (r: boolean) => void } }).hooks.boardFindNext; if (f) f(reverse); };
+
 function typing(ev: KeyboardEvent): boolean { const t = ev.target as HTMLElement | null; return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable); }
 
 /** Register everything; called once from editor/index.ts before the handled ids are published. */
@@ -58,7 +63,10 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   const find = HANDLERS.find;
   Object.assign(HANDLERS, {
     pageSettings: needDoc(openPageSettings),
-    find: ((a?: Parameters<Handler>[0]) => { if (E.kdoc && isSch()) openFind(false); else if (find) find(a); }) as Handler,
+    find: ((a?: Parameters<Handler>[0]) => { if (E.kdoc && isSch()) openFind(false); else if (E.kdoc && !(E.kdoc as KDoc).fpEditor) openBoardFind(); else if (find) find(a); }) as Handler,   // the footprint editor has no Find (FOOTPRINT_EDIT_FRAME)
+    // ACTIONS::findNext / findPrevious (F3 / Shift+F3)
+    findNext: (() => { if (E.kdoc && !isSch() && !(E.kdoc as KDoc).fpEditor) boardFindNext(false); }) as Handler,
+    findPrevious: (() => { if (E.kdoc && !isSch() && !(E.kdoc as KDoc).fpEditor) boardFindNext(true); }) as Handler,
     findAndReplace: needDoc(() => openFind(true), true),
     editSymbolFields: needDoc(() => openFieldsTable(false), true),
     // the board editor's File > Fabrication Outputs > Bill of Materials is the fabrication package; the schematic's is the fields table
@@ -89,11 +97,13 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     if (document.getElementById("symedit")) return;   // the Symbol Editor frame is up: its own keys
     const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let run: (() => void) | null = null;
     if (mod && !ev.shiftKey && k === "f" && isSch()) run = () => openFind(ev.altKey);
+    else if (mod && !ev.shiftKey && !ev.altKey && k === "f" && !(E.kdoc as KDoc).fpEditor) run = () => openBoardFind();
+    else if (ev.key === "F3" && !mod && !ev.altKey && !isSch() && !(E.kdoc as KDoc).fpEditor) run = () => boardFindNext(ev.shiftKey);
     else if (mod && !ev.altKey && !ev.shiftKey && ev.key === ",") run = () => openPreferences();
     else if (mod && ev.shiftKey && !ev.altKey && k === "g") run = () => HANDLERS.toggleGridOverrides();
     else if (ev.altKey && !mod && !ev.shiftKey && (ev.key === "1" || ev.key === "2")) run = () => { const mm = fastGrid(ev.key === "1" ? 1 : 2); if (mm) toast("Grid: " + gridLabel(mm)); };
     if (!run) return;
-    if (KD().isOpen() && !(mod && k === "f")) return;
+    if (KD().isOpen() && !(mod && k === "f") && ev.key !== "F3") return;
     if (typing(ev) && !mod) return;
     ev.preventDefault(); ev.stopPropagation(); run();
   }, true);

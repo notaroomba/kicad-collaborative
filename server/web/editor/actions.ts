@@ -1,15 +1,15 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 import { setGroupCurrent, setToggle, setToggles, state, store } from "./appstore";
-import { centerOn, commentOnAction, openThreadAction, openThreadOnDoc } from "./comments";
+import { commentOnAction, openThreadAction, openThreadOnDoc } from "./comments";
 import { saveVersionDialog, versionsCommand } from "./versions";
-import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, selectItemAction, setActiveLayer, setGridPitch, setLayerVisible, switchEditor, updateGridStatus } from "./doc";
+import { enterSheet, navigateDocs, openDoc, openDocId, rootSchematic, selectItemAction, setActiveLayer, setGridPitch, setLayerVisible, switchEditor, updateGridStatus } from "./doc";
 import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
 import { chooseTrackWidth, chooseViaSize, chooseViaStack } from "./pcbrouting";
 import { setCrosshair, setTheme, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
 import { contextMenuAction, openArcEditModeMenu, openGridButtonMenu, openRouterModeMenu } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
-import { drawSelection, renderProps, setFilter } from "./selection";
+import { setFilter } from "./selection";
 import { E } from "./state";
 import { activeModule, deleteAction, orientSelected, redoLast, runModuleAction, selectAll, setTool, toolCtx, undoLast } from "./tools";
 import { api, esc, setRadio, showPopover, toast } from "./util";
@@ -22,7 +22,7 @@ import { openPosFile } from "./pcbdialogs/posfile";
 import { openPlotSchematic } from "../dialogs/plot-schematic";
 import { printDialog } from "./print";
 import type { AppAction } from "../store";
-import type { ActionAnchor, ActionHandler, ItemSummary } from "./types";
+import type { ActionAnchor, ActionHandler } from "./types";
 // ---- actions (the home menu's entries and the collab items of the editor menus) ----
 export async function runAction(act: string, el?: ActionAnchor) {
   const id = state.project && state.project.projectId;
@@ -73,17 +73,6 @@ export async function runAction(act: string, el?: ActionAnchor) {
 
 export function toggleRenderOpt(key: string, id: string) { E.renderOpts[key] = !E.renderOpts[key]; setToggle(id, !!E.renderOpts[key]); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); }
 
-export function findPopover(el: ActionAnchor) { showPopover("find", { hits: null, query: "" }, el); }
-
-/** The Find popover's query: select and centre the best match, report the count. */
-export function findAction(query: string) {
-  const v = String(query || "").trim().toLowerCase();
-  // booleans subtract as 0 / 1: exact matches first, then prefix matches
-  const m: ItemSummary[] = v ? E.items.filter((fp: ItemSummary) => fpName(fp).toLowerCase().includes(v)).sort((x: ItemSummary, y: ItemSummary) => ((fpName(y).toLowerCase() === v) as unknown as number) - ((fpName(x).toLowerCase() === v) as unknown as number) || ((fpName(y).toLowerCase().startsWith(v)) as unknown as number) - ((fpName(x).toLowerCase().startsWith(v)) as unknown as number)) : [];
-  if (m.length) { E.selected = m[0]; drawSelection(); renderProps(); centerOn(m[0].x / E.IU, m[0].y / E.IU); }
-  const p = store.get().popover; if (p && p.kind === "find") store.set({ popover: Object.assign({}, p, { hits: v ? m.length : null, query: String(query || "") }) });
-}
-
 
 // Every chrome action the web editor handles, by KiCad action id (or one of ours).  An id missing here
 // that maps to a tool (server/web/tables.ts TOOL_MAP) activates the tool; anything else is dimmed and
@@ -93,7 +82,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   selectSetLasso: () => { E.selMode = "lasso"; setRadio("Selection modes", "selectSetLasso"); store.slice("viewport", { selMode: E.selMode }); setTool("select"); },
   selectAll: () => selectAll(),
   save: (a) => runAction("checkpoint", a), refreshHistory: () => loadHistory(),
-  undo: () => undoLast(), redo: () => redoLast(), find: (a) => findPopover(a), doDelete: () => deleteAction(),
+  undo: () => undoLast(), redo: () => redoLast(), find: () => undefined, doDelete: () => deleteAction(),
   zoomRedraw: () => requestRender(), zoomInCenter: () => zoomStep(true), zoomOutCenter: () => zoomStep(false), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitObjects(),
   navigateBack: () => navigateDocs(-1), navigateForward: () => navigateDocs(1), navigateUp: () => { const r = rootSchematic(); if (r && state.doc !== r) openDoc(r); else toast("Already at the root sheet"); },
   rotateCCW: () => orientSelected("ccw"), rotateCW: () => orientSelected("cw"), rotateCcw: () => orientSelected("ccw"), rotateCw: () => orientSelected("cw"),
@@ -187,7 +176,6 @@ export function dispatchAction(a: AppAction) {
       case "selectItem": selectItemAction(a.id); return;
       case "restore": restoreCheckpoint(a.name); return;
       case "versions": versionsCommand(a); return;
-      case "find": findAction(a.query); return;
       case "popover": store.set({ popover: a.popover || null }); return;
       case "contextMenu": contextMenuAction(a); return;
       case "toastDone": return;

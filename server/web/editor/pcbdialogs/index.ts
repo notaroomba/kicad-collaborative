@@ -3,6 +3,7 @@
 // Clearance Resolution.  Each is a module action on CollabTools.pcb, so the menus (web/actions/tables.ts)
 // and hotkeys find it the way they find every other board command.
 import { openBoardSetup } from "./board-setup";
+import "./find";   // Edit > Find (DIALOG_FIND): registers E.hooks.boardFind / boardFindNext
 import { openFootprintFields } from "./fp-fields";
 import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, openNetInspector, prevMarker } from "./inspect";
 import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";

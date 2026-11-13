@@ -61,25 +61,7 @@ function PopoverBody({ p }: { p: PopoverState }) {
           <p className="note">1. Install the desktop app from the <a href={RELEASES} target="_blank" rel="noreferrer">releases page</a>.<br />2. File → Join Session from URL… and paste a share link (File → Copy share link… here).<br />3. Edits sync both ways, live.</p>
         </>
       );
-    case "find":
-      return <FindBody p={p} close={close} />;
   }
-}
-
-function FindBody({ p, close }: { p: PopoverState; close: () => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  const [q, setQ] = useState(p.query || "");
-  useEffect(() => { const t = setTimeout(() => ref.current?.focus(), 0); return () => clearTimeout(t); }, []);   // after the popover is positioned and shown
-  const hits = p.hits;
-  return (
-    <>
-      <h4 className={H4}>Find</h4>
-      <input id="findQ" className={INPUT} ref={ref} placeholder="Reference or value…" value={q}
-        onChange={(ev) => { setQ(ev.target.value); dispatch({ type: "find", query: ev.target.value }); }}
-        onKeyDown={(ev) => { ev.stopPropagation(); if (ev.key === "Enter") { dispatch({ type: "find", query: q }); close(); } if (ev.key === "Escape") close(); }} />
-      <p className="note" id="findHits">{q.trim() && hits !== null && hits !== undefined ? `${hits} match${hits === 1 ? "" : "es"}` : ""}</p>
-    </>
-  );
 }
 
 export function Popover() {

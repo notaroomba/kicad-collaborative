@@ -132,13 +132,12 @@ export interface RoutingState {
   layers: RoutingLayer[]; layerPair: [string, string];
 }
 
-export type PopoverKind = "desktop" | "about" | "share" | "kicad" | "find";
+export type PopoverKind = "desktop" | "about" | "share" | "kicad";
 export interface Anchor { left: number; top: number; right: number; bottom: number }
 export interface PopoverState {
   kind: PopoverKind; anchor?: Anchor | null;
   title?: string; why?: string;          // desktop
   url?: string;                          // share
-  hits?: number | null; query?: string;  // find
 }
 
 /**
@@ -267,7 +266,6 @@ export type AppAction =
   | { type: "selectItem"; id: string }
   | { type: "restore"; name: string }
   | ({ type: "versions" } & VersionsCmd)
-  | { type: "find"; query: string }
   | { type: "popover"; popover: PopoverState | null }
   /** the right-click menu: run a row (then it closes), brighten a row's item, or just close */
   | { type: "contextMenu"; run?: number; hover?: string | null }
