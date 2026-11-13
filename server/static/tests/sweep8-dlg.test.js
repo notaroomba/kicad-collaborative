@@ -205,5 +205,35 @@ test("ERC_REPORT::GetTextReport: shown severities, ShowReport lines, counts and 
   const t2 = RP.ercTextReport(list, { ...o, errors: false, exclusions: false, units: "mil", ignored: ["Pin to pin"] });
   assert.ok(/Report includes: None/.test(t2) && /ERC messages: 0/.test(t2) && /    - Pin to pin\n$/.test(t2));
 });
+const AN = load(["tools", "sch-tools", "annotate.ts"]), AL = load(["dialogs", "annotate-logic.ts"]);
+{
+  const F = "(effects (font (size 1.27 1.27)))";
+  const sym = (lib, id, x, unit, ref, val) => `(symbol (lib_id "${lib}") (at ${x} 50 0) (unit ${unit}) (uuid "${id}") (property "Reference" "${ref}" (at 0 0 0) ${F}) (property "Value" "${val}" (at 0 0 0) ${F}))`;
+  const libDual = `(symbol "T:DUAL" (property "Reference" "U" (at 0 0 0) ${F}) (property "Value" "DUAL" (at 0 0 0) ${F}) (symbol "DUAL_1_1") (symbol "DUAL_2_1"))`;
+  const libR = `(symbol "T:R" (property "Reference" "R" (at 0 0 0) ${F}) (property "Value" "R" (at 0 0 0) ${F}) (symbol "R_1_1"))`;
+  const ANN = `(kicad_sch (version 20250114) (generator "eeschema") (uuid "root") (paper "A4") (lib_symbols ${libDual} ${libR})
+ ${sym("T:DUAL", "a", 10, 1, "U7", "DUAL")} ${sym("T:DUAL", "b", 90, 2, "U7", "DUAL")} ${sym("T:DUAL", "c", 50, 2, "U?", "DUAL")} ${sym("T:R", "r", 20, 1, "R?", "10k")}
+ (sheet (at 0 0) (size 10 10) (uuid "s1") (property "Sheetname" "A" (at 0 0 0) ${F}) (property "Sheetfile" "../sub/a.kicad_sch" (at 0 0 0) ${F})))`;
+  const refOf = (ch, id) => { const c = ch.find((x) => x.id === id); return c ? K.parseAll(c.sexpr).find((t) => t[0] !== "lib_symbols").find((p) => Array.isArray(p) && p[0] === "property" && p[1] === "Reference")[2] : null; };
+  test("Annotate reset: a package's units stay together (locked set); Regroup symbol units groups them afresh by placement", () => {
+    const d = K.parseDoc(ANN);
+    const reset = AN.annotateChanges(d, { keep: false });
+    assert.deepEqual(["a", "b", "c", "r"].map((id) => refOf(reset, id)), ["U1", "U1", "U2", "R1"]);
+    const regroup = AN.annotateChanges(d, { keep: false, regroup: true });
+    assert.deepEqual(["a", "b", "c", "r"].map((id) => refOf(regroup, id)), ["U1", "U2", "U1", "R1"]);
+  });
+  test("AnnotateSymbols / DeleteAnnotation report lines", () => {
+    const d = K.parseDoc(ANN);
+    assert.deepEqual(AN.annotateMessages(d, AN.annotateChanges(d, { keep: false })),
+      ["Annotated 10k as R1.", "Updated DUAL (unit A) from U7 to U1.", "Annotated DUAL (unit B) as U2.", "Updated DUAL (unit B) from U7 to U1."]);
+    assert.deepEqual(AN.annotateMessages(d, AN.clearAnnotationChanges(d), true), ["Cleared annotation for DUAL (unit A).", "Cleared annotation for DUAL (unit B)."]);
+  });
+  test("Recurse into subsheets: sheet files resolved beside the sheet that names them", () => {
+    const d = K.parseDoc(ANN);
+    assert.deepEqual(AL.subsheetFiles(d, "boards/main"), ["boards/sub/a.kicad_sch"]);
+    assert.deepEqual(AL.subsheetFiles(d, ""), ["sub/a.kicad_sch"]);
+    assert.deepEqual(AL.subsheetFiles(d, "", new Set(["a"])), []);
+  });
+}
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

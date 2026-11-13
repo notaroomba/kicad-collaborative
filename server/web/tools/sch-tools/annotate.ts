@@ -64,15 +64,41 @@ export function annotateChanges(doc: KDoc, opts?: AnnotateOpts | null) {
     let n: number;
     const multi = libUnits(doc, r.item.node).units > 1;
     // units of one multi-unit package (same old reference) stay together, like KiCad's locked-unit map
-    // (Regroup symbol units, with a reset: they are packed afresh like new units)
-    const packageKey = multi && !opts.regroup && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
-    if (packageKey && assigned.has(packageKey)) n = assigned.get(packageKey)!;
-    else { n = packageKey ? firstFree(r, false) : firstFree(r, multi); if (packageKey) assigned.set(packageKey, n); }
-    take(r, n);
+    // Regroup symbol units (a reset with aRegroupUnits) skips GetMultiUnitSymbols' locked map: units group afresh by placement
+    const packageKey = !opts.regroup && multi && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
+    if (packageKey && assigned.has(packageKey)) n = assigned.get(packageKey)!;   // already held since the package's first unit
+    else {
+      n = packageKey ? firstFree(r, false) : firstFree(r, multi);
+      // AnnotateReferences numbers a locked set at once: every unit of the package holds the number from here on
+      take(r, n);
+      if (packageKey) { assigned.set(packageKey, n); for (const o of refs) if (o !== r && o.isNew && o.prefix === r.prefix && o.old === r.old && libUnits(doc, o.item.node).units > 1) take(o, n); }
+    }
     const ref = r.prefix + n; if (ref === r.old) continue;
     const node = deep(r.item.node); setReference(node, ref); changes.push(modChange(doc, r.item, node));
   }
   return changes;
+}
+/** LIB_SYMBOL::LetterSubReference( unit, 'A' ): A … Z, AA … */
+const unitLetter = (unit: number): string => { let n = unit, s = ""; while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s; };
+/**
+ * SCH_EDIT_FRAME::AnnotateSymbols' and DeleteAnnotation's report lines for the changes (read before they are applied):
+ * "Annotated %s as %s." / "Updated %s from %s to %s." (with " (unit %s)" for a multi-unit symbol) and
+ * "Cleared annotation for %s." — the symbol named by its value.
+ */
+export function annotateMessages(doc: KDoc, changes: KChange[], clear = false): string[] {
+  const out: string[] = [];
+  for (const c of changes) {
+    const it = doc.items.get(c.id as string); if (!it || it.kind !== "symbol") continue;
+    const p0 = refField(it.node), prev = p0 ? str(p0[2]) : "", annotated = !!prev && !/\?$/.test(prev);
+    const val = (() => { const v = kids(it.node, "property").find((q) => str(q[1]) === "Value"); return v ? str(v[2]) : ""; })();
+    const multi = libUnits(doc, it.node).units > 1, u = kid(it.node, "unit"), sub = multi ? unitLetter(u ? num(u[1], 1) : 1) : "";
+    if (clear) { out.push(multi ? `Cleared annotation for ${val} (unit ${sub}).` : `Cleared annotation for ${val}.`); continue; }
+    const n = typeof c.sexpr === "string" ? K.parseAll(c.sexpr).find((t) => Array.isArray(t) && t[0] !== "lib_symbols") : null, p1 = n ? refField(n as SNode) : null, ref = p1 ? str(p1[2]) : "";
+    if (annotated && ref === prev) continue;
+    if (annotated) out.push(multi ? `Updated ${val} (unit ${sub}) from ${prev} to ${ref}.` : `Updated ${val} from ${prev} to ${ref}.`);
+    else out.push(multi ? `Annotated ${val} (unit ${sub}) as ${ref}.` : `Annotated ${val} as ${ref}.`);
+  }
+  return out;
 }
 export function clearAnnotationChanges(doc: KDoc, only?: Set<string> | null) {
   const changes: KChange[] = [];

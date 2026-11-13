@@ -2,12 +2,15 @@
 // Scope (Entire schematic / Current sheet only / Selection), Order (by X / by Y), Numbering (first free after N,
 // sheet number × 100, × 1000) and Options (keep / reset existing annotations); "Annotate" numbers the symbols in
 // scope against every reference the project's sheets already use (SCH_REFERENCE_LIST over the whole hierarchy),
-// "Clear Annotation" resets them to "R?".  Other sheets are edited through their own documents, each step on
+// "Clear Annotation" resets them to "R?".  Recurse into subsheets takes in the sheets below the current one, Regroup
+// symbol units (with Reset) drops the locked unit sets, and the message panel lists AnnotateSymbols' report lines.  Other sheets are edited through their own documents, each step on
 // that sheet's undo list, as Find and Replace's Replace All does.
 import { E, appState, pushUndoFor, toolCtx } from "./editor";
 import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
 import { obj, projectDocs, projectJson, readDoc, saveProject, sub, submitDocOp } from "./project";
 import { effectiveTheme } from "../theme";
+import { subsheetFiles } from "./annotate-logic";
+export { subsheetFiles };
 
 /** BITMAPS::annotate_down_right / annotate_right_down (24 px, light and dark), beside the two sort orders. */
 const ORDER_BMP: Record<string, [string, string]> = {
@@ -16,15 +19,17 @@ const ORDER_BMP: Record<string, [string, string]> = {
 };
 
 type Scope = "all" | "sheet" | "selection";
-interface AnnotateOpts { order: "x" | "y"; keep: boolean; regroup?: boolean; start: number; sheetInterval: number; sheetNumber?: number; only?: Set<string>; reserved?: string[] }
+interface AnnotateOpts { order: "x" | "y"; keep: boolean; start: number; sheetInterval: number; sheetNumber?: number; only?: Set<string>; reserved?: string[]; regroup?: boolean }
 interface SchAnnotate {
   annotateChanges(doc: KDoc, opts: AnnotateOpts): KChange[];
+  annotateMessages(doc: KDoc, changes: KChange[], clear?: boolean): string[];
   clearAnnotationChanges(doc: KDoc, only?: Set<string> | null): KChange[];
 }
 const sch = (): SchAnnotate | null => ((window as unknown as { CollabTools?: { sch?: SchAnnotate } }).CollabTools || {}).sch || null;
 
 /** What the dialog remembers between openings (KiCad keeps these in the eeschema settings). */
-const A = { scope: "all" as Scope, order: "x" as "x" | "y", numbering: "first" as "first" | "100" | "1000", start: 0, keep: true, regroup: false };
+const A = { scope: "all" as Scope, order: "x" as "x" | "y", numbering: "first" as "first" | "100" | "1000", start: 0, keep: true, recursive: true, regroup: false };
+
 
 /** The annotated references of a sheet ("R1", "#PWR03"; "R?" is not one) — what the other sheets must not reuse. */
 export function usedRefs(doc: KDoc): string[] {
@@ -55,6 +60,16 @@ let api: DlgApi | null = null;   // the dialog this module opened last (KDialogs
 let msgs: HTMLElement | null = null;
 const say = (text: string, bad = false) => { if (!msgs) return; msgs.append(h("div", { style: bad ? "color:var(--err)" : "" }, text)); msgs.scrollTop = msgs.scrollHeight; };
 
+const dirOf = (path: string): string => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+/** The sheets below this one (Recurse into subsheets): the sheet files its sheets name, then theirs. */
+function belowHere(others: { docId: string; path: string; doc: KDoc }[], only: Set<string> | null): typeof others {
+  const here = projectDocs().find((d) => d.docId === appState.docId), byPath = new Map(others.map((o) => [o.path, o])), out: typeof others = [], seen = new Set<string>();
+  const walk = (doc: KDoc, dir: string, sel: Set<string> | null): void => {
+    for (const f of subsheetFiles(doc, dir, sel)) { const o = byPath.get(f); if (!o || seen.has(o.docId)) continue; seen.add(o.docId); out.push(o); walk(o.doc, dirOf(o.path), null); }
+  };
+  if (E.kdoc) walk(E.kdoc, here ? dirOf(here.path) : "", only);
+  return out;
+}
 async function otherSheets(): Promise<{ docId: string; path: string; doc: KDoc }[]> {
   const out: { docId: string; path: string; doc: KDoc }[] = [];
   for (const d of projectDocs().filter((x) => x.docType === "kicad_sch" && x.docId !== appState.docId)) {
@@ -65,53 +80,62 @@ async function otherSheets(): Promise<{ docId: string; path: string; doc: KDoc }
 
 async function runAnnotate(): Promise<void> {
   const S = sch(); if (!S || !E.kdoc) return;
+  if (msgs) msgs.innerHTML = "";
   if (E.viewOnly) { say("View-only access", true); return; }
   const interval = A.numbering === "100" ? 100 : A.numbering === "1000" ? 1000 : 0;
   await storeReusedSheetMode();   // annotation reads the mode from the project
-  const base: AnnotateOpts = { order: A.order, keep: A.keep, regroup: !A.keep && A.regroup, start: A.numbering === "first" ? A.start : 0, sheetInterval: interval };
+  // OnAnnotateClick: regroupUnits = resetAnnotation && m_checkRegroupUnits
+  const base: AnnotateOpts = { order: A.order, keep: A.keep, start: A.numbering === "first" ? A.start : 0, sheetInterval: interval, regroup: !A.keep && A.regroup };
   const only = A.scope === "selection" ? new Set<string>(E.selection) : undefined;
   if (A.scope === "selection" && E.selected) only!.add(E.selected.id);
   const others = await otherSheets();
-  // the references the sheets left alone keep: everything on them when only this sheet is annotated, or when existing
+  // the sheets annotated besides this one: all of them, or with Recurse the ones below this sheet (or the selected sheets)
+  const targets = A.scope === "all" ? others : A.recursive ? belowHere(others, only || null) : [];
+  const targetIds = new Set(targets.map((t) => t.docId));
+  // the references the sheets left alone keep: everything on them when only some sheets are annotated, or when existing
   // annotations are kept; a reset of the entire schematic starts from nothing and fills sheet after sheet
-  const reserved: string[] = A.scope !== "all" || A.keep ? others.flatMap((o) => usedRefs(o.doc)) : [];
+  const reserved: string[] = others.filter((o) => !targetIds.has(o.docId) || A.keep).flatMap((o) => usedRefs(o.doc));
   const here = S.annotateChanges(E.kdoc, Object.assign({}, base, { only, reserved, sheetNumber: pageOf(E.kdoc, 1) }));
-  let total = here.length, sheets = here.length ? 1 : 0;
-  if (here.length) toolCtx().commit(here, "annotate");
-  if (A.scope === "all") {
-    reserved.push(...usedRefs(E.kdoc));
-    for (const [i, o] of others.entries()) {
-      const ch = S.annotateChanges(o.doc, Object.assign({}, base, { reserved: reserved.slice(), sheetNumber: pageOf(o.doc, i + 2) }));
-      if (ch.length) {
-        const inverse = inverseOf(o.doc, ch);
-        try { await submitDocOp(o.docId, ch); } catch (e) { say(`Could not annotate ${o.path}: ${(e as Error).message}`, true); continue; }
-        pushUndoFor(o.docId, { label: "annotate", changes: ch, inverse }); total += ch.length; sheets++;
-        for (const c of ch) KiCadCanvas.applyChange(o.doc, c, 1e4);
-      }
-      reserved.push(...usedRefs(o.doc));
+  const lines: string[] = S.annotateMessages ? S.annotateMessages(E.kdoc, here) : [];
+  if (here.length) toolCtx().commit(here, "Annotate");
+  reserved.push(...usedRefs(E.kdoc));
+  for (const [i, o] of targets.entries()) {
+    const ch = S.annotateChanges(o.doc, Object.assign({}, base, { reserved: reserved.slice(), sheetNumber: pageOf(o.doc, i + 2) }));
+    if (ch.length) {
+      const inverse = inverseOf(o.doc, ch), msgsHere = S.annotateMessages ? S.annotateMessages(o.doc, ch) : [];
+      try { await submitDocOp(o.docId, ch); } catch (e) { say(`Could not annotate ${o.path}: ${(e as Error).message}`, true); continue; }
+      pushUndoFor(o.docId, { label: "Annotate", changes: ch, inverse }); lines.push(...msgsHere);
+      for (const c of ch) KiCadCanvas.applyChange(o.doc, c, 1e4);
     }
+    reserved.push(...usedRefs(o.doc));
   }
-  say(total ? `Annotated ${total} symbol${total === 1 ? "" : "s"}${sheets > 1 ? ` on ${sheets} sheets` : ""}.` : "No symbols needed annotation.");
+  for (const l of lines) say(l);
+  say("Annotation complete.");
   void refreshOtherRefs();
 }
 
 async function runClear(): Promise<void> {
   const S = sch(); if (!S || !E.kdoc) return;
+  if (msgs) msgs.innerHTML = "";
   if (E.viewOnly) { say("View-only access", true); return; }
   const only = A.scope === "selection" ? new Set<string>(E.selection) : null;
   if (only && E.selected) only.add(E.selected.id);
-  const here = S.clearAnnotationChanges(E.kdoc, only); let total = here.length;
-  if (here.length) toolCtx().commit(here, "clear annotation");
-  if (A.scope === "all") for (const o of await otherSheets()) {
+  const here = S.clearAnnotationChanges(E.kdoc, only);
+  const lines: string[] = S.annotateMessages ? S.annotateMessages(E.kdoc, here, true) : [];
+  if (here.length) toolCtx().commit(here, "Delete Annotation");
+  const others = A.scope === "all" || A.recursive ? await otherSheets() : [];
+  const targets = A.scope === "all" ? others : A.recursive ? belowHere(others, only) : [];
+  for (const o of targets) {
     const ch = S.clearAnnotationChanges(o.doc, null); if (!ch.length) continue;
-    const inverse = inverseOf(o.doc, ch);
+    const inverse = inverseOf(o.doc, ch), msgsHere = S.annotateMessages ? S.annotateMessages(o.doc, ch, true) : [];
     try { await submitDocOp(o.docId, ch); } catch (e) { say(`Could not clear ${o.path}: ${(e as Error).message}`, true); continue; }
-    pushUndoFor(o.docId, { label: "clear annotation", changes: ch, inverse }); total += ch.length;
+    pushUndoFor(o.docId, { label: "Delete Annotation", changes: ch, inverse }); lines.push(...msgsHere);
+    for (const c of ch) KiCadCanvas.applyChange(o.doc, c, 1e4);
   }
-  say(total ? `Cleared the annotation of ${total} symbol${total === 1 ? "" : "s"}.` : "No annotated symbols in scope.");
+  for (const l of lines) say(l);
 }
 
-let regroup: HTMLInputElement, reuseSuffix = false, initialReuse = false;
+let reuseSuffix = false, initialReuse = false;
 /** storeReusedSheetMode: the Reused Sheets choice written to the project when it changed. */
 async function storeReusedSheetMode(): Promise<void> {
   if (reuseSuffix === initialReuse) return;
@@ -128,33 +152,35 @@ export function openAnnotate(): void {
     title: "Annotate Schematic", width: 600,
     build(body) {
       const hasSel = E.selection.size > 0 || !!E.selected;
+      const start = textInput(String(A.start), (v) => { A.start = Math.max(0, parseInt(v, 10) || 0); }, { id: "kd-ann-start", style: "width:70px", type: "number", min: "0" });
       const dark = effectiveTheme() === "dark";
+      // bSizerXpos / bSizerYpos: the radio button, then annotate_down_right / annotate_right_down beside it
       const withBmp = (row: HTMLElement, o: string) => h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:12px" }, row, h("img", { src: ORDER_BMP[o][dark ? 1 : 0], width: "24", height: "24", alt: "" }));
       const withTip = (row: HTMLElement, tip: string) => { row.title = tip; return row; };
-      regroup = h("input", { type: "checkbox", id: "kd-ann-regroup", checked: A.regroup, disabled: A.keep }) as HTMLInputElement;
-      regroup.addEventListener("change", () => { A.regroup = regroup.checked; });
-      const regroupRow = h("label", { class: "kd-chk", style: "display:flex;gap:6px;align-items:center" }, regroup, "Regroup symbol units");
       reuseSuffix = obj(obj(obj(projectJson()).schematic).annotation).reused_sheet_suffixes === true;
       initialReuse = reuseSuffix;
-      const start = textInput(String(A.start), (v) => { A.start = Math.max(0, parseInt(v, 10) || 0); }, { id: "kd-ann-start", style: "width:70px", type: "number", min: "0" });
+      const regroup = checkbox("Regroup symbol units", A.regroup, (on) => { A.regroup = on; }, { id: "kd-ann-regroup", disabled: A.keep });
+      const regroupBox = regroup.querySelector("input") as HTMLInputElement;
+      const keepChanged = (keep: boolean): void => { A.keep = keep; regroupBox.disabled = keep; regroup.style.opacity = keep ? ".5" : ""; };
+      if (A.keep) regroup.style.opacity = ".5";
+      // fgSizer1 (2 × 2): Scope | Order, Options | Numbering; the Reused Sheets box; then the message panel
       body.append(
-        h("div", { style: "display:flex;gap:12px" },
+        h("div", { style: "display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 12px" },
           box("Scope", radio("scope", "all", "Entire schematic", A.scope === "all", () => { A.scope = "all"; }), radio("scope", "sheet", "Current sheet only", A.scope === "sheet", () => { A.scope = "sheet"; }),
             radio("scope", "selection", "Selection", A.scope === "selection", () => { A.scope = "selection"; }, !hasSel),
-            checkbox("Recurse into subsheets", true, undefined, { disabled: true, title: "Every sheet of the project is annotated" })),
-          box("Options", radio("keep", "keep", "Keep existing annotations", A.keep, () => { A.keep = true; regroup.disabled = true; }), radio("keep", "reset", "Reset existing annotations", !A.keep, () => { A.keep = false; regroup.disabled = false; }),
-            regroupRow)),
-        h("div", { style: "display:flex;gap:12px;margin-top:8px" },
+            checkbox("Recurse into subsheets", A.recursive, (on) => { A.recursive = on; }, { id: "kd-ann-recursive" })),
           box("Order", withBmp(radio("order", "x", "Sort symbols by X position", A.order === "x", () => { A.order = "x"; }), "x"), withBmp(radio("order", "y", "Sort symbols by Y position", A.order === "y", () => { A.order = "y"; }), "y")),
+          box("Options", radio("keep", "keep", "Keep existing annotations", A.keep, () => keepChanged(true)), radio("keep", "reset", "Reset existing annotations", !A.keep, () => keepChanged(false)), regroup),
           box("Numbering", h("div", { style: "display:flex;gap:6px;align-items:center" }, radio("num", "first", "Use first free number after:", A.numbering === "first", () => { A.numbering = "first"; }), start),
             radio("num", "100", "First free after sheet number X 100", A.numbering === "100", () => { A.numbering = "100"; }),
             radio("num", "1000", "First free after sheet number X 1000", A.numbering === "1000", () => { A.numbering = "1000"; }))),
-        // DIALOG_ANNOTATE's Reused Sheets box: SCHEMATIC_SETTINGS::m_AnnotateReusedSheetSuffixes (annotation.reused_sheet_suffixes)
+        // sbSizerReusedSheets: SCHEMATIC_SETTINGS::m_AnnotateReusedSheetSuffixes (annotation.reused_sheet_suffixes)
         h("div", { style: "margin-top:8px" }, box("Reused Sheets",
           radio("reuse", "separate", "Number each sheet instance separately (R1, R2 ...)", !reuseSuffix, () => { reuseSuffix = false; }),
           withTip(radio("reuse", "suffix", "Number each file once and add the sheet's reference suffix (R1_M1, R1_M2 ...)", reuseSuffix, () => { reuseSuffix = true; }),
             "Repeated instances of one sheet file need distinct full reference suffixes. Set Reference Suffix in Sheet Properties."))),
-        msgs = h("div", { "data-ann-msgs": "1", style: "margin-top:10px;height:90px;overflow:auto;border:1px solid var(--line);background:var(--panel);padding:4px 6px;font-size:12px" }));
+        h("div", { style: "margin-top:10px;font-size:12px" }, "Annotation Messages:"),
+        msgs = h("div", { "data-ann-msgs": "1", style: "margin-top:4px;height:160px;overflow:auto;border:1px solid var(--line);background:var(--panel);padding:4px 6px;font-size:12px" }));
       if (A.scope === "selection" && !hasSel) { A.scope = "all"; const r = body.querySelector<HTMLInputElement>("#kd-ann-scope-all"); if (r) r.checked = true; }
     },
     buttons: [
