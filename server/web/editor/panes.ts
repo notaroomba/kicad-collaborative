@@ -66,7 +66,6 @@ export function setupEditorChrome() {
   setRadio("Units", ({ mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" } as Record<string, string>)[E.units]);
   setRadio("Selection modes", E.selMode === "lasso" ? "selectSetLasso" : "selectSetRect");
   setRadio("Crosshair modes", E.crosshairMode === "full" ? "cursorFullCrosshairs" : E.crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
-  $("#crosshair").classList.toggle("on", E.crosshairMode !== "small");
   setToggles({ toggleGrid: E.gridOn, togglePolarCoords: E.polarCoords, toggleHiddenPins: !!E.renderOpts.showHiddenPins, highContrastMode: !!E.renderOpts.highContrast,
     padDisplayMode: !!E.renderOpts.outlinePads, viaDisplayMode: !!E.renderOpts.outlineVias, trackDisplayMode: !!E.renderOpts.outlineTracks,
     zoneDisplayFilled: !E.renderOpts.zoneOutline, zoneDisplayOutline: !!E.renderOpts.zoneOutline });
@@ -103,4 +102,4 @@ export function setUnitsAction(u: string, id: string) {
   setRadio("Units", id); store.slice("viewport", { units: E.units, lastImperial: E.lastImperial || "mil" });
 }
 
-export function setCrosshair(mode: "small" | "full" | "45", id: string) { E.crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); refreshCrosshair(); }
+export function setCrosshair(mode: "small" | "full" | "45", id: string) { E.crosshairMode = mode; setRadio("Crosshair modes", id); store.slice("viewport", { crosshair: mode }); refreshCrosshair(); }

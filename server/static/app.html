@@ -14,7 +14,6 @@
 <style>
   /* Colours, type, spacing and the shared components (.btn, .input, .pill, the .kd-* dialog frame, …)
      come from /static/theme.css, linked above.  Only the app's own layout lives here. */
-  :root { --cursor-pcb: #FFFFFF; --cursor-sch: #0F0F0F; }   /* the colour themes' cursor (KiCad default theme) */
   html, body { height: 100%; margin: 0; }
   body { background: var(--bench); color: var(--ink); font: var(--fs-base)/1.45 var(--font); overflow: hidden;
          -webkit-font-smoothing: antialiased; }
@@ -57,8 +56,6 @@
   @media (prefers-reduced-motion: reduce) { .kinfobar, .kinfobar.show { transition: none; } }
   .ktip { position: fixed; left: 0; top: 0; z-index: 1000; max-width: 360px; padding: 4px 7px; border: 1px solid var(--line-2, var(--line)); border-radius: 3px; background: var(--panel); color: var(--ink); font-size: 12px; line-height: 1.35; white-space: pre-line; pointer-events: none; box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 18%, transparent); opacity: 0; visibility: hidden; transition: opacity .08s linear, visibility 0s linear .08s; }
   .ktip.on { opacity: 1; visibility: visible; transition: opacity .08s linear; }
-  #crosshair { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; color: var(--cursor-pcb); }
-  #crosshair.live { display: block; } body[data-editor="sch"] #crosshair { color: var(--cursor-sch); }
   #signinOverlay { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-3); padding: 10px 14px; display: none; box-shadow: var(--shadow); }
   .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center; }
   .kv label { color: var(--ink-2); }
@@ -88,7 +85,6 @@
           <svg id="base" xmlns="http://www.w3.org/2000/svg"></svg>
           <svg id="overlay" xmlns="http://www.w3.org/2000/svg"><g id="ovRoot"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></g></svg>
         </div>
-        <canvas id="crosshair" data-mode="small"></canvas>
         <div id="cmtPanel"></div>
       </div>
       <div id="ui-tbRight"></div>
