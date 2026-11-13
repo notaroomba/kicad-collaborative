@@ -296,7 +296,10 @@ stage.addEventListener("pointerdown", (ev) => {
   }
   // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
   // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
-  if (!isSch() && best && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
+  // A press on a footprint that is already selected drags the selection, whatever is under it (DRAG_SELECTED:
+  // PCB_SELECTION_TOOL's SelectionContains( DragOrigin ) check comes before any new pick)
+  const pressOnSelected = !isSch() && !!best && !smodeOf(ev) && !!selectedSet()?.has(best.id);
+  if (!isSch() && best && !pressOnSelected && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
     try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { E.selection.clear(); E.selected = null; E.selField = null; E.selPins = []; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); }
   }
   if (!best && mod && mod.onSelectDown) { try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); } }
