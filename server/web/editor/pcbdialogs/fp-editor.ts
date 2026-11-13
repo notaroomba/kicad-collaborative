@@ -266,31 +266,44 @@ export function enumPadsDialog(done: (p: { start: number; step: number; prefix: 
 let checkerMarkers: Any[] = [];
 /** The markers the checker drew (the canvas overlay asks for them). */
 export const fpCheckerMarkers = (): Any[] => checkerMarkers;
+/**
+ * DIALOG_FOOTPRINT_CHECKER: the markers list (a click selects and highlights a marker), Show: All / Errors /
+ * Warnings / Exclusions with their counts (OnSeverity: All checks Errors and sets Warnings and Exclusions to
+ * itself), Delete Marker (the selected one), Delete All Markers, and Run Checks / Close (SetupStandardButtons).
+ */
 export function footprintCheckerDialog(ctx: ToolCtx): boolean {
   const doc = ctx.doc as KDoc | null; if (!doc) return false;
   const list = h("div", { class: "pd-report", style: "height:300px", "data-k": "markers" });
-  const counts = h("span", { class: "pd-value" });
-  const showErr = checkField(true, "Errors", { onChange: () => draw() }), showWarn = checkField(true, "Warnings", { onChange: () => draw() });
+  let current = -1;
+  const showAll = checkField(false, "All", { key: "show-all", onChange: (v) => { showErr.set(true); showWarn.set(v); showExcl.set(v); draw(); } });
+  const showErr = checkField(true, "Errors", { key: "show-errors", onChange: () => draw() }), showWarn = checkField(true, "Warnings", { key: "show-warnings", onChange: () => draw() });
+  const showExcl = checkField(false, "Exclusions", { key: "show-exclusions", onChange: () => draw() });
+  const visible = (mk: Any): boolean => (mk.excluded ? showExcl.get() : mk.severity === "error" ? showErr.get() : showWarn.get());
   const draw = (): void => {
     list.replaceChildren();
-    const shown = checkerMarkers.filter((mk) => (mk.severity === "error" ? showErr.get() : showWarn.get()));
+    const shown = checkerMarkers.filter(visible);
     for (const mk of shown) {
-      const sevLabel = mk.severity === "error" ? "Error" : "Warning";
-      const row = h("div", { class: "ln " + mk.severity, style: "cursor:pointer" }, `[${mk.code}]: ${mk.title}${mk.detail ? " " + mk.detail : ""}  ; ${sevLabel}`);
-      row.addEventListener("click", () => { ctx.setHighlight(new Set(mk.ids)); ctx.requestRender(); });
+      const sevLabel = mk.excluded ? "Excluded" : mk.severity === "error" ? "Error" : "Warning";
+      const i = checkerMarkers.indexOf(mk);
+      const row = h("div", { class: "ln " + mk.severity + (i === current ? " sel" : ""), style: "cursor:pointer" + (i === current ? ";background:var(--sel);color:var(--on-accent,#fff)" : ""), "data-k": "marker" }, `[${mk.code}]: ${mk.title}${mk.detail ? " " + mk.detail : ""}  ; ${sevLabel}`);
+      row.addEventListener("click", () => { current = i; ctx.setHighlight(new Set(mk.ids)); ctx.requestRender(); draw(); });
       list.append(row);
     }
     if (!shown.length) list.append(h("div", { class: "ln info" }, checkerMarkers.length ? "" : "No footprint problems found."));
-    (showErr.el.lastChild as Text).textContent = `Errors (${checkerMarkers.filter((x) => x.severity === "error").length})`;
-    (showWarn.el.lastChild as Text).textContent = `Warnings (${checkerMarkers.filter((x) => x.severity === "warning").length})`;
-    counts.textContent = "";
+    const n = (f: (x: Any) => boolean) => checkerMarkers.filter(f).length;
+    (showErr.el.lastChild as Text).textContent = `Errors (${n((x) => !x.excluded && x.severity === "error")})`;
+    (showWarn.el.lastChild as Text).textContent = `Warnings (${n((x) => !x.excluded && x.severity === "warning")})`;
+    (showExcl.el.lastChild as Text).textContent = `Exclusions (${n((x) => !!x.excluded)})`;
   };
   const show = (): void => { const c = ctx as Any; if (c.setMarkers) c.setMarkers(checkerMarkers.map((mk) => ({ code: mk.code, severity: mk.severity, x: mk.at[0], y: mk.at[1], text: mk.title + (mk.detail ? " " + mk.detail : ""), ids: mk.ids }))); };
-  const run = (): void => { checkerMarkers = CHK().checkFootprint(doc); draw(); show(); ctx.requestRender(); };
+  const run = (): void => { checkerMarkers = CHK().checkFootprint(doc); current = -1; draw(); show(); ctx.requestRender(); };
+  const deleteOne = (): void => { if (current < 0 || current >= checkerMarkers.length) return; checkerMarkers.splice(current, 1); current = -1; ctx.setHighlight(null); draw(); show(); ctx.requestRender(); };
+  const deleteAll = (): void => { checkerMarkers = []; current = -1; draw(); show(); ctx.setHighlight(null); ctx.requestRender(); };
   run();
-  return !!openDialog({ title: "Footprint Checker", width: 640, modeless: true, noOk: true, cancelLabel: "Close",
-    extra: [{ label: "Run Checks", fn: run }, { label: "Delete All Markers", fn: () => { checkerMarkers = []; draw(); show(); ctx.setHighlight(null); ctx.requestRender(); } }],
-    build(body) { body.append(list, h("div", { class: "pd-row", style: "margin-top:6px" }, h("span", { class: "pd-lbl" }, "Show:"), showErr.el, showWarn.el, counts)); },
+  return !!openDialog({ title: "Footprint Checker", width: 680, modeless: true, okLabel: "Run Checks", cancelLabel: "Close",
+    extra: [{ label: "Delete Marker", fn: deleteOne }, { label: "Delete All Markers", fn: deleteAll }],
+    build(body) { body.append(list, h("div", { class: "pd-row", style: "margin-top:6px;gap:10px" }, h("span", { class: "pd-lbl" }, "Show:"), showAll.el, h("span", { style: "width:25px" }), showErr.el, showWarn.el, showExcl.el)); },
+    ok() { run(); return false; },
     cancel() { ctx.setHighlight(null); } });
 }
 
