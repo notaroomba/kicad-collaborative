@@ -874,6 +874,7 @@ export function Home() {
         { id: "mcp", label: "Connect an AI assistant (MCP)", icon: "link", run: () => { location.href = "/connect"; } },
         { id: "gh", label: "GitHub profile", icon: "open", run: () => { window.open(`https://github.com/${me.login}`, "_blank", "noopener"); } },
         { id: "app", label: "Get the desktop app", icon: "desktop", run: () => { window.open(RELEASES, "_blank", "noopener"); } },
+        ...(me.admin ? ["-" as const, { id: "admin", label: "Admin dashboard", icon: "chart", run: () => { location.href = "/admin"; } }] : []),
         "-",
         { id: "out", label: "Log out", icon: "signout", run: () => { signOut(); } },
       ]} /> : null}

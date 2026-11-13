@@ -850,5 +850,6 @@ pub async fn me(AuthUser(user): AuthUser) -> Json<serde_json::Value> {
         "name": user.name,
         "email": user.email,
         "avatarUrl": user.avatar_url,
+        "admin": crate::plugins::is_admin(&user.login),
     }))
 }

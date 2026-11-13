@@ -14,7 +14,7 @@ export type DocType = "kicad_pcb" | "kicad_sch" | "footprint";
 export type Units = "mm" | "in" | "mil";
 export type ConnStatus = "offline" | "connecting" | "live" | "error" | "idle";
 
-export interface User { id: number; login: string; name?: string | null; avatarUrl?: string | null }
+export interface User { id: number; login: string; name?: string | null; avatarUrl?: string | null; admin?: boolean }
 
 export interface DocEntry { docId: string; path: string; docType: string; hasPreview?: boolean }
 

@@ -1,4 +1,5 @@
 mod access;
+mod admin;
 mod ai;
 mod datasheet;
 mod kicadlib;
@@ -368,6 +369,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/github/connect", get(auth::github_connect))
         .route("/auth/github/install", get(github_app::install))
         .route("/auth/github/installed", get(github_app::installed))
+        .route("/admin", get(admin::page))
+        .route("/api/admin/stats", get(admin::stats))
+        .route("/static/dist/admin.js", get(admin::js))
         .route("/admin/github-app", get(github_app::admin_page))
         .route("/admin/github-app/created", get(github_app::admin_created))
         .route("/github", get(github::page))
