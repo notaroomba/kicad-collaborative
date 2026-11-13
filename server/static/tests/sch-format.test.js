@@ -47,6 +47,14 @@ test("the painter draws hop arcs only when the project's hop-over size is set", 
   K.setSchFormatting({ hopOverChoice: 0 }, doc);
 });
 
+test("SVG export plots the hops (sch_plotter m_plotHopOver): runs and an arc bulging away from the crossing wire", () => {
+  const doc = K.parseDoc(HEAD + W("w1", [0, 5], [20, 5]) + W("w2", [10, 0], [10, 10]) + ")");
+  K.setSchFormatting({ hopOverChoice: 3 }, doc);
+  const svg = K.renderSvg(doc, { frame: false, background: false });
+  K.setSchFormatting({ hopOverChoice: 0 }, doc);
+  assert.ok(/M9\.0856 5A0\.9144 0\.9144 0 0 1 10\.9144 5/.test(svg), svg.slice(0, 600));
+});
+
 test("overbar_offset_ratio moves the ~{overbar} stroke", () => {
   const doc = K.parseDoc(HEAD + '(text "~{RST}" (at 0 0 0) (effects (font (size 2 2)) (justify left bottom)) (uuid "t1")))');
   const barY = () => { const ctx = recCtx(); K.render(doc, ctx, view, {}); const ys = []; for (let i = 0; i + 1 < ctx.ops.length; i++) { const a = ctx.ops[i], b = ctx.ops[i + 1]; if (a[0] === "M" && b[0] === "L" && Math.abs(a[2] - b[2]) < 1e-9 && Math.abs(b[1] - a[1]) > 2) ys.push(a[2]); } return Math.min(...ys); };

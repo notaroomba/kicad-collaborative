@@ -1005,6 +1005,7 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
   const base: Mat | null = m ? [m.a, m.b, m.c, m.d, m.e, m.f] as unknown as Mat : null;
   ctx.save();
   ctx.globalAlpha = style.alpha; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash([]);
+  const hops = doc.type === "sch" ? hopShapes(doc) : null;   // a hopping wire's shadow follows its hops (the same shape on every layer)
   for (const key of ids) {
     // "itemId#pin:N" / "itemId#field:Name" (schematic) and "footprintId#padIndex" (board) halo that part alone
     const cut = typeof key === "string" ? key.indexOf("#") : -1, id = cut > 0 ? key.slice(0, cut) : key, sub = cut > 0 ? key.slice(cut + 1) : null;
@@ -1036,6 +1037,8 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
       if (g.t === "rect" || g.t === "image") { ctx.lineWidth = Math.max((g as RectGeom).wd || 0, minW) + extra; ctx.strokeRect(g.x, g.y, g.w, g.h); continue; }
       if (g.t === "poly" && (!g.pts || g.pts.length < 2)) continue;
       ctx.lineWidth = Math.max(g.w || 0, minW) + extra;
+      const hop = hops && g.t === "poly" ? hops.get(g) : undefined;
+      if (hop) { strokeHopShape(ctx, hop, null); continue; }
       const p = (ctx as unknown as { __plot?: boolean }).__plot ? null : pathOf(g);
       // strokes only: a shape filled in its own outline colour (a junction dot, a FILLED_SHAPE) keeps its fill
       const fillIt = strokesOnly ? !!g.fill && g.fill === g.color : (g.fill || g.t === "pad" || g.t === "circle");

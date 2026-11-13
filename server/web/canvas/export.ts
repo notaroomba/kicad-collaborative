@@ -7,6 +7,7 @@ import { isList, kid, quotedMask, str, splitLines } from "./sexpr";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 import { strokeLine, strokeOrigin } from "./stroke-font";
+import { type HopPiece, hopShapes } from "./hop-over";
 import type { Doc, DrawTextG, ExportOpts, Geom, Item, PathSink, SAtom } from "./types";
 
 /** An SvgPath: the `d` string built so far, the current point and the subpath start. */
@@ -47,6 +48,18 @@ SvgPath.prototype.arc = function (this: SvgPathT, x: number, y: number, r: numbe
   this.cx = p1x; this.cy = p1y;
 };
 
+/** A hopping wire: its runs (dashed like the wire) and its hop arcs (solid), as SCH_PAINTER draws them. */
+function svgHop(g: Geom, pieces: HopPiece[], hairline: number): string {
+  const lw = Math.max(g.w || 0, hairline);
+  const runs = pieces.filter((p) => p.t === "seg").map((p) => `M${fmt(p.a[0])} ${fmt(p.a[1])}L${fmt(p.b[0])} ${fmt(p.b[1])}`).join("");
+  const arcs = pieces.filter((p) => p.t === "arc").map((p) => {
+    const cross = (p.m[0] - p.a[0]) * (p.b[1] - p.a[1]) - (p.m[1] - p.a[1]) * (p.b[0] - p.a[0]);   // which side the mid point bulges to
+    const r = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]) / 2;
+    return `M${fmt(p.a[0])} ${fmt(p.a[1])}A${fmt(r)} ${fmt(r)} 0 0 ${cross > 0 ? 1 : 0} ${fmt(p.b[0])} ${fmt(p.b[1])}`;
+  }).join("");
+  const dash = g.dash ? ` stroke-dasharray="${dashPattern(g.dashType, lw).map(fmt).join(" ")}"` : "";
+  return `<path d="${runs}" fill="none" stroke="${g.color}" stroke-width="${fmt(lw)}" stroke-linecap="round"${dash}/>` + `<path d="${arcs}" fill="none" stroke="${g.color}" stroke-width="${fmt(lw)}" stroke-linecap="round"/>`;
+}
 /** One geometry record as SVG markup (same fill / stroke rules as the canvas painter), or "" when it draws nothing. */
 export function svgGeom(g: Geom | DrawTextG, hairline: number, isPcb: boolean, bg: string | null | false | undefined): string {
   const t = g.t; const sw = (w: number | undefined) => Math.max(w || 0, hairline);
@@ -193,7 +206,10 @@ export function renderSvg(doc: Doc, opts?: ExportOpts | null): string {
     if (it.hiddenGeom) for (const g of it.hiddenGeom) { if (hidden.has(g.layer) || (g.hiddenText ? !opts.showHiddenText : !opts.showHiddenPins)) continue; take(g); }
   }
   const zs = Array.from(buckets.keys()).sort((a, b) => a - b);
+  const hops = isPcb ? null : hopShapes(doc);   // Formatting > Hop-over size: plotted as drawn (m_plotHopOver)
   for (const z of zs) for (const g of buckets.get(z)!) {
+    const hop = hops && g.t === "poly" ? hops.get(g) : undefined;
+    if (hop) { out.push(svgHop(g, hop, hairline)); continue; }
     if (g.hiddenText) { const s = svgGeom(g, hairline, isPcb, bg || PCB_BG); if (s) out.push(`<g opacity="${HIDDEN_TEXT_ALPHA}">` + s + "</g>"); continue; }
     const s = svgGeom(g, hairline, isPcb, bg || PCB_BG); if (s) out.push(s);
   }
