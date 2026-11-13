@@ -4,7 +4,6 @@
 // origins are E.pcbOrigins, as pcbrouting.ts has them for the open board.
 import { store } from "./appstore";
 import { E } from "./state";
-import { isSch } from "./view";
 export { toDisplayAbs, toDisplayRel } from "../units";
 
 export type DisplayOrigin = "page" | "aux" | "grid";
@@ -29,6 +28,7 @@ export function publishUserOrigin(): void {
  * position fields (UNIT_BINDER::SetCoordType) and the Properties panel's coordinate rows show it; the schematic has
  * no transform.  fromDisplayAbs is FromDisplay, the value typed back in board coordinates.
  */
+const isSch = (): boolean => E.DOC_TYPE === "kicad_sch";   // (view.ts's test; that module is not loaded by the dialogs' tests)
 export function toDisplayAbsAxis(v: number, axis: "x" | "y"): number {
   if (isSch()) return v;
   const vp = store.get().viewport; const o = vp.userOrigin || [0, 0];
