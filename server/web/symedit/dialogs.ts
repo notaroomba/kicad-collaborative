@@ -15,6 +15,7 @@ import type { SymbolEditor, Lib } from "./editor";
 import { nodeOf } from "./editor";
 import { icon } from "./ui";
 import { pinMapPage, pinMapState, harvestPinMaps } from "./pinmap";
+import * as FF from "./fpfilters";
 import { openSimModel } from "../dialogs/sim-model";
 import { embeddedModelFiles, projectModelFiles, refPrefix, simPinsOfLib } from "../dialogs/sim-files";
 import { libDocFor } from "./libdoc";
@@ -305,6 +306,64 @@ export function editShape(se: SymbolEditor, id: string): void {
   });
 }
 
+// ---------------------------------------------------------------- Footprint Filters page
+/** PANEL_FOOTPRINT_FILTERS: the filter list with Add / Edit / Delete, and the footprints the filters match. */
+function fpFiltersPage(pg: HTMLElement, get: () => string[], set: (f: string[]) => void, ro: boolean, inheritedFrom: string): void {
+  const sel = new Set<number>(); let anchor = -1;
+  const list = h("div", { id: "sp-fpfilters", class: "kd-listbox", tabindex: "0", style: "flex:1;min-height:220px;overflow:auto;border:1px solid var(--line);background:var(--paper);padding:2px 0" });
+  if (inheritedFrom) list.title = `These filters are inherited from '${inheritedFrom}'.`;
+  const label = h("div", { id: "sp-fpmatch-label", style: "margin-bottom:4px" }, "Matching footprints:");
+  const matches = h("div", { id: "sp-fpmatches", style: "flex:1;min-height:220px;overflow:auto;border:1px solid var(--line);background:var(--paper);padding:2px 0" });
+  const changed = (f: string[]) => { set(f.map(FF.sanitizeFpFilter)); list.removeAttribute("title"); draw(); update(); };
+  const draw = () => {
+    list.replaceChildren();
+    get().forEach((f, i) => {
+      const row = h("div", { class: "kd-lbrow" + (sel.has(i) ? " sel" : ""), "data-i": String(i), style: "padding:1px 6px;cursor:default;white-space:nowrap" + (sel.has(i) ? ";background:var(--sel)" : "") }, f);
+      row.addEventListener("click", (ev) => {
+        if (ev.shiftKey && anchor >= 0) { sel.clear(); for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) sel.add(k); }
+        else if (ev.ctrlKey || ev.metaKey) { if (sel.has(i)) sel.delete(i); else sel.add(i); anchor = i; }
+        else { sel.clear(); sel.add(i); anchor = i; }
+        draw(); update();
+      });
+      row.addEventListener("dblclick", (ev) => { ev.stopPropagation(); sel.clear(); sel.add(i); void edit(); });
+      list.append(row);
+    });
+  };
+  // OnFpFilterDClick: a double-click on empty space adds a filter
+  list.addEventListener("dblclick", () => { void add(); });
+  list.addEventListener("click", (ev) => { if (ev.target === list) { sel.clear(); draw(); update(); } });
+  const add = async () => {
+    if (ro) return; const v = await promptText("Add Footprint Filter", "Filter:", "");
+    if (v === null || !v) { update(); return; }
+    const f = get().concat([FF.sanitizeFpFilter(v)]); sel.clear(); sel.add(f.length - 1); changed(f);
+  };
+  const edit = async () => {
+    if (ro || !sel.size) return; const i = Math.min(...sel); const v = await promptText("Edit Footprint Filter", "Filter:", get()[i]);
+    if (v !== null && v) { const f = get().slice(); f[i] = FF.sanitizeFpFilter(v); changed(f); } else update();
+  };
+  const del = () => { if (ro || !sel.size) return; const f = get().filter((_x, i) => !sel.has(i)); sel.clear(); changed(f); };
+  let token = 0;
+  const update = () => {
+    const filters = get(); const pats = sel.size ? filters.filter((_x, i) => sel.has(i)) : filters; const my = ++token;
+    const show = () => {
+      if (my !== token) return;
+      const idx = FF.footprintIndex();
+      if (pats.length && !idx) { label.textContent = "Matching footprints:"; matches.replaceChildren(h("div", { style: "padding:1px 6px;color:var(--ink-3)" }, `Loading footprint libraries (${Math.floor(FF.footprintIndexProgress() * 100)}%)...`)); setTimeout(show, 250); return; }
+      const r = FF.matchFootprints(pats, idx || []);
+      label.textContent = `Matching footprints (${r.names.length}${r.limited ? "+" : ""}):`;
+      matches.replaceChildren(...r.names.map((n) => h("div", { class: "kd-lbrow", style: "padding:1px 6px;white-space:nowrap" }, n)));
+    };
+    if (pats.length) void FF.loadFootprintIndex();
+    show();
+  };
+  const btn = (txt: string, title: string, fn: () => void, id: string) => { const b = h("button", { type: "button", class: "btn", title, id, disabled: ro }, txt); b.addEventListener("click", fn); return b; };
+  const bar = h("div", { style: "display:flex;gap:5px;margin-top:5px" }, btn("+", "Add footprint filter", () => void add(), "sp-fpf-add"), btn("✎", "Edit footprint filter", () => void edit(), "sp-fpf-edit"), h("span", { style: "width:20px" }), btn("🗑", "Delete footprint filter", del, "sp-fpf-del"));
+  pg.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:14px;height:100%" },
+    h("div", { style: "display:flex;flex-direction:column" }, h("div", { style: "margin-bottom:4px" }, "Footprint filters:"), list, bar),
+    h("div", { style: "display:flex;flex-direction:column" }, label, matches)));
+  draw(); update();
+}
+
 // ---------------------------------------------------------------- Symbol Properties
 export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } = {}): void {
   const t = se.tab; const sym = se.symbol(); if (!t || !sym) return;
@@ -321,7 +380,14 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
   const curRows = (): L.FieldRow[] => (fgrid ? fgrid.rows() : rows);
   const name = textInput(M.unescapeLibId(M.symName(sym)), undefined, { id: "sp-name" });
   const keywords = textInput(M.fieldValue(sym, "ki_keywords"), undefined, { id: "sp-keywords" });
-  const filters = h("textarea", { id: "sp-fpfilters", style: "width:100%;min-height:70px" }) as HTMLTextAreaElement; filters.value = M.fieldValue(sym, "ki_fp_filters").split(/\s+/).filter(Boolean).join("\n");
+  // footprint filters: a derived symbol with none of its own shows the nearest ancestor's (ancestorDefining) and saves
+  // nothing while they stay the inherited ones
+  const splitF = (v: string) => v.split(/\s+/).filter(Boolean);
+  let fpFilters = splitF(M.fieldValue(sym, "ki_fp_filters")); let inheritedFrom = ""; let inheritedFilters: string[] | null = null;
+  if (!fpFilters.length && derived) {
+    const lm = se.libMap(se.libs.get(t.lib) || null); let cur: M.Node | null = sym; const seen = new Set<string>();
+    while (cur && M.parentNameOf(cur) && lm) { const pn: string = M.parentNameOf(cur)!; if (seen.has(pn)) break; seen.add(pn); cur = lm.symbols.get(pn) || null; const f = cur ? splitF(M.fieldValue(cur, "ki_fp_filters")) : []; if (f.length) { fpFilters = f; inheritedFilters = f.slice(); inheritedFrom = M.unescapeLibId(pn); break; } }
+  }
   const unitsIn = textInput(String(M.unitCount(root)), undefined, { id: "sp-units", type: "number", min: "1", max: "64", style: "width:70px" });
   const interchange = checkbox("All units are interchangeable", !M.unitsLocked(root), undefined, { id: "sp-interchangeable" });
   const bs = M.bodyStyles(root);
@@ -381,7 +447,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
           bodyGrid = KD().grid(bodyGridHost, [{ key: "name", label: "", width: 320 }], bodyRows, { readOnly: ro, height: 100, buttons: { add: () => ({ name: "" }), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true } });
           syncBody();
         } }]),
-        { label: "Footprint Filters", build(pg: HTMLElement) { pg.append(h("div", { style: "margin-bottom:4px" }, "Footprint filters:"), filters); } },
+        { label: "Footprint Filters", build(pg: HTMLElement) { fpFiltersPage(pg, () => fpFilters, (f) => { fpFilters = f; inheritedFrom = ""; }, ro, inheritedFrom); } },
         ...(derived ? [] : [{ label: "Pin Connections", build(pg: HTMLElement) {
           const jgHost = h("div", { id: "sp-jumpergroups" });
           pg.append(jumpers, h("div", { style: "margin-top:8px" }, "Explicit jumper pin groups:"), jgHost);
@@ -444,7 +510,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         });
         s.splice(at, 0, ...fresh, ...keepMeta);
         M.setMetaField(s, "ki_keywords", keywords.value.trim());
-        M.setMetaField(s, "ki_fp_filters", filters.value.split(/\s+/).filter(Boolean).join(" "));
+        { const own = inheritedFilters && fpFilters.join(" ") === inheritedFilters.join(" ") ? [] : fpFilters; if (own.join(" ") !== splitF(M.fieldValue(s, "ki_fp_filters")).join(" ")) M.setMetaField(s, "ki_fp_filters", own.join(" ")); }
         // PANEL_SYMBOL_PIN_MAP::ApplyToSymbol (only when the page was edited, so an untouched symbol keeps its text)
         if (pinMaps.dirty) M.setPinMapData(s, harvestPinMaps(pinMaps), pinMaps.assocs);
         if (derived && inherit.value && inherit.value !== parentName) M.setParentName(s, inherit.value);

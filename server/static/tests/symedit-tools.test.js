@@ -276,3 +276,16 @@ test("Library Symbol Properties: Derive from symbol choices leave out the symbol
   assert.deepStrictEqual(M.parentChoices(lib, "E"), ["A", "B", "C", "D"]);
   const e = M.clone(lib.symbols.get("E")); M.setParentName(e, "A"); assert.strictEqual(M.parentNameOf(e), "A");
 });
+
+test("Footprint Filters page: anchored wildcard matching, lib: prefix, 500 cap, sorted union", () => {
+  const FF = load("symedit/fpfilters.ts");
+  const libs = [{ name: "Resistor_SMD", footprints: ["R_0603_1608Metric", "R_0402_1005Metric", "R_Array_Convex_4x0402"] }, { name: "Capacitor_SMD", footprints: ["C_0603_1608Metric"] }];
+  assert.deepStrictEqual(FF.matchFootprints(["R_*"], libs).names, ["Resistor_SMD:R_0402_1005Metric", "Resistor_SMD:R_0603_1608Metric", "Resistor_SMD:R_Array_Convex_4x0402"]);
+  assert.deepStrictEqual(FF.matchFootprints(["*0603*", "C_*"], libs).names, ["Capacitor_SMD:C_0603_1608Metric", "Resistor_SMD:R_0603_1608Metric"]);
+  assert.deepStrictEqual(FF.matchFootprints(["capacitor_smd:*"], libs).names, ["Capacitor_SMD:C_0603_1608Metric"]);
+  assert.deepStrictEqual(FF.matchFootprints(["R_0603"], libs).names, []);   // anchored
+  assert.deepStrictEqual(FF.matchFootprints(["R_060?_*"], libs).names, ["Resistor_SMD:R_0603_1608Metric"]);
+  const big = [{ name: "L", footprints: Array.from({ length: 600 }, (_x, i) => "F" + i) }];
+  const r = FF.matchFootprints(["F*"], big); assert.strictEqual(r.names.length, 500); assert.ok(r.limited);
+  assert.strictEqual(FF.sanitizeFpFilter("SOIC 8*"), "SOIC_8*");
+});

@@ -285,7 +285,7 @@ export function footprintCheckerDialog(ctx: ToolCtx): boolean {
     for (const mk of shown) {
       const sevLabel = mk.excluded ? "Excluded" : mk.severity === "error" ? "Error" : "Warning";
       const i = checkerMarkers.indexOf(mk);
-      const row = h("div", { class: "ln " + mk.severity + (i === current ? " sel" : ""), style: "cursor:pointer" + (i === current ? ";background:var(--sel);color:var(--on-accent,#fff)" : ""), "data-k": "marker" }, `[${mk.code}]: ${mk.title}${mk.detail ? " " + mk.detail : ""}  ; ${sevLabel}`);
+      const row = h("div", { class: "ln " + mk.severity + (i === current ? " sel" : ""), style: "cursor:pointer" + (i === current ? ";background:var(--sel)" : ""), "data-k": "marker" }, `[${mk.code}]: ${mk.title}${mk.detail ? " " + mk.detail : ""}  ; ${sevLabel}`);
       row.addEventListener("click", () => { current = i; ctx.setHighlight(new Set(mk.ids)); ctx.requestRender(); draw(); });
       list.append(row);
     }
