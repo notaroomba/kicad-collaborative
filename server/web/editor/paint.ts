@@ -305,7 +305,9 @@ function idleStep(): void {
 function blitLevel(target: CanvasRenderingContext2D, L: Level, view: KView): void {
   const { k, ox, oy } = placement(L, view);
   target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
-  target.imageSmoothingEnabled = true; target.imageSmoothingQuality = "high";
+  // bilinear: a level is never more than LEVEL_SPAN above the frame, so every source pixel is sampled (mipmaps would
+  // only soften it), and it is the cheapest filter where the canvas rasters on the CPU
+  target.imageSmoothingEnabled = true; target.imageSmoothingQuality = "low";
   target.drawImage(L.cv, ox, oy, L.w * k, L.h * k);
   target.restore();
   L.used = performance.now();
@@ -338,14 +340,15 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
   if (force && force !== "rest") dropLevels();
   if (zoom || force) restPending = false;
   const lv = l.view;
-  const reusable = !force && !!lv && l.doc === doc && !!l.opts && sameOpts(opts, l.opts) && sameGeoms(doc, l.geoms);
+  // (walks every item: asked only where it matters)
+  const isReusable = (): boolean => !force && !!lv && l.doc === doc && !!l.opts && sameOpts(opts, l.opts) && sameGeoms(doc, l.geoms);
   let stand = false;
   if ((zoom || zoomEnd || restPending) && !force && costMs > SLOW_MS && (!lv || !sameScale(view, lv))) {
     // a zoom frame on a slow document: drawn from a zoom level
     if (levelKey && !levelsValid(doc, opts)) dropLevels();
     keyLevels(doc, opts);
     let L = findLevel(view, W, H, true) || findLevel(view, W, H, false);
-    if (!L && zoom && !wasScaling && reusable && lv && costMs > SCALED_MIN_MS && (view.dpr || 1) === (lv.dpr || 1) && view.ppm === lv.ppm && view.x0 === lv.x0 && view.y0 === lv.y0) {
+    if (!L && zoom && !wasScaling && lv && costMs > SCALED_MIN_MS && (view.dpr || 1) === (lv.dpr || 1) && view.ppm === lv.ppm && view.x0 === lv.x0 && view.y0 === lv.y0 && isReusable()) {
       // the first frame of a zoom and nothing ready: the cached pass scaled about the same document origin, at once
       const dpr = view.dpr || 1, k = view.zoom / lv.zoom;
       const ox = view.panX * dpr - lv.panX * dpr * k, oy = view.panY * dpr - lv.panY * dpr * k;
@@ -368,7 +371,7 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
       return;
     }
   }
-  if (reusable && lv && sameScale(view, lv)) {
+  if (lv && sameScale(view, lv) && isReusable()) {
     const dpr = view.dpr || 1, dx = (view.panX - lv.panX) * dpr, dy = (view.panY - lv.panY) * dpr;
     if (dx === 0 && dy === 0) { stats.blits++; stats.last = "blit"; }
     else if (l.ms > 6 && whole(dx) && whole(dy) && Math.abs(dx) < W * 0.75 && Math.abs(dy) < H * 0.75) {   // a cheap pass is simply redone
