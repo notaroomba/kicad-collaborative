@@ -110,6 +110,53 @@ function library(what, a) {
       }
       return { library: a.lib, name: a.name, step: fs.readFileSync(f, "utf8") };
     }
+    if (what === "symbolLibraries" || what === "symbolFile") {
+      // KiCad's symbol libraries: KC_SYMBOLS names a folder laid out like kicad-symbols; without it a library is downloaded
+      // once from the official repository.  A library kept as one symbol per file is put together as src/libs.rs does it:
+      // the header of its first file, root symbols by name, then the derived ones.
+      const scache = process.env.KC_SYMBOLS || path.join(server, "node_modules", ".cache", "kicad-symbols-" + LIBS_REF);
+      const sapi = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2Fkicad-symbols/repository";
+      const tree = (p) => {
+        const f = path.join(scache, ".index", (p || "root") + ".json"); if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, "utf8"));
+        if (process.env.KC_SYMBOLS) return fs.readdirSync(p ? path.join(scache, p) : scache);
+        const names = []; for (let page = 1; page < 40; page++) { const buf = curl(`${sapi}/tree?ref=${encodeURIComponent(LIBS_REF)}&per_page=100&page=${page}${p ? "&path=" + encodeURIComponent(p) : ""}`); const rows = buf ? JSON.parse(buf.toString("utf8")) : []; for (const r of rows) names.push(r.name); if (rows.length < 100) break; }
+        fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(names)); return names;
+      };
+      const raw = (rel) => {
+        const f = path.join(scache, rel);
+        if (!fs.existsSync(f)) { if (process.env.KC_SYMBOLS) return null; const buf = curl(`${sapi}/files/${encodeURIComponent(rel)}/raw?ref=${encodeURIComponent(LIBS_REF)}`); if (!buf) return null; fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, buf); }
+        return fs.readFileSync(f, "utf8");
+      };
+      const root = tree("");
+      if (what === "symbolLibraries") return { libraries: root.filter((n) => /\.kicad_sym(dir)?$/.test(n)).map((n) => n.replace(/\.kicad_sym(dir)?$/, "")) };
+      if (!safe(a.lib)) return { error: "not a library name" };
+      if (root.includes(a.lib + ".kicad_sym")) { const text = raw(a.lib + ".kicad_sym"); return text ? { library: a.lib, text } : {}; }
+      if (!root.includes(a.lib + ".kicad_symdir")) return {};
+      // one request for the whole folder (the repository's archive of that path), unpacked into the cache
+      const dir = path.join(scache, a.lib + ".kicad_symdir");
+      if (!fs.existsSync(dir) && !process.env.KC_SYMBOLS) {
+        const buf = curl(`https://gitlab.com/kicad/libraries/kicad-symbols/-/archive/${encodeURIComponent(LIBS_REF)}/kicad-symbols-${encodeURIComponent(LIBS_REF)}.tar.gz?path=${encodeURIComponent(a.lib + ".kicad_symdir")}`); if (!buf) return {};
+        const tmp = dir + ".part"; fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true }); fs.writeFileSync(tmp + ".tgz", buf);
+        const r = spawnSync("tar", ["xzf", tmp + ".tgz", "-C", tmp, "--strip-components=2"]); fs.rmSync(tmp + ".tgz", { force: true });
+        if (r.status !== 0) { fs.rmSync(tmp, { recursive: true, force: true }); return {}; }
+        fs.renameSync(tmp, dir);
+      }
+      const sources = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith(".kicad_sym")).sort().map((n) => fs.readFileSync(path.join(dir, n), "utf8")) : [];
+      if (!sources.length) return {};
+      if (sources.length === 1) return { library: a.lib, text: sources[0] };
+      let header = ""; const symbols = [];
+      for (const src of sources) {
+        if (!src.trimStart().startsWith("(kicad_symbol_lib")) continue;
+        // a symbol's text is cut out of its file as it stands: from its "\t(symbol" line to the "\t)" that closes it
+        const blocks = [...src.matchAll(/^\t\(symbol "((?:[^"\\]|\\.)*)"[\s\S]*?^\t\)$/gm)];
+        if (!header) header = (src.match(/^\t\((?:version|generator|generator_version) [^\n]*\)$/gm) || []).map((l) => l + "\n").join("");
+        for (const b of blocks) symbols.push({ name: JSON.parse(`"${b[1]}"`), parent: (/^\t\t\(extends "((?:[^"\\]|\\.)*)"\)/m.exec(b[0]) || [])[1] || null, text: b[0].slice(1) });
+      }
+      const by = new Map(symbols.map((x) => [x.name, x]));
+      const depth = (x) => { let d = 0; for (let at = x; at && at.parent && d <= 16; at = by.get(at.parent)) d++; return d; };
+      symbols.sort((x, y) => depth(x) - depth(y) || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+      return { library: a.lib, text: "(kicad_symbol_lib\n" + header + symbols.map((x) => "\t" + x.text + "\n").join("") + ")\n" };
+    }
     const list = (p) => {
       const f = path.join(cache, ".index", (p || "root") + ".json"); if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, "utf8"));
       if (process.env.KC_FOOTPRINTS) return fs.readdirSync(p ? path.join(cache, p) : cache);

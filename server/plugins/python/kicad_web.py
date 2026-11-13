@@ -1075,7 +1075,7 @@ def boot(identifier, files, bridge=None, name=""):
     # where a desktop installation keeps KiCad's libraries: plugins build library paths from these
     for v in ("", "6", "7", "8", "9", "10"):
         os.environ.setdefault("KICAD%s_FOOTPRINT_DIR" % v, pcbnew.FOOTPRINT_DIR)
-        os.environ.setdefault("KICAD%s_SYMBOL_DIR" % v, "/usr/share/kicad/symbols")
+        os.environ.setdefault("KICAD%s_SYMBOL_DIR" % v, SYMBOL_DIR)
         os.environ.setdefault("KICAD%s_3DMODEL_DIR" % v, MODEL_DIR)
     os.environ.setdefault("KISYS3DMOD", MODEL_DIR)
     os.environ.setdefault("KIPRJMOD", PROJECT_DIR)
@@ -1292,6 +1292,7 @@ def _install_library_files():
 
 
 MODEL_DIR = "/usr/share/kicad/3dmodels"
+SYMBOL_DIR = "/usr/share/kicad/symbols"
 
 
 def _read_back(path, mode, real_open):
@@ -1369,6 +1370,60 @@ def _global_fp_table(path):
         log.warning("global footprint library table: %s", e)
 
 
+_sym_table_done = [False]
+_sym_libraries = {}                                  # nickname -> has its file been asked for (True: here, False: none)
+
+
+def _symbol_library_names():
+    if "names" not in _sym_libraries:
+        r = _library("symbolLibraries", {})
+        _sym_libraries["names"] = sorted(str(n) for n in (r.get("libraries") or []))
+    return _sym_libraries["names"]
+
+
+def _global_sym_table(path):
+    """The global symbol library table of a desktop KiCad, which names every symbol library it came with, written the
+    first time a plugin looks for it.  Each library is one <name>.kicad_sym file under the symbols folder."""
+    if _sym_table_done[0] or not isinstance(path, str) or not path.endswith("sym-lib-table"):
+        return
+    try:
+        if os.path.realpath(os.path.dirname(os.path.abspath(path))) != os.path.realpath(CONFIG_DIR):
+            return
+        _sym_table_done[0] = True
+        target = os.path.join(CONFIG_DIR, "sym-lib-table")
+        if os.path.lexists(target):
+            return
+        rows = "".join('\t(lib (name "%s")(type "KiCad")(uri "${KICAD%s_SYMBOL_DIR}/%s.kicad_sym")(options "")(descr ""))\n'
+                       % (n, str(pcbnew._Host.version).split(".")[0], n) for n in _symbol_library_names())
+        if rows:
+            _write(target, ("(sym_lib_table\n\t(version 7)\n" + rows + ")\n").encode("utf-8"))
+    except Exception as e:                           # the libraries cannot be reached: no table, as on a bare installation
+        log.warning("global symbol library table: %s", e)
+
+
+def _symbol_library_file(p, real_exists, real_open):
+    """KiCad's symbol libraries as files under the symbols folder: <library>.kicad_sym holds the whole library, fetched
+    through the editor the first time a plugin looks for it or opens it."""
+    name = p[len(SYMBOL_DIR) + 1:]
+    if "/" in name or not name.endswith(".kicad_sym") or real_exists(p):
+        return
+    nick = name[:-len(".kicad_sym")]
+    if nick in _sym_libraries:
+        return
+    _sym_libraries[nick] = False
+    try:
+        if nick not in _symbol_library_names():
+            return
+        text = (_library("symbolFile", {"lib": nick}) or {}).get("text")
+        if text:
+            os.makedirs(SYMBOL_DIR, exist_ok=True)
+            with real_open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            _sym_libraries[nick] = True
+    except Exception as e:                           # the libraries cannot be reached: the file is not there
+        log.warning("symbol library files: %s", e)
+
+
 def _install_model_files():
     """KiCad's 3D model library as the files a desktop installation has under its 3dmodels folder: a plugin that
     opens, copies or looks for <library>.3dshapes/<name>.step there gets the model, fetched through the editor the
@@ -1388,6 +1443,9 @@ def _install_model_files():
         except TypeError:
             return
         _global_fp_table(p)
+        _global_sym_table(p)
+        if isinstance(p, str) and p.startswith(SYMBOL_DIR + "/"):
+            return _symbol_library_file(p, real_exists, real_open)
         if not isinstance(p, str) or not p.startswith(root + "/") or p in missing:
             return
         parts = p[len(root) + 1:].split("/")
@@ -2024,11 +2082,16 @@ def _carry_board_file():
     vec = lambda p: pcbnew.VECTOR2I(int(p[0]), int(p[1]))
     done = {"footprints": 0, "tracks": 0, "vias": 0, "lines": 0, "zones": 0}
 
-    # footprints, found by their place in the schematic, else by reference
-    by_path, by_ref = {}, {}
+    # footprints, found by their own id, else by their place in the schematic, else by a reference only one of them has
+    by_id, by_path, by_ref, ref_count = {}, {}, {}, {}
     for fp in board.GetFootprints():
+        by_id.setdefault(word(fp._node, "uuid") or word(fp._node, "tstamp"), fp)
         by_path.setdefault(fp.GetPath().AsString(), fp)
         by_ref.setdefault(fp.GetReference(), fp)
+        ref_count[fp.GetReference()] = ref_count.get(fp.GetReference(), 0) + 1
+    by_id.pop("", None)
+    by_path.pop("", None)
+    file_refs = {}
     for n in root[1:]:
         if not isinstance(n, list) or not n or str(n[0]) not in ("footprint", "module"):
             continue
@@ -2036,8 +2099,10 @@ def _carry_board_file():
         for k in n:
             if isinstance(k, list) and len(k) > 2 and ((str(k[0]) == "property" and str(k[1]) == "Reference") or (str(k[0]) == "fp_text" and str(k[1]) == "reference")):
                 ref = str(k[2])
-        fp = by_path.get(word(n, "path")) if word(n, "path") else None
-        fp = fp or by_ref.get(ref)
+        file_refs[ref] = file_refs.get(ref, 0) + 1
+        fp = by_id.get(word(n, "uuid") or word(n, "tstamp")) or (by_path.get(word(n, "path")) if word(n, "path") else None)
+        if fp is None and ref and ref_count.get(ref) == 1 and file_refs[ref] == 1:
+            fp = by_ref.get(ref)
         at = kid(n, "at")
         if fp is None or at is None or len(at) < 3:
             continue
@@ -2129,13 +2194,18 @@ def _carry_board_file():
     live = [((word(t._node, "layer"), t.GetNetname()), ((t.GetStart().x, t.GetStart().y), (t.GetEnd().x, t.GetEnd().y)), t)
             for t in board.GetTracks() if str(t._node[0]) == "segment"]
     new = [((word(n, "layer"), net_of(n)), (xy(n, "start"), xy(n, "end")), n) for n in segments("segment")]
-    wide = {id(t): t for _k, _s, t in live}
+    # the tracks as they were, by layer and net, to find the one a segment of the file is (a board has thousands)
+    wide = {}
+    for key, _shape, t in live:
+        wide.setdefault(key, []).append(t)
     settle(live, new, same_ends, apart, move_track, make_track, "tracks")
     # a track that stayed where it was but was made wider or narrower
     for key, shape, node in new:
         w = width_of(node)
-        for t in wide.values():
-            if w > 0 and t._board is not None and (word(t._node, "layer"), t.GetNetname()) == key and abs(t.GetWidth() - w) > 1000 \
+        if w <= 0:
+            continue
+        for t in wide.get(key, ()):
+            if t._board is not None and abs(t.GetWidth() - w) > 1000 \
                     and same_ends(((t.GetStart().x, t.GetStart().y), (t.GetEnd().x, t.GetEnd().y)), shape):
                 t.SetWidth(w)
                 done["tracks"] += 1

@@ -206,6 +206,8 @@ export function pythonRuntime(): void {
       case "fab.odb": out = await kicad.fab.odb(a); break;
       case "project.versions": out = await kicad.project.versions(); break;
       case "libs.libraries": out = await kicad.libs.libraries(); break;
+      case "libs.symbolLibraries": out = await kicad.libs.symbolLibraries(); break;
+      case "libs.symbolFile": out = await kicad.libs.symbolFile(a); break;
       case "libs.footprints": out = await kicad.libs.footprints(a); break;
       case "libs.footprint": out = await kicad.libs.footprint(a); break;
       case "libs.model": out = await kicad.libs.model(a); break;

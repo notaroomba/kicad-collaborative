@@ -195,8 +195,8 @@
   "note": "It opens. It keeps library folders on a computer in step with a KiComLib server you run yourself; the web editor has no such folders and a plugin here can only reach the web addresses its own package names."
  },
  "com.github.jOaSbA.localize-dependencies": {
-  "status": "limited",
-  "note": "It opens and reads the project's library tables, but finds nothing to do: an online project already holds its own libraries, and KiCad's standard libraries are served by the editor."
+  "status": "works",
+  "note": "Driven end to end with “Also include standard KiCad libraries” ticked, on a project of three sheets and a board: five of KiCad's symbol libraries are copied whole into the project, the footprints too, every symbol and footprint that used them points at the copies, the project's library tables list them and nothing moves; Revert puts it all back. Also run in the browser editor. 3D models are copied the same way (run by hand on a second board, 17 files). Revert works until the page is closed: its backup is too large to keep after that, so use Edit > Undo or Version History then."
  },
  "com.github.jOaSbA.via-stitching": {
   "status": "works"
@@ -287,7 +287,7 @@
  },
  "com.github.spice-projects.kicad-xyce-plugin": {
   "status": "unsupported",
-  "note": "It adds no board editor command."
+  "note": "The package is a compiled Linux desktop program (xyce-studio) with its own window toolkit, and it starts the Xyce simulator installed on the computer. A browser page cannot run either."
  },
  "com.github.tnaegele.kicad-cut-tracks-at-line": {
   "status": "works"

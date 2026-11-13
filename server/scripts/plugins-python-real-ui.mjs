@@ -514,6 +514,73 @@ if (only('kicad-git')) {
   } catch (e) { check('kicad-git runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.adamws.kicad-git', 12)); await shot('real-kicad-git-fail'); }
 }
 
+// ---- Localize Dependencies: KiCad's own symbol libraries and footprints copied into the project, the sheets and the
+// board pointed at the copies.  The server must serve the libraries (KC_LIBS_SYMBOLS_URL / KC_LIBS_FOOTPRINTS_URL may
+// name local folders laid out like the official repositories, for a machine that cannot download them).
+if (only('localize')) {
+  const ID = 'com.github.jOaSbA.localize-dependencies';
+  try {
+    const dir = path.join(repo, 'demos/openair-max');
+    const pid = (await db.query(`INSERT INTO projects (owner_id, name) VALUES ($1, $2) RETURNING id`, [dana, 'openair-localize'])).rows[0].id; const docs = {};
+    for (const [file, type] of [['One-Air-Max.kicad_pcb', 'kicad_pcb'], ['One-Air-Max.kicad_sch', 'kicad_sch'], ['Battery-Holder.kicad_sch', 'kicad_sch'], ['Solar-Module.kicad_sch', 'kicad_sch'], ['One-Air-Max.kicad_pro', 'kicad_pro']]) {
+      const doc = (await db.query(`INSERT INTO documents (project_id, path, doc_type) VALUES ($1, $2, $3) RETURNING id`, [pid, file, type])).rows[0].id;
+      await db.query('INSERT INTO snapshots (doc_id, seq, content) VALUES ($1, 0, $2)', [doc, fs.readFileSync(path.join(dir, file))]); docs[file] = doc;
+    }
+    const sheetsBefore = Object.fromEntries(['One-Air-Max.kicad_sch', 'Battery-Holder.kicad_sch', 'Solar-Module.kicad_sch'].map((f) => [f, fs.readFileSync(path.join(dir, f), 'utf8')]));
+    const STD = ['Connector', 'Device', 'Jumper', 'Transistor_FET', 'power'];
+    const ids = (t) => [...t.matchAll(/\(lib_id "([^":]+):([^"]+)"\)/g)].map((m) => `${m[1]}:${m[2]}`);
+    await page.goto(`${BASE}/p/${pid}/edit?doc=${docs['One-Air-Max.kicad_pcb']}`); await editorReady();
+    const fpids = () => page.evaluate(() => { const out = {}; for (const [id, it] of window.CollabEditor.kdoc.items) { if (it.kind === 'footprint' || (it.node && String(it.node[0]) === 'footprint')) out[id] = String((it.node || [])[1]); } return out; });
+    const fpBefore = await fpids();
+    const actions = await install(ID);
+    await runAction(ID, actions[0]);
+    const f = await frameOf(ID);
+    await f.waitForSelector('text=Also include standard KiCad libraries', { timeout: 180000 });
+    const rowsShown = await f.locator('text=standard').count();
+    check('Localize Dependencies: its window lists the project\'s parts, with those from KiCad\'s libraries marked standard', rowsShown > 20, `${rowsShown} rows say standard`);
+    const boxes = await f.locator('.wx-table td input[type=checkbox]').count();
+    const fits = await f.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Localize'); const t = document.querySelector('.wx-table'); const r = b && b.getBoundingClientRect(); return !!r && r.bottom <= window.innerHeight && r.top >= 0 && !!t && t.scrollHeight > t.clientHeight; });
+    check('Localize Dependencies: each row has its tick box, and the long list scrolls inside the window with the buttons in view', boxes > 100 && fits, `${boxes} boxes, fits ${fits}`);
+    await shot('real-localize-window');
+    await f.click('text=Also include standard KiCad libraries');
+    await f.getByRole('button', { name: 'Localize', exact: true }).click();
+    // the plugin's own questions and the editor's (add the libraries, change each sheet) are answered yes, in the order they come
+    const asked = []; let done = '';
+    for (let i = 0; i < 12; i++) {
+      const up = await page.waitForSelector('#pluginPrompt', { timeout: i < 2 ? 240000 : 25000 }).catch(() => null); if (!up) break;
+      const text = await page.locator('#pluginPrompt').innerText(); asked.push(text.split('\n')[0].slice(0, 60));
+      if (/Localized:/.test(text)) done = text;
+      await shot(`real-localize-ask-${i}`);
+      await page.click('#pluginPrompt .btn.primary');
+      await page.waitForFunction((t) => { const e = document.querySelector('#pluginPrompt'); return !e || e.innerText !== t; }, text, { timeout: 60000 }).catch(() => {});
+      if (/Localized:/.test(text)) { const g = await frameOf(ID); await g.getByRole('button', { name: 'Close', exact: true }).click().catch(() => {}); }
+    }
+    check('Localize Dependencies: it reports what it localized', /Symbols: 5 libraries, 193 references/.test(done) && /Footprints: 2 libraries, 2 files, 7 references/.test(done), done.replace(/\n/g, ' ').slice(0, 300) + ' || asked: ' + asked.join(' | '));
+    check('Localize Dependencies: the editor asks before adding the libraries and before changing each sheet', asked.some((a) => /Add to the project's libraries/.test(a)) && asked.filter((a) => /Change the schematic/.test(a)).length === 3, asked.join(' | '));
+    await page.waitForTimeout(2500);
+    const proj = await page.evaluate(async (p) => (await (await fetch(`/api/projects/${p}`)).json()), pid);
+    const docList = (proj.docs || proj.documents || []); const byPath = Object.fromEntries(docList.map((d) => [d.path, d.docId || d.id]));
+    const text = async (p) => (byPath[p] ? page.evaluate(async (d) => (await fetch(`/api/docs/${d}/content`)).text(), byPath[p]) : '');
+    const missing = STD.map((l) => `libs/${l}_local.kicad_sym`).concat(['libs/Jumper_local.pretty/SolderJumper-3_P1.3mm_Bridged12_RoundedPad1.0x1.5mm.kicad_mod', 'libs/TestPoint_local.pretty/TestPoint_Pad_D1.5mm.kicad_mod']).filter((p) => !byPath[p]);
+    check('Localize Dependencies: the copied libraries are documents of the project', missing.length === 0, `missing ${missing.join(', ')}; have ${Object.keys(byPath).join(', ')}`);
+    const power = await text('libs/power_local.kicad_sym');
+    check('Localize Dependencies: the copy of the power library is the whole library', power.startsWith('(kicad_symbol_lib') && (power.match(/^\t\(symbol "/gm) || []).length > 100 && power.includes('(symbol "GND"'), `${power.length} bytes, ${(power.match(/^\t\(symbol "/gm) || []).length} symbols`);
+    let sheetsOk = true, detail = '';
+    for (const [name, was] of Object.entries(sheetsBefore)) {
+      const now = await text(name); const want = ids(was).map((x) => { const [l, n] = [x.slice(0, x.indexOf(':')), x.slice(x.indexOf(':') + 1)]; return STD.includes(l) ? `${l}_local:${n}` : x; });
+      const have = ids(now);
+      if (JSON.stringify(want) !== JSON.stringify(have)) { sheetsOk = false; detail += `${name}: ${have.filter((x) => /_local:/.test(x)).length} of ${want.filter((x) => /_local:/.test(x)).length} repointed; `; }
+    }
+    check('Localize Dependencies: every symbol of the three sheets that came from those libraries now names the copy', sheetsOk, detail);
+    const symTable = await text('sym-lib-table'), fpTable = await text('fp-lib-table');
+    check('Localize Dependencies: the project\'s library tables list the copies', STD.every((l) => symTable.includes(`${l}_local`)) && fpTable.includes('Jumper_local') && fpTable.includes('TestPoint_local'), `${symTable.slice(0, 200)} || ${fpTable.slice(0, 200)}`);
+    const fpAfter = await fpids(); const changed = Object.keys(fpBefore).filter((k) => fpBefore[k] !== fpAfter[k]);
+    check('Localize Dependencies: the seven footprints of the open board name the copies, and no other footprint changed', changed.length === 7 && changed.every((k) => fpAfter[k] === fpBefore[k].replace(':', '_local:')), `${changed.length} changed: ${changed.slice(0, 3).map((k) => `${fpBefore[k]} -> ${fpAfter[k]}`).join(', ')}`);
+    check('Localize Dependencies: nothing was handed over as a download instead', downloads.length === 0 || !downloads.some((d) => /lib-table|kicad_sym|kicad_sch/.test(d.suggestedFilename())), downloads.map((d) => d.suggestedFilename()).join());
+    await shot('real-localize-done');
+  } catch (e) { check('Localize Dependencies runs', false, String(e).slice(0, 400) + ' ' + await logTail('com.github.jOaSbA.localize-dependencies', 12)); await shot('real-localize-fail'); }
+}
+
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
 

@@ -514,6 +514,9 @@ const libGet = async (path: string): Promise<any> => {
 };
 export const libs: Record<string, (a: any) => Promise<unknown>> = {
   libraries: async () => { const j = await libGet("/api/libs/footprints"); return { libraries: (j && Array.isArray(j.libraries) ? j.libraries : []).map((l: any) => String(l.name || "")).filter(Boolean) }; },
+  // KiCad's symbol libraries: their names, and one whole library as the <name>.kicad_sym file a desktop installation has
+  symbolLibraries: async () => { const j = await libGet("/api/libs/symbols"); return { libraries: (j && Array.isArray(j.libraries) ? j.libraries : []).map((l: any) => String(l.name || "")).filter(Boolean) }; },
+  symbolFile: async (a) => { const lib = libName(a.lib); const j = await libGet(`/api/libs/symbol-files/${encodeURIComponent(lib)}`); return j && typeof j.text === "string" ? { library: lib, text: j.text } : {}; },
   footprints: async (a) => { const lib = libName(a.lib); const j = await libGet(`/api/libs/footprints/${encodeURIComponent(lib)}`); return { library: lib, footprints: (j && Array.isArray(j.footprints) ? j.footprints : []).map((f: any) => String(f.n || "")).filter(Boolean) }; },
   // KiCad's 3D model library: the STEP file of <lib>.3dshapes/<name>, as the 3D viewer reads it
   model: async (a) => {

@@ -443,7 +443,7 @@ const NEEDS: Record<string, string | null> = {
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
   "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "fab.vrml": "design:read", "fab.odb": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write", "project.saveRules": "design:write",
-  "libs.libraries": null, "libs.footprints": null, "libs.footprint": null, "libs.model": null,
+  "libs.libraries": null, "libs.symbolLibraries": null, "libs.symbolFile": null, "libs.footprints": null, "libs.footprint": null, "libs.model": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
   "storage.get": null, "storage.set": null, "storage.remove": null, "storage.keys": null,

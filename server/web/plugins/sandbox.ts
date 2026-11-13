@@ -66,7 +66,7 @@ export function sandboxRuntime(): void {
     view: group("view", ["select", "move", "highlight", "focus", "appearance", "setMarkers", "clearMarkers", "openDocument"]),
     fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom", "svg", "plot", "drc", "netlist", "render", "model", "vrml", "odb"]),
     project: group("project", ["versions", "saveVersion", "addLibraryFiles", "rewriteDocument", "saveRules"]),
-    libs: group("libs", ["libraries", "footprints", "footprint", "model"]),
+    libs: group("libs", ["libraries", "symbolLibraries", "symbolFile", "footprints", "footprint", "model"]),
     net: group("net", ["fetch"]),
     ui: Object.assign(group("ui", ["prompt", "confirm", "showPanel", "hidePanel", "showWindow", "hideWindow", "openLink"]), {
       toast: (text: any) => call("ui.toast", text && typeof text === "object" ? text : { text: String(text) }),

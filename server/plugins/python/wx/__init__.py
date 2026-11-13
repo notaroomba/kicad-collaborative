@@ -1785,6 +1785,7 @@ class Event:
     GetSelection = GetInt
     GetPosition = lambda self: Point(0, 0)
     GetIndex = GetInt
+    GetColumn = lambda self: self.__dict__.get("_column", 0)
 
     def IsChecked(self):
         s = self._source
@@ -1943,7 +1944,7 @@ _CSS = """
 .wx-top>.wx-panel:only-child{flex:1 1 auto;min-height:0}
 .wx-list{min-height:60px;overflow:auto;border:1px solid var(--line);border-radius:3px;background:var(--panel)}
 .wx-list label{display:flex;gap:5px;align-items:center;padding:1px 6px}
-.wx-table{overflow:auto;border:1px solid var(--line);border-radius:3px;min-height:60px}
+.wx-table{overflow:auto;border:1px solid var(--line);border-radius:3px;min-height:60px;max-height:min(62vh,640px)}
 .wx-table tr.sel td{background:color-mix(in srgb,var(--blue) 25%,transparent)}
 .wx-table td input{width:100%;border:0;background:none;padding:1px 2px}
 .wx-table table{border-collapse:collapse;width:100%}
@@ -3740,6 +3741,7 @@ class ListCtrl(Window):
         th.textContent = text
         self._head.appendChild(th)
         self._cols.append(text)
+        _listen(th, "click", lambda e=None: self._wx_col_click(th))
         self.__dict__.setdefault("_col_els", []).append(th)
         self.__dict__.setdefault("_col_widths", []).append(-1)
         if self._wx_style & LC_NO_HEADER:
@@ -3814,8 +3816,13 @@ class ListCtrl(Window):
         _listen(tr, "click", lambda e=None: self._wx_click(row))
         _listen(tr, "dblclick", lambda e=None: self._wx_activate(row))
         index = max(0, min(index, len(self._rows)))
+        after = self._rows[index]["tr"] if index < len(self._rows) else None
         self._rows.insert(index, row)
-        self._table.appendChild(tr)
+        if after is not None:
+            self._table.insertBefore(tr, after)          # a row put in the middle is shown in the middle
+        else:
+            self._table.appendChild(tr)
+        self._wx_box(row)
         return index
 
     def _wx_click(self, row):
@@ -3829,6 +3836,14 @@ class ListCtrl(Window):
         ev = Event(self, EVT_LIST_ITEM_SELECTED)          # noqa: F821
         ev._int = self._rows.index(row)
         self._wx_fire(EVT_LIST_ITEM_SELECTED, ev)          # noqa: F821
+
+    def _wx_col_click(self, th):
+        """A click on a column's heading (EVT_LIST_COL_CLICK): lists sort themselves from it."""
+        els = self.__dict__.get("_col_els", [])
+        if th in els:
+            ev = Event(self, EVT_LIST_COL_CLICK)          # noqa: F821
+            ev._column = ev._int = els.index(th)
+            self._wx_fire(EVT_LIST_COL_CLICK, ev)          # noqa: F821
 
     def _wx_activate(self, row):
         ev = Event(self, EVT_LIST_ITEM_ACTIVATED)          # noqa: F821
@@ -3847,8 +3862,12 @@ class ListCtrl(Window):
 
     def SetItem(self, index, col=0, label="", *_):
         if 0 <= index < len(self._rows) and 0 <= col < len(self._rows[index]["cells"]):
-            self._rows[index]["cells"][col] = str(label)
-            self._rows[index]["tds"][col].textContent = str(label)
+            row = self._rows[index]
+            row["cells"][col] = str(label)
+            row["tds"][col].textContent = str(label)
+            if col == 0 and row.get("box") is not None:          # the text replaced the cell: its check box goes back in front
+                td = row["tds"][0]
+                td.insertBefore(row["box"], td.firstChild) if _DOM else td.appendChild(row["box"])
         return True
 
     SetStringItem = SetItem
@@ -3942,9 +3961,60 @@ class ListCtrl(Window):
     def GetFocusedItem(self):
         return self.GetFirstSelected()
 
-    EnsureVisible = SetImageList = AssignImageList = SetItemBackgroundColour = SetItemTextColour = SetItemFont = EnableCheckBoxes = SortItems = lambda self, *a, **k: None
-    IsItemChecked = lambda self, i: False
-    CheckItem = lambda self, i, on=True: None
+    EnsureVisible = SetImageList = AssignImageList = SetItemFont = SortItems = lambda self, *a, **k: None
+
+    def SetItemTextColour(self, index, colour):
+        if 0 <= index < len(self._rows):
+            self._rows[index]["tr"].style.color = Colour(colour)._css() if colour is not None else ""
+
+    def SetItemBackgroundColour(self, index, colour):
+        if 0 <= index < len(self._rows):
+            self._rows[index]["tr"].style.background = Colour(colour)._css() if colour is not None else ""
+
+    # -- check boxes (wxListCtrl::EnableCheckBoxes): one at the start of each row
+    def EnableCheckBoxes(self, enable=True):
+        self.__dict__["_checks"] = bool(enable)
+        for row in self._rows:
+            self._wx_box(row)
+        return True
+
+    def HasCheckBoxes(self):
+        return bool(self.__dict__.get("_checks"))
+
+    def _wx_box(self, row):
+        on, box = self.__dict__.get("_checks"), row.get("box")
+        if on and box is None and row["tds"]:
+            box = _el("input")
+            box.type = "checkbox"
+            box.className = "wx-tree-chk"
+            box.checked = bool(row.get("checked"))
+            _listen(box, "click", lambda e=None: self._wx_tick(row, bool(box.checked), e))
+            td = row["tds"][0]
+            td.insertBefore(box, td.firstChild) if _DOM else td.appendChild(box)
+            row["box"] = box
+        elif not on and box is not None:
+            box.remove()
+            row["box"] = None
+
+    def _wx_tick(self, row, on, dom_event=None):
+        if dom_event is not None and hasattr(dom_event, "stopPropagation"):
+            dom_event.stopPropagation()              # ticking a row does not select it
+        if bool(row.get("checked")) == bool(on):
+            return
+        row["checked"] = bool(on)
+        if row.get("box") is not None:
+            row["box"].checked = bool(on)
+        kind = EVT_LIST_ITEM_CHECKED if on else EVT_LIST_ITEM_UNCHECKED          # noqa: F821
+        ev = Event(self, kind)
+        ev._int = self._rows.index(row)
+        self._wx_fire(kind, ev)
+
+    def CheckItem(self, index, check=True):
+        if self.__dict__.get("_checks") and 0 <= index < len(self._rows):
+            self._wx_tick(self._rows[index], bool(check))
+
+    def IsItemChecked(self, index):
+        return bool(self.__dict__.get("_checks")) and 0 <= index < len(self._rows) and bool(self._rows[index].get("checked"))
 
 
 ListView = ListCtrl

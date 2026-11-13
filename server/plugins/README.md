@@ -433,3 +433,15 @@ properties.  `board.GetTitleBlock().SetComment(…)` and the other title block s
 change the open board through `design.titleBlock` (needs `design:write`), and
 `board.GetProperties()` answers `has_key`.  `window.Connect(id, id, eventType, func)`
 with `event.SetEventType(eventType)` delivers `wx.PostEvent` as `Bind` does.
+
+KiCad's symbol libraries are files too: `/usr/share/kicad/symbols/<library>.kicad_sym` holds the
+whole library (`/api/libs/symbol-files/<library>`, put together from the one-symbol-per-file
+folders the libraries ship as), and the global `sym-lib-table` in the settings folder names
+every one, as `fp-lib-table` does for footprints.  A plugin that copies libraries into the
+project and rewrites the board file and the sheets (Localize Dependencies) therefore works as
+on the desktop: the copies become project libraries, the sheets are carried through
+`project.rewriteDocument`, and the board file's footprint library names and 3D model files are
+carried into the open board.  Footprints of a rewritten board file are matched by their id, then
+by their place in the schematic, then by a reference only one footprint has.  A `wx.ListCtrl`
+has real check boxes (`EnableCheckBoxes`, `CheckItem`, `EVT_LIST_ITEM_CHECKED`), row colours and
+`EVT_LIST_COL_CLICK`, and scrolls inside its window.
