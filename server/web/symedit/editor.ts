@@ -21,7 +21,7 @@ import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from ".
 import { fitMenu } from "../menufit";
 import * as D from "./dialogs";
 import * as SP from "./props";
-import { symCanvasMenu, type SymMenuCtx } from "./ctxmenu";
+import { symCanvasMenu, symTreeMenu, type SymMenuCtx } from "./ctxmenu";
 import { ZOOM_LIST } from "../tables";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
@@ -33,7 +33,7 @@ import { gridPitchFor, type GridClass } from "../dialogs/logic";
 import { ARC_MODE_ACTIONS, ARC_START_DIR_END, ARC_START_END_CENTER, ARC_START_END_MID, ARC_TANGENT, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, fromNm, toNm, type ArcSol } from "../tools/arc-geom";
 
 export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete" | "zoom";
-interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
+interface Row { name: string; desc: string; parent: string; units: number; power: boolean; unitNames?: string[] }
 export interface Lib { nick: string; kind: "project" | "official"; doc: LibBuffer | null; rows: Row[] | null; syms: Map<string, M.Node>; open: boolean; loading: boolean; error?: string }
 export interface Origin { docId: string; itemId: string; libId: string; ref: string; sheet: string }
 /** One undo step: the symbol before and after the edit (the undo lays after → before over the current symbol). */
@@ -78,6 +78,7 @@ export class SymbolEditor {
   tool: ToolId = "select";
   showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = true; showTree = true; showProps = true;
   propsCollapsed = new Set<string>();
+  symOpen = new Set<string>();
   /** the window's grid.show and cursor shape (COMMON_TOOLS::ToggleGrid, CursorSmall/Full/45Crosshairs), remembered per browser */
   showGrid = viewPref("grid", true) as boolean; crosshair = viewPref("crosshair", "small") as "small" | "full" | "45";
   /** ACTION_TOOLBAR groups: the action each group's button shows (SelectToolbarAction) */
@@ -93,7 +94,7 @@ export class SymbolEditor {
   lastTextAngle = 0;
   clip: string | null = null;
   filter = "";
-  treeSel: { lib: string; name?: string } | null = null;
+  treeSel: { lib: string; name?: string; unit?: number } | null = null;
   private el: Record<string, HTMLElement> = {};
   private cv: HTMLCanvasElement | null = null;
   private preview: M.Node | null = null;
@@ -273,7 +274,7 @@ export class SymbolEditor {
     if (lib.rows) return lib.rows;
     if (lib.kind === "project" && lib.doc) {
       const rows: Row[] = [];
-      for (const [name, s] of lib.doc.lib.symbols) rows.push({ name, desc: M.fieldValue(s, "Description"), parent: M.parentNameOf(s) || "", units: M.unitCount(M.rootOf(lib.doc.lib, s)), power: M.isPower(s) });
+      for (const [name, s] of lib.doc.lib.symbols) { const root = M.rootOf(lib.doc.lib, s); rows.push({ name, desc: M.fieldValue(s, "Description"), parent: M.parentNameOf(s) || "", units: M.unitCount(root), power: M.isPower(s), unitNames: M.unitChoices(root) }); }
       rows.sort((a, b) => M.numCompare(a.name, b.name));
       return (lib.rows = rows);
     }
@@ -736,11 +737,16 @@ export class SymbolEditor {
     const n = this.treeSel ? this.treeSel.lib : this.tab && !this.tab.origin ? this.tab.lib : null;
     return n ? this.libs.get(n) || null : null;
   }
+  /** SYMBOL_TREE_SYNCHRONIZING_ADAPTER: pinned libraries first ("☆ "), " *" and bold on modified libraries and
+   *  symbols, derived symbols in italics, the on-canvas symbol (or its collapsed library) outlined, every
+   *  multi-unit symbol with its units as children; a click selects, a double-click or the twist expands. */
   renderTree(): void {
     const list = this.el.list; if (!list) return;
     const q = this.filter.trim().toLowerCase(); const t = this.tab;
     const frag = document.createDocumentFragment();
-    const libs = [...this.libs.values()].sort((a, b) => (a.kind === b.kind ? a.nick.localeCompare(b.nick) : a.kind === "project" ? -1 : 1));
+    const pinned = this.pinnedLibs();
+    const libs = [...this.libs.values()].sort((a, b) => (pinned.has(a.nick) !== pinned.has(b.nick) ? (pinned.has(a.nick) ? -1 : 1) : a.kind === b.kind ? a.nick.localeCompare(b.nick) : a.kind === "project" ? -1 : 1));
+    const onCanvas = t && !t.origin ? { lib: t.lib, name: t.name } : null;
     for (const lib of libs) {
       const rows = lib.kind === "project" || lib.rows ? this.rowsOf(lib) : lib.rows || [];
       const hits = q ? rows.filter((r) => r.name.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q)) : rows;
@@ -748,26 +754,40 @@ export class SymbolEditor {
       const open = lib.open || (!!q && hits.length > 0);
       const modified = !!lib.doc && lib.doc.loaded && lib.doc.isModified;
       const isSel = this.treeSel && this.treeSel.lib === lib.nick && !this.treeSel.name;
-      const row = h("div", { class: "se-row lib" + (lib.kind === "official" ? " ro" : "") + (isSel ? " cur" : ""), "data-lib": lib.nick, title: lib.kind === "official" ? "KiCad library (read-only)" : lib.doc ? lib.doc.path : "" },
-        h("span", { class: "tw" }, open ? "▾" : "▸"), h("span", { class: "nm" }, (modified ? "*" : "") + lib.nick),
-        lib.loading ? h("span", { class: "ds" }, " loading…") : lib.error ? h("span", { class: "ds" }, " " + lib.error) : null);
-      row.addEventListener("click", () => { lib.open = !open; this.treeSel = { lib: lib.nick }; if (lib.open && lib.kind === "official") void this.loadOfficial(lib); this.renderTree(); this.renderMenus(); });
-      row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); this.treeSel = { lib: lib.nick }; this.renderTree(); showMenu(ev.clientX, ev.clientY, this.libMenu(lib)); });
+      const canvasLib = !!onCanvas && onCanvas.lib === lib.nick && !open;
+      const note = lib.error ? "(failed to load) " + lib.error : lib.kind === "official" ? "(read-only)" : lib.loading ? "loading…" : "";
+      const tw = h("span", { class: "tw" }, open ? "▾" : "▸");
+      const row = h("div", { class: "se-row lib" + (modified ? " mod" : "") + (lib.error ? " dis" : "") + (isSel ? " cur" : ""), "data-lib": lib.nick, title: lib.kind === "official" ? "KiCad library (read-only)" : lib.doc ? lib.doc.path : "" },
+        tw, h("span", { class: "nm" + (canvasLib ? " canvas" : "") }, (pinned.has(lib.nick) ? "☆ " : "") + lib.nick + (modified ? " *" : "")), note ? h("span", { class: "ds" }, note) : null);
+      const toggle = () => { lib.open = !open; if (lib.open && lib.kind === "official") void this.loadOfficial(lib); this.renderTree(); };
+      tw.addEventListener("click", (ev) => { ev.stopPropagation(); this.treeSel = { lib: lib.nick }; toggle(); });
+      row.addEventListener("click", () => { this.treeSel = { lib: lib.nick }; this.renderTree(); this.renderMenus(); });
+      row.addEventListener("dblclick", () => toggle());
+      row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); this.treeSel = { lib: lib.nick }; this.renderTree(); showMenu(ev.clientX, ev.clientY, this.treeMenu(lib, null)); });
       frag.append(row);
       if (!open) continue;
       for (const r of hits) {
-        const cur = !!t && !t.origin && t.lib === lib.nick && t.name === r.name;
-        const sel = this.treeSel && this.treeSel.lib === lib.nick && this.treeSel.name === r.name;
+        const cur = !!onCanvas && onCanvas.lib === lib.nick && onCanvas.name === r.name;
+        const sel = this.treeSel && this.treeSel.lib === lib.nick && this.treeSel.name === r.name && this.treeSel.unit === undefined;
         const mod = !!lib.doc && lib.doc.loaded && lib.doc.isSymbolModified(r.name);
-        const sr = h("div", { class: "se-row" + (sel || cur ? " cur" : ""), "data-sym": lib.nick + ":" + r.name, style: "padding-left:18px", title: r.desc },
-          h("span", { class: "tw" }, r.units > 1 ? "▸" : ""), h("span", { class: "nm", style: cur ? "font-weight:600" : "" }, (mod ? "*" : "") + M.unescapeLibId(r.name)), h("span", { class: "ds" }, r.desc));
+        const key = lib.nick + ":" + r.name; const uopen = r.units > 1 && this.symOpen.has(key);
+        const stw = h("span", { class: "tw" }, r.units > 1 ? (uopen ? "▾" : "▸") : "");
+        const sr = h("div", { class: "se-row" + (sel ? " cur" : "") + (mod ? " mod" : "") + (r.parent ? " der" : ""), "data-sym": key, style: "padding-left:18px", title: r.desc },
+          stw, h("span", { class: "nm" + (cur ? " canvas" : "") }, M.unescapeLibId(r.name) + (mod ? " *" : "")), h("span", { class: "ds" }, r.desc));
+        const utoggle = () => { if (r.units < 2) return; if (this.symOpen.has(key)) this.symOpen.delete(key); else this.symOpen.add(key); this.renderTree(); };
+        stw.addEventListener("click", (ev) => { ev.stopPropagation(); utoggle(); });
         sr.addEventListener("click", () => { this.treeSel = { lib: lib.nick, name: r.name }; this.renderTree(); });
         sr.addEventListener("dblclick", () => void this.loadSymbol(lib.nick, r.name));
-        sr.addEventListener("contextmenu", (ev) => { ev.preventDefault(); this.treeSel = { lib: lib.nick, name: r.name }; this.renderTree(); showMenu(ev.clientX, ev.clientY, this.symMenu(lib, r.name)); });
+        sr.addEventListener("contextmenu", (ev) => { ev.preventDefault(); this.treeSel = { lib: lib.nick, name: r.name }; this.renderTree(); showMenu(ev.clientX, ev.clientY, this.treeMenu(lib, r.name)); });
         frag.append(sr);
-        if (r.units > 1 && cur) for (let u = 1; u <= r.units; u++) {
-          const ur = h("div", { class: "se-row" + (t!.unit === u ? " cur" : ""), style: "padding-left:36px" }, h("span", { class: "nm" }, `Unit ${M.unitLetter(u)}`));
-          ur.addEventListener("click", () => this.setUnit(u)); frag.append(ur);
+        if (uopen) for (let u = 1; u <= r.units; u++) {
+          const usel = this.treeSel && this.treeSel.lib === lib.nick && this.treeSel.name === r.name && this.treeSel.unit === u;
+          const label = (r.unitNames && r.unitNames[u - 1]) || `Unit ${M.unitLetter(u)}`;
+          const ur = h("div", { class: "se-row unit" + (usel ? " cur" : ""), "data-unit": key + ":" + u, style: "padding-left:36px" }, h("span", { class: "nm" }, label));
+          ur.addEventListener("click", () => { this.treeSel = { lib: lib.nick, name: r.name, unit: u }; this.renderTree(); });
+          // LIB_TREE activation of a unit: the symbol opens on that unit
+          ur.addEventListener("dblclick", () => void (async () => { if (cur || (await this.loadSymbol(lib.nick, r.name))) this.setUnit(u); })());
+          frag.append(ur);
         }
       }
       if (lib.kind === "project" && lib.doc && lib.doc.loaded && !rows.length && !q) frag.append(h("div", { class: "se-row", style: "padding-left:18px;color:var(--ink-3)" }, "(empty)"));
@@ -775,38 +795,50 @@ export class SymbolEditor {
     if (this.officialFailed && !q) frag.append(h("div", { class: "se-row", style: "color:var(--ink-3);white-space:normal" }, this.officialFailed));
     list.innerHTML = ""; list.append(frag);
   }
-  private libMenu(lib: Lib): MenuEntry[] {
-    const A = this.actions(); const proj = lib.kind === "project" && !!lib.doc && lib.doc.canEdit && !E.viewOnly;
-    return [
-      this.act("newSymbol", A.newSymbol, { enabled: () => proj }),
-      { sep: true },
-      this.act("save", () => void this.saveLib(lib), { enabled: () => proj && !!lib.doc && lib.doc.isModified }),
-      this.act("saveLibraryAs", () => void D.saveLibraryAs(this, lib), { label: "Save Library As...", enabled: () => !E.viewOnly }),
-      this.act("revert", () => void this.revertLib(lib), { enabled: () => proj && !!lib.doc && lib.doc.isModified }),
-      { sep: true },
-      this.act("importSymbol", () => void D.importSymbol(this, lib), { enabled: () => proj }),
-      this.act("pasteSymbol", () => void this.pasteSymbol(lib), { enabled: () => proj }),
-    ];
+  /** Pinned libraries (LIB_TREE_MODEL_ADAPTER pinned_symbol_libs), kept for this viewer. */
+  pinnedLibs(): Set<string> { try { return new Set(JSON.parse(localStorage.getItem("kui.symedit.pinned") || "[]") as string[]); } catch { return new Set(); } }
+  private setPinned(nick: string, on: boolean): void {
+    const p = this.pinnedLibs(); if (on) p.add(nick); else p.delete(nick);
+    try { localStorage.setItem("kui.symedit.pinned", JSON.stringify([...p])); } catch { /* no storage */ }
+    this.renderTree();
   }
-  private symMenu(lib: Lib, name: string): MenuEntry[] {
+  /** The library tree's menu (symedit/ctxmenu.ts symTreeMenu): rows whose condition is false are hidden. */
+  private treeMenu(lib: Lib, name: string | null): MenuEntry[] {
     const proj = lib.kind === "project" && !!lib.doc && lib.doc.canEdit && !E.viewOnly;
-    return [
-      this.act("editSymbol", () => void this.loadSymbol(lib.nick, name)),
-      { sep: true },
-      this.act("save", () => void this.saveLib(lib), { enabled: () => proj && !!lib.doc && lib.doc.isSymbolModified(name) }),
-      this.act("saveSymbolAs", () => void this.withSymbol(lib, name, () => D.saveSymbolAs(this, false))),
-      this.act("saveSymbolCopyAs", () => void this.withSymbol(lib, name, () => D.saveSymbolAs(this, true))),
-      this.act("duplicateSymbol", () => void this.duplicateSymbol(lib, name), { enabled: () => proj }),
-      this.act("renameSymbol", () => void D.renameSymbol(this, lib, name), { enabled: () => proj }),
-      this.act("revert", () => void this.revertSymbol(lib, name), { enabled: () => proj && !!lib.doc && lib.doc.isSymbolModified(name) }),
-      { sep: true },
-      this.act("cutSymbol", () => { this.copySymbol(lib, name); void this.deleteSymbol(lib, name); }, { label: "Cut", enabled: () => proj }),
-      this.act("copySymbol", () => this.copySymbol(lib, name), { label: "Copy" }),
-      this.act("pasteSymbol", () => void this.pasteSymbol(lib), { enabled: () => proj && !!this.clip }),
-      this.act("deleteSymbol", () => void this.deleteSymbol(lib, name), { enabled: () => proj }),
-      { sep: true },
-      this.act("exportSymbol", () => void this.withSymbol(lib, name, () => D.exportSymbol(this))),
-    ];
+    const row = name ? this.rowsOf(lib).find((r) => r.name === name) || (lib.rows || []).find((r) => r.name === name) : null;
+    const pinned = this.pinnedLibs().has(lib.nick);
+    const ids = symTreeMenu({ libSelected: !name, libInferred: true, symbolSelected: !!name, derived: !!row && !!row.parent, allPinned: !name ? pinned : true, allUnpinned: !name ? !pinned : true });
+    const runs: Record<string, [() => void, (() => boolean)?]> = {
+      newSymbol: [() => void D.newSymbol(this), () => proj],
+      deriveFromExistingSymbol: [() => void D.newSymbol(this, name || undefined), () => proj],
+      save: [() => void this.saveLib(lib), () => proj && !!lib.doc && (name ? lib.doc.isSymbolModified(name) : lib.doc.isModified)],
+      saveLibraryAs: [() => void D.saveLibraryAs(this, lib), () => !E.viewOnly],
+      saveSymbolAs: [() => void this.withSymbol(lib, name!, () => D.saveSymbolAs(this, false))],
+      saveSymbolCopyAs: [() => void this.withSymbol(lib, name!, () => D.saveSymbolAs(this, true))],
+      revert: [() => void (name ? this.revertSymbol(lib, name) : this.revertLib(lib)), () => proj && !!lib.doc && (name ? lib.doc.isSymbolModified(name) : lib.doc.isModified)],
+      importSymbol: [() => void D.importSymbol(this, lib), () => proj],
+      exportSymbol: [() => void this.withSymbol(lib, name!, () => D.exportSymbol(this))],
+      cutSymbol: [() => { this.copySymbol(lib, name!); void this.deleteSymbol(lib, name!); }, () => proj],
+      copySymbol: [() => this.copySymbol(lib, name!)],
+      pasteSymbol: [() => void this.pasteSymbol(lib), () => proj && !!this.clip],
+      duplicateSymbol: [() => void this.duplicateSymbol(lib, name!), () => proj],
+      deleteSymbol: [() => void this.deleteSymbol(lib, name!), () => proj],
+      renameSymbol: [() => void D.renameSymbol(this, lib, name!), () => proj],
+      symbolProperties: [() => void this.withSymbol(lib, name!, () => D.symbolProperties(this))],
+      flattenSymbol: [() => void this.flattenSymbol(lib, name!), () => proj],
+      pinLibrary: [() => this.setPinned(lib.nick, true), () => !name],
+      unpinLibrary: [() => this.setPinned(lib.nick, false), () => !name],
+      hideLibraryTree: [() => { this.showTree = false; this.renderToolbars(); this.paint(); }],
+    };
+    return ids.map((id): MenuEntry => { if (id === "-") return { sep: true }; const r = runs[id]; return this.act(id, r ? r[0] : undefined, { enabled: r && r[1] ? r[1] : () => true }); });
+  }
+  /** SYMBOL_EDITOR_CONTROL::FlattenSymbol: the derived symbol becomes a root symbol in its library buffer. */
+  async flattenSymbol(lib: Lib, name: string): Promise<void> {
+    const doc = lib.doc; if (!doc || !doc.canEdit) return;
+    const s = doc.lib.symbols.get(name); if (!s || !M.isDerived(s)) return;
+    const base = M.text(s); const flat = M.flatten(doc.lib, s);
+    try { await doc.commit([[name, M.text(flat), base]]); } catch (e) { void messageBox("Failed to update library with flattened symbol"); return; }
+    lib.rows = null; this.kcache = null; this.renderAll();
   }
   private async withSymbol(lib: Lib, name: string, fn: () => unknown): Promise<void> { if (await this.loadSymbol(lib.nick, name)) await fn(); }
 

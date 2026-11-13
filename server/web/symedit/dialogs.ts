@@ -411,7 +411,8 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
  * else the current symbol's).  With no target library the symbol opens in an unsaved tab and its first save asks for
  * a library (CreateUnsavedSymbolTab).
  */
-export function newSymbol(se: SymbolEditor): void {
+/** DIALOG_LIB_NEW_SYMBOL; `parentName`: Derive from Existing Symbol (CreateNewSymbol( aInheritFrom )) presets the parent. */
+export function newSymbol(se: SymbolEditor, parentName?: string): void {
   if (E.viewOnly) { void messageBox("You have view-only access to this project."); return; }
   const cand = se.currentLib();
   const target = cand && cand.kind === "project" && cand.doc && cand.doc.canEdit ? cand : null;
@@ -430,6 +431,7 @@ export function newSymbol(se: SymbolEditor): void {
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
   const info = h("div", { style: "display:none;padding:4px 8px;margin-bottom:6px;background:color-mix(in srgb,var(--blue) 14%,var(--panel));border-radius:3px", id: "ns-info" });
   parent.addEventListener("change", () => { info.style.display = parent.value ? "block" : "none"; info.textContent = `Deriving from symbol '${parent.value}'.`; if (parent.value && !name.value) name.value = M.unescapeLibId(parent.value); });
+  if (parentName && parents().includes(parentName)) { parent.value = parentName; parent.dispatchEvent(new Event("change")); }
   KD().open({
     title: "New Symbol", width: 560,
     build(body) {

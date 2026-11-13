@@ -257,6 +257,14 @@ await test("Align to Grid, Swap, Convert / Explode Stacked Pins", () => {
   const a = M.allPins(sym)[0].node, b = M.allPins(sym)[1].node; M.swapItems([a, b]);
   assert.match(M.text(a), /\(at 5\.08 0 180\)/); assert.match(M.text(b), /\(at -5\.08 1\.27 0\)/);
 });
+await test("library tree menu: symbol_editor_control.cpp order and conditions, pin / hide library tree", () => {
+  const C = load("symedit/ctxmenu.ts");
+  const lib = C.symTreeMenu({ libSelected: true, libInferred: true, symbolSelected: false, derived: false, allPinned: false, allUnpinned: true });
+  assert.deepStrictEqual(lib, ["pinLibrary", "-", "newSymbol", "-", "save", "saveLibraryAs", "revert", "-", "importSymbol", "-", "pasteSymbol", "-", "hideLibraryTree"]);
+  const sym = C.symTreeMenu({ libSelected: false, libInferred: true, symbolSelected: true, derived: true, allPinned: true, allUnpinned: true });
+  assert.deepStrictEqual(sym.slice(3), ["newSymbol", "deriveFromExistingSymbol", "-", "save", "saveSymbolAs", "saveSymbolCopyAs", "revert", "-", "importSymbol", "exportSymbol", "-",
+    "cutSymbol", "copySymbol", "pasteSymbol", "duplicateSymbol", "deleteSymbol", "-", "renameSymbol", "symbolProperties", "flattenSymbol", "-", "hideLibraryTree"]);
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();

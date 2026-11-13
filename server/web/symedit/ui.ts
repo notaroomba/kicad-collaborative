@@ -52,8 +52,13 @@ export const CSS = `
 .se-row .tw{width:12px;text-align:center;color:var(--ink-2);flex:none}
 .se-row .ds{color:var(--ink-3);overflow:hidden;text-overflow:ellipsis}
 .se-row.cur .ds{color:inherit;opacity:.8}
-.se-row.lib{font-weight:600}
-.se-row.ro .nm{font-style:italic}
+.se-row.mod .nm{font-weight:600}
+.se-row.der .nm{font-style:italic}
+.se-row.dis{color:var(--ink-3)}
+.se-row .nm.canvas{position:relative;padding:0 6px 0 3px;border:1px solid var(--ink);border-right:0;margin-right:6px}
+.se-row .nm.canvas::before,.se-row .nm.canvas::after{content:"";position:absolute;right:-4px;width:0;height:calc(50% + 1px);border-right:1px solid var(--ink)}
+.se-row .nm.canvas::before{top:-1px;transform-origin:bottom;transform:skewX(23deg)}
+.se-row .nm.canvas::after{bottom:-1px;transform-origin:top;transform:skewX(-23deg)}
 .se-centre{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 .se-tabs{display:flex;gap:1px;background:var(--panel-2,var(--panel));border-bottom:1px solid var(--line);overflow-x:auto;min-height:26px}
 .se-tab{display:flex;align-items:center;gap:6px;padding:3px 10px;cursor:default;white-space:nowrap;border-right:1px solid var(--line)}

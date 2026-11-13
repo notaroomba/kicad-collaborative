@@ -68,3 +68,34 @@ export function symCanvasMenu(c: SymMenuCtx): SymMenuRow[] {
   add(1000, "-"); add(1000, "zoomMenu"); add(1000, "gridMenu");
   return tidy(rows.map((r, i) => [r, i] as const).sort((a, b) => a[0][0] - b[0][0] || a[1] - b[1]).filter(([r]) => r[2]).map(([r]) => r[1]));
 }
+
+/** What the library tree's selection is (SYMBOL_EDITOR_CONTROL::Init's conditions). */
+export interface SymTreeCtx {
+  /** a library row is selected (libSelectedCondition) */
+  libSelected: boolean;
+  /** a library is known from the selection: a library or one of its symbols (libInferredCondition) */
+  libInferred: boolean;
+  /** one symbol (symbolSelectedCondition) */
+  symbolSelected: boolean;
+  /** that symbol is derived (derivedSymbolSelectedCondition) */
+  derived: boolean;
+  /** the selected library rows are all pinned / all unpinned (LIBRARY_EDITOR_CONTROL checkPinnedStatus) */
+  allPinned: boolean;
+  allUnpinned: boolean;
+}
+/** SYMBOL_EDITOR_CONTROL::Init's library tree menu plus LIBRARY_EDITOR_CONTROL::AddContextMenuItems. */
+export function symTreeMenu(c: SymTreeCtx): SymMenuRow[] {
+  const rows: [number, SymMenuRow, boolean][] = [];
+  const add = (order: number, id: SymMenuRow, cond = true) => rows.push([order, id, cond]);
+  add(10, "newSymbol", c.libInferred); add(10, "deriveFromExistingSymbol", c.symbolSelected);
+  add(10, "-"); add(10, "save", c.symbolSelected || c.libInferred); add(10, "saveLibraryAs", c.libSelected);
+  add(10, "saveSymbolAs", c.symbolSelected); add(10, "saveSymbolCopyAs", c.symbolSelected); add(10, "revert", c.symbolSelected || c.libInferred);
+  add(20, "-"); add(20, "importSymbol", c.libInferred); add(20, "exportSymbol", c.symbolSelected);
+  add(100, "-"); add(100, "cutSymbol", c.symbolSelected); add(100, "copySymbol", c.symbolSelected); add(100, "pasteSymbol", c.libInferred);
+  add(100, "duplicateSymbol", c.symbolSelected); add(100, "deleteSymbol", c.symbolSelected);
+  add(120, "-"); add(120, "renameSymbol", c.symbolSelected); add(120, "symbolProperties", c.symbolSelected); add(120, "flattenSymbol", c.derived);
+  // LIBRARY_EDITOR_CONTROL::AddContextMenuItems (added last, so its order-1 rows lead)
+  add(1, "pinLibrary", c.allUnpinned); add(1, "unpinLibrary", c.allPinned); add(1, "-");
+  add(400, "-"); add(400, "hideLibraryTree");
+  return tidy(rows.map((r, i) => [r, i] as const).sort((a, b) => a[0][0] - b[0][0] || a[1] - b[1]).filter(([r]) => r[2]).map(([r]) => r[1]));
+}
