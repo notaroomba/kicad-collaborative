@@ -7,9 +7,11 @@ file, is at `/styleguide`.
 
 ## Principles
 
-1. **It is KiCad.** Neutral grey chrome like KiCad's own windows, dense rows, small radii, 1px
-   rules. The design on the canvas is the only colourful thing on screen.
-2. **Blue is the accent.** Primary buttons, links, selection, focus and the active tab are blue.
+1. **It is KiCad.** Near-black and near-white chrome laid out like KiCad's own windows, dense
+   rows, small radii, 1px rules. The design on the canvas is the only colourful thing on screen.
+2. **Ink is the accent.** The primary button is a solid ink fill (near-black in light, near-white
+   in dark); links, selection, focus and the active tab are neutral. There is no blue on chrome
+   (the token is still called `--blue`).
    One primary button per view.
 3. **Red means red.** Red is F.Cu, an error, or a destructive action. It never
    means "go".
@@ -86,7 +88,7 @@ values, coordinates, paths, counts, keys). Weights 400, 500 for controls, 600 fo
 | Component | Class | Notes |
 | --- | --- | --- |
 | Button | `.btn`, with `.primary`, `.danger`, `.danger.solid`, `.ghost`, `.on`, `.sm`, `.lg` | One primary per view. In a dialog the primary is rightmost, Cancel to its left |
-| Field | `.input`, with `.mono`, `.lg`, `.bad` | Works on `input`, `select` and `textarea`. Focus is a blue border, not a glow |
+| Field | `.input`, with `.mono`, `.lg`, `.bad` | Works on `input`, `select` and `textarea`. Focus is a `--blue` border, not a glow |
 | Badge | `.pill`, with `.owner`, `.editor`, `.info`, `.ok`, `.warn`, `.err` | Outline only, mono, uppercase |
 | Key | `.kbd` | |
 | Callout | `.callout`, with `.ok`, `.warn`, `.err` | A message in the flow of a page |
@@ -102,11 +104,11 @@ from the tokens, and their buttons and fields match `.btn` and `.input`.
 
 ## The mark
 
-The icon is KiCad's own mark reworked: the blue squircle (`#2B4BB7` to `#2B2FB7`) with a white
-"Ki", KiCad's orange dot (`#FF6D00`) and a second, teal presence dot (`#19C2B0`). It is one file,
-`server/static/icon.svg`, used by `pages::MARK`, `/favicon.svg`, the menu bar and the About
-dialog. Its colours belong to the icon only and are not theme tokens. Use it at 18 to 20px in
-title bars; never recolour or redraw it.
+The icon is a junction: two wires and the dot that joins them, in near-white on a near-black
+rounded tile (`#FAFAFA` on `#111113`), with a hairline edge so the tile holds on dark pages. It is
+one file, `server/static/icon.svg`, used by `pages::MARK`, `/favicon.svg`, the PNG and ICO sizes
+drawn from it, the menu bar and the About dialog. Its colours belong to the icon only and are not
+theme tokens. Use it at 18 to 20px in title bars; never recolour or redraw it.
 
 ## Adding UI
 

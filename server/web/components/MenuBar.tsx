@@ -168,7 +168,7 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
             ? <div key={"sep" + i} className="h-px bg-line my-1 mx-1" role="separator" />
             : (
               <button type="button" key={e.id} role="menuitem" data-appmenu={e.id}
-                className={cx(ROW, sel === i ? "bg-accent text-white" : "bg-transparent")}
+                className={cx(ROW, sel === i ? "bg-accent text-on-accent" : "bg-transparent")}
                 onMouseMove={() => setSel(i)} onClick={() => run(e)}>
                 <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center">{e.icon ? <KIcon name={e.icon} size={16} /> : null}</span>
                 <span className="flex-1">{e.label}</span>
@@ -234,7 +234,7 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
           const icon = SUBMENU_ICONS[n.title];
           return (
             <div key={"sub" + n.title} data-idx={i} data-sub={n.title} role="menuitem" aria-haspopup="true" aria-expanded={openIdx === i}
-              className={cx(ROW, "sub", active ? "bg-accent text-white" : "bg-transparent")} onMouseMove={() => onHover(depth, i)} onClick={() => onOpenSub(depth, i)}>
+              className={cx(ROW, "sub", active ? "bg-accent text-on-accent" : "bg-transparent")} onMouseMove={() => onHover(depth, i)} onClick={() => onOpenSub(depth, i)}>
               <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center">{icon ? <KIcon name={icon} size={16} /> : null}</span>
               <span className="flex-1">{n.title}</span><span className="ml-6 text-2xs opacity-70">▶</span>
               {openIdx === i ? <Panel nodes={n.nodes} depth={depth + 1} anchor={rectOf(i)} parentPanel={ownRect} sel={sel} open={open} c={c} onHover={onHover} onEnterPanel={onEnterPanel} onRun={onRun} onOpenSub={onOpenSub} /> : null}
@@ -249,11 +249,11 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
         const body: ReactNode = (
           <>
             <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center text-base leading-none" data-check={checkable ? (on ? "on" : "off") : undefined}>{on ? "✓" : icon ? <KIcon name={icon} size={16} /> : null}</span>
-            <span className="flex-1">{label}</span>{k ? <kbd className={cx(KBD, active && !off && "text-white")}>{k}</kbd> : null}
+            <span className="flex-1">{label}</span>{k ? <kbd className={cx(KBD, active && !off && "text-on-accent")}>{k}</kbd> : null}
           </>
         );
         // (bg-transparent only when not highlighted: in the stylesheet it comes after bg-accent and would win)
-        const cls = cx(ROW, active && !off ? "bg-accent text-white" : "bg-transparent", why && "desk opacity-50", off && "off opacity-40", on && "on");
+        const cls = cx(ROW, active && !off ? "bg-accent text-on-accent" : "bg-transparent", why && "desk opacity-50", off && "off opacity-40", on && "on");
         if (LINKS[id]) return <a className={cls} key={id + i} href={LINKS[id]} target="_blank" rel="noreferrer" role="menuitem" data-idx={i} data-uiact={id} onMouseMove={() => onHover(depth, i)} onClick={(ev) => { ev.preventDefault(); onRun(n, ev.currentTarget); }}>{body}</a>;
         return (
           <button type="button" className={cls} key={id + i} role={checkable ? "menuitemcheckbox" : "menuitem"} aria-checked={checkable ? on : undefined} aria-disabled={off ? true : undefined}

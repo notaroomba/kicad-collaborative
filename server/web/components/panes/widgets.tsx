@@ -43,7 +43,7 @@ export function ContextMenu({ at, onClose }: { at: MenuAt | null; onClose: () =>
       style={{ left: (pos || at).x, top: (pos || at).y, visibility: pos ? "visible" : "hidden" }} onContextMenu={(ev) => ev.preventDefault()}>
       {at.items.map((it, i) => it === "-"
         ? <div key={i} className="my-1 border-t border-line" />
-        : <div key={i} role="menuitem" className={cx("px-3 py-[3px] whitespace-nowrap", it.disabled ? "text-ink-3" : "cursor-default hover:bg-accent hover:text-white")}
+        : <div key={i} role="menuitem" className={cx("px-3 py-[3px] whitespace-nowrap", it.disabled ? "text-ink-3" : "cursor-default hover:bg-accent hover:text-on-accent")}
             onClick={() => { if (it.disabled) return; onClose(); it.run(); }}>{it.label}</div>)}
     </div>, document.body);
 }

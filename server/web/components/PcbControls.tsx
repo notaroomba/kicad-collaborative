@@ -74,7 +74,7 @@ export function LayerSelect() {
         <div ref={list} id="layerSelList" className="fixed z-70 bg-panel border border-line rounded-md shadow-panel py-0.5 max-h-[70vh] overflow-auto text-sm" style={style}>
           {layers.map((l) => (
             <button type="button" key={l.name} data-layer={l.name}
-              className={cx("flex items-center gap-2 w-full bg-transparent border-0 px-2 py-[3px] text-ink text-left whitespace-nowrap hover:bg-accent hover:text-white on:bg-on", l.name === active && "on")}
+              className={cx("flex items-center gap-2 w-full bg-transparent border-0 px-2 py-[3px] text-ink text-left whitespace-nowrap hover:bg-accent hover:text-on-accent on:bg-on", l.name === active && "on")}
               onClick={() => { setOpen(false); dispatch({ type: "setActiveLayer", layer: l.name }); }}>
               <i className={SWATCH} style={{ background: l.color }} />
               <span className="flex-1">{l.label}{LAYER_KEYS[l.name] ? ` (${LAYER_KEYS[l.name]})` : ""}</span>

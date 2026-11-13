@@ -105,12 +105,12 @@ function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElem
         const ro = viewOnlyWhy(viewOnly, it.id); const why = unavailable(a, it.id) || ro; const k = keyFor(a, it.id);
         return (
           <button type="button" key={it.id} title={titleFor(a, it.id)} data-uiact={it.id}
-            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-white cur:shadow-[inset_2px_0_0_var(--color-blue)] desk:opacity-[.45]",
+            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-on-accent cur:shadow-[inset_2px_0_0_var(--color-blue)] desk:opacity-[.45]",
               why && "desk", cur === it.id && "cur")}
             onClick={(ev) => { onClose(); if (ro) return; dispatch({ type: "setGroupCurrent", group: group.group, id: it.id }); runUiAction(a, it.id, ev.currentTarget); }}>
             <KIcon name={(actionMeta(it.id) || it).icon || "options_generic"} />
             <span className="flex-1">{paletteLabel(it, group)}</span>
-            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-white">{k}</kbd> : null}
+            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{k}</kbd> : null}
           </button>
         );
       })}
@@ -243,11 +243,11 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
         const ro = viewOnlyWhy(viewOnly, m.id); const why = unavailable(a, m.id) || ro; const k = keyFor(a, m.id);
         return (
           <button type="button" key={e.key} title={titleFor(a, m.id)} data-uiact={m.id}
-            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-white desk:opacity-[.45]", why && "desk")}
+            className={cx("krow group flex items-center gap-2 w-full bg-transparent border-0 rounded-xs px-2 py-1 text-ink text-left hover:bg-accent hover:text-on-accent desk:opacity-[.45]", why && "desk")}
             onClick={(ev) => { onClose(); if (!ro) runUiAction(a, m.id, ev.currentTarget); }}>
             {m.glyph ? <Glyph svg={m.glyph} /> : <KIcon name={m.icon || "options_generic"} />}
             <span className="flex-1">{m.label}</span>
-            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-white">{k}</kbd> : null}
+            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{k}</kbd> : null}
           </button>
         );
       })}

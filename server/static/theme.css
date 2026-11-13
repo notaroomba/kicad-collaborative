@@ -13,8 +13,9 @@
    Rules of the house:
      - No colour literal outside this file's token blocks.  Canvas drawing (KiCad's layer and
        schematic colours) is the one exception and lives in web/canvas/colors.ts.
-     - Neutral grey chrome, as KiCad's own windows.  Blue is the accent: primary buttons, links,
-       selection, focus.  Red means F.Cu, an error, or a destructive action, never "go".
+     - Near-black and near-white chrome with one accent, ink: the primary button is a solid ink
+       fill, links, selection and focus are neutral.  No blue on chrome.  Red means F.Cu, an
+       error, or a destructive action, never "go".
      - Radii stay small (3px controls, 6px windows), rules are 1px.  The one gradient on chrome
        is the pane caption (paper to bench), as KiCad's docked panes have. */
 
@@ -22,22 +23,22 @@
   color-scheme: light dark;
 
   /* ---- surfaces ---- */
-  --bench: #EBEBEB;      /* chrome: toolbars, sidebars, title bars */
-  --paper: #F5F5F5;      /* page and pane bodies, hover fill */
+  --bench: #F4F4F5;      /* chrome: toolbars, sidebars, title bars */
+  --paper: #FAFAFA;      /* page and pane bodies, hover fill */
   --panel: #FFFFFF;      /* inputs, menus, cards, raised surfaces */
-  --line: #CDCDCD;       /* 1px rules and control borders */
-  --line-2: #B5B5B5;     /* stronger rule, grid dots, hovered border */
+  --line: #E4E4E7;       /* 1px rules and control borders */
+  --line-2: #C8C8CE;     /* stronger rule, grid dots, hovered border */
 
   /* ---- text ---- */
-  --ink: #1A1A1A;        /* primary */
-  --ink-2: #555555;      /* secondary */
-  --ink-3: #737373;      /* tertiary: captions, mono meta, placeholders */
+  --ink: #111113;        /* primary */
+  --ink-2: #52525B;      /* secondary */
+  --ink-3: #71717A;      /* tertiary: captions, mono meta, placeholders */
 
-  /* ---- accent: KiCad blue ---- */
-  --accent: #2A5DB0;     /* primary action fill */
-  --accent-2: #214C93;   /* its border, hover and pressed */
+  /* ---- accent: ink.  The site is one colour; the canvas keeps KiCad's ---- */
+  --accent: #111113;     /* primary action fill */
+  --accent-2: #2E2E33;   /* its border, hover and pressed */
   --on-accent: #FFFFFF;  /* text and icons on --accent, --copper and --err fills */
-  --blue: #2F68C0;       /* links, selection, focus ring, active tab */
+  --blue: #3F3F46;       /* links, selection, focus ring, active tab */
 
   /* ---- KiCad layer colours used as meaning ---- */
   --copper: #C83434;     /* F.Cu, owner badge */
@@ -101,22 +102,28 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bench: #222427; --paper: #2A2C30; --panel: #18191B; --line: #3D4046; --line-2: #50545B;
-    --ink: #E8E8E8; --ink-2: #B2B5BA; --ink-3: #8B8F96;
-    --accent: #3A72CC; --accent-2: #4C84DC; --blue: #7AABF2;
+    --bench: #111113; --paper: #18181B; --panel: #0B0B0C; --line: #27272A; --line-2: #3F3F46;
+    --ink: #FAFAFA; --ink-2: #A1A1AA; --ink-3: #85858E;
+    --accent: #FAFAFA; --accent-2: #D4D4D8; --on-accent: #0B0B0C; --blue: #D4D4D8;
     --copper: #E05555; --copper-2: #C83434; --teal: #4FBDBD; --wire: #45C245;
     --warn: #E5A800; --err: #F0464A; --err-2: #D2383C;
     --shadow: 0 6px 20px #00000080; --shadow-dialog: 0 18px 48px #000000A6; --scrim: #00000080;
   }
 }
 :root[data-theme="dark"] {
-  --bench: #222427; --paper: #2A2C30; --panel: #18191B; --line: #3D4046; --line-2: #50545B;
-  --ink: #E8E8E8; --ink-2: #B2B5BA; --ink-3: #8B8F96;
-  --accent: #3A72CC; --accent-2: #4C84DC; --blue: #7AABF2;
+  --bench: #111113; --paper: #18181B; --panel: #0B0B0C; --line: #27272A; --line-2: #3F3F46;
+  --ink: #FAFAFA; --ink-2: #A1A1AA; --ink-3: #85858E;
+  --accent: #FAFAFA; --accent-2: #D4D4D8; --on-accent: #0B0B0C; --blue: #D4D4D8;
   --copper: #E05555; --copper-2: #C83434; --teal: #4FBDBD; --wire: #45C245;
   --warn: #E5A800; --err: #F0464A; --err-2: #D2383C;
   --shadow: 0 6px 20px #00000080; --shadow-dialog: 0 18px 48px #000000A6; --scrim: #00000080;
 }
+/* the mark (static/icon.svg) follows the system scheme on its own; these make an inlined copy follow
+   an explicit theme choice too */
+:root[data-theme="light"] .jn-t { fill: #111113; } :root[data-theme="light"] .jn-e { stroke: #fff; stroke-opacity: .18; }
+:root[data-theme="light"] .jn-w { stroke: #FAFAFA; } :root[data-theme="light"] .jn-d { fill: #FAFAFA; }
+:root[data-theme="dark"] .jn-t { fill: #FAFAFA; } :root[data-theme="dark"] .jn-e { stroke: #000; stroke-opacity: .12; }
+:root[data-theme="dark"] .jn-w { stroke: #111113; } :root[data-theme="dark"] .jn-d { fill: #111113; }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="light"] { color-scheme: light; }
 
@@ -126,6 +133,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
+:where(p) a:not([class]) { text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }

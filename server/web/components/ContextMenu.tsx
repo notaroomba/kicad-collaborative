@@ -53,7 +53,7 @@ function Panel({ items, path, open, active, x, y, onHover, onRun }: PanelProps) 
         return (
           <div className="relative" key={i}>
             <button type="button" role={it.check ? "menuitemcheckbox" : "menuitem"} aria-checked={it.check ? !!it.checked : undefined} aria-disabled={dim || undefined} aria-haspopup={it.sub ? "menu" : undefined}
-              className={cx(ROW, isActive ? (dim ? "bg-line/40 text-ink" : "bg-accent text-white") : "bg-transparent text-ink", dim ? "opacity-50 cursor-default" : "cursor-pointer")}
+              className={cx(ROW, isActive ? (dim ? "bg-line/40 text-ink" : "bg-accent text-on-accent") : "bg-transparent text-ink", dim ? "opacity-50 cursor-default" : "cursor-pointer")}
               title={it.why ? `${it.label} — ${it.why}` : undefined} data-ctxact={it.act || it.label} data-dim={dim ? "1" : undefined}
               onPointerEnter={() => onHover(p, it)} onClick={(ev) => { ev.stopPropagation(); if (!it.sub) onRun(it); }}>
               {lead ? (
@@ -63,7 +63,7 @@ function Panel({ items, path, open, active, x, y, onHover, onRun }: PanelProps) 
                 </span>
               ) : null}
               <span className="flex-1">{it.label}</span>
-              {it.key ? <kbd className={cx(KBD, isActive && !dim && "text-white")}>{it.key}</kbd> : null}
+              {it.key ? <kbd className={cx(KBD, isActive && !dim && "text-on-accent")}>{it.key}</kbd> : null}
               {it.sub ? <span className="ml-4 -mr-0.5" aria-hidden="true">›</span> : null}
             </button>
             {it.sub && startsWith(open, p) ? <Panel items={it.sub} path={p} open={open} active={active} x={0} y={0} onHover={onHover} onRun={onRun} /> : null}
