@@ -722,6 +722,11 @@ Object.freeze(ACTIONS);
 export function setRoutingDialogsImpl(d: RoutingDialogs) { routingDialogs = d; }
 
 /** The Grid Origin dialog; exported for the tests (the units come from the toolbar's size units). */
+// EDIT_TOOL::Drag: the module's D / G handling (index.ts dragKey), so the menu bar and the hotkey list reach it too
+let dragImpl: ((ctx: PcbCtx, free: boolean) => boolean) | null = null;
+export function setDragImpl(f: (ctx: PcbCtx, free: boolean) => boolean) { dragImpl = f; }
+act("drag45Degree", "Drag 45 Degree Mode", "D", (ctx: PcbCtx) => !!dragImpl && dragImpl(ctx, false), { tip: "Drags a track segment, or a mixed selection as one block, keeping connected tracks at 45 degrees." });
+act("dragFreeAngle", "Drag Free Angle", "G", (ctx: PcbCtx) => !!dragImpl && dragImpl(ctx, true), { tip: "Drags the nearest joint in the track without restricting the track angle." });
 export function openGridOrigin(ctx: PcbCtx) {
   const R = sizesOf(ctx), u = sizeUnits(), per = u === "mil" ? 0.0254 : u === "in" ? 25.4 : 1, dp = u === "mil" ? 2 : u === "in" ? 5 : 4;
   const show = (mm: number) => +(mm / per).toFixed(dp), back = (v: number) => Math.round(v * per * 1e6) / 1e6;

@@ -28,7 +28,7 @@ import type { PickerFn, PromptFn } from "./dom";
 import type { LayerPicker } from "./route-tool";
 import type { RouterSettings } from "./router-settings";
 import { root } from "../root";
-import { footprintByRef, footprintRefChoices, ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
+import { setDragImpl, footprintByRef, footprintRefChoices, ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
 import { hoverPoint, liveSelected, netNameOf, nextWidth, sizesOf } from "./app-state";
 import { ArcGeom, arcBackup, arcDrawMode, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, arcMove, arcTangentSeedAt, arcTangentSeedNear, finishArc, setArcDrawMode, showArcMode } from "./arcs";
 import { arrayChanges, arrayOrigin, arraySize, arrayStacked, arrayTransform } from "./array";
@@ -120,6 +120,28 @@ function selectedPadKeys(): string[] {
   const also = S.padAlso && S.padAlso.anchor === S.padSel ? S.padAlso.keys : [];
   return [S.padSel, ...also.filter((k) => k !== S.padSel)];
 }
+
+/**
+ * EDIT_TOOL::Drag (PCB_ACTIONS::drag45Degree, D, and dragFreeAngle, G): one footprint is dragged with its tracks, tracks
+ * and a via go to the router's inline drag (45 degree or free angle); with nothing selected the routable item under the
+ * cursor is dragged, or a footprint there is hover-dragged.  False lets the key through (a selection that is not routable).
+ */
+function dragKey(ctx: PcbCtx, free: boolean): boolean {
+  bind(ctx); if (!ctx.doc) return false;
+  const editing = () => { if (ctx.viewOnly) { ctx.toast("View-only access"); return false; } return true; };
+  const ids = selectionIds(ctx); const it = liveSelected();
+  if (!S.sel.size && it && ids.size === 1 && ctx.doc.items.get(it.id)?.kind === "footprint") return editing() && beginCarryMove(ctx, { drag: true });
+  if (ids.size && !routableItems(ctx.doc, ids)) return false;
+  if (!ids.size && !dragCandidate(ctx, cursorPoint(ctx))) {   // nothing routable under the cursor: a footprint there is hover-dragged
+    if (!editing()) return true;
+    const sel = requestSelection(ctx, { filter: (x: KItem) => x.kind === "footprint" || x.kind === "group" });
+    if (sel && sel.items.length === 1 && sel.items[0]!.kind === "footprint") { applySelection(ctx, sel.ids); beginCarryMove(ctx, { ids: sel.ids, drag: true, hover: true }); }
+    return true;
+  }
+  if (editing()) { S.dragFree = free; ctx.setTool("drag"); }
+  return true;
+}
+setDragImpl(dragKey);
 
 export const pcb = {
   id: "pcb", tools: TOOLS, state: S, ghostSegs,
@@ -295,17 +317,7 @@ export const pcb = {
     case "ViaTool": ctx.setTool("via"); return true;
     case "d": case "D": case "g": case "G":
       if (shift) return false;
-      { const ids = selectionIds(ctx); const it = liveSelected();
-        if (!S.sel.size && it && ids.size === 1 && ctx.doc.items.get(it.id)?.kind === "footprint") return editing() && beginCarryMove(ctx, { drag: true });
-        // EDIT_TOOL::Drag: tracks and a via go to the router (D = 45°, G = free angle); nothing selected picks under the cursor
-        if (ids.size && !routableItems(ctx.doc, ids)) return false;
-        if (!ids.size && !dragCandidate(ctx, cursorPoint(ctx))) {   // nothing routable under the cursor: a footprint there is hover-dragged
-          if (!editing()) return true;
-          const sel = requestSelection(ctx, { filter: (x: KItem) => x.kind === "footprint" || x.kind === "group" });
-          if (sel && sel.items.length === 1 && sel.items[0]!.kind === "footprint") { applySelection(ctx, sel.ids); beginCarryMove(ctx, { ids: sel.ids, drag: true, hover: true }); }
-          return true;
-        }
-        if (editing()) { S.dragFree = k === "g" || k === "G"; ctx.setTool("drag"); } return true; }
+      return dragKey(ctx, k === "g" || k === "G");
     case "q": case "Q": if (!shift && !(ev.ctrlKey || ev.metaKey || ev.altKey) && (S.route || S.modTool === "route" || S.modTool === "routediff")) return runAction("ACT_CustomTrackWidth", ctx); return false;
     case "t": case "T": if (!shift) { ctx.setTool("gtext"); return true; } return false;
     case "L": if (shift) { ctx.setTool("gline"); return true; } return false;
