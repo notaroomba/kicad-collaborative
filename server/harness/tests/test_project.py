@@ -181,6 +181,24 @@ class Blinker(unittest.TestCase):
         self.assertEqual(again["page"], built["page"])
         self.assertEqual(again["overlaps"], 0)
 
+    def test_fit_page_picks_the_smallest_paper_and_moves_the_drawing_onto_it(self):
+        sch, built = self._sheet()
+        nets = sch.nets()
+        sch.page("A1")
+        sch._edit({"op": "move_region", "x0": 0, "y0": 0, "x1": 841, "y1": 594, "dx": 300 * 1.27, "dy": 200 * 1.27})   # far corner of a big page
+        sch.flush()
+        fit = sch.fit_page()
+        self.assertEqual((fit["paper"], fit["was"], fit["fits"]), (built["page"], "A1", True))
+        lay = sch.layout(limit=1)
+        self.assertEqual((lay["paper"], lay["count"]), (built["page"], 0))
+        area, ext = lay["drawing_area"], lay["extent"]
+        self.assertLess(abs((ext[0] - area[0]) - (area[2] - ext[2])), 2.6)      # in the middle, left to right
+        self.assertEqual(sch.nets(), nets)                                       # moved as one piece: nothing came apart
+        self.assertEqual(sch.fit_page()["moved"], [0.0, 0.0])                    # already fitted: nothing moves
+        sch.clear()
+        sch.page("A2")
+        self.assertEqual(sch.fit_page()["paper"], "A4")                         # an empty sheet is the smallest page
+
     def test_the_layout_check_finds_what_is_drawn_over_something_else(self):
         sch, built = self._sheet()
         self.assertEqual(built["overlaps"], 0, built.get("overlap_list"))

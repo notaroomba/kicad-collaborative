@@ -760,6 +760,53 @@ class Schematic(_Doc):
         self._edit({"op": "set_page", "paper": paper})
         self.flush()
 
+    def fit_page(self, margin: float = 2.54, papers: tuple | None = None) -> dict:
+        """Make the page fit what is drawn: the smallest paper ("A4", "A3", "A2", "A1", "A0", or the ones named in `papers`)
+        that holds everything with `margin` to the border and clear of the title block, and the drawing moved as one piece
+        to the middle of it.  Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A4."""
+        self.flush()
+        r = self.layout(limit=1)
+        was, ext = r.get("paper", "A4"), r.get("extent")
+        sizes = [p for p in _PAPERS if not papers or p[0] in papers] or list(_PAPERS)
+        now = was
+
+        def paper(name):
+            nonlocal now
+            if name != now:
+                self.page(name)
+                now = name
+
+        if not ext:
+            paper(sizes[0][0])
+            return {"paper": now, "was": was, "moved": [0, 0], "fits": True}
+        w, h = ext[2] - ext[0], ext[3] - ext[1]
+        edge = 12.7 + margin   # the frame's border, then the margin
+        off = lambda: sum(n for k, n in (self.layout(limit=1).get("by_kind") or {}).items() if k in ("outside the page border", "over the title block"))
+        for name, pw, ph in sizes:
+            if w > pw - 2 * edge or h > ph - 2 * edge:
+                continue
+            tx, ty = pw - 125.0 - margin, ph - 49.0 - margin   # the title block's corner
+            # in the middle of the drawing area (a drawing that steps around the title block may sit there), else in the
+            # middle of the room above the title block, else of the room to its left
+            for x1, y1 in ((pw - edge, ph - edge), (pw - edge, ty), (tx, ph - edge)):
+                if w > x1 - edge or h > y1 - edge:
+                    continue
+                dx = round(((edge + x1 - w) / 2 - ext[0]) / GRID) * GRID   # parts and wires stay on the grid
+                dy = round(((edge + y1 - h) / 2 - ext[1]) / GRID) * GRID
+                paper(name)
+                box = {"x0": ext[0] - 0.5, "y0": ext[1] - 0.5, "x1": ext[2] + 0.5, "y1": ext[3] + 0.5}
+                if dx or dy:
+                    self._edit({"op": "move_region", **box, "dx": dx, "dy": dy})
+                    self.flush()
+                if not off():
+                    return {"paper": name, "was": was, "moved": [round(dx, 2), round(dy, 2)], "fits": True}
+                if dx or dy:   # it sits on the title block or the border there: back, and try the next place
+                    self._edit({"op": "move_region", "x0": box["x0"] + dx, "y0": box["y0"] + dy, "x1": box["x1"] + dx, "y1": box["y1"] + dy, "dx": -dx, "dy": -dy})
+                    self.flush()
+        paper(was)
+        self.project.note(f"{self.path}: the drawing ({round(w)} x {round(h)} mm) does not fit on {sizes[-1][0]}; split it over several sheets.")
+        return {"paper": was, "was": was, "moved": [0, 0], "fits": False}
+
     def title(self, title: str | None = None, rev: str | None = None, date: str | None = None, company: str | None = None) -> None:
         """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as they are."""
         e = {k: v for k, v in (("title", title), ("rev", rev), ("date", date), ("company", company)) if v is not None}
@@ -1017,7 +1064,13 @@ class Schematic(_Doc):
                 self.text(line, (x0 + pad, ny), italic=True)
                 ny += _LINE
             self.flush()
-        # ---- 6. what was asked for against what is there
+        # ---- 6. a sheet that had something on it was packed onto the page it had: now that all of it is drawn, the page is
+        #         made to fit (an empty sheet was packed onto the smallest page already)
+        if used:
+            fit = self.fit_page()
+            if fit["fits"]:
+                paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
+        # ---- 7. what was asked for against what is there
         wrong = self._miswired(nets)
         lay = self.layout(limit=8)
         out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
