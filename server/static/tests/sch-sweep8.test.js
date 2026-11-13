@@ -150,5 +150,22 @@ test("Lock writes (locked yes) where SCH_IO_KICAD_SEXPR does, and locked items s
   assert.strictEqual(c.log[c.log.length - 1].label, "Unlock"); assert.ok(!_.isLockedNode(doc.items.get("w1").node));
 });
 
+test("Draw Ellipses / Draw Elliptical Arcs: the box's inscribed ellipse, then the arc's start and end angles", () => {
+  const doc = K.parseDoc(HEAD + ")"); const c = makeCtx(doc);
+  sch.onActivate("ellipse", c);
+  sch._.drawClick(c, "ellipse", [10.16, 10.16]); sch._.drawClick(c, "ellipse", [30.48, 20.32]);
+  assert.strictEqual(c.log.length, 1);
+  const e = [...doc.items.values()].find((it) => it.kind === "ellipse");
+  assert.ok(e, "an ellipse was added");
+  assert.ok(/^\(ellipse \(center 20\.32 15\.24\) \(major_radius 10\.16\) \(minor_radius 5\.08\) \(rotation_angle 0\) \(stroke \(width 0\) \(type default\)\) \(fill \(type none\)\) \(uuid/.test(K.serialize(e.node)), K.serialize(e.node));
+  const tall = _.ellipseFromBox([0, 0], [5.08, 20.32]); assert.strictEqual(tall.rotation, 90); assert.strictEqual(tall.major, 10.16);
+  sch.onActivate("ellipse_arc", c);
+  for (const p of [[50.8, 10.16], [71.12, 20.32], [81.28, 15.24], [60.96, 20.32]]) sch._.drawClick(c, "ellipse_arc", p);
+  const a = [...doc.items.values()].find((it) => it.kind === "ellipse_arc");
+  assert.ok(a, "an elliptical arc was added");
+  const v = (k) => +K.kid(a.node, k)[1];
+  assert.strictEqual(v("start_angle"), 0); assert.strictEqual(v("end_angle"), 90, "the end after the start (Y down: the bottom is +90)");
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

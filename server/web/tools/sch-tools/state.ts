@@ -10,7 +10,7 @@ export const LINE_KINDS = new Set(["wire", "bus", "polyline"]);
 export const TEXT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text"]);
 export const POINT_KINDS = new Set(["junction", "no_connect", "bus_entry"]);
 export const SHAPE_KINDS = new Set(["rectangle", "circle", "arc", "ellipse", "ellipse_arc"]);          // sheet-level SCH_SHAPEs (polyline is a LINE_KIND)
-export const DRAW_TOOLS = new Set(["rect", "circle", "arc", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
+export const DRAW_TOOLS = new Set(["rect", "circle", "ellipse", "ellipse_arc", "arc", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
 // Kinds the canvas has no SCH_TYPE_NAMES entry for: the desktop's GetClass() names.
 export const TYPE_NAMES: Record<string, string> = { bezier: "SCH_SHAPE", image: "SCH_BITMAP", table: "SCH_TABLE", rule_area: "SCH_RULE_AREA" };
 // KiCad's delete cursor: a small bin with a crosshair hotspot
@@ -33,6 +33,8 @@ export const TOOLS = [
   { id: "lines", label: "Lines", key: "I", kind: "polyline", cursor: "LINE_GRAPHIC", icon: '<path d="M3 20l6-10 5 6 7-12"/>' },
   { id: "rect", label: "Rectangle", key: "", cursor: "PENCIL", icon: '<rect x="4" y="6" width="16" height="12"/>' },
   { id: "circle", label: "Circle", key: "", cursor: "PENCIL", icon: '<circle cx="12" cy="12" r="8"/>' },
+  { id: "ellipse", label: "Ellipse", key: "", cursor: "PENCIL", icon: '<ellipse cx="12" cy="12" rx="9" ry="5"/>' },
+  { id: "ellipse_arc", label: "Elliptical arc", key: "", cursor: "PENCIL", icon: '<path d="M3 12a9 5 0 0 1 18 0"/>' },
   { id: "arc", label: "Arc", key: "", cursor: "PENCIL", icon: '<path d="M4 18a8 8 0 0 1 16 0"/>' },
   { id: "textbox", label: "Text box", key: "", cursor: "PENCIL", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M8 9h8M12 9v7"/>' },
   { id: "delete", label: "Delete", key: "", cursor: "REMOVE", icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },

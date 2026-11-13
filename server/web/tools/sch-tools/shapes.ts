@@ -2,7 +2,7 @@ import type { SchCtx, Pt } from "./types";
 import { root } from "../root";
 import { commitSchArc, schArcClick } from "./arcs";
 import { closePrompt, labelDefaults, promptImpl } from "./dom";
-import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetCorner, sheetNode, drawTableNode, textBoxNode } from "./nodes";
+import { bezierNode, circleNode, ellipseArcAngles, ellipseFromBox, ellipseNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetCorner, sheetNode, drawTableNode, textBoxNode } from "./nodes";
 import { rememberPlaced } from "./repeat";
 import { SHEET_EXT, nextPage, placeSheet, placeSheetNode, sheetFileFor, sheetInstance } from "./sheets";
 import { K, S, kids, str } from "./state";
@@ -28,6 +28,10 @@ export function drawClick(ctx: SchCtx, shape: string, p: Pt) {
     if (shape !== "lines" && d.pts.length >= 3 && same(p, d.pts[0])) { finishDraw(ctx); return; }   // back on the first point closes it
     d.pts.push(p); ctx.requestRender(); return;
   }
+  if (shape === "ellipse_arc") {                   // the box's two corners, then the start and end points (ELLIPSE_GEOM_MANAGER)
+    if (d.pts.length === 1 && same(p, d.pts[0])) return;
+    d.pts.push(p); if (d.pts.length === 4) finishDraw(ctx); else ctx.requestRender(); return;
+  }
   if (shape === "bezier") {                        // start, control 1, end, then the far handle (BEZIER_GEOM_MANAGER)
     if (d.pts.length === 2 && same(p, d.pts[0])) { ctx.toast("The curve's end must differ from its start"); return; }
     d.pts.push(p); if (d.pts.length === 4) finishDraw(ctx); else ctx.requestRender(); return;
@@ -40,6 +44,8 @@ export function finishDraw(ctx: SchCtx) {
   const d = S.draw; if (!d) return;
   const doc = ctx.doc, pts = d.pts; let node = null, label = d.shape;
   if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
+  else if (d.shape === "ellipse") { node = ellipseNode(ellipseFromBox(pts[0], pts[1]), false); label = "Draw Ellipse"; }
+  else if (d.shape === "ellipse_arc") { if (pts.length === 4) { const e = ellipseFromBox(pts[0], pts[1]); Object.assign(e, ellipseArcAngles(e, pts[2], pts[3])); node = ellipseNode(e, true); } label = "Draw Elliptical Arc"; }
   else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
   else if (d.shape === "arc") { commitSchArc(ctx, d, false); ctx.requestRender(); return; }
   else if (d.shape === "lines") { const p = simplify(pts); if (p.length >= 2) node = polylineNode(p); label = "lines"; }

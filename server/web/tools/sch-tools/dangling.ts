@@ -9,7 +9,7 @@ import { drawEditPoints } from "./point-edit";
 import { collisionCursor, collisionMarkers, drawCollision } from "./collision";
 import { snapAnchor, snapConn } from "./snap";
 import { drawSchArcPreview } from "./arcs";
-import { drawTableLines, sheetCorner, sheetNode } from "./nodes";
+import { drawTableLines, ellipseArcAngles, ellipseFromBox, sheetCorner, sheetNode } from "./nodes";
 import { CLR, K, S, atOf, kids, ptsOf, str, toolOf } from "./state";
 import { ghost, r4, same, segDist, segs } from "./util";
 import { segNull } from "./wire";
@@ -200,6 +200,14 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
       if (it) { c.restore(); paintItems(c, view, doc, [it], {}); c.save(); }
     }
     else if (d.shape === "rect" || d.shape === "textbox") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
+    else if (d.shape === "ellipse" || d.shape === "ellipse_arc") {
+      // ELLIPSE_GEOM_MANAGER's preview: the box's ellipse, then the arc from the start point to the cursor
+      const box = d.pts.length >= 2 ? d.pts[1] : cur, e = ellipseFromBox(p0, box), rad = (deg: number) => deg * Math.PI / 180;
+      c.beginPath();
+      if (d.shape === "ellipse_arc" && d.pts.length >= 3) { const g = ellipseArcAngles(e, d.pts[2], cur); c.ellipse(e.cx, e.cy, e.major, e.minor, rad(e.rotation), rad(g.start), rad(g.end)); }
+      else c.ellipse(e.cx, e.cy, e.major, e.minor, rad(e.rotation), 0, Math.PI * 2);
+      c.stroke();
+    }
     else if (d.shape === "circle") { c.beginPath(); c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2); c.stroke(); }
     else if (d.shape === "arc" && d.arc) drawSchArcPreview(c, d, px);
     else if (d.shape === "bezier") {

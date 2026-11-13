@@ -31,6 +31,35 @@ export const fillNone = (): SNode => ["fill", ["type", "none"]];
 export const xy = (p: Pt): SNode => ["xy", r4(p[0]), r4(p[1])];
 export function corners(a: Pt, b: Pt): Box { return [r4(Math.min(a[0], b[0])), r4(Math.min(a[1], b[1])), r4(Math.max(a[0], b[0])), r4(Math.max(a[1], b[1]))]; }
 export function rectangleNode(a: Pt, b: Pt): SNode { const [x0, y0, x1, y1] = corners(a, b); return ["rectangle", ["start", x0, y0], ["end", x1, y1], stroke0(), fillNone()]; }
+/** EDA_UNIT_UTILS::FormatAngle: "{:.10g}" degrees. */
+function angle10(deg: number): number { return +(+deg.toPrecision(10)).toString(); }
+/** An ellipse being drawn (mm, Y down, degrees): ELLIPSE<int>'s centre, radii, rotation and arc angles. */
+export interface SchEllipse { cx: number; cy: number; major: number; minor: number; rotation: number; start: number; end: number }
+/**
+ * ELLIPSE_GEOM_MANAGER::setBboxCorner2: the ellipse inscribed in the box from `a` to `b`, the major axis along the
+ * longer side (rotation 0, or 90 for a tall box), in internal units as KiCad does.
+ */
+export function ellipseFromBox(a: Pt, b: Pt): SchEllipse {
+  const IU = 1e4, iu = (v: number) => Math.round(v * IU), tdiv = (x: number, y: number) => Math.trunc(x / y);
+  const x1 = iu(a[0]), y1 = iu(a[1]), x2 = iu(b[0]), y2 = iu(b[1]);
+  const cx = tdiv(x1 + x2, 2), cy = tdiv(y1 + y2, 2), hw = tdiv(Math.abs(x2 - x1), 2), hh = tdiv(Math.abs(y2 - y1), 2), wide = hw >= hh;
+  return { cx: cx / IU, cy: cy / IU, major: Math.max(wide ? hw : hh, 1) / IU, minor: Math.max(wide ? hh : hw, 1) / IU, rotation: wide ? 0 : 90, start: 0, end: 360 };
+}
+/** ELLIPSE::GetAngleAtPoint (degrees, Y down). */
+export function ellipseAngle(e: SchEllipse, p: Pt): number {
+  const a = Math.max(1e-4, e.major), b = Math.max(1e-4, e.minor), r = e.rotation * Math.PI / 180, dx = p[0] - e.cx, dy = p[1] - e.cy;
+  return Math.atan2((-dx * Math.sin(r) + dy * Math.cos(r)) / b, (dx * Math.cos(r) + dy * Math.sin(r)) / a) * 180 / Math.PI;
+}
+/** ELLIPSE_GEOM_MANAGER::setStartAngle / setEndAngle: the end after the start, wrapped by 360. */
+export function ellipseArcAngles(e: SchEllipse, s: Pt, t?: Pt): { start: number; end: number } {
+  const start = ellipseAngle(e, s); if (!t) return { start, end: start + 360 };
+  let end = ellipseAngle(e, t); while (end <= start) end += 360; return { start, end };
+}
+/** formatEllipse / formatEllipseArc on a sheet: centre, radii, rotation (and the arc's angles), stroke, fill. */
+export function ellipseNode(e: SchEllipse, arc: boolean): SNode {
+  return [arc ? "ellipse_arc" : "ellipse", ["center", r4(e.cx), r4(e.cy)], ["major_radius", r4(e.major)], ["minor_radius", r4(e.minor)], ["rotation_angle", angle10(e.rotation)],
+    ...(arc ? [["start_angle", angle10(e.start)], ["end_angle", angle10(e.end)]] as SNode[] : []), stroke0(), fillNone()];
+}
 export function circleNode(c: Pt, r: number): SNode { return ["circle", ["center", r4(c[0]), r4(c[1])], ["radius", r4(r)], stroke0(), fillNone()]; }
 export function arcNode(a: Pt, m: Pt, b: Pt): SNode { return ["arc", ["start", r4(a[0]), r4(a[1])], ["mid", r4(m[0]), r4(m[1])], ["end", r4(b[0]), r4(b[1])], stroke0(), fillNone()]; }
 export function polylineNode(pts: Pt[]): SNode { return ["polyline", ["pts", ...pts.map(xy)], stroke0(), fillNone()]; }
