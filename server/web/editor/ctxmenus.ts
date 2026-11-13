@@ -59,7 +59,7 @@ export interface MenuDef {
   icon?: string;
   entries: Entry[];
   /** filled in by the editor: the zoom presets, the grid list */
-  dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers" | "unfold";
+  dynamic?: "zoom" | "grid" | "diffpair" | "trackwidth" | "pinfunction" | "pinhelpers" | "unfold";
 }
 export type Entry =
   | { order: number; cond: Cond; act: string; check?: boolean }
@@ -69,7 +69,7 @@ export type Entry =
 const always: Cond = () => true;
 
 export class CondMenu implements MenuDef {
-  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers" | "unfold";
+  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair" | "trackwidth" | "pinfunction" | "pinhelpers" | "unfold";
   constructor(title = "", icon?: string) { this.title = title; this.icon = icon; }
   private add(e: Entry, order: number | undefined): this {
     e.order = order === undefined || order < 0 ? this.entries.length : order;
@@ -101,6 +101,8 @@ const set = (...k: string[]) => new Set(k);
 export const ZOOM_MENU: MenuDef = { title: "Zoom", icon: "zoom_selection", entries: [], dynamic: "zoom" };
 export const GRID_MENU: MenuDef = { title: "Grid", icon: "grid_select", entries: [], dynamic: "grid" };
 /** ROUTER_TOOL's DIFF_PAIR_MENU: Use Net Class Values, Use Custom Values... and the pre-defined pair dimensions (filled in by the board module). */
+/** ROUTER_TOOL's TRACK_WIDTH_MENU: Use Starting Track Width / Use Net Class Values / Use Custom Values..., the track widths and the via sizes (filled in by the board module). */
+export const TRACK_WIDTH_MENU: MenuDef = { title: "Select Track/Via Width", icon: "width_track_via", entries: [], dynamic: "trackwidth" };
 export const DIFF_PAIR_MENU: MenuDef = { title: "Select Differential Pair Dimensions", icon: "width_track_via", entries: [], dynamic: "diffpair" };
 /** GRID_MENU::update() puts this above the grid list. */
 export const GRID_ORIGIN = "ACTIONS::gridOrigin";
@@ -419,7 +421,7 @@ function pcbRouterMenu(): CondMenu {
   m.sub(new CondMenu("Track Corner Mode", "switch_corner_rounding_shape").item("ACT_SwitchCornerModeToNext", always, 1).sep(1)
     .check("ACT_SwitchCornerMode45").check("ACT_SwitchCornerModeArc45").check("ACT_SwitchCornerMode90").check("ACT_SwitchCornerModeArc90"));
   m.sep();
-  m.sub(new CondMenu("Select Track/Via Width", "width_track_via").item("ACT_CustomTrackWidth"));
+  m.sub(TRACK_WIDTH_MENU);
   m.sub(DIFF_PAIR_MENU, (c) => c.tool === "routediff");   // diffPairCond: the router is in PNS_MODE_ROUTE_DIFF_PAIR
   m.item("PCB_ACTIONS::routerSettingsDialog").sep();
   standardSubMenus(m);
@@ -436,7 +438,11 @@ function pcbDrawingToolMenu(): CondMenu {
   m.item("ACTIONS::cancelInteractive", always, 1).sep(1);
   m.item("PCB_ACTIONS::clearHighlight", haveHighlight, 2).sep(haveHighlight, 2);
   const arcTool = tool(...PCB_ARC_TOOLS);
-  m.item("PCB_ACTIONS::closeOutline", (c) => c.canClose, 200).item("ACTIONS::deleteLastPoint", (c) => c.canUndoPoint, 200).item("ACTIONS::arcPosture", arcTool, 200);
+  // canCloseOutline / canUndoPoint / canFinishShape go by the drawing mode alone (m_mode), not by the points so far
+  const canCloseOutline = tool("zone", "thievingzone", "rulearea", "gpoly");
+  const canUndoPoint = tool(...PCB_ARC_TOOLS, "zone", "thievingzone", "rulearea", "gpoly", "gcurve", "gline");
+  const canFinishShape = tool(...PCB_ARC_TOOLS, "gcurve");
+  m.item("PCB_ACTIONS::closeOutline", canCloseOutline, 200).item("ACTIONS::deleteLastPoint", canUndoPoint, 200).item("ACTIONS::finishInteractive", canFinishShape, 200).item("ACTIONS::arcPosture", arcTool, 200);
   m.check("PCB_ACTIONS::drawArcCenter", arcTool, 200).check("PCB_ACTIONS::drawArcStartEndMid", arcTool, 200).check("PCB_ACTIONS::drawArcStartEndCenter", arcTool, 200)
     .check("PCB_ACTIONS::drawArcTangent", arcTool, 200).check("PCB_ACTIONS::drawArcStartDirEnd", arcTool, 200).item("ACTIONS::cycleArcDrawMode", arcTool, 200);
   const tuning = tool(...PCB_TUNING_TOOLS);

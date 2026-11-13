@@ -347,11 +347,16 @@ export function openLayerPair(): void {
 }
 
 // ---------------------------------------------------------------- install
-export function installPcbRouting(): void {
+function installRoutingDialogs(): void {
   // the dialogs need the page, so pcb-tools.js publishes their KiCad action ids and calls back into this module
   const pcb = CollabTools.pcb as (PcbToolModule & { setRoutingDialogs?(d: { layerPair(): void; sizes(): void }): void }) | undefined;
   if (pcb && pcb.setRoutingDialogs) pcb.setRoutingDialogs({ layerPair: openLayerPair, sizes: openPredefinedSizes });
-  installRouterDialogs();   // Interactive Router Settings and the Select Layer picker
+  installRouterDialogs();   // Interactive Router Settings, Differential Pair Dimensions, Track and Via Dimensions and the Select Layer picker
+}
+export function installPcbRouting(): void {
+  installRoutingDialogs();
+  // the board tools load lazily (pcbtools-loader.ts): they get the dialogs when they arrive
+  window.addEventListener("kc-pcb-tools", installRoutingDialogs);
   R().subscribe(onSizesChanged);
   store.subscribe(onStore);
 }

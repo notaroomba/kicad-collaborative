@@ -307,6 +307,10 @@ export class PcbSizes {
   useConnectedWidth = true;
   /** m_TempOverrideTrackWidth: W during a route overrides the connected width until the route ends */
   tempOverride = false;
+  /** BOARD_DESIGN_SETTINGS::m_useCustomTrackVia, m_customTrackWidth and m_customViaSize (Custom Track/Via Size..., Q) */
+  useCustomTrackVia = false;
+  customTrackWidth = 0.2;
+  customVia: ViaDim = { diameter: 0.5, drill: 0.3 };
   /**
    * The custom rules' sizes for a net (PNS_KICAD_IFACE_BASE::ImportSizes queries CT_WIDTH, CT_VIA_DIAMETER,
    * CT_VIA_HOLE and CT_DIFF_PAIR_GAP while the sizes follow the netclass): set by the board tools from the
@@ -329,6 +333,7 @@ export class PcbSizes {
   reset(): void {
     this.sizes = boardSizes(null); this.src = undefined; this.trackIndex = 0; this.viaIndex = 0; this.diffPairIndex = 0; this.useCustomDiffPair = false;
     this.customDiffPair = { width: 0.2, gap: 0.25, via_gap: 0.25 }; this.diffPairViaGapSameAsGap = true; this.useConnectedWidth = true; this.tempOverride = false;
+    this.useCustomTrackVia = false; this.customTrackWidth = 0.2; this.customVia = { diameter: 0.5, drill: 0.3 };
     this.layerPair = ["F.Cu", "B.Cu"]; this.activeLayer = ""; this.layerPairPresets = []; this.curvedRatsnest = false; this.gridOrigin = [0, 0]; this.auxOrigin = [0, 0]; this.emit();
   }
   /** Take the project's settings (.kicad_pro text or object; empty = no project).  The same source again is a no-op. */
@@ -352,8 +357,17 @@ export class PcbSizes {
     if (this.diffPairIndex >= this.sizes.diffPairs.length) this.diffPairIndex = 0;
     this.emit();
   }
-  setTrackIndex(i: number): void { this.trackIndex = Math.max(0, Math.min(Math.round(i) || 0, this.sizes.trackWidths.length - 1)); this.emit(); }
-  setViaIndex(i: number): void { this.viaIndex = Math.max(0, Math.min(Math.round(i) || 0, this.sizes.vias.length - 1)); this.emit(); }
+  /** SetTrackWidthIndex / SetViaSizeIndex: a pre-defined size, which ends the custom size. */
+  setTrackIndex(i: number): void { this.trackIndex = Math.max(0, Math.min(Math.round(i) || 0, this.sizes.trackWidths.length - 1)); this.useCustomTrackVia = false; this.emit(); }
+  setViaIndex(i: number): void { this.viaIndex = Math.max(0, Math.min(Math.round(i) || 0, this.sizes.vias.length - 1)); this.useCustomTrackVia = false; this.emit(); }
+  /** UseCustomTrackViaSize( on ) */
+  setUseCustomTrackVia(on: boolean): void { this.useCustomTrackVia = !!on; this.emit(); }
+  /** DIALOG_TRACK_VIA_SIZE OK: SetCustomTrackWidth / SetCustomViaSize / SetCustomViaDrill, then UseCustomTrackViaSize( true ) with the width overriding the connected one */
+  setCustomTrackVia(width: number, diameter: number, drill: number): void {
+    this.customTrackWidth = width; this.customVia = { diameter, drill }; this.useCustomTrackVia = true; this.tempOverride = true; this.emit();
+  }
+  /** "Use Starting Track Width" / "Use Net Class Values" of TRACK_WIDTH_MENU */
+  setUseConnectedWidth(on: boolean): void { this.useConnectedWidth = !!on; this.emit(); }
   /** PCB_ACTIONS::autoTrackWidth */
   toggleConnectedWidth(): boolean { this.useConnectedWidth = !this.useConnectedWidth; this.emit(); return this.useConnectedWidth; }
   setActiveLayer(layer: string): void { if (layer === this.activeLayer) return; this.activeLayer = layer; this.emit(); }
@@ -363,13 +377,14 @@ export class PcbSizes {
   setAuxOrigin(p: [number, number]): void { this.auxOrigin = [p[0], p[1]]; this.emit(); }
 
   /** BOARD_DESIGN_SETTINGS::UseNetClassTrack / UseNetClassVia */
-  get useNetclassTrack(): boolean { return this.trackIndex <= 0 || this.trackIndex >= this.sizes.trackWidths.length; }
-  get useNetclassVia(): boolean { return this.viaIndex <= 0 || this.viaIndex >= this.sizes.vias.length; }
+  get useNetclassTrack(): boolean { return !this.useCustomTrackVia && (this.trackIndex <= 0 || this.trackIndex >= this.sizes.trackWidths.length); }
+  get useNetclassVia(): boolean { return !this.useCustomTrackVia && (this.viaIndex <= 0 || this.viaIndex >= this.sizes.vias.length); }
   /** GetCurrentTrackWidth: the selected pre-defined width, or the Default netclass's. */
-  currentTrackWidth(): number { return this.useNetclassTrack ? defaultNetclass(this.sizes).track_width : this.sizes.trackWidths[this.trackIndex]; }
+  currentTrackWidth(): number { if (this.useCustomTrackVia) return this.customTrackWidth; return this.useNetclassTrack ? defaultNetclass(this.sizes).track_width : this.sizes.trackWidths[this.trackIndex]; }
   /** GetCurrentViaSize / GetCurrentViaDrill (a pre-defined via without a hole takes the Default netclass's drill). */
   currentVia(): ViaDim {
     const def = defaultNetclass(this.sizes);
+    if (this.useCustomTrackVia) return { diameter: this.customVia.diameter, drill: this.customVia.drill };
     if (this.useNetclassVia) return { diameter: def.via_diameter, drill: def.via_drill };
     const v = this.sizes.vias[this.viaIndex]; return { diameter: v.diameter, drill: v.drill > 0 ? v.drill : def.via_drill };
   }
@@ -396,12 +411,12 @@ export class PcbSizes {
   /** W / Shift+W with nothing selected (TrackWidthInc / Dec): the next pre-defined width; mid-route it also overrides the connected width. */
   stepTrackWidth(forward: boolean, routing = false): number {
     if (routing && this.useConnectedWidth && !this.tempOverride) this.tempOverride = true;
-    this.trackIndex = nextPredefinedIndex(this.trackIndex, forward, this.sizes.trackWidths.length);
+    this.trackIndex = nextPredefinedIndex(this.trackIndex, forward, this.sizes.trackWidths.length); this.useCustomTrackVia = false;
     this.emit(); return this.currentTrackWidth();
   }
   /** ' and \ with nothing selected (ViaSizeInc / Dec). */
   stepViaSize(forward: boolean): ViaDim {
-    this.viaIndex = nextPredefinedIndex(this.viaIndex, forward, this.sizes.vias.length);
+    this.viaIndex = nextPredefinedIndex(this.viaIndex, forward, this.sizes.vias.length); this.useCustomTrackVia = false;
     this.emit(); return this.currentVia();
   }
   /** BOARD_DESIGN_SETTINGS::UseNetClassDiffPair: the list's netclass entry and no custom values. */

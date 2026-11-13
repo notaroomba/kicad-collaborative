@@ -9,6 +9,7 @@
 import { KD, checkbox, h } from "../dialogs/dom";
 import { E } from "./state";
 import { toast } from "./util";
+import { errorMessage } from "./pcbdialogs/ui";
 import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /** pcb-tools.js's ROUTING_SETTINGS, by the parameter names KiCad stores in pcbnew.json's "tools.pns". */
@@ -180,6 +181,44 @@ export function openDiffPairDimensions(): void {
     } });
 }
 
+// ---------------------------------------------------------------- DIALOG_TRACK_VIA_SIZE
+interface CustomSizes { customTrackWidth: number; customVia: { diameter: number; drill: number }; setCustomTrackVia(w: number, d: number, h: number): void }
+/** PCB_VIA::ValidateViaParameters for a diameter and a hole (GEOMETRY_MIN_SIZE is 1 µm): the message and the field it names. */
+export function validateViaParameters(diameter: number | null, drill: number | null): { msg: string; field: "diameter" | "drill" } | null {
+  const MIN = 0.001;
+  if (diameter !== null && diameter < MIN) return { msg: "Via diameter is too small.", field: "diameter" };
+  if (drill !== null && drill < MIN) return { msg: "Via drill is too small.", field: "drill" };
+  if (diameter !== null && drill === null) return { msg: "No via hole size defined.", field: "drill" };
+  if (drill !== null && diameter === null) return { msg: "No via diameter defined.", field: "diameter" };
+  if (diameter !== null && drill !== null && diameter <= drill) return { msg: "Via hole size must be smaller than via diameter", field: "drill" };
+  return null;
+}
+/**
+ * ROUTER_TOOL::CustomTrackWidthDialog — "Track and Via Dimensions" (DIALOG_TRACK_VIA_SIZE): Track width, Via diameter and
+ * Via hole from the custom sizes; OK stores them and routes with them (UseCustomTrackViaSize, m_TempOverrideTrackWidth).
+ */
+export function openCustomTrackViaSize(): void {
+  const sizes = (KiCadCanvas as unknown as { pcbSizes: { state: CustomSizes } }).pcbSizes.state;
+  const api = pcbApi() as (RouterApi & { trackViaSizeChanged?(ctx: unknown): void }) | null;
+  const u = String(E.units || "mm"), unitName = u === "mil" ? "mils" : u === "in" ? "in" : "mm";
+  styles();
+  const inputs: Record<string, HTMLInputElement> = {};
+  KD().open({ title: "Track and Via Dimensions", width: 320,
+    build(body) {
+      const grid = h("div", { class: "dpd-grid" }); body.appendChild(grid);
+      const row = (key: string, label: string, v: number) => { const inp = h("input", { type: "text", value: lengthText(v, u), "data-k": key }); inputs[key] = inp; grid.append(h("span", { class: "dpd-l" }, label), inp, h("span", { class: "dpd-u" }, unitName)); };
+      row("width", "Track width:", sizes.customTrackWidth); row("diameter", "Via diameter:", sizes.customVia.diameter); row("drill", "Via hole:", sizes.customVia.drill);
+    },
+    ok() {
+      const val = (k: string): number | null => { const t = inputs[k] ? inputs[k].value.trim() : ""; if (!t) return null; const v = parseLength(t, u); return isNaN(v) ? null : v; };
+      const err = validateViaParameters(val("diameter"), val("drill"));
+      if (err) { errorMessage(err.msg, () => { const i = inputs[err.field]; if (i) { i.focus(); i.select(); } }); return false; }
+      sizes.setCustomTrackVia(val("width") ?? sizes.customTrackWidth, val("diameter")!, val("drill")!);
+      if (api && api.trackViaSizeChanged) api.trackViaSizeChanged(null);
+      return true;
+    } });
+}
+
 // ---------------------------------------------------------------- DIALOG_TUNING_PATTERN_PROPERTIES
 /** pcb-tools.js's MEANDER_SETTINGS as the dialog shows them (lengths in mm; targetLength null = unconstrained). */
 export interface TuneView { targetLength: number | null; minAmp: number; maxAmp: number; spacing: number; round: boolean; crPct: number; singleSided: boolean; overrideCustomRules: boolean; constraint?: string | null }
@@ -280,6 +319,6 @@ export const pickLayer: LayerPicker = (opts, done) => {
 /** Registers both with pcb-tools.js. */
 export function installRouterDialogs(): void {
   const api = pcbApi(); if (!api) return;
-  if (api.setRoutingDialogs) api.setRoutingDialogs({ routerSettings: openRouterSettings, diffPair: openDiffPairDimensions, tuning: openTuningSettings });
+  if (api.setRoutingDialogs) api.setRoutingDialogs({ routerSettings: openRouterSettings, diffPair: openDiffPairDimensions, tuning: openTuningSettings, customTrackVia: openCustomTrackViaSize });
   if (api.setLayerPicker) api.setLayerPicker(pickLayer);
 }

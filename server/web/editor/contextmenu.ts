@@ -132,7 +132,7 @@ function deleteAll(): void {
 /** Entries with behaviour of their own.  A function returns the runner, or a string saying why the row is dimmed. */
 const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "ACTIONS::cancelInteractive": () => escape,
-  "ACTIONS::finishInteractive": (c) => (c.drawingLine || c.routing || c.canUndoPoint || (c.editor === "sch" && (c.tool === "arc" || c.tool === "bezier")) ? moduleKey("Enter") : "nothing is being drawn"),
+  "ACTIONS::finishInteractive": (c) => (c.drawingLine || c.routing || c.canUndoPoint || (c.editor === "sch" && (c.tool === "arc" || c.tool === "bezier")) || (c.editor === "pcb" && (c.tool === "garc" || c.tool === "gcurve")) ? moduleKey("Enter") : "nothing is being drawn"),
   "SCH_ACTIONS::undoLastSegment": (c) => (schState()?.wire ? moduleKey("Backspace") : c.canUndoPoint ? moduleKey("Backspace") : "no segment to take back"),
   "ACTIONS::deleteLastPoint": () => moduleKey("Backspace"),
   "SCH_ACTIONS::switchSegmentPosture": () => (schState()?.wire ? moduleKey("/") : "no wire is being drawn"),
@@ -240,6 +240,12 @@ function diffPairRows(): CtxItem[] {
   if (!pcb || !pcb.diffPairMenu) return [];
   return pcb.diffPairMenu(toolCtx()).map((r): CtxItem => (r.sep ? { sep: true } : { label: r.label, check: true, checked: !!r.checked, run: runRow(() => { if (r.run) r.run(); }) }));
 }
+/** TRACK_WIDTH_MENU's rows, from the board module (pcb-tools.js trackWidthMenu). */
+function trackWidthRows(): CtxItem[] {
+  const pcb = (CollabTools as unknown as { pcb?: { trackWidthMenu?: (ctx: unknown) => DpRow[] } }).pcb;
+  if (!pcb || !pcb.trackWidthMenu) return [];
+  return pcb.trackWidthMenu(toolCtx()).map((r): CtxItem => (r.sep ? { sep: true } : { label: r.label, check: true, checked: !!r.checked, run: runRow(() => { if (r.run) r.run(); }) }));
+}
 /** The schematic module's pin helpers (sch-tools pins.ts). */
 interface PinRef { id: string; number: string }
 interface SchPins {
@@ -310,7 +316,7 @@ function unfoldRows(): CtxItem[] {
   const c = (E.lastClient as [number, number] | null) || [window.innerWidth / 2, window.innerHeight / 2];
   openPopupMenu(c[0], c[1], unfoldPopup(entries, bus, at, true));
 };
-function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "unfold" ? unfoldRows() : menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : menu.dynamic === "pinfunction" ? pinFunctionRows() : menu.dynamic === "pinhelpers" ? pinHelperRows() : rows(items, c); }
+function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "unfold" ? unfoldRows() : menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : menu.dynamic === "trackwidth" ? trackWidthRows() : menu.dynamic === "pinfunction" ? pinFunctionRows() : menu.dynamic === "pinhelpers" ? pinHelperRows() : rows(items, c); }
 
 /** "Symbol R1 (10k)", "Wire", "Track [VCC] on B.Cu, length 0.6400 mm": how KiCad names an item in a disambiguation menu. */
 function describe(it: KItem | string): string {

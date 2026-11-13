@@ -180,7 +180,7 @@ test("DIFF_PAIR_MENU: Use Net Class Values / Use Custom Values... checks, the li
   const { ctx } = fakeCtx(); const R = K.pcbSizes.state;
   R.load(JSON.stringify({ board: { design_settings: { diff_pair_dimensions: [{ width: 0, gap: 0, via_gap: 0 }, { width: 0.15, gap: 0.2, via_gap: 0.3 }] } } }));
   let rows = pcb.diffPairMenu(ctx);
-  assert.deepEqual(rows.map((r) => r.sep ? "-" : r.label), ["Use Net Class Values", "Use Custom Values...", "-", "Width 0.15 mm, gap 0.2 mm, via gap 0.3 mm"]);
+  assert.deepEqual(rows.map((r) => r.sep ? "-" : r.label), ["Use Net Class Values", "Use Custom Values...", "-", "Width 0.1500 mm, gap 0.2000 mm, via gap 0.3000 mm"]);
   assert.equal(rows[0].checked, true); rows[3].run(); rows = pcb.diffPairMenu(ctx); assert.equal(rows[0].checked, false); assert.equal(rows[3].checked, true);
   let opened = 0; pcb.setRoutingDialogs({ diffPair: () => { opened++; } }); rows[1].run(); assert.equal(opened, 1); assert.equal(pcb.diffPairMenu(ctx)[1].checked, true);
 });

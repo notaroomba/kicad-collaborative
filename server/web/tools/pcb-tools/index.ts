@@ -29,7 +29,7 @@ import type { LayerPicker } from "./route-tool";
 import type { RouterSettings } from "./router-settings";
 import { root } from "../root";
 import { footprintByRef, footprintRefChoices, ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
-import { hoverPoint, liveSelected, nextWidth, sizesOf } from "./app-state";
+import { hoverPoint, liveSelected, netNameOf, nextWidth, sizesOf } from "./app-state";
 import { ArcGeom, arcBackup, arcDrawMode, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, arcMove, arcTangentSeedAt, arcTangentSeedNear, finishArc, setArcDrawMode, showArcMode } from "./arcs";
 import { arrayChanges, arrayOrigin, arraySize, arrayStacked, arrayTransform } from "./array";
 import { cancelOps, dimensionLabel, newItemDialogs, placeTextAt, setNewItemDialogsImpl } from "./assistants";
@@ -50,7 +50,8 @@ import { drawClick, finishPoly, openImagePicker, placeImage, polyOutline, zoneTe
 import { circleApprox, circleOutside, clipperArea, ovalApprox, ovalOutside, sliverMarkers, sliverPoints, splitCollinearOutlines } from "./drc-sliver";
 import { PolygonTest, connectionWidthMarkers } from "./drc-connwidth";
 import { DEFAULT_SETTINGS, boardOutline, chainLoops, courtyards, designSettings, drc, edgeShapes, netClearance, netclassOf, segCross } from "./drc";
-import { cycleWidth, deleteSelection, expandSelection, flipSelected, fmtSize, hoverDelete, rotateSelected, routableItems } from "./edit-commands";
+import { cycleWidth, deleteSelection, expandSelection, flipSelected, fmtSize, hoverDelete, rotateSelected, routableItems, sizeUnits } from "./edit-commands";
+import { messageText } from "../../units";
 import { flipFootprintNode, rotateFootprintNode } from "./footprint";
 import { angleSnapDirections, bestDragOrigin, itemAnchors, nearestSnapLinePoint, snapAnchors, snapCursor } from "./grid-helper";
 import { OffsetItemState } from "./ref-move";
@@ -305,6 +306,7 @@ export const pcb = {
           return true;
         }
         if (editing()) { S.dragFree = k === "g" || k === "G"; ctx.setTool("drag"); } return true; }
+    case "q": case "Q": if (!shift && !(ev.ctrlKey || ev.metaKey || ev.altKey) && (S.route || S.modTool === "route" || S.modTool === "routediff")) return runAction("ACT_CustomTrackWidth", ctx); return false;
     case "t": case "T": if (!shift) { ctx.setTool("gtext"); return true; } return false;
     case "L": if (shift) { ctx.setTool("gline"); return true; } return false;
     // @ts-expect-error -- TS7029: the fall-through to "r" below is intended
@@ -447,7 +449,7 @@ export const pcb = {
    * Use Custom Values... (which opens the dialog), then the list's entries.  [{ label, tip, checked, run() } | { sep: true }].
    */
   diffPairMenu(ctx: PcbCtx) {
-    bind(ctx); const R = sizesOf(ctx); const fmt = (v: number) => fmtSize(v);
+    bind(ctx); const R = sizesOf(ctx); const u = sizeUnits(); const fmt = (v: number) => messageText(v, u === "mil" ? "mil" : u === "in" ? "in" : "mm", "pcb", true);
     const pick = (i: number) => () => { R.setDiffPairIndex(i); if (S.route && S.route.dp && lastCtx) { S.route.dpSizes = dpSizes(lastCtx, { P: S.route.net }); S.route.width = S.route.dpSizes.width; updateHead(lastCtx); lastCtx.requestRender(); } };
     const rows: ({ label: string; tip?: string; checked: boolean; run: () => void; sep?: undefined } | { sep: true; label?: undefined })[] = [
       { label: "Use Net Class Values", tip: "Use differential pair dimensions from the net class", checked: !R.useCustomDiffPair && R.diffPairIndex === 0, run: pick(0) },
@@ -457,6 +459,34 @@ export const pcb = {
     R.diffPairLabels(fmt).forEach((label, k) => rows.push({ label, checked: !R.useCustomDiffPair && R.diffPairIndex === k + 1, run: pick(k + 1) }));
     return rows;
   },
+  /**
+   * TRACK_WIDTH_MENU ("Select Track/Via Width", router_tool.cpp): Use Starting Track Width, Use Net Class Values, Use
+   * Custom Values..., the pre-defined track widths ("Track netclass width" first) and via sizes ("Via netclass values"
+   * first), each a check item.  [{ label, tip, checked, run() } | { sep: true }].
+   */
+  trackWidthMenu(ctx: PcbCtx) {
+    bind(ctx); const R = sizesOf(ctx);
+    const u = sizeUnits(), fmt = (v: number) => messageText(v, u === "mil" ? "mil" : u === "in" ? "in" : "mm", "pcb", true);
+    const useIndex = !R.useConnectedWidth && !R.useCustomTrackVia;
+    const changed = () => { if (lastCtx) { const rt = S.route; if (rt) { rt.width = R.routeWidth(netNameOf(lastCtx, rt.net), rt.connected); updateHead(lastCtx); } lastCtx.requestRender(); } };
+    const rows: ({ label: string; tip?: string; checked: boolean; run: () => void; sep?: undefined } | { sep: true; label?: undefined })[] = [
+      { label: "Use Starting Track Width", tip: "Route using the width of the starting track.", checked: R.useConnectedWidth && !R.useCustomTrackVia,
+        run: () => { R.setUseCustomTrackVia(false); R.setUseConnectedWidth(true); R.tempOverride = false; changed(); } },
+      { label: "Use Net Class Values", tip: "Use track and via sizes from the net class", checked: useIndex && R.trackIndex === 0 && R.viaIndex === 0,
+        run: () => { R.setUseConnectedWidth(false); R.setViaIndex(0); R.setTrackIndex(0); changed(); } },
+      { label: "Use Custom Values...", tip: "Specify custom track and via sizes", checked: R.useCustomTrackVia,
+        run: () => { R.setUseCustomTrackVia(true); R.tempOverride = true; runAction("ACT_CustomTrackWidth", lastCtx || ctx); } },
+      { sep: true },
+    ];
+    R.sizes.trackWidths.forEach((w, i) => rows.push({ label: i === 0 ? "Track netclass width" : `Track ${fmt(w)}`, checked: useIndex && R.trackIndex === i,
+      run: () => { R.tempOverride = true; R.setTrackIndex(i); changed(); } }));
+    rows.push({ sep: true });
+    R.sizes.vias.forEach((v, i) => rows.push({ label: i === 0 ? "Via netclass values" : v.drill > 0 ? `Via ${fmt(v.diameter)}, hole ${fmt(v.drill)}` : `Via ${fmt(v.diameter)}`,
+      checked: useIndex && R.viaIndex === i, run: () => { R.setViaIndex(i); changed(); } }));
+    return rows;
+  },
+  /** PCB_ACTIONS::trackViaSizeChanged: a route in progress takes the new sizes. */
+  trackViaSizeChanged(ctx: PcbCtx) { ctx = ctx || lastCtx; if (!ctx) return; bind(ctx); const rt = S.route; if (rt) { rt.width = sizesOf(ctx).routeWidth(netNameOf(ctx, rt.net), rt.connected); updateHead(ctx); } ctx.requestRender(); },
   /** The net being routed (the first of a pair), "" with none: what the size dialogs resolve the netclass of. */
   routedNet() { return S.route && S.route.net ? S.route.net.name || "" : ""; },
   /** The router's pair sizes changed (the Differential Pair Dimensions dialog): a pair being routed takes them at once. */

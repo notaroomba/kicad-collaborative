@@ -9,7 +9,7 @@ export interface PcbAction { id: string; label: string; key: string; run(ctx: Pc
 export type TuneView = ReturnType<typeof tuneSettingsView>;
 /** The routing dialogs the editor bundle hands over (pcb.setRoutingDialogs). */
 export interface RoutingDialogs {
-  routerSettings?(ctx: PcbCtx): void; diffPair?(ctx: PcbCtx): void; layerPair?(ctx: PcbCtx): void; sizes?(ctx: PcbCtx): void;
+  routerSettings?(ctx: PcbCtx): void; diffPair?(ctx: PcbCtx): void; customTrackVia?(ctx: PcbCtx): void; layerPair?(ctx: PcbCtx): void; sizes?(ctx: PcbCtx): void;
   tuning?(req: { mode: string; settings: TuneView }, done: (v: TuneView) => void): void;
 }
 /** RequestSelection's options: the client filter, the lock filter (default on), quiet, and the re-run after Clarify Selection. */
@@ -443,6 +443,8 @@ export let routingDialogs: RoutingDialogs = {};
 // ROUTER_TOOL: the router's mode (PCB_ACTIONS::routerHighlightMode / routerShoveMode / routerWalkaroundMode, cycleRouterMode),
 // its settings dialog, the corner modes and the via commands (ACT_* in router_tool.cpp; context hotkeys in onCaptureKey / onKey)
 export const ROUTER_ACTION = { menu: false };
+// ROUTER_TOOL::CustomTrackWidthDialog (ACT_CustomTrackWidth, Q while routing): DIALOG_TRACK_VIA_SIZE from the editor bundle
+act("ACT_CustomTrackWidth", "Custom Track/Via Size...", "Q", (ctx: PcbCtx) => { if (routingDialogs.customTrackVia) routingDialogs.customTrackVia(ctx); else ctx.toast("Custom Track/Via Size: dialogs are unavailable here"); return true; }, Object.assign({ tip: "Shows a dialog for changing the track width and via size." }, ROUTER_ACTION));
 act("routerHighlightMode", "Router Highlight Mode", "", () => { setRouterSettings({ mode: RM_MARK }); return true; }, Object.assign({ tip: "Switch router to highlight mode", check: () => S.rs.mode === RM_MARK }, ROUTER_ACTION));
 act("routerShoveMode", "Router Shove Mode", "", () => { setRouterSettings({ mode: RM_SHOVE }); return true; }, Object.assign({ tip: "Switch router to shove mode", check: () => S.rs.mode === RM_SHOVE }, ROUTER_ACTION));
 act("routerWalkaroundMode", "Router Walkaround Mode", "", () => { setRouterSettings({ mode: RM_WALK }); return true; }, Object.assign({ tip: "Switch router to walkaround mode", check: () => S.rs.mode === RM_WALK }, ROUTER_ACTION));
