@@ -285,7 +285,17 @@ stage.addEventListener("pointerdown", (ev) => {
   // Board: a click on a pad selects the pad, not its footprint (PCB_SELECTION_TOOL; the footprint is picked by its body)
   let padWasSelected = false;
   if (!isSch() && E.tool === "select" && CollabTools.pcb && CollabTools.pcb.leaveGroupOutside) { try { CollabTools.pcb.leaveGroupOutside([x, y], toolCtx()); } catch (e) { console.warn(e); } }
-  if (!isSch() && E.tool === "select" && mod && mod.selectPadAt) {
+  // A press on a pad of a footprint that is already selected: SelectionContains( DragOrigin ) holds (the footprint's
+  // HitTest takes its pads), so a drag moves the selection; only the click (released where it was pressed) picks the
+  // pad, as selectPoint does on the button-up
+  let padClick: string | null = null;
+  if (!isSch() && E.tool === "select" && best && !smodeOf(ev) && selectedSet()?.has(best.id)) {
+    let pad: { item?: KItem; index?: number } | null = null;
+    try { pad = KiCadCanvas.padAt ? KiCadCanvas.padAt(E.kdoc, x, y) : null; } catch (e) { pad = null; }
+    const f = store.get().filter as Record<string, boolean>;
+    if (pad && pad.item && pad.index !== undefined && f.pads !== false && selectedSet()!.has(pad.item.id)) padClick = `${pad.item.id}#${pad.index}`;
+  }
+  if (!isSch() && E.tool === "select" && mod && mod.selectPadAt && !padClick) {
     const ps = CollabTools.pcb && CollabTools.pcb.state;
     let r: unknown = false;
     const padMode = smodeOf(ev);
@@ -331,7 +341,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
   if (!isSch() && !unlockedForEdit([best.id], true).length) return;   // a locked footprint is selected by the click but does not follow a drag
   { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
-  E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false, clickPin: pinClick };
+  E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false, clickPin: pinClick, clickPad: padClick };
   // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
   // 90° mode), a pin or junction under a moved pin gets a new wire, no-connects follow — KiCad's drag.
   if (E.kdoc && isSch() && CollabTools.sch && CollabTools.sch.beginDrag) {
@@ -345,6 +355,12 @@ stage.addEventListener("pointerdown", (ev) => {
 function selectPinOnly(pin: { id: string; number: string }): void {
   if (!E.kdoc || !E.kdoc.items.has(pin.id)) return;
   clearSelection(); E.selPins = [pin]; drawSelection(); renderProps(); renderObjects(); requestRender();
+}
+
+/** selectPoint on a pad of the selected footprint: the click (no drag) leaves that pad alone selected. */
+function selectPadOnly(key: string): void {
+  const ps = CollabTools.pcb && CollabTools.pcb.state; if (!E.kdoc || !ps || !E.kdoc.items.has(key.slice(0, key.lastIndexOf("#")))) return;
+  clearSelection(); ps.padSel = key; drawSelection(); renderProps(); renderObjects(); requestRender();
 }
 
 const smodeOf = (ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => selModifier(ev);
@@ -464,11 +480,11 @@ const onPointerUp = (ev: PointerEvent) => {
     if (E.kdoc) syncItemsFromDoc(); E.selected = E.items.find((f: ItemSummary) => f.id === fpE.id) || E.selected; drawSelection(); renderProps(); requestRender();
     return;
   }
-  const fp = E.drag.fp, wasMoved = E.drag.moved, wires = E.drag.wires || [], clickPin0 = E.drag.clickPin as { id: string; number: string } | null;
+  const fp = E.drag.fp, wasMoved = E.drag.moved, wires = E.drag.wires || [], clickPin0 = E.drag.clickPin as { id: string; number: string } | null, clickPad0 = (E.drag.clickPad as string | null) || null;
   const nx = Math.round(E.drag.curMm[0] * E.IU), ny = Math.round(E.drag.curMm[1] * E.IU);
   E.drag = null; dragG.replaceChildren();
   sendPresence([nx / E.IU, ny / E.IU], []);
-  if (!wasMoved) { if (clickPin0) selectPinOnly(clickPin0); return; }
+  if (!wasMoved) { if (clickPin0) selectPinOnly(clickPin0); else if (clickPad0) selectPadOnly(clickPad0); return; }
   const changes: KChange[] = [];
   if (nx !== fp.x || ny !== fp.y) changes.push(moveOp(fp, nx, ny));
   for (const w of wires) changes.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, w.item) });
