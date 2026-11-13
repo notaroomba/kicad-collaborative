@@ -19,6 +19,8 @@ import { syntaxHelp } from "../editor/syntax-help";
 import { refImageDialog } from "../editor/pcbdialogs/refimage";
 import { E, toast, toolCtx } from "./editor";
 import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
+import { comboBox } from "../components/kcombo";
+import { colorPicker, type RGBA } from "../editor/pcbdialogs/color-picker";
 import { facesUsed, fontPicker, type FontPickerEl } from "./font-picker";
 import * as L from "./sch-items-logic";
 import { commitWithOtherUnits } from "./sync-units";
@@ -51,20 +53,24 @@ export function messageBox(message: string, title = "Error"): Promise<void> {
     document.body.append(ov); ok.focus();
   });
 }
-/** COLOR_SWATCH: the colour or the checkered "unspecified"; a click picks, × resets to unspecified. */
+/** COLOR_SWATCH: the colour or the checkered "unspecified"; a click opens DIALOG_COLOR_PICKER (opacity allowed, the
+ *  default UNSPECIFIED, so its "Clear Color" button resets it). */
 export function swatch(initial: L.Color, id: string, onPick?: (c: L.Color) => void, disabled = false): { el: HTMLElement; get(): L.Color; set(c: L.Color): void; enable(on: boolean): void; pick(): void } {
   let color: L.Color = initial;
-  const input = h("input", { type: "color", id, value: L.colorToHex(color), style: "position:absolute;opacity:0;width:0;height:0;pointer-events:none" });
   const face = h("span", { style: "display:inline-block;width:26px;height:16px;border:1px solid var(--line);border-radius:2px;vertical-align:middle" });
   const paint = (): void => { face.style.background = color ? `rgba(${color[0]},${color[1]},${color[2]},${color[3]})` : "repeating-conic-gradient(var(--ink-3) 0 25%, var(--panel) 0 50%) 0 0 / 8px 8px"; face.title = color ? L.colorToHex(color) : "Unspecified"; };
-  input.addEventListener("input", () => { color = L.hexToColor(input.value, color ? color[3] || 1 : 1); paint(); if (onPick) onPick(color); });
-  const btn = h("button", { type: "button", class: "btn", style: "padding:1px 4px;position:relative", title: "Choose color", disabled, onclick: () => { input.value = L.colorToHex(color); input.click(); } }, face, input);
-  const clear = h("button", { type: "button", class: "btn", style: "padding:0 5px", title: "Unspecified (use the default color)", disabled, onclick: () => { color = null; paint(); if (onPick) onPick(color); } }, "×");
+  const btn = h("button", { type: "button", class: "btn", id, style: "padding:1px 4px;position:relative", title: "Choose color", disabled, onclick: () => {
+    colorPicker(swatchToRgba(color), true, (c) => { color = rgbaToSwatch(c); paint(); if (onPick) onPick(color); }, null);
+  } }, face);
   paint();
-  return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center", "data-swatch": id }, btn, clear), get: () => color, set: (c) => { color = c; paint(); }, enable: (on) => { btn.disabled = !on; clear.disabled = !on; },
+  return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center", "data-swatch": id }, btn), get: () => color, set: (c) => { color = c; paint(); }, enable: (on) => { btn.disabled = !on; },
     // COLOR_SWATCH::GetNewSwatchColor: open the picker on the current colour
     pick: () => { if (!btn.disabled) btn.click(); } };
 }
+/** L.Color (0-255 channels, alpha 0-1, null for UNSPECIFIED) ↔ the picker's COLOR4D (0-1 channels); a fully transparent
+ *  colour is UNSPECIFIED, as COLOR4D::UNSPECIFIED is (0, 0, 0, 0). */
+export const swatchToRgba = (c: L.Color): RGBA | null => (c ? { r: c[0] / 255, g: c[1] / 255, b: c[2] / 255, a: c[3] } : null);
+export const rgbaToSwatch = (c: RGBA): L.Color => (c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0 ? null : [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255), Math.round(c.a * 1000) / 1000]);
 /** Faces a grid's font column offers: the stroke font and the faces the sheet already uses (the dialogs' own font
  *  choice, font-picker.ts, adds every Google Font). */
 export function fontFaces(doc: KDoc | null): string[] { return [L.KICAD_FONT, ...facesUsed(doc)]; }
@@ -167,8 +173,12 @@ export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readO
 const nextFieldName = (rows: L.FieldRow[]): string => { let n = 1; const names = new Set(rows.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; };
 
 // ---------------------------------------------------------------- DIALOG_LABEL_PROPERTIES
-/** Every label text of this type across the project (and power nets for local / global labels): the Label: combo. */
-function existingLabels(kind: string, doc: KDoc): string[] {
+/**
+ * The Label: combo of DIALOG_LABEL_PROPERTIES::TransferDataToWindow: every label text of this type across the project,
+ * the values of the power symbols that act as labels of that type (global power symbols for a global label, local ones
+ * for a local label) and the project's bus aliases as "{ALIAS}", in std::set order.
+ */
+export function existingLabels(kind: string, doc: KDoc, busAliases: string[] = projectBusAliases()): string[] {
   const out = new Set<string>(); const docs: KDoc[] = [doc];
   const c = netMap(); if (c) for (const d of c.docs.values()) if (d !== doc) docs.push(d);
   const H = schH();
@@ -176,11 +186,20 @@ function existingLabels(kind: string, doc: KDoc): string[] {
     if (it.kind === kind) out.add(L.unescapeString(L.str(it.node[1])));
     if ((kind === "global_label" || kind === "label") && it.kind === "symbol" && H) {
       const lib = L.kid(it.node, "lib_id"); if (!lib || !H.isPowerSymbol(d, L.str(lib[1]))) continue;
-      const v = L.kids(it.node, "property").find((p) => L.fieldName(p) === "Value"); if (v && kind === "global_label") out.add(L.unescapeString(L.fieldValue(v)));
+      // IsSymbolLikePowerGlobalLabel / IsSymbolLikePowerLocalLabel: (power local) in the library symbol
+      const K = KiCadCanvas as unknown as { resolveLib?(d: KDoc, id: string): SNode | null }, ls = (K.resolveLib && K.resolveLib(d, L.str(lib[1]))) || d.lib.get(L.str(lib[1])) || null;
+      const pw = ls ? L.kid(ls, "power") : null, local = !!pw && pw.slice(1).some((x) => L.str(x as SNode) === "local");
+      if (local !== (kind === "label")) continue;
+      const v = L.kids(it.node, "property").find((p) => L.fieldName(p) === "Value"); if (v) out.add(L.unescapeString(L.fieldValue(v)));
     }
   }
+  for (const a of busAliases) out.add("{" + a + "}");
   out.delete("");
-  return Array.from(out).sort((a, b) => a.localeCompare(b));
+  return Array.from(out).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+/** SCHEMATIC::GetAllBusAliases: the names of the project's bus aliases (Schematic Setup > Bus Alias Definitions). */
+function projectBusAliases(): string[] {
+  try { const j = E.proSettings ? JSON.parse(E.proSettings) as { schematic?: { bus_aliases?: Record<string, unknown> } } : null; const ba = j && j.schematic && j.schematic.bus_aliases; return ba && typeof ba === "object" ? Object.keys(ba).filter(Boolean) : []; } catch { return []; }
 }
 /** Remembered between openings (DIALOG_SHIM saved control state): the multiple-label checkbox. */
 const labelMem = { multi: false };
@@ -205,13 +224,14 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       body = b;
       // Label: (a combo of the existing names for local and global labels, a single line for hierarchical ones)
       if (!dir) {
-        const listId = "kd-lbl-names";
-        const dl = h("datalist", { id: listId }); for (const n of (kind === "label" || kind === "global_label") ? existingLabels(kind, doc) : []) dl.append(h("option", { value: n }));
-        const single = textInput(st.text, undefined, { id: "kd-lbl-text", disabled: ro, style: "width:100%" }); single.setAttribute("list", listId); single.autocomplete = "off";
+        // m_valueCombo: an editable combo box (a themed list, never the browser's datalist popup)
+        const single = textInput(st.text, undefined, { id: "kd-lbl-text", disabled: ro, style: "width:100%" });
+        const host = h("div", { style: "flex:1;min-width:0" }, single);
+        const combo = (kind === "label" || kind === "global_label") ? comboBox(single, existingLabels(kind, doc)) : null;
+        const singleEl: HTMLElement = combo ? combo.el : single;
         const area = h("textarea", { id: "kd-lbl-multi", rows: 5, style: "width:100%;font-family:inherit", disabled: ro }) as HTMLTextAreaElement; area.value = st.text;
-        const host = h("div", { style: "flex:1;min-width:0" }, single, dl);
         textEl = single;
-        const showMulti = (on: boolean): void => { host.replaceChildren(on ? area : single, dl); if (on) area.value = single.value; else single.value = area.value.split("\n")[0] || ""; textEl = on ? area : single; textEl.focus(); };
+        const showMulti = (on: boolean): void => { if (combo) combo.close(); host.replaceChildren(on ? area : singleEl); if (on) area.value = single.value; else single.value = area.value.split("\n")[0] || ""; textEl = on ? area : single; textEl.focus(); };
         b.append(h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, h("label", { style: "padding-top:4px;min-width:38px" }, "Label:"), host));
         // m_textEntrySizer's last row (bSizer7): the multiple-label checkbox, then "Syntax help" aligned right
         const link = h("a", { href: "#", "data-k": "syntax-help", title: "Show syntax help window", style: "white-space:nowrap", onclick: (ev: Event) => { ev.preventDefault(); help(); } }, "Syntax help");

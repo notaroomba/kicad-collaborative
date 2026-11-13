@@ -11,7 +11,8 @@
 // sheet one step on its own undo list.
 import { E, appState, pushUndoFor, toolCtx, undoStack } from "./editor";
 import { KD, checkbox, h, select, textInput } from "./dom";
-import { messageBox } from "./sch-items";
+import { messageBox, rgbaToSwatch, swatchToRgba } from "./sch-items";
+import { colorPicker } from "../editor/pcbdialogs/color-picker";
 import { fontPicker, type FontPickerEl } from "./font-picker";
 import { projectDocs, readDoc, submitDocOp } from "./project";
 import * as L from "./global-edit-logic";
@@ -38,17 +39,17 @@ function selectedIds(): Set<string> {
 }
 
 
-/** A COLOR_SWATCH: the colour, or the checkered "unspecified" (COLOR4D::UNSPECIFIED, the default here). */
+/** A COLOR_SWATCH: the colour, or the checkered "unspecified" (COLOR4D::UNSPECIFIED, the default here); a click opens
+ *  DIALOG_COLOR_PICKER, whose "Clear Color" goes back to unspecified. */
 function swatch(id: string, onPick: () => void): { el: HTMLElement; get(): L.Color } {
   let color: L.Color = null;
-  const input = h("input", { type: "color", id, value: "#000000", style: "position:absolute;opacity:0;width:0;height:0;pointer-events:none" });
   const face = h("span", { style: "display:inline-block;width:26px;height:16px;border:1px solid var(--line);border-radius:2px;vertical-align:middle" });
-  const paint = (): void => { face.style.background = color ? L.colorToHex(color) : "repeating-conic-gradient(var(--ink-3) 0 25%, var(--panel) 0 50%) 0 0 / 8px 8px"; face.title = color ? L.colorToHex(color) : "Unspecified"; };
-  input.addEventListener("input", () => { color = L.hexToColor(input.value, 1); paint(); onPick(); });
-  const btn = h("button", { type: "button", class: "btn", style: "padding:1px 4px;position:relative", title: "Choose color", onclick: () => { input.value = L.colorToHex(color); input.click(); } }, face, input);
-  const clear = h("button", { type: "button", class: "btn", style: "padding:0 5px", title: "Unspecified (use the default color)", onclick: () => { color = null; paint(); onPick(); } }, "×");
+  const paint = (): void => { face.style.background = color ? `rgba(${color[0]},${color[1]},${color[2]},${color[3]})` : "repeating-conic-gradient(var(--ink-3) 0 25%, var(--panel) 0 50%) 0 0 / 8px 8px"; face.title = color ? L.colorToHex(color) : "Unspecified"; };
+  const btn = h("button", { type: "button", class: "btn", id, style: "padding:1px 4px;position:relative", title: "Choose color", onclick: () => {
+    colorPicker(swatchToRgba(color), true, (c) => { color = rgbaToSwatch(c); paint(); onPick(); }, null);
+  } }, face);
   paint();
-  return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center" }, btn, clear), get: () => color };
+  return { el: h("span", { style: "display:inline-flex;gap:2px;align-items:center", "data-swatch": id }, btn), get: () => color };
 }
 
 /** A wxCheckBox with wxCHK_3STATE: undetermined (null), off, on; a click cycles through them as wx does. */

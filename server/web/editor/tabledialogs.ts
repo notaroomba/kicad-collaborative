@@ -15,6 +15,7 @@ import { LINE_STYLES, tableDialog } from "./pcbdialogs/table";
 import { fontField } from "../dialogs/font-picker";
 import { box, checkField, errorMessage, fmtLen, form, h, lenField, messageBox, openDialog, parseLen, selectField, unitLabel, unitName, type Field } from "./pcbdialogs/ui";
 import { syntaxHelp } from "./syntax-help";
+import { colorPicker } from "./pcbdialogs/color-picker";
 import { boardXref } from "./pcbdialogs/xref";
 
 const isList = Array.isArray;
@@ -152,20 +153,24 @@ function mixedLen(v: number, mixed: boolean, ro: boolean, key: string): { el: HT
 /** COLOR_SWATCH: a swatch that opens the colour picker; "" is the default (unspecified) colour. */
 function swatch(rgba: string, mixed: boolean, ro: boolean, key: string): { el: HTMLElement; get(): string | null } {
   let cur: string | null = mixed ? null : rgba;
-  const hex = (s: string) => { const p = s.split(" ").map(Number); return "#" + p.slice(0, 3).map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, "0")).join(""); };
   const sw = h("span", { class: "tc-swatch", "data-k": key, title: "Set Color...", style: "display:inline-block;width:34px;height:20px;border:1px solid var(--line);border-radius:var(--r-1);vertical-align:middle;cursor:pointer" });
-  const pick = h("input", { type: "color", style: "position:absolute;opacity:0;width:0;height:0;pointer-events:none", disabled: ro }) as HTMLInputElement;
   const paint = (): void => {
     if (cur === null) { sw.style.background = "repeating-linear-gradient(45deg,var(--panel-2) 0 4px,var(--panel) 4px 8px)"; sw.title = MIXED; return; }
     if (!cur) { sw.style.background = "linear-gradient(to top left,transparent calc(50% - 1px),var(--err) 50%,transparent calc(50% + 1px)),var(--panel)"; sw.title = "Default"; return; }
     const p = cur.split(" ").map(Number); sw.style.background = `rgba(${p[0]},${p[1]},${p[2]},${p[3] ?? 1})`; sw.title = "Set Color...";
   };
-  sw.addEventListener("click", () => { if (ro) return; pick.value = cur ? hex(cur) : "#000000"; pick.click(); });
-  pick.addEventListener("input", () => { const v = pick.value; cur = [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16), 1].join(" "); paint(); });
+  // COLOR_SWATCH::GetNewSwatchColor: DIALOG_COLOR_PICKER with opacity, the default UNSPECIFIED
+  sw.addEventListener("click", () => {
+    if (ro) return;
+    const p = cur ? cur.split(" ").map(Number) : null;
+    colorPicker(p ? { r: p[0] / 255, g: p[1] / 255, b: p[2] / 255, a: p[3] ?? 1 } : null, true, (c) => {
+      cur = c.r === 0 && c.g === 0 && c.b === 0 && c.a === 0 ? "" : [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255), Math.round(c.a * 1000) / 1000].join(" "); paint();
+    }, null);
+  });
   const clear = h("button", { type: "button", class: "btn", title: "Default", disabled: ro, style: "height:22px;padding:0 6px;margin-left:4px", "data-k": key + "-default" }, "×");
   clear.addEventListener("click", () => { cur = ""; paint(); });
   paint();
-  return { el: h("span", { style: "position:relative;display:inline-flex;align-items:center" }, sw, pick, clear), get: () => cur };
+  return { el: h("span", { style: "position:relative;display:inline-flex;align-items:center" }, sw, clear), get: () => cur };
 }
 
 
