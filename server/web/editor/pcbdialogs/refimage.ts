@@ -6,7 +6,8 @@
 // item as PCB_IO_KICAD_SEXPR::format( PCB_REFERENCE_IMAGE ) does: (at) (layer) (rotate) (scale) (opacity) (locked)
 // (data) (uuid), the optional ones only off their defaults.  An edited bitmap is written back as PNG (a JPEG as JPEG),
 // as BITMAP_BASE::SaveImageData does once m_imageData is cleared.
-import { checkField, errorMessage, form, h, coordField, lenField, messageBox, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
+import { checkField, errorMessage, form, h, coordField, lenField, messageBox, numField, openDialog, selectField, spinField, unitLabel, type Field } from "./ui";
+import { colorPicker, type RGBA } from "./color-picker";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -15,6 +16,7 @@ const nval = (n: SNode | null, i = 1, d = 0): number => (n && typeof n[i] === "n
 const r6 = (v: number): number => { const x = +(+v).toFixed(6); return x === 0 ? 0 : x; };
 const MIN_SIZE = 15, MAX_SIZE = 6000;   // PANEL_IMAGE_EDITOR::CheckValues, pixels after scaling (at 300 PPI)
 const DEFAULT_PPI = 300;
+let bgDefault: RGBA = { r: 1, g: 1, b: 1, a: 1 };   // PANEL_IMAGE_EDITOR::OnRemoveBackground's s_defaultColor
 
 const layerLabel = (doc: KDoc, name: string): string => { const l = doc.layers ? doc.layers.get(name) : null; return l && l.userName ? l.userName : name; };
 const layerOptions = (doc: KDoc, cur: string): [string, string][] => {
@@ -151,7 +153,7 @@ export function refImageDialog(ctx: ToolCtx, item: KItem, sch = false): boolean 
   const fields: Record<string, Field<string | number | boolean>> = {};
   const reg = <T extends string | number | boolean>(k: string, f: Field<T>): Field<T> => { fields[k] = f as unknown as Field<string | number | boolean>; return f; };
   // the working image (PANEL_IMAGE_EDITOR::m_workingImage): pixels on a canvas once the bitmap has decoded
-  let work: HTMLCanvasElement | null = null, edited = false, scale = v0.scale, opacityIn: HTMLInputElement | null = null, preview: HTMLCanvasElement | null = null;
+  let work: HTMLCanvasElement | null = null, edited = false, scale = v0.scale, opacityIn: Field<number> | null = null, preview: HTMLCanvasElement | null = null;
   const drawPreview = (): void => {
     if (!preview || !work) return;
     const c = preview.getContext("2d"); if (!c) return;
@@ -171,7 +173,7 @@ export function refImageDialog(ctx: ToolCtx, item: KItem, sch = false): boolean 
       if (v0.type !== "jpeg") b64 = bytesToB64(pngWithPpi(b64ToBytes(b64), v0.ppi));
       data = b64;
     }
-    return { ...v0, x: Number(gv("x")), y: Number(gv("y")), rotation: Number(gv("rotation")), opacity: opacityIn ? Math.min(1, Math.max(0, Number(opacityIn.value) || 0)) : v0.opacity,
+    return { ...v0, x: Number(gv("x")), y: Number(gv("y")), rotation: Number(gv("rotation")), opacity: opacityIn ? Math.min(1, Math.max(0, opacityIn.get() || 0)) : v0.opacity,
       layer: String(gv("layer")), locked: !!gv("locked"), scale: Number(gv("scale")), data };   // TransferToImage reads the Scale text
   };
   let api: { close(): void } | null = null;
@@ -182,7 +184,8 @@ export function refImageDialog(ctx: ToolCtx, item: KItem, sch = false): boolean 
       const [w0, h0] = refImageSize(v0, v0.scale);
       const wd = reg("width", lenField(w0, { ro, key: "width" })), ht = reg("height", lenField(h0, { ro, key: "height" }));
       const sc = reg("scale", numField(v0.scale, { ro, key: "scale", digits: 6 }));
-      opacityIn = h("input", { type: "number", min: "0", max: "1", step: "0.1", value: v0.opacity.toFixed(1), "data-k": "opacity", disabled: ro, style: "width:100%" });
+      // m_spinOpacity: wxSpinCtrlDouble 0..1, step 0.1, one digit
+      opacityIn = spinField(v0.opacity, { min: 0, max: 1, step: 0.1, digits: 1, ro, key: "opacity" }); opacityIn.el.style.width = "100%";
       const layer = reg("layer", selectField<string>(v0.layer, layerOptions(doc, v0.layer), { ro, key: "layer" }));
       const locked = reg("locked", checkField(v0.locked, "Locked", { ro, key: "locked", tip: "Locked items cannot be freely moved and oriented on the canvas and can only be selected when the 'Locked items' checkbox is checked in the selection filter." }));
       // onWidthChanged / onHeightChanged / onScaleChanged: the three stay tied together
@@ -202,24 +205,26 @@ export function refImageDialog(ctx: ToolCtx, item: KItem, sch = false): boolean 
         drawPreview();
       }
       const btn = (label: string, key: string, fn: () => void): HTMLButtonElement => { const b = h("button", { type: "button", "data-k": key, disabled: ro || !work }, label); b.addEventListener("click", fn); return b; };
-      // OnRemoveBackground: DIALOG_COLOR_PICKER, white by default (most images are crops from documents)
-      const bgPick = h("input", { type: "color", value: "#ffffff", "data-k": "bgColor", style: "display:none" });
-      bgPick.addEventListener("change", () => { const hex = bgPick.value; edit((px) => colourToAlpha(px, [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)])); });
+      // OnRemoveBackground: DIALOG_COLOR_PICKER without opacity, white the first time (most images are crops from
+      // documents), then the colour picked last (s_defaultColor)
+      const removeBackground = (): void => colorPicker(bgDefault, false, (c) => {
+        edit((px) => colourToAlpha(px, [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)])); bgDefault = c;
+      });
       const edForm = form([["Scale:", sc.el], ["PPI:", h("span", { "data-k": "ppi" }, String(v0.ppi))]], true);
       const edBtns = h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:6px" },
         btn("Convert to Greyscale", "grey", () => edit(greyscalePixels)), btn("Invert Colors", "invert", () => edit(invertPixels)),
-        btn("Remove Background", "removeBg", () => bgPick.click()), bgPick);
+        btn("Remove Background", "removeBg", removeBackground));
       // PANEL_IMAGE_EDITOR: the preview, with Scale / PPI and the buttons beside it (under it in the board dialog's column)
       const editor = sch ? h("div", { class: "pd-box", style: "display:flex;gap:12px;align-items:flex-start;margin-top:8px" }, preview, h("div", { style: "flex:1;min-width:0" }, edForm, edBtns))
         : h("div", { class: "pd-box" }, preview, edForm, edBtns);
       if (sch) {   // fgSizerPos above m_imageSizer
-        body.append(form([["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Rotation:", rot.el, unitLabel("deg")], ["Opacity:", opacityIn]], true), editor);
+        body.append(form([["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Rotation:", rot.el, unitLabel("deg")], ["Opacity:", opacityIn.el]], true), editor);
         return;
       }
       body.append(h("div", { class: "pd-cols2" },
         h("div", null,
           form([["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Rotation:", rot.el, unitLabel("deg")],
-            ["Width:", wd.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Opacity:", opacityIn], ["Associated layer:", layer.el]], true),
+            ["Width:", wd.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Opacity:", opacityIn.el], ["Associated layer:", layer.el]], true),
           h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el)),
         editor));
     },

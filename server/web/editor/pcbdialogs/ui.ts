@@ -121,6 +121,13 @@ const CSS = `
 .pd-dim { color: var(--ink-3, var(--ink-2)) !important; opacity: .7; }
 .pd-zone { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 0 16px; }
 textarea.pd-text { width: 100%; min-height: 260px; font-family: var(--mono); font-size: 12px; white-space: pre; }
+.pd-spin { position: relative; display: inline-flex; align-items: stretch; min-width: 0; }
+.pd-spin > input[type=text] { width: 100%; min-width: 0; padding-right: 18px; }
+.pd-spin > .arrows { position: absolute; right: 1px; top: 1px; bottom: 1px; width: 16px; display: flex; flex-direction: column; border-left: 1px solid var(--line); }
+.pd-spin > .arrows > button { flex: 1 1 50%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: var(--panel-2); color: var(--ink-2); display: grid; place-items: center; cursor: default; }
+.pd-spin > .arrows > button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, var(--panel-2)); }
+.pd-spin > .arrows > button + button { border-top: 1px solid var(--line); }
+.pd-spin.disabled > .arrows { opacity: .5; pointer-events: none; }
 `;
 let cssDone = false;
 /** The kit's stylesheet, for a dialog opened with KDialogs.open directly (its own button row). */
@@ -275,6 +282,29 @@ export function numField(v: number, opts?: { ro?: boolean; key?: string; digits?
   const input = h("input", { type: "text", value: fmt(v), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
   input.addEventListener("change", () => { const x = Number(input.value.replace(",", ".")); if (isNaN(x) || !input.value.trim()) input.value = fmt(cur); else { cur = x; input.value = fmt(x); } });
   return { el: input, input, get: () => { if (input.value === fmt(cur)) return cur; const x = Number(input.value.replace(",", ".")); return isNaN(x) || !input.value.trim() ? cur : x; }, set(x) { cur = x; input.value = fmt(x); } };
+}
+/**
+ * wxSpinCtrl / wxSpinCtrlDouble: a number entry with up / down arrows (and the arrow keys) that step by `step` and
+ * stay in min..max (`wrap` goes round, wxSP_WRAP); `digits` decimals are shown.  onChange fires on every step and
+ * on a typed value (wxEVT_SPINCTRL).
+ */
+export function spinField(v: number, opts: { min: number; max: number; step?: number; digits?: number; wrap?: boolean; ro?: boolean; key?: string; onChange?(v: number): void }): Field<number> & { enable(on: boolean): void } {
+  const step = opts.step || 1, digits = opts.digits || 0;
+  const clamp = (x: number): number => { if (opts.wrap) { const span = opts.max - opts.min + step; while (x > opts.max) x -= span; while (x < opts.min) x += span; return x; } return Math.min(opts.max, Math.max(opts.min, x)); };
+  const fmt = (x: number): string => x.toFixed(digits);
+  let cur = clamp(v);
+  const input = h("input", { type: "text", value: fmt(cur), disabled: !!opts.ro, "data-k": opts.key, inputmode: "decimal" });
+  const arrow = (d: string): SVGSVGElement => { const t = document.createElement("template"); t.innerHTML = `<svg viewBox="0 0 8 5" width="8" height="5" aria-hidden="true"><path d="${d}" fill="currentColor"/></svg>`; return t.content.firstChild as SVGSVGElement; };
+  const set = (x: number, fire: boolean): void => { const n = clamp(Math.round(x / step) * step); const was = cur; cur = +n.toFixed(Math.max(digits, 6)); input.value = fmt(cur); if (fire && opts.onChange && cur !== was) opts.onChange(cur); };
+  const bump = (dir: number): void => { if (input.disabled) return; set(cur + dir * step, true); };
+  const up = h("button", { type: "button", tabindex: "-1", "data-k": opts.key ? opts.key + "-up" : undefined, "aria-label": "Increment" }, arrow("M0 5L4 0L8 5Z"));
+  const down = h("button", { type: "button", tabindex: "-1", "data-k": opts.key ? opts.key + "-down" : undefined, "aria-label": "Decrement" }, arrow("M0 0L8 0L4 5Z"));
+  up.addEventListener("mousedown", (ev) => { ev.preventDefault(); bump(1); }); down.addEventListener("mousedown", (ev) => { ev.preventDefault(); bump(-1); });
+  input.addEventListener("keydown", (ev) => { if (ev.key === "ArrowUp") { ev.preventDefault(); bump(1); } else if (ev.key === "ArrowDown") { ev.preventDefault(); bump(-1); } });
+  input.addEventListener("change", () => { const x = Number(input.value.replace(",", ".")); if (isNaN(x) || !input.value.trim()) input.value = fmt(cur); else set(x, true); });
+  const el = h("span", { class: "pd-spin" + (opts.ro ? " disabled" : "") }, input, h("span", { class: "arrows" }, up, down));
+  return { el, input, get: () => { const x = Number(input.value.replace(",", ".")); return input.value === fmt(cur) || isNaN(x) || !input.value.trim() ? cur : clamp(x); }, set: (x) => set(x, false),
+    enable: (on) => { input.disabled = !on; el.classList.toggle("disabled", !on); } };
 }
 export function textField(v: string, opts?: { ro?: boolean; key?: string; placeholder?: string }): Field<string> {
   const input = h("input", { type: "text", value: v, disabled: !!(opts && opts.ro), "data-k": opts && opts.key, placeholder: opts && opts.placeholder });
@@ -492,14 +522,15 @@ export function gridButtons(g: GridApi, make: () => Record<string, CellValue>, o
 // ---------------------------------------------------------------- report panel
 export interface ReportLine { severity: string; text: string }
 /** WX_HTML_REPORT_PANEL: the message list with its "Show:" filter row. */
-export function reportPanel(height?: string): { el: HTMLElement; set(lines: ReportLine[]): void } {
+export function reportPanel(height?: string, opts?: { fileName?: string; empty?: string }): { el: HTMLElement; set(lines: ReportLine[]): void } {
+  ensureCss();
   const list = h("div", { class: "pd-report", style: `height:${height || "260px"}` });
   let lines: ReportLine[] = [];
   const filters: Record<string, Field<boolean>> = {};
   const draw = (): void => {
     list.replaceChildren();
     for (const l of lines) { const key = l.severity === "error" ? "Errors" : l.severity === "warning" ? "Warnings" : l.severity === "action" ? "Actions" : "Infos"; if (!filters.All.get() && !filters[key].get()) continue; list.append(h("div", { class: "ln " + l.severity }, l.text)); }
-    if (!list.childElementCount) list.append(h("div", { class: "ln info" }, lines.length ? "" : "No changes to be made."));
+    if (!list.childElementCount) list.append(h("div", { class: "ln info" }, lines.length ? "" : opts && opts.empty !== undefined ? opts.empty : "No changes to be made."));
     const count = (s: string): number => lines.filter((l) => l.severity === s).length;
     (filters.Errors.el.lastChild as Text).textContent = `Errors (${count("error")})`; (filters.Warnings.el.lastChild as Text).textContent = `Warnings (${count("warning")})`;
   };
@@ -507,6 +538,12 @@ export function reportPanel(height?: string): { el: HTMLElement; set(lines: Repo
   for (const [name, on] of [["All", true], ["Errors", true], ["Warnings", true], ["Actions", true], ["Infos", true]] as [string, boolean][]) {
     const f = checkField(on, name, { onChange: (v) => { if (name === "All") for (const k of Object.keys(filters)) filters[k].set(v); else filters.All.set(["Errors", "Warnings", "Actions", "Infos"].every((k) => filters[k].get())); draw(); } });
     filters[name] = f; bar.append(f.el);
+  }
+  if (opts && opts.fileName) {
+    // onBtnSaveToFile: every line as generatePlainText writes it ("Error: ", "Warning: ", "Info: " before the message)
+    const plain = (l: ReportLine): string => (l.severity === "error" ? "Error: " : l.severity === "warning" ? "Warning: " : l.severity === "info" ? "Info: " : "") + l.text + "\n";
+    const name = opts.fileName;
+    bar.append(h("span", { style: "flex:1" }), h("button", { class: "btn sm", "data-k": "saveReport", onclick: () => download(name, lines.map(plain).join(""), "text/plain;charset=utf-8") }, "Save..."));
   }
   const el = h("div", null, list, bar);
   return { el, set(l) { lines = l; draw(); } };
