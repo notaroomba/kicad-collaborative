@@ -1,14 +1,19 @@
 // editor/export-netlist — File > Export > Netlist… (DIALOG_EXPORT_NETLIST): a notebook of the netlist formats,
-// "Export Netlist" / "Close".  KiCad (this sheet, menu-actions netlistText), OrcadPCB2, Allegro, CadStar, PADS
-// (sim/netlist-formats.ts from the project's hierarchy), SPICE and SPICE Model (sim/spice-netlist.ts).
-// The file is offered as a download named after the project (<stem>.net / .cir).  The page last used and the SPICE
+// "Export Netlist" / "Close".  KiCad and Allegro (sim/netlist-kicad.ts), OrcadPCB2, CadStar, PADS
+// (sim/netlist-formats.ts), all from the project's hierarchy, SPICE and SPICE Model (sim/spice-netlist.ts).
+// The file is offered as a download named after the project (<stem>.net / .cir); Allegro's netlist and its devices/
+// folder of device files come as one .zip, as the browser cannot write a folder next to the file.  The page last used and the SPICE
 // options are remembered per browser, as KiCad keeps them in its settings.
 import { E } from "./state";
 import { state } from "./appstore";
 import { box, checkField, h, note, notebook, openDialog, reportPanel, textField, type Field, type ReportLine } from "./pcbdialogs/ui";
 import { projectNetlist } from "./pcbdialogs/update-pcb";
-import { projectDocs } from "./projectfile";
-import { download, fileStem, netlistText } from "./menu-actions";
+import { liveDocument, loadProjectFile, projectDocs } from "./projectfile";
+import { download, fileStem } from "./menu-actions";
+import * as NK from "../sim/netlist-kicad";
+import { schVariantNames } from "../dialogs/sch-variants";
+import { zip } from "../fab/zip";
+import { KICAD_BASE_VERSION } from "../canvas/version";
 import * as SP from "../sim/spice-netlist";
 import * as NF from "../sim/netlist-formats";
 import * as S from "../dialogs/sim-model-logic";
@@ -29,7 +34,7 @@ function store(s: Saved): void { try { localStorage.setItem(KEY, JSON.stringify(
 interface SchInternals { _?: { symbolPins(doc: KDoc, item: KItem): { number: string }[]; isPowerSymbol(doc: KDoc, libId: string): boolean } }
 
 /** The SPICE netlist of the project's hierarchy (or of the current sheet's subtree) with its libraries read. */
-export async function projectSpiceNetlist(options: number, report: (m: string, sev: "error" | "warning") => void): Promise<string | null> {
+export async function projectSpiceNetlist(options: number, report: (m: string, sev: "error" | "warning") => void, model = false): Promise<string | null> {
   const res = await projectNetlist();
   if ("error" in res) { report(res.error, "error"); return null; }
   const sch = CollabTools.sch as (SchToolModule & SchInternals) | undefined, hp = sch && sch._;
@@ -43,7 +48,7 @@ export async function projectSpiceNetlist(options: number, report: (m: string, s
   }
   const variant = currentVariant();
   if (variant) SP.setVariantView((n, v, path) => symbolViewForVariant(n, v, path));
-  const { symbols, texts } = SP.readHierarchy({ sheets, netMap: res.netlist.netMap || new Map(), symbolPins: hp.symbolPins,
+  const { symbols, texts, ports } = SP.readHierarchy({ sheets, netMap: res.netlist.netMap || new Map(), symbolPins: hp.symbolPins,
     isPower: (d, it) => hp.isPowerSymbol(d, String(((KiCadCanvas.kid(it.node, "lib_id") as SNode | null) || [])[1])), variant: variant || undefined });
   // every Sim.Library the symbols name, read before the (synchronous) exporter runs
   const files = projectModelFiles(projectDocs()), libs = new Map<string, S.SpiceLibrary | null>();
@@ -58,7 +63,55 @@ export async function projectSpiceNetlist(options: number, report: (m: string, s
     }
     libs.set(p, text === null ? null : S.isIbisPath(p) ? S.parseIbisLibrary(text, p) : S.parseSpiceLibrary(text));
   }
-  return SP.spiceNetlist({ symbols, texts, options, library: (p) => libs.get(p) || null, report });
+  return SP.spiceNetlist({ symbols, texts, options, library: (p) => libs.get(p) || null, report, subckt: model ? { name: projectName(), ports } : undefined });
+}
+
+/** GetBuildVersion() as the netlist headers carry it */
+const BUILD_VERSION = KICAD_BASE_VERSION;
+/** PROJECT::GetProjectName: the .kicad_pro's file name without its extension. */
+function projectName(): string {
+  const pro = projectDocs().find((d) => /\.kicad_pro$/.test(d.path));
+  return pro ? (pro.path.split("/").pop() as string).replace(/\.kicad_pro$/, "") : fileStem().stem;
+}
+/** The NlInput of the project's hierarchy: sheets by page, the .kicad_pro's text variables, variants and root sheet
+ *  name, the symbol library table's URIs and the net classes. */
+export async function projectNlInput(): Promise<NK.NlInput | { error: string }> {
+  const res = await projectNetlist();
+  if ("error" in res) return res;
+  let pro: Record<string, unknown> = {};
+  try { const t = (E.proSettings as string | null) || (await loadProjectFile()); pro = t ? JSON.parse(t) : {}; } catch (e) { pro = {}; }
+  const sheets = NK.nlSheets(res.netlist.instances || [], (f) => { const x = res.files.get(f); return x ? (x.doc as KDoc) : null; });
+  const docs = sheets.map((s) => s.doc);
+  const reg = new Map<string, string>();
+  const sch = pro.schematic as { variants?: { name?: string; description?: string }[] } | undefined;
+  for (const v of (sch && Array.isArray(sch.variants) ? sch.variants : [])) if (v && typeof v.name === "string") reg.set(v.name, typeof v.description === "string" ? v.description : "");
+  const variants = schVariantNames(docs as never, pro).slice(1).map((name) => ({ name, description: reg.get(name) || "" }));
+  // the project sym-lib-table's rows, else the global table's ${KICAD10_SYMBOL_DIR}
+  const uris = new Map<string, string>();
+  const table = projectDocs().find((d) => /(^|\/)sym-lib-table$/.test(d.path));
+  if (table) {
+    try {
+      const t = KiCadCanvas.parse((await liveDocument(table.docId)).file) as SNode | null;
+      for (const row of (t || []).filter((c) => Array.isArray(c) && c[0] === "lib") as SNode[]) {
+        const name = String(((KiCadCanvas.kid(row, "name") as SNode | null) || [])[1] || ""), uri = String(((KiCadCanvas.kid(row, "uri") as SNode | null) || [])[1] || "");
+        if (name) uris.set(name, uri);
+      }
+    } catch (e) { /* the global table only */ }
+  }
+  const ns = (pro.net_settings || {}) as { classes?: { name?: string }[]; netclass_assignments?: Record<string, string | string[]> | null; netclass_patterns?: { netclass?: string; pattern?: string }[] };
+  const classes = new Set(["Default", ...(ns.classes || []).map((c) => String((c && c.name) || "")).filter(Boolean)]);
+  const wild = (p: string): RegExp => new RegExp("^" + p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  const pats = (ns.netclass_patterns || []).filter((p) => p && p.pattern && p.netclass).map((p) => ({ re: wild(String(p.pattern)), cls: String(p.netclass) }));
+  const netClass = (name: string): string => {
+    const a = (ns.netclass_assignments || {})[name]; const direct = Array.isArray(a) ? a[0] : a;
+    const cls = direct || (pats.find((p) => p.re.test(name)) || { cls: "" }).cls;
+    return cls && classes.has(cls) ? cls : "Default";
+  };
+  const rootUuid = sheets.length ? sheets.find((s) => !s.sheetNode)?.uuidPath[0] : "";
+  const rootSheetName = String(((pro.sheets as unknown[][] | undefined) || []).find((e) => Array.isArray(e) && e[0] === rootUuid)?.[1] || "");
+  return { sheets, netlist: res.netlist, source: res.root, date: NK.iso8601Local(new Date()), version: BUILD_VERSION,
+    textVars: (pro.text_variables as Record<string, string>) || {}, variants, rootSheetName, netClass,
+    libUri: (nick) => (uris.has(nick) ? (uris.get(nick) as string) : `\${KICAD10_SYMBOL_DIR}/${nick}.kicad_sym`) };
 }
 
 export function openExportNetlist(): void {
@@ -101,7 +154,19 @@ export function openExportNetlist(): void {
       void (async () => {
         let text: string | null = null;
         try {
-          if (name === "KiCad") text = E.kdoc ? netlistText(E.kdoc as never, fileStem().name) : null;
+          if (name === "KiCad" || name === "Allegro") {
+            const inp = await projectNlInput();
+            if ("error" in inp) { say(inp.error, "error"); return; }
+            if (name === "KiCad") text = NK.kicadNetlist(inp);
+            else {
+              const a = NK.allegroNetlist(inp, (m, sev) => say(m, sev));
+              const entries = [{ name: fname, data: a.netlist }, ...[...a.devices].map(([f, d]) => ({ name: "devices/" + f, data: d }))];
+              const bytes = await zip(entries);
+              download(new Blob([bytes as BlobPart], { type: "application/zip" }), `${stem}-allegro.zip`);
+              say(`Netlist exported to '${fname}' with ${a.devices.size} device file${a.devices.size === 1 ? "" : "s"} in 'devices' (${stem}-allegro.zip).`, "info");
+              return;
+            }
+          }
           else if (name === "SPICE" || name === "SPICE Model") {
             let o = 0;
             if (name === "SPICE") {
@@ -112,13 +177,11 @@ export function openExportNetlist(): void {
               if (v("saveAllEvents", true)) o |= SP.OPTION_SAVE_ALL_EVENTS;
               if (v("curSheetAsRoot", false)) o |= SP.OPTION_CUR_SHEET_AS_ROOT;
             } else if (v("modelCurSheetAsRoot", false)) o |= SP.OPTION_CUR_SHEET_AS_ROOT;
-            if (name === "SPICE Model") { say("SPICE .subckt model export is not available in the browser.", "error"); return; }
-            text = await projectSpiceNetlist(o, (m, sev) => say(m, sev));
-          } else if (name === "Allegro") { say("Allegro netlist export is not available in the browser.", "error"); return; }
-          else {
+            text = await projectSpiceNetlist(o, (m, sev) => say(m, sev), name === "SPICE Model");
+          } else {
             const res = await projectNetlist();
             if ("error" in res) { say(res.error, "error"); return; }
-            const now = new Date(), ver = "10.99-web";
+            const now = new Date(), ver = BUILD_VERSION;
             text = name === "OrcadPCB2" ? NF.orcadPcb2(res.netlist, now) : name === "CadStar" ? NF.cadstar(res.netlist, now, ver) : NF.pads(res.netlist);
           }
         } catch (e) { console.warn(e); text = null; }

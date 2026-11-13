@@ -33,7 +33,12 @@ export interface SpiceNetlistInput {
   /** a library by its Sim.Library path (as the field holds it); null when it cannot be read */
   library(path: string): S.SpiceLibrary | null;
   report?(message: string, severity: "error" | "warning"): void;
+  /** NETLIST_EXPORTER_SPICE_MODEL: the .subckt's name (the project's) and its ports (readHierarchy's ports) */
+  subckt?: { name: string; ports: Map<string, SpicePort> };
 }
+/** A hierarchical label as a .subckt port: its text and LABEL_FLAG_SHAPE. */
+export interface SpicePort { name: string; shape: string }
+const PORT_DIR: Record<string, string> = { input: "input", output: "output", bidirectional: "inout", tri_state: "tristate", passive: "passive" };
 
 /** NETLIST_EXPORTER_SPICE::ConvertToSpiceMarkup. */
 export function convertToSpiceMarkup(netName: string): string {
@@ -125,7 +130,9 @@ export function spiceNetlist(inp: SpiceNetlistInput): string {
       const r = S.createFromFields(rows, pinNumbers); model = r.model;
       if (r.error) report(r.error, "error");
     }
-    const pinNetNames = sym.pins.map((p) => { const n = convertToSpiceMarkup(p.net); return n === "" ? `NC-${nc++}` : n; });
+    // GenerateItemPinNetName (the model exporter names a port's net after the port first)
+    const ports = inp.subckt ? inp.subckt.ports : null;
+    const pinNetNames = sym.pins.map((p) => { const n = convertToSpiceMarkup(ports && ports.has(p.net) ? (ports.get(p.net) as SpicePort).name : p.net); return n === "" ? `NC-${nc++}` : n; });
     const probe: S.SpiceItem = { refName: sym.ref, modelName: "", baseModelName, pinNumbers, pinNetNames };
     // SPICE_GENERATOR::ModelName, uniquified only for names KiCad itself defines with a .model line
     const proposed = baseModelName === "" ? `__${sym.ref}` : `${sym.ref}.${baseModelName}`;
@@ -135,6 +142,12 @@ export function spiceNetlist(inp: SpiceNetlistInput): string {
   }
   const directives = readDirectives(inp.texts);
   let out = ".title KiCad schematic\n";
+  if (inp.subckt) {
+    // NETLIST_EXPORTER_SPICE_MODEL::WriteHead
+    out = `*\n\n.subckt ${inp.subckt.name}\n`;
+    for (const [, port] of [...inp.subckt.ports.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) out += `+       ${port.name} ; ${PORT_DIR[port.shape] || "passive"}\n`;
+    out += "\n\n";
+  }
   for (const p of [...libsUsed].sort()) out += `.include "${p.replace(/\\/g, "/")}"\n`;
   const spiceItem = (it: Item): S.SpiceItem => ({ refName: it.ref, modelName: it.modelName, baseModelName: it.baseModelName, pinNumbers: it.pinNumbers, pinNetNames: it.pinNetNames });
   for (const it of items) if (it.model.enabled) out += S.modelLine(it.model, spiceItem(it));
@@ -151,7 +164,7 @@ export function spiceNetlist(inp: SpiceNetlistInput): string {
     }
   }
   for (const it of items) if (it.model.enabled) out += S.itemLine(it.model, spiceItem(it));
-  out += ".end\n";
+  out += inp.subckt ? "\n.ends\n" : ".end\n";
   return out;
 }
 
@@ -182,9 +195,22 @@ function strNumCmpI(a: string, b: string): number { return S.strNumCmp(a, b, tru
 /** ReadSchematicAndLibraries' walk: each sheet instance, its symbols by uuid, the first unit of each reference with
  *  the pins of all its units (CreatePinList: by number, duplicates dropped), net names from the net map; and the
  *  texts for ReadDirectives. */
-export function readHierarchy(h: HierarchyInput): { symbols: SpiceSymbol[]; texts: string[] } {
-  const netOf = new Map<string, string>();
-  for (const e of h.netMap.values()) { if (e.bus) continue; for (const m of e.members) if (m.kind === "pin" && m.pin !== undefined) netOf.set(`${m.inst}|${m.id}|${m.pin}`, e.name); }
+export function readHierarchy(h: HierarchyInput): { symbols: SpiceSymbol[]; texts: string[]; ports: Map<string, SpicePort> } {
+  const netOf = new Map<string, string>(), labelNet = new Map<string, string>();
+  for (const e of h.netMap.values()) {
+    if (e.bus) continue;
+    for (const m of e.members) {
+      if (m.kind === "pin" && m.pin !== undefined) netOf.set(`${m.inst}|${m.id}|${m.pin}`, e.name);
+      else if (m.kind === "hierarchical_label") labelNet.set(`${m.inst}|${m.id}`, e.name);
+    }
+  }
+  // NETLIST_EXPORTER_SPICE_MODEL::readPorts: each hierarchical label of the exported sheets, by its net (first wins)
+  const ports = new Map<string, SpicePort>();
+  for (const sh of h.sheets) for (const it of sh.doc.items.values()) {
+    if (it.kind !== "hierarchical_label") continue;
+    const net = labelNet.get(`${sh.index}|${it.id}`); if (net === undefined || ports.has(net)) continue;
+    ports.set(net, { name: sv(it.node[1]), shape: sv((kidOf(it.node, "shape") || [])[1]) || "input" });
+  }
   const symbols: SpiceSymbol[] = [], texts: string[] = [], seen = new Set<string>();
   const refOf = (n: N, path: string): string => {
     let ref = sv((kidsOf(n, "property").find((p) => sv(p[1]) === "Reference") || [])[2]);
@@ -219,7 +245,7 @@ export function readHierarchy(h: HierarchyInput): { symbols: SpiceSymbol[]; text
       symbols.push({ ref, fields, pins });
     }
   }
-  return { symbols, texts };
+  return { symbols, texts, ports };
 }
 let symbolViewForVariantAny: (n: N, v: string, path: string) => N = (n) => n;
 /** The variant view the reader uses (canvas/variant-model symbolViewForVariant), set by the caller's bundle. */

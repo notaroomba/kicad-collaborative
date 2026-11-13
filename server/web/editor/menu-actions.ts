@@ -60,69 +60,6 @@ async function saveDocCopy(): Promise<void> {
   } catch (e) { toast("Save failed: " + (e as Error).message, 4000); }
 }
 
-// ---------------------------------------------------------------- netlist (eeschema/netlist_exporters/netlist_exporter_kicad.cpp)
-const q = (s: unknown) => '"' + String(s ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
-/**
- * The open sheet's netlist in KiCad's s-expression format (export (version "E") (design …) (components …) (nets …)),
- * from the tool module's net computation (sch-tools ercNets).  Net names follow CONNECTION_GRAPH: a global label or
- * power symbol, else a hierarchical or local label ("/NAME"), else "Net-(REF-PIN)"; a single unlabelled pin is
- * "unconnected-(REF-PIN-PadN)".  Sub-sheets are not flattened: this is the sheet that is open.
- */
-export function netlistText(doc: { items: Map<string, Item> }, source: string): string | null {
-  const K = W.KiCadCanvas, sch = W.CollabTools && W.CollabTools.sch;
-  if (!sch || !sch._ || !sch._.ercNets) return null;
-  const prop = (n: Sx, name: string) => { const p = K.kids(n, "property").find((x) => K.str(x[1]) === name); return p ? K.str(p[2]) : ""; };
-  const comps: { ref: string; item: Item }[] = [];
-  const seen = new Set<string>();
-  for (const it of doc.items.values()) {
-    if (it.kind !== "symbol") continue;
-    const ref = prop(it.node, "Reference"); if (!ref || ref.startsWith("#") || seen.has(ref)) continue;   // power symbols and flags are not components
-    const ob = K.kid(it.node, "on_board"); if (ob && K.str(ob[1]) === "no") continue;
-    seen.add(ref); comps.push({ ref, item: it });
-  }
-  const refKey = (r: string) => { const m = /^(.*?)(\d+)$/.exec(r); return m ? [m[1], +m[2]] as const : [r, 0] as const; };
-  const byRef = (a: string, b: string) => { const x = refKey(a), y = refKey(b); return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] - y[1]; };
-  comps.sort((a, b) => byRef(a.ref, b.ref));
-  const out: string[] = ['(export (version "E")', "  (design", `    (source ${q(source)})`, `    (date ${q(new Date().toISOString().slice(0, 19))})`, '    (tool "Junction web editor"))', "  (components"];
-  for (const c of comps) {
-    const n = c.item.node, lib = K.str((K.kid(n, "lib_id") || [])[1]), [libName, part] = lib.includes(":") ? [lib.slice(0, lib.indexOf(":")), lib.slice(lib.indexOf(":") + 1)] : ["", lib];
-    const uuid = K.str((K.kid(n, "uuid") || [])[1]);
-    out.push(`    (comp (ref ${q(c.ref)})`, `      (value ${q(prop(n, "Value"))})`);
-    if (prop(n, "Footprint")) out.push(`      (footprint ${q(prop(n, "Footprint"))})`);
-    if (prop(n, "Datasheet") && prop(n, "Datasheet") !== "~") out.push(`      (datasheet ${q(prop(n, "Datasheet"))})`);
-    if (prop(n, "Description")) out.push(`      (description ${q(prop(n, "Description"))})`);
-    out.push(`      (libsource (lib ${q(libName)}) (part ${q(part)}) (description ${q(prop(n, "Description"))}))`, '      (sheetpath (names "/") (tstamps "/"))', `      (tstamps ${q(uuid)}))`);
-  }
-  out.push("  )", "  (nets");
-  interface Term { item: Item; pin?: { number: string; name: string; type: string }; key?: string; power?: boolean }
-  const nets: { name: string; nodes: { ref: string; pin: string; fn: string; type: string }[] }[] = [];
-  const { nets: raw } = sch._.ercNets(doc) as { nets: { terms: Term[] }[] };
-  for (const net of raw) {
-    const nodes: { ref: string; pin: string; fn: string; type: string }[] = []; const dup = new Set<string>();
-    for (const t of net.terms) {
-      if (!t.pin || t.power || t.item.kind !== "symbol") continue;
-      const ref = prop(t.item.node, "Reference"); if (!seen.has(ref)) continue;
-      const k = ref + "\u0000" + t.pin.number; if (dup.has(k)) continue; dup.add(k);
-      nodes.push({ ref, pin: t.pin.number, fn: t.pin.name && t.pin.name !== "~" ? t.pin.name : "", type: t.pin.type });
-    }
-    if (!nodes.length) continue;
-    nodes.sort((a, b) => byRef(a.ref, b.ref) || (a.pin < b.pin ? -1 : a.pin > b.pin ? 1 : 0));
-    const keys = net.terms.map((t) => t.key).filter((k): k is string => !!k);
-    const pick = (p: string) => keys.filter((k) => k.startsWith(p)).map((k) => k.slice(p.length)).sort()[0];
-    const g = pick("global:"), h = pick("hier:"), l = pick("local:"), first = nodes[0];
-    const name = g !== undefined ? g : h !== undefined ? "/" + h : l !== undefined ? "/" + l
-      : nodes.length === 1 ? `unconnected-(${first.ref}-${first.fn ? first.fn + "-" : ""}Pad${first.pin})` : `Net-(${first.ref}-${first.fn || "Pad" + first.pin})`;
-    nets.push({ name, nodes });
-  }
-  nets.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  nets.forEach((net, i) => {
-    out.push(`    (net (code ${q(i + 1)}) (name ${q(net.name)})`);
-    net.nodes.forEach((nd, j) => out.push(`      (node (ref ${q(nd.ref)}) (pin ${q(nd.pin)})${nd.fn ? ` (pinfunction ${q(nd.fn)})` : ""} (pintype ${q(nd.type)}))${j === net.nodes.length - 1 ? ")" : ""}`));
-  });
-  out.push("  ))", "");
-  return out.join("\n");
-}
-
 /** File > Export > Drawing to Clipboard: the sheet as a PNG image on the system clipboard. */
 async function drawingToClipboard(): Promise<void> {
   if (!E.kdoc) return;

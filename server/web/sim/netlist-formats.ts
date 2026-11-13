@@ -9,10 +9,11 @@ import type { Netlist, NetComponent } from "../canvas/pcb-netlist";
 
 export const NETLIST_HEAD_STRING = "EESchema Netlist Version 1.1";
 
-/** GetISO8601CurrentDateTime: local time, "%Y-%m-%dT%H:%M:%S" and the offset as "+hhmm" (kicad-cli's files: "2024-12-19T18:53:31+0000"). */
+/** GetISO8601CurrentDateTime (common/string_utils.cpp): wxDateTime::Now().FormatISOCombined( 'T' ), local time
+ *  with no zone ("2026-08-17T20:22:14", as kicad-cli 10 writes it; older files carry "+0000"). */
 export function iso8601(d: Date): string {
-  const p = (n: number): string => String(n).padStart(2, "0"), off = -d.getTimezoneOffset();
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${off >= 0 ? "+" : "-"}${p(Math.floor(Math.abs(off) / 60))}${p(Math.abs(off) % 60)}`;
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 

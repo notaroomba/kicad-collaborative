@@ -80,6 +80,6 @@ test("PADS / OrcadPCB2: the value's field references resolved (GetValue( RESOLVE
   const nl = N.buildNetlist({ doc, uuid, file: "rectifier.kicad_sch" }, () => null, helpers, "rectifier");
   assert.ok(/^V1 {15}V_SIN$/m.test(NFM.pads(nl)), NFM.pads(nl));
 });
-test("iso8601: GetISO8601CurrentDateTime's shape", () => { assert.ok(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}$/.test(NFM.iso8601(new Date()))); });
+test("iso8601: GetISO8601CurrentDateTime's shape", () => { assert.ok(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/.test(NFM.iso8601(new Date()))); });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
