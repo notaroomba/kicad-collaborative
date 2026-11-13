@@ -113,13 +113,11 @@ export function preemptKey(ev: KeyboardEvent): void {
   for (const hook of keyHooks) { let took = false; try { took = hook(ev); } catch (e) { console.warn(e); } if (took) { ev.stopImmediatePropagation(); return; } }
   const combo = comboOf(ev); if (!combo) return;
   if (E.tool === "measure" && combo === "Ctrl+C") return;   // the measure tool takes ACTIONS::copy itself (index.ts)
+  // a key the user moved in Preferences > Hotkeys: the table decides it before any tool's own binding and before
+  // KICAD_KEY_WINS (whose entries are the default keys), and a key taken off its action does nothing
+  if (userTouchedKey(combo)) { runSpecHotkey(ev); ev.preventDefault(); ev.stopImmediatePropagation(); return; }
   const what = KICAD_KEY_WINS[editorKind()][combo];
-  if (!what) {
-    // a key the user moved in Preferences > Hotkeys: the table decides it before any tool's own binding (and a key
-    // taken off its action does nothing)
-    if (!userTouchedKey(combo)) return;
-    runSpecHotkey(ev); ev.preventDefault(); ev.stopImmediatePropagation(); return;
-  }
+  if (!what) return;
   if (what === "spec") runSpecHotkey(ev);
   else if (what.startsWith("key:")) {
     const mod = activeModule() as ToolModule | null; const k = what.slice(4), shift = k.startsWith("Shift+");
