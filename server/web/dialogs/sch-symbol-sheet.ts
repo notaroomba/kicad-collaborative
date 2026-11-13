@@ -354,18 +354,34 @@ export function openSheetProperties(ctx: Ctx, item: KItem, opts: SheetOpts = {})
     build(b) {
       const fh = h("div"); b.append(fh);
       grid = fieldsGrid(fh, L.fieldRows(staged, origin, ["Sheetname", "Sheetfile", "Sheet name", "Sheet file"]), { readOnly: ro, doc, newName: nextName, height: 150, shown: [0, 1, 2, 3, 4, 5, 6, 7] });
-      const row = h("div", { style: "display:flex;gap:12px;margin-top:6px;align-items:flex-start" });
-      const left = h("div", { style: "flex:1" }); const g = h("div", { class: "kd-fmt" });
-      els.bwidth = lenBox(st.width, "kd-sh-bwidth"); bc = swatch(st.color, "kd-sh-bcolor", undefined, ro); fc = swatch(bg, "kd-sh-bg", undefined, ro);
-      g.append(h("label", null, "Border width:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, els.bwidth, units()), h("span"), h("label", null, "Border color:"), bc.el, h("span"), h("label", null, "Background fill:"), fc.el, h("span"));
+      // bSizer5: Attributes (Page number, Full reference suffix, the flags) beside Style (Border width / color | Fill color)
+      const row = h("div", { style: "display:flex;gap:10px;margin-top:6px;align-items:stretch" });
+      const att = h("div", { style: "flex:0 0 auto;display:flex;flex-direction:column" }); const ab = KD().staticBox(att, "Attributes"); ab.style.flex = "1";
       els.page = textInput(pg ? L.str(pg[1]) : "", undefined, { id: "kd-sh-page", style: "width:90px", disabled: ro || (!pg && !opts.onCreate) });
-      g.append(h("label", null, "Page number:"), els.page, h("span"), h("label", null, "Hierarchical path:"), pathEl, h("span"));
-      left.append(g);
-      const att = h("div"); const ab = KD().staticBox(att, "Attributes");
-      const cb = (k: string, label: string, on: boolean) => { const x = checkbox(label, on, undefined, { id: "kd-sh-" + k, disabled: ro }); els[k] = x.querySelector("input") as HTMLInputElement; return x; };
-      ab.append(cb("exsim", "Exclude from simulation", flag(staged, "exclude_from_sim", false)), cb("exbom", "Exclude from bill of materials", !flag(staged, "in_bom", true)),
-        cb("exboard", "Exclude from board", !flag(staged, "on_board", true)), cb("dnp", "Do not populate", flag(staged, "dnp", false)));
-      row.append(left, att); b.append(row);
+      // OnUpdateUI: the current path's suffix and this sheet's own, "None" when both are empty (read-only)
+      const sufEl = h("input", { id: "kd-sh-fullsuffix", readOnly: true, tabIndex: -1, style: "width:110px" }) as HTMLInputElement;
+      const suffixOf = (rows: L.FieldRow[]): string => { const r = rows.find((x) => x.name === P.REF_SUFFIX_FIELD); return r ? r.value : ""; };
+      const showSuffix = (rows: L.FieldRow[]): void => { const f = pathRefSuffix() + suffixOf(rows); sufEl.value = f || "None"; };
+      const cb = (k: string, label: string, on: boolean, tip?: string) => { const x = checkbox(label, on, undefined, { id: "kd-sh-" + k, disabled: ro, title: tip }); els[k] = x.querySelector("input") as HTMLInputElement; return x; };
+      ab.append(
+        h("div", { style: "display:flex;gap:8px;align-items:center;margin-bottom:8px" }, h("label", null, "Page number:"), els.page),
+        h("div", { style: "display:flex;gap:8px;align-items:center;margin-bottom:8px" }, h("label", null, "Full reference suffix:"), sufEl),
+        cb("exsim", "Exclude from simulation", flag(staged, "exclude_from_sim", false)), h("div", { style: "height:10px" }),
+        cb("exboard", "Exclude from board", !flag(staged, "on_board", true), "This is useful for adding symbols that only get exported to the bill of materials but\nnot required to layout the board such as mechanical fasteners and enclosures"),
+        cb("dnp", "Do not populate", flag(staged, "dnp", false)),
+        cb("exbom", "Exclude from bill of materials", !flag(staged, "in_bom", true), "This is useful for adding symbols for board footprints such as fiducials\nand logos that you do not want to appear in the bill of materials export"));
+      const sty = h("div", { style: "flex:1;min-width:0;display:flex;flex-direction:column" }); const sb = KD().staticBox(sty, "Style"); sb.style.flex = "1";
+      els.bwidth = lenBox(st.width, "kd-sh-bwidth"); bc = swatch(st.color, "kd-sh-bcolor", undefined, ro); fc = swatch(bg, "kd-sh-bg", undefined, ro);
+      sb.append(h("div", { style: "display:flex;gap:10px" },
+        h("div", { style: "flex:2;min-width:0" }, h("div", { style: "margin-bottom:5px" }, "Border"),
+          h("div", { style: "display:flex;gap:6px;align-items:center" }, h("label", null, "Width:"), els.bwidth, units(), h("span", { style: "width:20px" }), h("label", null, "Color:"), bc.el)),
+        h("div", { style: "flex:1;min-width:0" }, h("div", { style: "margin-bottom:5px" }, "Fill"),
+          h("div", { style: "display:flex;gap:6px;align-items:center" }, h("label", null, "Color:"), fc.el))));
+      row.append(att, sty); b.append(row);
+      // m_sizerBottom: Hierarchical path: beside the buttons
+      b.append(h("div", { style: "display:flex;gap:6px;align-items:center;margin-top:8px" }, h("label", null, "Hierarchical path:"), pathEl));
+      showSuffix(L.fieldRows(staged, origin));
+      fh.addEventListener("input", () => { if (grid) showSuffix(grid.rows()); }); fh.addEventListener("change", () => { if (grid) showSuffix(grid.rows()); });
       showPath(nameOf(L.fieldRows(staged, origin)));
       fh.addEventListener("change", () => { if (grid) showPath(nameOf(grid.rows())); });
     },
