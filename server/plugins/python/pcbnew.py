@@ -635,7 +635,7 @@ class BOX2I:
         return f"BOX2I(({self._x}, {self._y}), ({self._w}, {self._h}))"
 
 
-# no EDA_RECT, TRACK, MODULE and the like: see _GONE at the end of this file
+# EDA_RECT, TRACK, MODULE and the like: see _LEGACY at the end of this file
 wxRect = BOX2I
 
 
@@ -8596,14 +8596,31 @@ class _Placeholder:
         return (object,)
 
 
-# Names plugins look for with hasattr() to tell an old KiCad from a current one.  KiCad 10 has none of them, so
-# neither has this module: answering with a placeholder would send such a plugin down its KiCad 5 or 6 code.
-_GONE = frozenset(("EDA_RECT", "TRACK", "VIA", "MODULE", "D_PAD", "DRAWSEGMENT", "ZONE_CONTAINER", "TEXTE_PCB", "TEXTE_MODULE",
-                   "EDGE_MODULE", "FP_TEXT", "FP_SHAPE", "MOD_VIRTUAL", "MOD_CMS", "MOD_DEFAULT"))
+# Class names KiCad dropped after version 5 or 6.  A plugin that asks "hasattr(pcbnew, 'TRACK')" wants to know
+# which KiCad it runs in, and the answer here is KiCad 10's: no.  A plugin written for the old names alone, which
+# uses them without asking (pcbnew.TRACK(board), from pcbnew import D_PAD), still gets today's class for it.
+_LEGACY = {"EDA_RECT": "BOX2I", "TRACK": "PCB_TRACK", "VIA": "PCB_VIA", "MODULE": "FOOTPRINT", "D_PAD": "PAD", "DRAWSEGMENT": "PCB_SHAPE",
+           "ZONE_CONTAINER": "ZONE", "TEXTE_PCB": "PCB_TEXT", "TEXTE_MODULE": "PCB_TEXT", "EDGE_MODULE": "PCB_SHAPE", "FP_TEXT": "PCB_TEXT",
+           "FP_SHAPE": "PCB_SHAPE"}
+
+
+def _asked_whether(depth=2):
+    """Whether the caller's caller is calling a function (hasattr, getattr) and not reading an attribute or importing."""
+    import dis
+    import sys
+    try:
+        frame = sys._getframe(depth)
+        return dis.opname[frame.f_code.co_code[frame.f_lasti]].startswith("CALL")
+    except Exception:
+        return False
 
 
 def __getattr__(name):
-    if name.startswith("__") or name in _GONE or not name.isidentifier():
+    if name.startswith("__") or not name.isidentifier():
         raise AttributeError(name)
+    if name in _LEGACY:
+        if _asked_whether():
+            raise AttributeError(name)
+        return globals()[_LEGACY[name]]
     _missing.add(name)
     return _Placeholder(name)
