@@ -236,6 +236,23 @@
     }
   },
   {
+    "name": "review_design",
+    "title": "Review against the checklists",
+    "write": false,
+    "description": "Check a schematic sheet or the board against the house checklists (Andrew Greenberg's Actually Useful Schematics talk with his schematic and PCB layout checklists, and Graham Sutherland's schematic guidelines). On a sheet: supplies drawn as symbols that point the right way, useful supply names with their voltage range and current written down, named nets, global labels with a direction shape on stubs, wires before labels, wire crossings, labelled and described blocks, notes on connectors, switches and LEDs, the title block, symbols drawn by function not by package, values, capacitor voltage ratings (twice the rail), resistor dissipation, MOSFET body diodes, a bypass capacitor on every IC supply, signals that cross supply voltages, UART TX/RX, I2C and open-drain pull-ups, reset and enable default states, test points, programming access, input protection, the ERC, and MFR/MPN fields. On the board: bypass capacitors at their pins, power track widths and vias, ground planes on both sides with stitching, zone clearance, courtyards, test point access, reference designators on pads, the board's name, version and date on the silkscreen, three fiducials, and the DRC. Each finding names the rule, the parts and nets, and the call that fixes it; errors first. `passed` lists the rules with nothing against them and `manual` the checklist items only a person can judge. Run it after drawing a sheet or laying out a board and before reporting that a design is finished; a design is not finished while it has errors.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string", "description": "Project id or exact name."},
+        "document": {"type": "string", "description": "Which sheet (its path or file name), or \"board\"."},
+        "level": {"type": "string", "enum": ["error", "warning", "note"], "description": "List only findings at least this serious (note, the default, lists all)."},
+        "rule": {"type": "string", "description": "List only one rule or family of rules, for example \"power\" or \"caps.voltage\"."}
+      },
+      "required": ["project", "document"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "check_layout",
     "title": "Check sheet layout",
     "write": false,

@@ -22,6 +22,9 @@ import os as _os
 
 from .project import Board, Pin, Project, Schematic
 from .transport import HarnessError, HostTransport, LocalEngine, McpTransport
+from . import rules as _rules
+
+_rules.install(Project, Schematic, Board)
 
 __all__ = ["open", "connect", "current", "Project", "Schematic", "Board", "Pin", "HarnessError", "parts"]
 __version__ = "0.1.0"

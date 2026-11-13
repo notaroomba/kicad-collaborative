@@ -15,6 +15,7 @@
 import * as design from "../ai/design";
 import { ToolError } from "../ai/design";
 import { checkLayout } from "../ai/layout";
+import { reviewDesign } from "../ai/review";
 import { renderPicture } from "../mcp/picture";
 import * as library from "../ai/library";
 import { buildProposal, writeRules, type EditLine } from "../ai/proposals";
@@ -161,6 +162,7 @@ export class Workspace {
       case "list_nets": return on(() => design.listNets(rest()));
       case "get_geometry": return on(() => design.geometry(rest()));
       case "check_layout": return on(() => checkLayout(rest()));
+      case "review_design": return on(() => reviewDesign(rest()));
       case "render": { const h = this.find(args.document); const ed = this.open(h); return { document: h.path, svg: renderPicture(ed.kdoc, args.box ? { bbox: args.box, frame: false } : {}) }; }
       case "run_checks": return on(() => design.runChecks(rest()));
       case "get_board_info": { const b = this.docs.find((d) => d.docType === "kicad_pcb"); if (!b) throw new ToolError("This project has no board."); this.open(b); return design.boardInfo(); }

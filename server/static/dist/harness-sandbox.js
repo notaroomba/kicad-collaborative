@@ -23,6 +23,9 @@ import os as _os
 
 from .project import Board, Pin, Project, Schematic
 from .transport import HarnessError, HostTransport, LocalEngine, McpTransport
+from . import rules as _rules
+
+_rules.install(Project, Schematic, Board)
 
 __all__ = ["open", "connect", "current", "Project", "Schematic", "Board", "Pin", "HarnessError", "parts"]
 __version__ = "0.1.0"
@@ -85,7 +88,7 @@ def current() -> Project:
 
 
 from . import parts  # noqa: E402
-`;var m=`"""Projects, schematic sheets and boards as plain Python objects.
+`;var h=`"""Projects, schematic sheets and boards as plain Python objects.
 
 Nothing here writes KiCad file text.  Each method turns into one or a few edits for the design
 engine (the editor's own code), which keeps the files valid and, on an online project, sends the
@@ -107,10 +110,13 @@ _PAD = 3.81      # between a frame and what it holds
 _HEAD = 6.35     # the strip a frame's heading takes
 _TITLE = 2.54    # heading text height
 _LINE = 2.286    # pitch of note lines
-_PAPERS = [("A4", 297.0, 210.0), ("A3", 420.0, 297.0), ("A2", 594.0, 420.0), ("A1", 841.0, 594.0), ("A0", 1189.0, 841.0)]
+# A3 (11 x 17 in) is the smallest sheet a design is drawn on: nobody prints these, and white space is what separates blocks
+_PAPERS = [("A3", 420.0, 297.0), ("A2", 594.0, 420.0), ("A1", 841.0, 594.0), ("A0", 1189.0, 841.0)]
 _STAGE = (1524.0, 127.0)   # blocks are drawn off the page first, measured, then moved into place
 _DIR = {"left": (-1, 0), "right": (1, 0), "top": (0, -1), "bottom": (0, 1)}
 _LABEL_ROT = {"left": 180, "right": 0, "top": 90, "bottom": 270}
+_SHAPE = {"output": "output", "power_out": "output", "input": "input", "power_in": "input", "bidirectional": "bidirectional", "tri_state": "bidirectional",
+          "open_collector": "bidirectional", "open_emitter": "bidirectional"}     # a global label's shape from the pin it stands on
 _GND_ROT = {"bottom": 0, "right": 90, "top": 180, "left": 270}
 _SUPPLY_ROT = {"top": 0, "left": 90, "bottom": 180, "right": 270}
 _GROUND = re.compile(r"^(A|D|P)?(GND|VSS|VEE)|^GND|^-\\d|^Earth", re.I)
@@ -659,7 +665,7 @@ class Schematic(_Doc):
         if net:
             self.flush()
             if self.pin(f"{specs[0]['ref']}.{specs[0]['number']}")["net"] != net:
-                self.label(specs[0], net)
+                self.label(specs[0], net, kind="label")      # a wired net gets its name as a plain wire label
         self.flush()
         return ", ".join(how)
 
@@ -673,8 +679,12 @@ class Schematic(_Doc):
             return None
         return end
 
-    def label(self, pin, name: str, kind: str = "label") -> None:
-        """Put a net label on a pin (on a short stub away from the symbol).  \`pin\` may name several pins ("U1.GND")."""
+    def label(self, pin, name: str, kind: str | None = None, shape: str | None = None) -> None:
+        """Put a net's name on a pin, on a short stub away from the symbol.  \`pin\` may name several pins ("U1.GND").
+        A stub that reaches one pin and carries on elsewhere by name gets a global label (a hierarchical one with
+        kind="hierarchical_label" on a sub-sheet) whose shape says which way the signal goes, taken from the pin's
+        type unless \`shape\` is given: a plain label (kind="label") is only for naming a wire that is drawn through."""
+        kind = kind or "global_label"
         for p in self._pins(pin):
             self.flush()
             g = self.geometry()
@@ -692,7 +702,10 @@ class Schematic(_Doc):
                     self._edit({"op": "add_wire", "points": [list(at), list(far)]})
                     self._edit({"op": "add_label", "kind": kind, "text": name, "x": far[0], "y": far[1], "rotation": 180 if p["side"] == "right" else 0})
                     continue
-            self._edit({"op": "add_label", "kind": kind, "text": name, "x": at[0], "y": at[1], "rotation": _LABEL_ROT[p["side"]]})
+            e = {"op": "add_label", "kind": kind, "text": name, "x": at[0], "y": at[1], "rotation": _LABEL_ROT[p["side"]]}
+            if kind != "label":
+                e["shape"] = shape or _SHAPE.get(p.get("type", ""), "passive")
+            self._edit(e)
 
     def power(self, pin, name: str) -> None:
         """Put a power symbol (power:GND, power:+3V3, ...) on a pin.  \`pin\` may name several pins ("U1.GND")."""
@@ -703,13 +716,23 @@ class Schematic(_Doc):
             g = self.geometry()
             if p["net"] == short:
                 continue
-            end = self._stub(p, g)
-            at = end or p.at
-            if end:
-                self._edit({"op": "add_wire", "points": [list(p.at), list(end)]})
-            rot = (_GND_ROT if _GROUND.search(short) else _SUPPLY_ROT)[p["side"]]
+            # the symbol is never turned: a supply points up and a ground down, always, so the wire bends to it
+            v = 1 if _GROUND.search(short) else -1
+            d = _DIR[p["side"]]
+            paths = []
+            if d == (0, v):                                    # the pin already points the symbol's way
+                paths.append([p.at, (p["x"], _r(p["y"] + v * STUB))])
+            elif d[1] == 0:                                    # a pin on the side: out, then a short step up or down
+                out = (_r(p["x"] + d[0] * STUB), p["y"])
+                paths.append([p.at, out, (out[0], _r(p["y"] + v * GRID))])
+            else:                                              # a pin that points the other way: away, aside, and back a step
+                away = (p["x"], _r(p["y"] + d[1] * 2 * STUB))
+                for side in (1, -1):
+                    paths.append([p.at, away, (_r(p["x"] + side * STUB), away[1]), (_r(p["x"] + side * STUB), _r(away[1] + v * GRID))])
+            path = next((q for q in paths if not self._blocked(q, g, (p.at,))), paths[0])
+            self._edit({"op": "add_wire", "points": [list(q) for q in path]})
             self._is_power(short)
-            self._edit(self._power_edit(lib_id, at[0], at[1], rot))
+            self._edit(self._power_edit(lib_id, path[-1][0], path[-1][1], 0))
 
     def _is_power(self, name: str) -> bool:
         if name in self.project.custom_power:
@@ -722,10 +745,17 @@ class Schematic(_Doc):
             self.supply(name)        # a supply KiCad's power library has no symbol for: one is made, as a person would
             return True
 
-    def supply(self, name: str) -> str:
+    def supply(self, name: str, volts=None, amps=None, source: str | None = None) -> str:
         """Declare a net a supply (or a ground) that KiCad's power library has no symbol for ("VSYS", "VDD_SPI", "GND_RF"):
         from then on it is drawn with a power symbol of its own, an arrow up for a supply and KiCad's ground mark for a
-        ground, instead of a net label.  \`net\`, \`power\` and \`build\` do this by themselves for names that read as supplies."""
+        ground, instead of a net label.  \`net\`, \`power\` and \`build\` do this by themselves for names that read as supplies.
+        With volts=(min, typ, max) and amps=(min, typ, max) the rail's range and load are also written on the sheet
+        ("VUSB = (4.5, 5, 5.5) V @ (, 35, 500) mA"), which every supply should have; \`supplies({...})\` writes several at once."""
+        if volts is not None or amps is not None:
+            if not _POWER.match(name) and name not in self.project.custom_power:
+                self.supply(name)
+            self.supplies({name: {"volts": volts, "amps": amps, "from": source}})
+            return name
         if name not in self.project.custom_power:
             ground = bool(_GROUND.search(name))
             self.project.custom_power[name] = _power_symbol(name, ground)
@@ -848,9 +878,9 @@ class Schematic(_Doc):
         self.flush()
 
     def fit_page(self, margin: float = 2.54, papers: tuple | None = None) -> dict:
-        """Make the page fit what is drawn: the smallest paper ("A4", "A3", "A2", "A1", "A0", or the ones named in \`papers\`)
+        """Make the page fit what is drawn: the smallest paper ("A3", "A2", "A1", "A0", or the ones named in \`papers\`)
         that holds everything with \`margin\` to the border and clear of the title block, and the drawing moved as one piece
-        to the middle of it.  Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A4."""
+        to the middle of it.  Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A3."""
         self.flush()
         r = self.layout(limit=1)
         was, ext = r.get("paper", "A4"), r.get("extent")
@@ -895,7 +925,11 @@ class Schematic(_Doc):
         return {"paper": was, "was": was, "moved": [0, 0], "fits": False}
 
     def title(self, title: str | None = None, rev: str | None = None, date: str | None = None, company: str | None = None) -> None:
-        """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as they are."""
+        """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as
+        they are, except the date, which is set to today whenever the title or the revision is."""
+        if date is None and (title is not None or rev is not None):
+            import datetime
+            date = datetime.date.today().isoformat()     # a title or a revision without a date is half a title block
         e = {k: v for k, v in (("title", title), ("rev", rev), ("date", date), ("company", company)) if v is not None}
         if e:
             self.flush()
@@ -1045,7 +1079,8 @@ class Schematic(_Doc):
 
     # ---- a whole sheet from a netlist
     def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None,
-              notes: dict | None = None, frames: bool = True, labels: list | None = None, swap_pins: bool = True) -> dict:
+              notes: dict | None = None, frames: bool = True, labels: list | None = None, swap_pins: bool = True,
+              supplies: dict | None = None, global_labels: bool = True, review: bool = True) -> dict:
         """Draw a schematic from a netlist in one call.
 
         parts: {ref: {"lib": "Device:R", "value": "10k", "footprint": "...", "fields": {...}}} (lib may be a
@@ -1056,7 +1091,10 @@ class Schematic(_Doc):
         Every pin gets a power symbol or a net label on a short stub, so the result is correct by construction.
 
         Blocks are drawn off the page, measured as drawn (fields, labels and all), and then packed onto the page, so
-        nothing overlaps; the page grows (A4, A3, ...) when the design needs it.  Returns counts, anything that did
+        nothing overlaps; the page starts at A3 (11 x 17 in) and grows when the design needs it.  Labels that leave a block are
+        global labels with a direction shape (global_labels=False keeps plain ones); supplies={name: {"volts": (min, typ, max),
+        "amps": (min, typ, max)}} writes the supply list on the sheet; "review" in the result is what the house checklist
+        (sch.review()) still finds, so fix that before reporting the sheet done (review=False skips it).  Returns counts, anything that did
         not connect, and "overlaps": what the layout check still finds (0 for a clean sheet).
         """
         named = bool(groups)
@@ -1090,6 +1128,8 @@ class Schematic(_Doc):
                 problems.append(str(e))
         self.flush()
         self._repair(nets)
+        if global_labels:      # a name at the end of a wire sends the net elsewhere: it is a global label with a direction, not text
+            self.globalize()
         # ---- 3. measure each block as drawn, and what its heading and notes need
         blocks = []
         for gname, band in bands:
@@ -1151,6 +1191,11 @@ class Schematic(_Doc):
                 self.text(line, (x0 + pad, ny), italic=True)
                 ny += _LINE
             self.flush()
+        if supplies:
+            try:
+                self.supplies(supplies)
+            except HarnessError as e:
+                problems.append(str(e))
         # ---- 6. a sheet that had something on it was packed onto the page it had: now that all of it is drawn, the page is
         #         made to fit (an empty sheet was packed onto the smallest page already)
         if used:
@@ -1164,6 +1209,12 @@ class Schematic(_Doc):
                "problems": problems + wrong, "unconnected": self.unconnected()[:40], "overlaps": lay.get("count", 0)}
         if drawer.swapped:
             out["pins_swapped"] = drawer.swapped      # symbols redrawn with supply straps on top and ground straps at the bottom of their side
+        if review:      # the house checklist, so what is missing is known before anyone looks at the sheet
+            try:
+                rv = self.review(level="warning", limit=14)
+                out["review"] = {"errors": rv["errors"], "warnings": rv["warnings"], "findings": [f if len(f) < 420 else f[:417] + "..." for f in rv["findings"]]}
+            except HarnessError:
+                pass
         if lay.get("count"):
             out["overlap_list"] = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in lay.get("overlaps", [])]
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
@@ -1766,7 +1817,7 @@ class Board(_Doc):
         if len(nets) > 1:
             raise HarnessError(f"These pads are on different nets ({', '.join(nets)}); a track cannot join them. Change the schematic and sync.")
         return self.route(nets=nets, widths={nets[0]: width} if width else None, time_s=time_s)
-`;var h=`"""How the harness reaches a design.
+`;var m=`"""How the harness reaches a design.
 
 Every transport answers the same small set of calls (\`list_components\`, \`get_geometry\`,
 \`apply\`, \`run_checks\`, ...), so \`Project\`, \`Schematic\` and \`Board\` do not care whether the
@@ -2966,7 +3017,372 @@ class Blocks:
             bands.append((g, [ASSEMBLY_X - 25.4, gy - 25.4, ASSEMBLY_X + 1200.0, gy + max(height, 25.4) + 25.4]))
             gy = _up(gy + max(height, 25.4) + 127.0)
         return bands, placed, self.problems
-`;var g=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
+`;var g=`"""The house design rules as calls: the review against the checklists, and what the checklists ask a design to carry.
+
+The rules are Andrew Greenberg's "Actually Useful Schematics" (KiCon 2025) with his Checklist for Schematics and
+Checklist for PCB Layout, and Graham Sutherland's "Creating high quality electronics schematics".  \`review()\` judges
+a sheet or the board against every item a program can judge (the engine does the judging, so the MCP tool
+\`review_design\` gives the same answer); the other calls add what the lists ask for: global labels with a direction
+on net stubs, supplies with their voltage range and current written down, test points, MFR and MPN fields,
+fiducials, the board's name and version on the silkscreen, ground stitching.
+
+The methods are attached to Schematic, Board and Project when the package is imported.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import re
+import uuid as _uuid
+
+from .transport import HarnessError
+
+_LINE = 2.286
+
+
+def _r(v: float) -> float:
+    return round(v, 4)
+
+
+# ---------------------------------------------------------------- review
+
+def _review(self, level: str | None = None, rule: str | None = None, limit: int = 40) -> dict:
+    """Check this sheet or board against the house checklists.
+
+    Returns {"errors", "warnings", "notes", "passed": [rule ids], "findings": ["error power.direction: ... [items]"],
+    "manual": [what only a person can judge]}.  \`level="error"\` lists only errors, \`rule="power"\` one family.
+    A design is not finished while errors are listed; fix warnings or say in a note on the sheet why one stands.
+    """
+    args = {k: v for k, v in (("level", level), ("rule", rule)) if v}
+    r = self._call("review_design", **args)
+    rows = []
+    for f in r.get("findings", [])[:limit]:
+        rows.append(f"{f['level']} {f['rule']}: {f['message']}" + (f" [{'; '.join(f['items'])}]" if f.get("items") else ""))
+    out = {"check": r.get("check"), "errors": r.get("errors", 0), "warnings": r.get("warnings", 0), "notes": r.get("notes", 0),
+           "passed": r.get("passed", []), "findings": rows, "manual": r.get("manual", [])}
+    self.project.note(f"{getattr(self, 'path', 'document')}: review {out['errors']} errors, {out['warnings']} warnings, {len(out['passed'])} of {r.get('rules', 0)} rules clean")
+    return out
+
+
+def _project_review(self, level: str | None = "warning") -> dict:
+    """Review every sheet and the board; one entry per document."""
+    out = {}
+    for d in self._docs:
+        doc = self._doc(d["path"], d["type"]) if d["type"] in ("schematic", "board") else None
+        if doc is None:
+            continue
+        try:
+            out[d["path"]] = doc.review(level=level)
+        except HarnessError as e:
+            out[d["path"]] = {"error": str(e)}
+    return out
+
+
+# ---------------------------------------------------------------- schematic
+
+def _globalize(self, *names: str, all: bool = False) -> int:   # noqa: A002
+    """Turn the plain labels that sit on a wire end or straight on a pin into global labels with a direction shape
+    (input, output, bidirectional, passive, from the pins on the wire).  A net that continues somewhere else by name must
+    say so; a plain label reads as the name of a wire.  Names in the middle of a wire stay as they are.  Without names
+    every label whose name is used more than once is converted; \`all=True\` converts single ones too.  Returns the count."""
+    self.flush()
+    e: dict = {"op": "globalize_labels"}
+    if names:
+        e["names"] = list(names)
+    if all:
+        e["all"] = True
+    self._edit(e)
+    try:
+        res = self.flush() or {}
+    except HarnessError as err:
+        if "no plain label" in str(err):
+            return 0
+        raise
+    d = next((x["globalize_labels"] for x in res.get("details") or [] if "globalize_labels" in x), {})
+    return int(d.get("converted", 0))
+
+
+def _fmt_range(v, unit: str, scale: float = 1.0) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, (int, float)):
+        return f"{v * scale:g} {unit}"
+    v = (list(v) + [None, None, None])[:3]
+    return "(" + ", ".join("" if x is None else f"{x * scale:g}" for x in v) + f") {unit}"
+
+
+def _supplies(self, table: dict, at=None, title: str = "Power supplies (min, typ, max)") -> list:
+    """Write down what each supply is: {"VUSB": {"volts": (4.5, 5.0, 5.5), "amps": (None, 0.035, 0.5), "from": "J1"}}
+    becomes the line "VUSB = (4.5, 5, 5.5) V @ (, 35, 500) mA from J1" in a list on the sheet (in free space, or at \`at\`).
+    A reader then knows the range and the load of every rail without opening a datasheet, and the review uses the
+    stated maximum to check capacitor voltage ratings and resistor dissipation.  A single number is taken as typical."""
+    lines = []
+    for name, spec in table.items():
+        spec = spec if isinstance(spec, dict) else {"volts": spec}
+        amps = spec.get("amps")
+        small = amps is not None and max([abs(x) for x in ([amps] if isinstance(amps, (int, float)) else amps) if x is not None] + [0]) < 1
+        line = f"{name} = {_fmt_range(spec.get('volts'), 'V')}"
+        if amps is not None:
+            line += " @ " + (_fmt_range(amps, "mA", 1000) if small else _fmt_range(amps, "A"))
+        if spec.get("from"):
+            line += f" from {spec['from']}"
+        if spec.get("note"):
+            line += f" ({spec['note']})"
+        lines.append(line)
+        if not self._is_power(name):
+            self.supply(name)
+    if not lines:
+        return []
+    self.flush()
+    w = max(self._width(title) * 1.1, max(self._width(x) for x in lines)) + 1.5
+    h = (len(lines) + 1) * _LINE + 1.0
+    if at is None:
+        spot = self._call("check_layout", limit=1, free={"w": _r(w), "h": _r(h)}).get("free")
+        if not spot:
+            raise HarnessError("There is no free space for the supply list on the page; make the page larger with page(\\"A2\\") or give at=(x, y).")
+        at = (spot["x"], spot["y"])
+    y = at[1] + _LINE
+    self.text(title, (at[0] + 0.5, y), bold=True)
+    for line in lines:
+        y += _LINE
+        self.text(line, (at[0] + 0.5, y))
+    self.flush()
+    return [_r(at[0]), _r(at[1])]
+
+
+def _test_point(self, net: str, ref: str | None = None, expect: str | None = None,
+                footprint: str = "TestPoint:TestPoint_Pad_D1.0mm") -> str:
+    """A test point on a net ("+3V3", "GND", "~{RESET}" or a pin like "U1.RUN").  \`expect\` is written beside it
+    ("3.3 V", "low while in reset"): tell the reader what to expect at a test point.  Returns its reference."""
+    self.flush()
+    name = net
+    if "." in net and not self._is_power(net):
+        try:
+            name = self.pin(net)["net"] or net
+        except HarnessError:
+            name = net
+    at = None
+    try:      # room for the point, its supply symbol or label and its note, clear of the blocks
+        spot = self._call("check_layout", limit=1, free={"w": 25.4, "h": 20.32}).get("free")
+        if spot:
+            at = (round((spot["x"] + 10.16) / 1.27) * 1.27, round((spot["y"] + 10.16) / 1.27) * 1.27)
+    except HarnessError:
+        pass
+    tp = self.place("Connector:TestPoint", at=at, ref=ref, value=name.lstrip("/"), footprint=footprint)
+    self.flush()
+    if name != net and (not name or name.startswith(("Net-(", "unconnected-"))):
+        self.connect(net, f"{tp}.1")
+    else:
+        self.net(name, f"{tp}.1")
+    self.flush()
+    if expect:
+        try:
+            self.note(f"{tp}: expect {expect}", near=tp)
+        except HarnessError:
+            pass
+    return tp
+
+
+def _bom(self, ref: str, mfr: str | None = None, mpn: str | None = None, **more) -> None:
+    """The ordering fields of a part: sch.bom("U1", mfr="Texas Instruments", mpn="TLV62569DBVR", LCSC="C141836",
+    Voltage="16V", Power="0.1W").  MFR and MPN are what the checklist asks of every component."""
+    fields = {k: v for k, v in (("MFR", mfr), ("MPN", mpn)) if v}
+    fields.update({k: v for k, v in more.items() if v is not None})
+    if fields:
+        self.set(ref, **fields)
+
+
+def _fiducials(self, count: int = 3, footprint: str = "Fiducial:Fiducial_1mm_Mask2mm") -> list:
+    """Fiducial marks for pick and place (three per assembled side).  Places the symbols; board.sync() brings them
+    across and board.fiducials() puts them in the corners."""
+    have = [r for r in self.refs() if re.match(r"FID\\d", r)]
+    out = list(have)
+    need = count - len(have)
+    if need <= 0:
+        return out
+    self.flush()
+    spot = None
+    try:      # a row of them in free room, clear of the blocks
+        spot = self._call("check_layout", limit=1, free={"w": 15.24 * need + 5.08, "h": 15.24}).get("free")
+    except HarnessError:
+        pass
+    for k, i in enumerate(range(len(have), count)):
+        at = (round((spot["x"] + 7.62 + k * 15.24) / 1.27) * 1.27, round((spot["y"] + 8.89) / 1.27) * 1.27) if spot else None
+        out.append(self.place("Mechanical:Fiducial", at=at, ref=f"FID{i + 1}", footprint=footprint))
+    self.flush()
+    return out
+
+
+# ---------------------------------------------------------------- board
+
+def _corner_spots(self, inset: float):
+    g = self.geometry()
+    o = g.get("outline")
+    if not o:
+        raise HarnessError("The board has no outline yet; draw it first with board.outline(x0, y0, x1, y1).")
+    x0, y0, x1, y1 = o
+    return g, [(x0 + inset, y0 + inset), (x1 - inset, y1 - inset), (x0 + inset, y1 - inset), (x1 - inset, y0 + inset)]
+
+
+def _free_at(g, at, r: float, skip=()) -> bool:
+    for p in g["parts"]:
+        if p["ref"] in skip:
+            continue
+        b = p.get("courtyard") or p.get("box")
+        if b and at[0] > b[0] - r and at[0] < b[2] + r and at[1] > b[1] - r and at[1] < b[3] + r:
+            return False
+    return True
+
+
+def _board_fiducials(self, inset: float = 2.5) -> dict:
+    """Put the board's fiducials (FID1..) in three corners, as far apart as the outline allows, clear of other parts.
+    The schematic must have them first (sch.fiducials(), then board.sync())."""
+    self.flush()
+    g, corners = _corner_spots(self, inset)
+    fids = sorted(p["ref"] for p in g["parts"] if re.match(r"FID\\d", p["ref"]))
+    if not fids:
+        raise HarnessError("The board has no fiducials. Add them in the schematic with sch.fiducials(), then board.sync().")
+    o = g["outline"]
+    placed = {}
+    for ref, c in zip(fids, corners):
+        at, step = c, 1.0
+        dx = 1 if c[0] < (o[0] + o[2]) / 2 else -1
+        dy = 1 if c[1] < (o[1] + o[3]) / 2 else -1
+        for n in range(40):      # walk along the edge, then inward, until the mark and its mask opening are in the clear
+            cands = [(c[0] + dx * n * step, c[1]), (c[0], c[1] + dy * n * step), (c[0] + dx * n * step, c[1] + dy * n * step)]
+            hit = next((q for q in cands if _free_at(g, q, 1.2, skip=fids)), None)
+            if hit:
+                at = hit
+                break
+        self.place(ref, (_r(at[0]), _r(at[1])))
+        placed[ref] = [_r(at[0]), _r(at[1])]
+    self.flush()
+    for ref, at in placed.items():      # bare board around the mark, so no pour or track fills its mask opening
+        side = next((p.get("side", "front") for p in g["parts"] if p["ref"] == ref), "front")
+        try:
+            self.keepout([_r(at[0] - 1.15), _r(at[1] - 1.15), _r(at[0] + 1.15), _r(at[1] + 1.15)], layers=["B.Cu" if side == "back" else "F.Cu"], name=f"{ref} clear")
+        except HarnessError:
+            pass
+    self.flush()
+    return placed
+
+
+def _mark(self, name: str | None = None, rev: str | None = None, date: str | None = None, org: str | None = None,
+          at=None, layer: str = "F.SilkS", size: float = 1.0) -> dict:
+    """Print the board's identity on the silkscreen: organisation, name, version and date (today's by default), as the
+    layout checklist asks.  It goes in free space, from the bottom edge up, on one line or broken over two or three and
+    in smaller type where the board is crowded, and on the back when the front has no room; \`at\` (top left of the text) puts it exactly there."""
+    self.flush()
+    date = date or _dt.date.today().isoformat()
+    name = name or self.project.name
+    tail = " ".join(x for x in (rev, date) if x)
+    shapes = [[" ".join(x for x in (org, name, tail) if x)]]
+    if org:
+        shapes.append([org, " ".join(x for x in (name, tail) if x)])
+    shapes.append([x for x in (org, name, tail) if x])
+    g = self.geometry()
+    o = g.get("outline")
+
+    def emit(lines, pos, lay, sz):
+        mirror = " mirror" if lay.startswith("B.") else ""
+        text = "\\\\n".join(lines)
+        self.add_item(f'(gr_text "{text}" (at {_r(pos[0])} {_r(pos[1])}) (layer "{lay}") (uuid "{_uuid.uuid4()}") '
+                      f'(effects (font (size {sz} {sz}) (thickness {_r(sz * 0.15)})) (justify left top{mirror})))')
+        self.flush()
+        return {"text": " / ".join(lines), "at": [_r(pos[0]), _r(pos[1])], "layer": lay, "size": sz}
+
+    if at is not None:
+        return emit(shapes[0], at, layer, size)
+    if not o:
+        raise HarnessError("The board has no outline yet; draw it first with board.outline(x0, y0, x1, y1), or give at=(x, y).")
+    other = "B.SilkS" if layer.startswith("F.") else "F.SilkS"
+    for lay in (layer, other):
+        side = "back" if lay.startswith("B.") else "front"
+        boxes = []
+        for p in g["parts"]:
+            b = p.get("courtyard") or p.get("box")
+            if b and (p.get("side", "front") == side or len(p.get("pads", [])) > 0 and re.match(r"(J|P|H|MH|TP)\\d", p["ref"])):
+                boxes.append(b)
+        for sz in dict.fromkeys((size, 0.8, 0.6)):
+            if sz > size:
+                continue
+            for lines in shapes:
+                w, h = max(len(x) for x in lines) * sz * 0.9 + 0.4, len(lines) * sz * 1.65 + 0.3
+                if w > o[2] - o[0] - 1.6 or h > o[3] - o[1] - 1.6:
+                    continue
+                y = o[3] - 0.8 - h
+                while y >= o[1] + 0.8:
+                    x = o[0] + 0.8
+                    while x + w <= o[2] - 0.8:
+                        hit = next((b for b in boxes if x < b[2] + 0.25 and x + w > b[0] - 0.25 and y < b[3] + 0.25 and y + h > b[1] - 0.25), None)
+                        if hit is None:
+                            return emit(lines, (x + 0.2, y + 0.15), lay, sz)
+                        x = max(x + 0.5, hit[2] + 0.3)
+                    y -= 0.5
+    raise HarnessError(f"There is no room for \\"{shapes[0][0]}\\" on the silkscreen of either side, even at 0.6 mm in three lines; give at=(x, y).")
+
+
+def _stitch(self, spacing: float = 10.0, net: str = "GND", margin: float = 1.5, size: float | None = None, drill: float | None = None) -> dict:
+    """Tie the ground planes together with a grid of vias, about every \`spacing\` mm, wherever one fits: clear of
+    parts, and taken back out wherever the rules check says it is too close to other copper.  Call it after routing,
+    with ground poured on at least two layers."""
+    self.flush()
+    g = self.geometry()
+    o = g.get("outline")
+    if not o:
+        raise HarnessError("The board has no outline yet.")
+    name = self._net(net)
+    pts = []
+    nx = max(1, int((o[2] - o[0] - 2 * margin) // spacing))
+    ny = max(1, int((o[3] - o[1] - 2 * margin) // spacing))
+    for i in range(nx + 1):
+        for j in range(ny + 1):
+            c = (o[0] + margin + i * (o[2] - o[0] - 2 * margin) / nx, o[1] + margin + j * (o[3] - o[1] - 2 * margin) / ny)
+            reach = int(spacing / 2)      # the nearest clear spot around the grid point, within half a pitch
+            near = sorted(((dx, dy) for dx in range(-reach, reach + 1) for dy in range(-reach, reach + 1)), key=lambda q: q[0] * q[0] + q[1] * q[1])
+            for dx, dy in near:
+                at = (_r(c[0] + dx), _r(c[1] + dy))
+                if o[0] + margin <= at[0] <= o[2] - margin and o[1] + margin <= at[1] <= o[3] - margin and _free_at(g, at, 0.6) and all(abs(at[0] - q[0]) + abs(at[1] - q[1]) > spacing / 2 for q in pts):
+                    pts.append(at)
+                    break
+    ids = {}
+    for at in pts:      # one batch each, so each via's id is known and a bad one can be taken out again
+        self.via(name, at, size=size, drill=drill)
+        res = self.flush() or {}
+        new = (res.get("added") or [None])[-1]
+        if new:
+            ids[new] = at
+    removed = 0
+    if ids:
+        r = self._call("run_checks")
+        bad = set()
+        for v in r.get("violations", []):
+            if v.get("severity") != "error" or v.get("code") in ("unconnected_items",):
+                continue
+            for vid, at in ids.items():
+                if abs(v["x"] - at[0]) < 1.0 and abs(v["y"] - at[1]) < 1.0:
+                    bad.add(vid)
+        for vid in bad:
+            self._edit({"op": "remove", "id": vid})
+            removed += 1
+        self.flush()
+    out = {"vias": len(ids) - removed, "tried": len(pts), "removed": removed}
+    self.project.note(f"board: {out['vias']} ground stitching vias")
+    return out
+
+
+def install(Project, Schematic, Board) -> None:
+    Schematic.review = _review
+    Board.review = _review
+    Project.review = _project_review
+    Schematic.globalize = _globalize
+    Schematic.supplies = _supplies
+    Schematic.test_point = _test_point
+    Schematic.bom = _bom
+    Schematic.fiducials = _fiducials
+    Board.fiducials = _board_fiducials
+    Board.mark = _mark
+    Board.stitch = _stitch
+`;var _=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
 
     from kicad_harness import parts
     part = parts.from_datasheet("W25Q64JV.pdf", name="W25Q64JV", package="SOIC-8")
@@ -3428,7 +3844,7 @@ def _same_family(header: str, want: dict) -> bool:
 def _title_matches(title: str, pk: dict) -> bool:
     got = ds.packages(title + " ")
     return any(g["family"] == pk["family"] and g["pins"] == pk["pins"] for g in got)
-`;var _=`"""Reading a datasheet without a model: page text, the pin table and the package drawing's numbers.
+`;var b=`"""Reading a datasheet without a model: page text, the pin table and the package drawing's numbers.
 
 Datasheets are laid out for people, so this is a set of careful heuristics, and it says how sure
 it is.  What it cannot read is reported as missing, and only that small remainder needs a
@@ -3708,7 +4124,7 @@ def dim_tables(pages: list) -> list:
                     out.append(t)
             i = max(j, i + 1)
     return out
-`;var b=`"""Footprints computed from package dimensions, after IPC-7351B.
+`;var y=`"""Footprints computed from package dimensions, after IPC-7351B.
 
 Every generator takes the package's own dimensions (the numbers a datasheet's mechanical drawing
 gives) and returns a \`Footprint\`: pads, courtyard, fabrication outline, silkscreen and the text of
@@ -4122,7 +4538,7 @@ def header(name: str, pins: int, rows: int = 1, pitch: float = 2.54, lead: float
         for r in range(rows):
             fp.pad(n, x0 + r * pitch, y0 + i * pitch, pad, pad, "rect", drill=hole); n += 1
     return fp.finish(rows * pitch, per * pitch, 0.5)
-`;var y=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
+`;var w=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
 
     from kicad_harness import parts
     rows = parts.find("3.3V LDO SOT-23-5 500mA")            # every vendor that is set up, merged
@@ -4407,7 +4823,7 @@ def lookup(mpn: str, project=None) -> dict:
         elif not out["datasheet"] and own.get("datasheet_candidates"):
             out["datasheet_candidates"] = own["datasheet_candidates"]
     return out
-`;var w=`"""Schematic symbols drawn from a pin list.
+`;var x=`"""Schematic symbols drawn from a pin list.
 
 A symbol is a rectangle with the pins sorted onto its sides the way KiCad's library convention
 (KLC) asks: supplies on top, grounds at the bottom, inputs on the left, outputs on the right,
@@ -4596,9 +5012,9 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var d=require("node:fs"),I=globalThis,F=d.constants;process.binding=e=>{if(e==="constants")return{fs:F};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete I[e]}catch{}var O=new(require("node:string_decoder")).StringDecoder("utf8"),k=new Int32Array(new SharedArrayBuffer(4)),a="";function x(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
-`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(k,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=O.write(e.subarray(0,n))}}function p(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=d.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(k,0,0,4);continue}throw t}}var R=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",m],["kicad_harness/transport.py",h],["kicad_harness/sheet.py",u],["kicad_harness/parts/__init__.py",g],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",b],["kicad_harness/parts/search.py",y],["kicad_harness/parts/symbol.py",w]],z=`
+`;var p=require("node:fs"),O=globalThis,R=p.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
+`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var B=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",_],["kicad_harness/parts/datasheet.py",b],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],G=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -4629,6 +5045,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function G(){let e=JSON.parse(x()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:v}=require(s+"pyodide.js"),i=await v({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(p({call:String(r),args:JSON.parse(String(l||"{}"))}),x())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of R)i.FS.writeFile("/kh/"+r,l);i.runPython(z);let N=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(N(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of B)i.FS.writeFile("/kh/"+r,l);i.runPython(G);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
 `).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
-`),p(o),process.exit(0)}G().catch(e=>{try{p({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`),d(o),process.exit(0)}L().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

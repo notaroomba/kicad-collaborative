@@ -193,7 +193,7 @@ fn build_catalog() -> Vec<Tool> {
     // The order a model reads them in: find the project, read, look, change, then the rest.
     let order = [
         "list_projects", "get_project", "get_design_overview", "get_design_guide", "list_components", "get_component", "list_nets",
-        "get_items", "run_checks", "check_layout", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "run_python", "get_run", "apply_changes",
+        "get_items", "run_checks", "review_design", "check_layout", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "run_python", "get_run", "apply_changes",
         "undo_changes", "redo_changes", "list_changes", "read_document", "list_comments", "add_comment", "resolve_comment", "list_checkpoints",
         "create_checkpoint", "create_project", "get_geometry",
     ];

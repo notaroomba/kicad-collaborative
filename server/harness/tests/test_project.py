@@ -197,7 +197,7 @@ class Blinker(unittest.TestCase):
         self.assertEqual(sch.fit_page()["moved"], [0.0, 0.0])                    # already fitted: nothing moves
         sch.clear()
         sch.page("A2")
-        self.assertEqual(sch.fit_page()["paper"], "A4")                         # an empty sheet is the smallest page
+        self.assertEqual(sch.fit_page()["paper"], "A3")                         # an empty sheet is the smallest page
 
     def test_the_layout_check_finds_what_is_drawn_over_something_else(self):
         sch, built = self._sheet()

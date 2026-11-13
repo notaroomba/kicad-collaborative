@@ -213,7 +213,9 @@ result = {"built": built, "overlaps": sch.overlaps(), "sections": sch.sections()
   const lay = await call('check_layout', { project: N2, document: 'schematic' });
   check('check_layout: a clean sheet inside the drawing area', !lay.isError && lay.data.count === 0 && lay.data.sections.length === 3 && lay.data.extent[0] >= lay.data.drawing_area[0] && lay.data.extent[3] <= lay.data.drawing_area[3], lay.text.slice(0, 400));
   const text = await call('read_document', { project: N2, document: 'schematic', max_chars: 400000 });
-  check('inside a block parts are wired: a label only where a net leaves the block', (text.data.text || '').split('(label "').length - 1 <= 4 && /\(label "OUT"/.test(text.data.text || '') && !/\(label "LED_K"/.test(text.data.text || '') && !/\(label "DISCH"/.test(text.data.text || ''), String((text.data.text || '').split('(label "').length - 1));
+  const labelled = (name) => new RegExp(`\\((?:global_)?label "${name}"`).test(text.data.text || '');
+  const labelCount = ((text.data.text || '').match(/\((?:global_)?label "/g) || []).length;
+  check('inside a block parts are wired: a label only where a net leaves the block', labelCount <= 4 && labelled('OUT') && !labelled('LED_K') && !labelled('DISCH'), String(labelCount));
   check('supply symbols point up and ground symbols down, labels are horizontal', !/\(symbol \(lib_id "power:[^"]+"\) \(at [-0-9.]+ [-0-9.]+ (90|180|270)\)/.test(text.data.text || '') && !/\(label "[^"]+" \(at [-0-9.]+ [-0-9.]+ (90|270)\)/.test(text.data.text || ''), '');
   check('the notes are on the sheet in words', /Note: C1 is 10 uF/.test(text.data.text || '') && /R3 is 330 ohm/.test(text.data.text || ''), (text.text || '').slice(0, 200));
   const bad = await call('run_python', { project: N2, live: false, code: `

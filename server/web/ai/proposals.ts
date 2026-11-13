@@ -8,6 +8,7 @@
 // new items are serialised without being added.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { globalizeLabels } from "./labels";
 import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } from "./design";
 import { projectDocs, resolveDoc } from "./design";
 import { footprintNode, kicadFootprint, kicadSymbol, vendorPart, vendorSymbol } from "./library";
@@ -427,8 +428,22 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
         case "add_label": {
           schOnly(e.op); const kind = e.kind || "label";
           if (!["label", "global_label", "hierarchical_label"].includes(kind)) throw new ToolError("kind is label, global_label or hierarchical_label");
-          const c = added(doc, SCH()._.labelNode(kind, text(e.text, "text"), [num(e.x, "x"), num(e.y, "y")], e.rotation || 0)); changes.push(c);
+          const node = SCH()._.labelNode(kind, text(e.text, "text"), [num(e.x, "x"), num(e.y, "y")], e.rotation || 0);
+          if (e.shape !== undefined && kind !== "label") {
+            if (!["input", "output", "bidirectional", "tri_state", "passive"].includes(e.shape)) throw new ToolError("shape is input, output, bidirectional, tri_state or passive");
+            const sh = node.find((c: any) => Array.isArray(c) && c[0] === "shape"); if (sh) sh[1] = e.shape;
+          }
+          const c = added(doc, node); changes.push(c);
           lines.push({ kind: "add", text: `Add ${kind.replace("_", " ")} "${e.text}" at (${fmt(e.x)}, ${fmt(e.y)})`, ids: [c.id] });
+          break;
+        }
+        case "globalize_labels": {
+          // plain labels on wire ends become global labels with a direction shape (a stub that goes elsewhere says so)
+          schOnly(e.op); const res = globalizeLabels(doc, { added, removed }, { names: Array.isArray(e.names) ? e.names.map(String) : undefined, all: e.all === true });
+          if (!res.converted.length) throw new ToolError("there is no plain label on a wire end or a pin to make global");
+          changes.push(...res.changes);
+          lines.push({ kind: "modify", text: `${res.converted.length} label${res.converted.length > 1 ? "s" : ""} made global with a direction shape: ${Array.from(new Set(res.converted)).slice(0, 12).join(", ")}`, ids: res.ids });
+          details.push({ globalize_labels: { converted: res.converted.length, names: Array.from(new Set(res.converted)) } });
           break;
         }
         case "add_junction": case "add_no_connect": {

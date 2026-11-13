@@ -164,7 +164,7 @@ const T = () => tokens.access_token;
   check('a notification is accepted with 202', note.status === 202);
   check('ping', JSON.stringify((await rpc(T(), 'ping')).result) === '{}');
   const list = (await rpc(T(), 'tools/list')).result.tools;
-  check('tools/list: the catalog, each tool with a schema and annotations', list.length === 30 && list.some((t) => t.name === 'check_layout') && list.some((t) => t.name === 'get_run') && list.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.annotations && t.description.length > 40), `${list.length} tools`);
+  check('tools/list: the catalog, each tool with a schema and annotations', list.length === 31 && list.some((t) => t.name === 'check_layout') && list.some((t) => t.name === 'review_design') && list.some((t) => t.name === 'get_run') && list.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.annotations && t.description.length > 40), `${list.length} tools`);
   check('the assistant\'s editor-only tools are not offered', !list.some((t) => ['get_selection', 'focus_view', 'open_document', 'propose_changes'].includes(t.name)));
   const unknown = await rpc(T(), 'nope/nothing');
   check('an unknown method is a JSON-RPC error', unknown.error && unknown.error.code === -32601);

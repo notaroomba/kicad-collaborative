@@ -20,10 +20,13 @@ _PAD = 3.81      # between a frame and what it holds
 _HEAD = 6.35     # the strip a frame's heading takes
 _TITLE = 2.54    # heading text height
 _LINE = 2.286    # pitch of note lines
-_PAPERS = [("A4", 297.0, 210.0), ("A3", 420.0, 297.0), ("A2", 594.0, 420.0), ("A1", 841.0, 594.0), ("A0", 1189.0, 841.0)]
+# A3 (11 x 17 in) is the smallest sheet a design is drawn on: nobody prints these, and white space is what separates blocks
+_PAPERS = [("A3", 420.0, 297.0), ("A2", 594.0, 420.0), ("A1", 841.0, 594.0), ("A0", 1189.0, 841.0)]
 _STAGE = (1524.0, 127.0)   # blocks are drawn off the page first, measured, then moved into place
 _DIR = {"left": (-1, 0), "right": (1, 0), "top": (0, -1), "bottom": (0, 1)}
 _LABEL_ROT = {"left": 180, "right": 0, "top": 90, "bottom": 270}
+_SHAPE = {"output": "output", "power_out": "output", "input": "input", "power_in": "input", "bidirectional": "bidirectional", "tri_state": "bidirectional",
+          "open_collector": "bidirectional", "open_emitter": "bidirectional"}     # a global label's shape from the pin it stands on
 _GND_ROT = {"bottom": 0, "right": 90, "top": 180, "left": 270}
 _SUPPLY_ROT = {"top": 0, "left": 90, "bottom": 180, "right": 270}
 _GROUND = re.compile(r"^(A|D|P)?(GND|VSS|VEE)|^GND|^-\d|^Earth", re.I)
@@ -572,7 +575,7 @@ class Schematic(_Doc):
         if net:
             self.flush()
             if self.pin(f"{specs[0]['ref']}.{specs[0]['number']}")["net"] != net:
-                self.label(specs[0], net)
+                self.label(specs[0], net, kind="label")      # a wired net gets its name as a plain wire label
         self.flush()
         return ", ".join(how)
 
@@ -586,8 +589,12 @@ class Schematic(_Doc):
             return None
         return end
 
-    def label(self, pin, name: str, kind: str = "label") -> None:
-        """Put a net label on a pin (on a short stub away from the symbol).  `pin` may name several pins ("U1.GND")."""
+    def label(self, pin, name: str, kind: str | None = None, shape: str | None = None) -> None:
+        """Put a net's name on a pin, on a short stub away from the symbol.  `pin` may name several pins ("U1.GND").
+        A stub that reaches one pin and carries on elsewhere by name gets a global label (a hierarchical one with
+        kind="hierarchical_label" on a sub-sheet) whose shape says which way the signal goes, taken from the pin's
+        type unless `shape` is given: a plain label (kind="label") is only for naming a wire that is drawn through."""
+        kind = kind or "global_label"
         for p in self._pins(pin):
             self.flush()
             g = self.geometry()
@@ -605,7 +612,10 @@ class Schematic(_Doc):
                     self._edit({"op": "add_wire", "points": [list(at), list(far)]})
                     self._edit({"op": "add_label", "kind": kind, "text": name, "x": far[0], "y": far[1], "rotation": 180 if p["side"] == "right" else 0})
                     continue
-            self._edit({"op": "add_label", "kind": kind, "text": name, "x": at[0], "y": at[1], "rotation": _LABEL_ROT[p["side"]]})
+            e = {"op": "add_label", "kind": kind, "text": name, "x": at[0], "y": at[1], "rotation": _LABEL_ROT[p["side"]]}
+            if kind != "label":
+                e["shape"] = shape or _SHAPE.get(p.get("type", ""), "passive")
+            self._edit(e)
 
     def power(self, pin, name: str) -> None:
         """Put a power symbol (power:GND, power:+3V3, ...) on a pin.  `pin` may name several pins ("U1.GND")."""
@@ -616,13 +626,23 @@ class Schematic(_Doc):
             g = self.geometry()
             if p["net"] == short:
                 continue
-            end = self._stub(p, g)
-            at = end or p.at
-            if end:
-                self._edit({"op": "add_wire", "points": [list(p.at), list(end)]})
-            rot = (_GND_ROT if _GROUND.search(short) else _SUPPLY_ROT)[p["side"]]
+            # the symbol is never turned: a supply points up and a ground down, always, so the wire bends to it
+            v = 1 if _GROUND.search(short) else -1
+            d = _DIR[p["side"]]
+            paths = []
+            if d == (0, v):                                    # the pin already points the symbol's way
+                paths.append([p.at, (p["x"], _r(p["y"] + v * STUB))])
+            elif d[1] == 0:                                    # a pin on the side: out, then a short step up or down
+                out = (_r(p["x"] + d[0] * STUB), p["y"])
+                paths.append([p.at, out, (out[0], _r(p["y"] + v * GRID))])
+            else:                                              # a pin that points the other way: away, aside, and back a step
+                away = (p["x"], _r(p["y"] + d[1] * 2 * STUB))
+                for side in (1, -1):
+                    paths.append([p.at, away, (_r(p["x"] + side * STUB), away[1]), (_r(p["x"] + side * STUB), _r(away[1] + v * GRID))])
+            path = next((q for q in paths if not self._blocked(q, g, (p.at,))), paths[0])
+            self._edit({"op": "add_wire", "points": [list(q) for q in path]})
             self._is_power(short)
-            self._edit(self._power_edit(lib_id, at[0], at[1], rot))
+            self._edit(self._power_edit(lib_id, path[-1][0], path[-1][1], 0))
 
     def _is_power(self, name: str) -> bool:
         if name in self.project.custom_power:
@@ -635,10 +655,17 @@ class Schematic(_Doc):
             self.supply(name)        # a supply KiCad's power library has no symbol for: one is made, as a person would
             return True
 
-    def supply(self, name: str) -> str:
+    def supply(self, name: str, volts=None, amps=None, source: str | None = None) -> str:
         """Declare a net a supply (or a ground) that KiCad's power library has no symbol for ("VSYS", "VDD_SPI", "GND_RF"):
         from then on it is drawn with a power symbol of its own, an arrow up for a supply and KiCad's ground mark for a
-        ground, instead of a net label.  `net`, `power` and `build` do this by themselves for names that read as supplies."""
+        ground, instead of a net label.  `net`, `power` and `build` do this by themselves for names that read as supplies.
+        With volts=(min, typ, max) and amps=(min, typ, max) the rail's range and load are also written on the sheet
+        ("VUSB = (4.5, 5, 5.5) V @ (, 35, 500) mA"), which every supply should have; `supplies({...})` writes several at once."""
+        if volts is not None or amps is not None:
+            if not _POWER.match(name) and name not in self.project.custom_power:
+                self.supply(name)
+            self.supplies({name: {"volts": volts, "amps": amps, "from": source}})
+            return name
         if name not in self.project.custom_power:
             ground = bool(_GROUND.search(name))
             self.project.custom_power[name] = _power_symbol(name, ground)
@@ -761,9 +788,9 @@ class Schematic(_Doc):
         self.flush()
 
     def fit_page(self, margin: float = 2.54, papers: tuple | None = None) -> dict:
-        """Make the page fit what is drawn: the smallest paper ("A4", "A3", "A2", "A1", "A0", or the ones named in `papers`)
+        """Make the page fit what is drawn: the smallest paper ("A3", "A2", "A1", "A0", or the ones named in `papers`)
         that holds everything with `margin` to the border and clear of the title block, and the drawing moved as one piece
-        to the middle of it.  Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A4."""
+        to the middle of it.  Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A3."""
         self.flush()
         r = self.layout(limit=1)
         was, ext = r.get("paper", "A4"), r.get("extent")
@@ -808,7 +835,11 @@ class Schematic(_Doc):
         return {"paper": was, "was": was, "moved": [0, 0], "fits": False}
 
     def title(self, title: str | None = None, rev: str | None = None, date: str | None = None, company: str | None = None) -> None:
-        """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as they are."""
+        """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as
+        they are, except the date, which is set to today whenever the title or the revision is."""
+        if date is None and (title is not None or rev is not None):
+            import datetime
+            date = datetime.date.today().isoformat()     # a title or a revision without a date is half a title block
         e = {k: v for k, v in (("title", title), ("rev", rev), ("date", date), ("company", company)) if v is not None}
         if e:
             self.flush()
@@ -958,7 +989,8 @@ class Schematic(_Doc):
 
     # ---- a whole sheet from a netlist
     def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None,
-              notes: dict | None = None, frames: bool = True, labels: list | None = None, swap_pins: bool = True) -> dict:
+              notes: dict | None = None, frames: bool = True, labels: list | None = None, swap_pins: bool = True,
+              supplies: dict | None = None, global_labels: bool = True, review: bool = True) -> dict:
         """Draw a schematic from a netlist in one call.
 
         parts: {ref: {"lib": "Device:R", "value": "10k", "footprint": "...", "fields": {...}}} (lib may be a
@@ -969,7 +1001,10 @@ class Schematic(_Doc):
         Every pin gets a power symbol or a net label on a short stub, so the result is correct by construction.
 
         Blocks are drawn off the page, measured as drawn (fields, labels and all), and then packed onto the page, so
-        nothing overlaps; the page grows (A4, A3, ...) when the design needs it.  Returns counts, anything that did
+        nothing overlaps; the page starts at A3 (11 x 17 in) and grows when the design needs it.  Labels that leave a block are
+        global labels with a direction shape (global_labels=False keeps plain ones); supplies={name: {"volts": (min, typ, max),
+        "amps": (min, typ, max)}} writes the supply list on the sheet; "review" in the result is what the house checklist
+        (sch.review()) still finds, so fix that before reporting the sheet done (review=False skips it).  Returns counts, anything that did
         not connect, and "overlaps": what the layout check still finds (0 for a clean sheet).
         """
         named = bool(groups)
@@ -1003,6 +1038,8 @@ class Schematic(_Doc):
                 problems.append(str(e))
         self.flush()
         self._repair(nets)
+        if global_labels:      # a name at the end of a wire sends the net elsewhere: it is a global label with a direction, not text
+            self.globalize()
         # ---- 3. measure each block as drawn, and what its heading and notes need
         blocks = []
         for gname, band in bands:
@@ -1064,6 +1101,11 @@ class Schematic(_Doc):
                 self.text(line, (x0 + pad, ny), italic=True)
                 ny += _LINE
             self.flush()
+        if supplies:
+            try:
+                self.supplies(supplies)
+            except HarnessError as e:
+                problems.append(str(e))
         # ---- 6. a sheet that had something on it was packed onto the page it had: now that all of it is drawn, the page is
         #         made to fit (an empty sheet was packed onto the smallest page already)
         if used:
@@ -1077,6 +1119,12 @@ class Schematic(_Doc):
                "problems": problems + wrong, "unconnected": self.unconnected()[:40], "overlaps": lay.get("count", 0)}
         if drawer.swapped:
             out["pins_swapped"] = drawer.swapped      # symbols redrawn with supply straps on top and ground straps at the bottom of their side
+        if review:      # the house checklist, so what is missing is known before anyone looks at the sheet
+            try:
+                rv = self.review(level="warning", limit=14)
+                out["review"] = {"errors": rv["errors"], "warnings": rv["warnings"], "findings": [f if len(f) < 420 else f[:417] + "..." for f in rv["findings"]]}
+            except HarnessError:
+                pass
         if lay.get("count"):
             out["overlap_list"] = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in lay.get("overlaps", [])]
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
