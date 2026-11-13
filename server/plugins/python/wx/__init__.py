@@ -2820,7 +2820,14 @@ class CheckBox(_Labelled):
     IsChecked = GetValue
 
     def SetValue(self, v):
-        self.input.checked = bool(v)
+        # wxPython takes a truth value here only as a bool or a whole number: a string such as "false" is a TypeError
+        # there, not a tick (plugins that load settings as text rely on that error leaving the box as it was)
+        self.input.checked = self._wx_truth(v)
+
+    def _wx_truth(self, v):
+        if not isinstance(v, (bool, int)) and not hasattr(v, "__index__"):
+            raise TypeError("%s.SetValue(): argument 1 has unexpected type '%s'" % (type(self).__name__, type(v).__name__))
+        return bool(v)
 
     def Get3StateValue(self):
         return CHK_CHECKED if self.GetValue() else CHK_UNCHECKED
@@ -2851,7 +2858,7 @@ class RadioButton(CheckBox):
     def SetValue(self, v):
         # one of a group: turning one on turns the others off (a browser does this for inputs that share a name;
         # said here too so it holds wherever the window is built)
-        if v:
+        if self._wx_truth(v):
             for other in getattr(self, "_wx_group", ()):
                 if other is not self:
                     other.input.checked = False

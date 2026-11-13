@@ -208,6 +208,22 @@
     "vn.thanhduongvs.component-position": {
       "status": "works",
       "note": "Driven end to end: both CSV files are opened; every part is listed at its own place and counted once."
+    },
+    "org.openscopeproject.InteractiveHtmlBom": {
+      "status": "works",
+      "note": "Driven end to end: the page's data is read back and checked against the board (every part and pad at its place, custom-shaped pads, outline, BOM)."
+    },
+    "com.github.sparkfun.SparkFunKiCadPanelizer": {
+      "status": "works",
+      "note": "Driven end to end: the 8 by 4 panel file is opened and checked part by part. The panel is saved as its own file; the open board stays as it was."
+    },
+    "com.github.Mage-Control-Systems-Ltd.NCCM": {
+      "status": "works",
+      "note": "Driven end to end: the rules it writes are read back, and they become the project's custom design rules once you agree."
+    },
+    "com.github.adrianwest.bakery": {
+      "status": "works",
+      "note": "Driven end to end: footprints, symbols and 3D models are copied into project libraries and every part, the schematics and the library table point at them; nothing else on the board changes. Datasheets it cannot download stay as links."
     }
   }
 }

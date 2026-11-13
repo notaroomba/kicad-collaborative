@@ -211,6 +211,12 @@ async function one(dir, boardPath, boardGiven) {
     }
     // Library files offered to the project: the stand-in editor takes what a project takes and remembers it.
     // A schematic the plugin rewrote as a file: the stand-in project takes it when it is a KiCad file that differs.
+    // The project's custom rules file written by a plugin: the stand-in project takes it and says so.
+    if (method === "project.saveRules") {
+      if (typeof a.text !== "string" || !/^[^/]+\.kicad_dru$/i.test(String(a.path || ""))) return JSON.stringify({ error: "not the project's custom rules file" });
+      rewritten.push(a.path); said.push(`Change the custom design rules: ${a.path}`);
+      return JSON.stringify({ applied: true });
+    }
     if (method === "project.rewriteDocument") {
       const ok = typeof a.text === "string" && a.text.trim().startsWith("(kicad_") && a.text !== a.base && siblings.some((f) => f.path === a.path);
       if (!ok) return JSON.stringify({ error: "not a document of this project" });

@@ -278,6 +278,24 @@ How it works:
 - **A "save as" file picker** (`wx.FilePickerCtrl` with `FLP_SAVE`) starts on the board's name in the project
   folder, and the name it holds stands for a chosen file: an empty file keeps its place until the plugin writes it
   (it is not handed over if the plugin never does).
+- **The open board saved under another name is a "save as".** A plugin that calls `board.SetFileName(other)` and
+  saves (a panelizer does) leaves the project's live board as it was, as the desktop leaves the file the person
+  opened: from that call on its changes stay in its own copy, the new file is handed over with its other files, and
+  the run ends with a note saying so (`BOARD._saved_as_from`, `kicad_web.flush`).
+- **The project's custom rules file.** A `<project>.kicad_dru` a plugin writes becomes the project's custom design
+  rules once the person agrees (`project.saveRules`, needs `design:write`; `E.api.saveCustomRules`), so the design
+  rule check, the router and the length tuner follow it. The rules the project already has are among the files a
+  plugin finds beside the board.
+- **The global footprint library table.** `fp-lib-table` in KiCad's settings folder names every library the editor
+  has, written the first time a plugin looks for it (`kicad_web._global_fp_table`).
+- **Truth values.** `wx.CheckBox.SetValue` and `wx.RadioButton.SetValue` take a bool or a whole number and raise
+  `TypeError` for anything else, as wxPython does; plugins that load their settings as text depend on that error.
+- **Custom-shaped pads.** `PAD.MergePrimitivesAsPolygon` gives the anchor and every primitive (strokes at their
+  width) about the pad's position. They are merged into one outline when the polygon library is loaded for the
+  plugin, and otherwise handed over as overlapping outlines that cover the same copper.
+- **Fabrication files in the headless run.** `scripts/plugins-python.mjs` answers `fab.gerbers`, `fab.drill`,
+  `fab.positions`, `fab.bom` and `fab.layers` with the editor's own writers (`static/dist/fab.js`), so a drive
+  opens real Gerber, drill, placement and BOM files (`drive_util.gerber_drawn`, `holes_drilled`, `parts_placed`).
 - **A schematic a plugin rewrites as a file is carried into the project.** Desktop plugins that change the
   schematic write the `.kicad_sch` file. The server works out what really changed, item by item, however the
   plugin laid the file out (`POST /api/docs/{id}/rewrite`, `merge::in_layout_of`), the editor lists it and asks,

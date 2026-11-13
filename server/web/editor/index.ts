@@ -604,4 +604,26 @@ async function importLibraryFiles(files: { path: string; text: string }[]): Prom
   const hit = [".step", ".stp"].map((ext) => docs.find((d) => d.docType === "model3d" && d.path.toLowerCase() === (stem + ext).toLowerCase())).find(Boolean);
   return hit ? `/api/docs/${hit.docId}/content` : null;
 };
-E.api = { importLibraryFiles, HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, startMove, state, store, toolCtx, undoLast, worldMm };
+/** The project's custom design rules (.kicad_dru) replaced by `text`: the existing rules document, or a new one beside the board. */
+async function saveCustomRules(path: string, text: string): Promise<boolean> {
+  const project = state.project;
+  if (!project || E.viewOnly) return false;
+  try {
+    const have = project.docs.find((d) => d.docType === "design_rules");
+    if (have) {
+      if (!(await saveTextDocument(have.docId, text, { id: "rules", kind: "MODIFIED", typeName: "DESIGN_RULES_FILE", properties: [{ name: "text", after: { type: "string", v: text } }] } as unknown as KChange))) return false;
+    } else {
+      const res = await api(`/api/projects/${project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path, docType: "design_rules" }) }) as { docId?: string; path?: string };
+      if (!res.docId) return false;
+      const r = await fetch(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text });
+      if (!r.ok) return false;
+      if (!project.docs.some((d) => d.docId === res.docId)) project.docs.push({ docId: res.docId, path: res.path || path, docType: "design_rules" });
+      store.set({ project: Object.assign({}, project) });
+    }
+    E.druText = text;        // DRC, the router and the length tuner read the rules from here
+    requestRender();
+    return true;
+  } catch (e) { console.warn(e); return false; }
+}
+
+E.api = { importLibraryFiles, saveCustomRules, HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, startMove, state, store, toolCtx, undoLast, worldMm };

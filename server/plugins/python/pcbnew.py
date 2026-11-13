@@ -1940,7 +1940,7 @@ class EDA_TEXT:
         self._node[i] = str(text)
         self._touch()
 
-    def GetShownText(self, *_):
+    def GetShownText(self, *_, **_k):
         t = self.GetText()
         p = getattr(self, "_parent", None)
         if p is not None and "${" in t:
@@ -2204,7 +2204,7 @@ class PCB_TEXT(BOARD_ITEM, EDA_TEXT):
         k = _kid(self._node, "layer")
         return k is not None and any(str(c) == "knockout" for c in k[2:])
 
-    def GetShownText(self, *_):
+    def GetShownText(self, *_, **_k):
         return EDA_TEXT.GetShownText(self)
 
     def TextHitTest(self, *a):
@@ -3489,6 +3489,32 @@ class PAD(BOARD_CONNECTED_ITEM):
     def IsNoConnectPad(self):
         return self.GetPinType().endswith("no_connect")
 
+    def MergePrimitivesAsPolygon(self, *a):
+        """A custom-shaped pad's copper, about the pad's own position and unrotated, as KiCad gives it: the anchor and
+        every primitive, strokes at their width.  KiCad merges them into one outline; here they are merged when the
+        polygon library is loaded and otherwise handed over as overlapping outlines that cover exactly the same copper."""
+        target = next((x for x in a if isinstance(x, SHAPE_POLY_SET)), None)
+        if target is None:
+            raise TypeError("MergePrimitivesAsPolygon(layer, SHAPE_POLY_SET): no polygon set given")
+        target.RemoveAllContours()
+        pieces = _pad_primitive_pieces(self)
+        import sys as _sys
+        if "shapely" in _sys.modules and len(pieces) > 1:
+            try:
+                sh = _sys.modules["shapely"]
+                import shapely.geometry as G
+                u = sh.unary_union([q if q.is_valid else q.buffer(0) for q in (G.Polygon(pp) for pp in pieces)])
+                polys = [u] if u.geom_type == "Polygon" else list(getattr(u, "geoms", []))
+                if polys and all(q.geom_type == "Polygon" and not q.interiors for q in polys):
+                    pieces = [list(q.exterior.coords)[:-1] for q in polys]
+            except Exception:      # noqa: BLE001 - the unmerged outlines stand
+                pass
+        for pts in pieces:
+            chain = SHAPE_LINE_CHAIN(closed=True)
+            for x, y in pts:
+                chain.Append(VECTOR2I(int(round(x)), int(round(y))))
+            target._outlines.append([chain])
+
     def BuildEffectivePolygon(self, *_a, **_k):
         """KiCad caches the pad's polygon here; this one is worked out each time it is asked for."""
 
@@ -3616,6 +3642,14 @@ class FOOTPRINT(BOARD_ITEM):
     def __init__(self, parent=None, *a):
         self._pending = None
         self._kids_cache = None
+        if isinstance(parent, FOOTPRINT):
+            # FOOTPRINT(footprint): a copy with its pads, texts and graphics, as the desktop's copy constructor makes.
+            # The copy and everything in it get their own ids, because two items of one board cannot share one here.
+            dup = parent.Duplicate()
+            self._board, self._parent, self._node = None, None, dup._node
+            self._dirty, self._flags, self._selected = False, IS_NEW, False
+            self._pending = dup._pending
+            return
         BOARD_ITEM.__init__(self, parent)
 
     @classmethod
@@ -6170,6 +6204,14 @@ class BOARD(EDA_ITEM):
         return self._filename
 
     def SetFileName(self, name):
+        # The open board given another file name is a "save as": on the desktop the file the person opened stays as it
+        # was and the plugin's result goes into the new file.  Here the open board is the project's live board, so from
+        # this point what the plugin changes stays in its own copy (kicad_web.flush) and is saved under the new name.
+        import os as _os
+        if self is _Host.board and self._filename and _os.path.abspath(str(name)) != _os.path.abspath(self._filename) and not getattr(self, "_saved_as_from", None):
+            self._saved_as_from = self._filename
+        elif getattr(self, "_saved_as_from", None) and _os.path.abspath(str(name)) == _os.path.abspath(self._saved_as_from):
+            self._saved_as_from = None
         self._filename = str(name)
 
     def GetFileFormatVersionAtLoad(self):
@@ -7727,6 +7769,73 @@ def _shape_geom(d, err=None):
             g = g.buffer(0)
         return g.buffer(half, quad_segs=_quad_segs(half, err)) if half > 0 else g
     return ring.buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+
+
+def _capsule(a, b, r, n=12):
+    """The outline of a stroke from a to b of half width r: two half circles joined by straight sides."""
+    ang = _math.atan2(b[1] - a[1], b[0] - a[0])
+    out = []
+    for c, start in ((b, ang - _math.pi / 2), (a, ang + _math.pi / 2)):
+        for i in range(n + 1):
+            t = start + _math.pi * i / n
+            out.append((c[0] + r * _math.cos(t), c[1] + r * _math.sin(t)))
+    return out
+
+
+def _pad_primitive_pieces(pad):
+    """The anchor and primitives of a custom-shaped pad as plain outlines (lists of points, internal units, about the
+    pad's position, unrotated).  Together they cover the pad's copper; they may overlap."""
+    s = pad.GetSize()
+    hx, hy = s.x / 2.0, s.y / 2.0
+    anchor = _kid(_kid(pad._node, "options") or [], "anchor")
+    if anchor is not None and len(anchor) > 1 and str(anchor[1]) == "circle":
+        pieces = [[(hx * _math.cos(2 * _math.pi * i / 48), hx * _math.sin(2 * _math.pi * i / 48)) for i in range(48)]]
+    else:
+        pieces = [[(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]]
+
+    def stroke(pts, r, closed=False):
+        seq = list(pts) + ([pts[0]] if closed and pts else [])
+        for a, b in zip(seq, seq[1:]):
+            pieces.append(_capsule(a, b, r))
+
+    for prim in (_kid(pad._node, "primitives") or [])[1:]:
+        if not isinstance(prim, list) or not prim:
+            continue
+        kind = str(prim[0])
+        wk = _kid(prim, "width")
+        if wk is None:
+            wk = _kid(_kid(prim, "stroke") or [], "width")
+        half = FromMM(_f(wk[1])) / 2.0 if wk is not None and len(wk) > 1 else 0
+        xy = lambda name: (lambda q: (FromMM(_f(q[1])), FromMM(_f(q[2]))) if q is not None and len(q) > 2 else None)(_kid(prim, name))      # noqa: E731
+        fk = _kid(prim, "fill")
+        solid = fk is not None and len(fk) > 1 and str(fk[1]) not in ("none", "no")
+        if kind == "gr_poly":
+            pp = [(FromMM(_f(q[1])), FromMM(_f(q[2]))) for q in (_kid(prim, "pts") or [])[1:] if isinstance(q, list) and len(q) > 2 and str(q[0]) == "xy"]
+            if len(pp) >= 3:
+                if solid or fk is None:
+                    pieces.append(pp)
+                if half > 0:
+                    stroke(pp, half, True)
+        elif kind == "gr_line" and xy("start") and xy("end"):
+            stroke([xy("start"), xy("end")], max(half, 1))
+        elif kind == "gr_circle" and xy("center") and xy("end"):
+            c, e = xy("center"), xy("end")
+            rr = _math.hypot(e[0] - c[0], e[1] - c[1])
+            ring = [(c[0] + rr * _math.cos(2 * _math.pi * i / 48), c[1] + rr * _math.sin(2 * _math.pi * i / 48)) for i in range(48)]
+            if solid or half == 0:
+                pieces.append([(c[0] + (rr + half) * _math.cos(2 * _math.pi * i / 48), c[1] + (rr + half) * _math.sin(2 * _math.pi * i / 48)) for i in range(48)])
+            else:
+                stroke(ring, half, True)
+        elif kind == "gr_rect" and xy("start") and xy("end"):
+            a, b = xy("start"), xy("end")
+            box = [(min(a[0], b[0]), min(a[1], b[1])), (max(a[0], b[0]), min(a[1], b[1])), (max(a[0], b[0]), max(a[1], b[1])), (min(a[0], b[0]), max(a[1], b[1]))]
+            if solid or half == 0:
+                pieces.append(box)
+            if half > 0:
+                stroke(box, half, True)
+        elif kind == "gr_arc" and xy("start") and xy("mid") and xy("end"):
+            stroke(_arc_points(VECTOR2I(*xy("start")), VECTOR2I(*xy("mid")), VECTOR2I(*xy("end"))), max(half, 1))
+    return pieces
 
 
 def _place_geom(g, rot, x, y):

@@ -442,7 +442,7 @@ const NEEDS: Record<string, string | null> = {
   "view.select": "view", "view.move": "design:write", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
-  "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "fab.vrml": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write",
+  "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "fab.vrml": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write", "project.saveRules": "design:write",
   "libs.libraries": null, "libs.footprints": null, "libs.footprint": null, "libs.model": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
@@ -492,6 +492,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   if (ns === "libs") return libs[fn](a);
   if (ns === "project" && fn === "addLibraryFiles") return addLibraryFiles(p, a);
   if (ns === "project" && fn === "rewriteDocument") return rewriteDocument(p, a);
+  if (ns === "project" && fn === "saveRules") return saveRules(p, a);
   if (ns === "project") { if (fn === "saveVersion") log(p.identifier, "host", a && a.name ? `Saved a version: ${String(a.name).slice(0, 80)}` : "Opened the Save Version dialog"); return project[fn](a); }
   if (ns === "net") return netFetch(p, a);
   if (ns === "storage") return storage(p.identifier, fn, a);
@@ -578,6 +579,26 @@ async function rewriteDocument(p: InstalledPlugin, a: any): Promise<unknown> {
   log(p.identifier, "host", `${path}: ${changes.length} change${changes.length === 1 ? "" : "s"} carried into the project${done.kept ? ` (kept as “${done.kept}”)` : ""}`);
   toast(`${p.manifest.name}: ${path} updated`, 4000);
   return { applied: true, changes };
+}
+
+/**
+ * The project's custom design rules file (.kicad_dru) as a plugin wrote it.  The person is shown what the plugin wants
+ * to store and decides; the rules then are the project's own (Board Setup > Custom Rules), and DRC uses them.
+ */
+async function saveRules(p: InstalledPlugin, a: any): Promise<unknown> {
+  const path = String(a.path || "").replace(/\\/g, "/"), text = typeof a.text === "string" ? a.text : "";
+  if (!/^[^/]+\.kicad_dru$/i.test(path) || text.length > 2_000_000) return { error: "not the project's custom rules file" };
+  let ed: any; try { ed = ED(); } catch { return { error: "no editor" }; }
+  if (!ed || ed.viewOnly || !ed.api || typeof ed.api.saveCustomRules !== "function") return { error: "this project is open for viewing only" };
+  if (typeof ed.druText === "string" && ed.druText === text) return { unchanged: true };
+  const rules = (text.match(/\(rule\s/g) || []).length;
+  const yes = await ask(p, { kind: "confirm", title: "Change the custom design rules", message: `${p.manifest.name} wrote the project's custom rules file (${path}): ${rules} rule${rules === 1 ? "" : "s"}. Store it in the project? The design rule check, the router and the length tuner follow these rules; Board Setup > Custom Rules shows them.`, fields: [], okLabel: "Store rules" });
+  if (!yes) return { declined: true };
+  const ok = await ed.api.saveCustomRules(path, text);
+  if (!ok) return { error: "the rules could not be saved" };
+  log(p.identifier, "host", `${path}: custom rules stored in the project (${rules} rule${rules === 1 ? "" : "s"})`);
+  toast(`${p.manifest.name}: custom rules updated`, 4000);
+  return { applied: true };
 }
 
 // ---------------------------------------------------------------- dialogs the host draws for a plugin

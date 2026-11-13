@@ -1345,6 +1345,30 @@ def _note_handed(paths):
         log.warning("could not note the files handed over: %s", e)
 
 
+_fp_table_done = [False]
+
+
+def _global_fp_table(path):
+    """A desktop KiCad has a global footprint library table in its settings folder that names every library it came
+    with.  Plugins that resolve a library nickname read it; it is written here the first time one looks for it."""
+    if _fp_table_done[0] or not isinstance(path, str) or not path.endswith("fp-lib-table"):
+        return
+    try:
+        if os.path.realpath(os.path.dirname(os.path.abspath(path))) != os.path.realpath(CONFIG_DIR):
+            return
+        _fp_table_done[0] = True
+        target = os.path.join(CONFIG_DIR, "fp-lib-table")
+        if os.path.lexists(target):
+            return
+        names = pcbnew.GetFootprintLibraries() if hasattr(pcbnew, "GetFootprintLibraries") else []
+        rows = "".join('\t(lib (name "%s")(type "KiCad")(uri "${KICAD%s_FOOTPRINT_DIR}/%s.pretty")(options "")(descr ""))\n'
+                       % (n, str(pcbnew._Host.version).split(".")[0], n) for n in sorted(names))
+        if rows:
+            _write(target, ("(fp_lib_table\n\t(version 7)\n" + rows + ")\n").encode("utf-8"))
+    except Exception as e:                           # the libraries cannot be reached: no table, as on a bare installation
+        log.warning("global footprint library table: %s", e)
+
+
 def _install_model_files():
     """KiCad's 3D model library as the files a desktop installation has under its 3dmodels folder: a plugin that
     opens, copies or looks for <library>.3dshapes/<name>.step there gets the model, fetched through the editor the
@@ -1363,6 +1387,7 @@ def _install_model_files():
             p = os.fspath(path)
         except TypeError:
             return
+        _global_fp_table(p)
         if not isinstance(p, str) or not p.startswith(root + "/") or p in missing:
             return
         parts = p[len(root) + 1:].split("/")
@@ -1502,6 +1527,10 @@ def flush():
     board = pcbnew._Host.board
     if board is None or _bridge is None:
         return None
+    if getattr(board, "_saved_as_from", None):
+        # the plugin renamed the open board (a "save as"): its changes belong to the new file, not to the live board
+        _saved_as[0] = board.GetFileName()
+        return None
     ch = board._changes()
     select = ch.pop("select")
     refill = ch.pop("refill")
@@ -1530,6 +1559,7 @@ def flush():
 
 _label = ["edit"]
 _refill_note = [False]
+_saved_as = [None]          # the file name a plugin gave the open board in this run ("save as"), if it did
 _event_depth = [0]
 
 
@@ -1958,7 +1988,8 @@ def _carry_board_file():
     word = lambda n, name: (lambda k: str(k[1]) if k is not None and len(k) > 1 else "")(kid(n, name))
     xy = lambda n, name: (lambda k: (nm(k[1]), nm(k[2])) if k is not None and len(k) > 2 else None)(kid(n, name))
     nets = {str(n[1]): str(n[2]) for n in root[1:] if isinstance(n, list) and len(n) > 2 and str(n[0]) == "net"}
-    net_of = lambda n: nets.get(word(n, "net"), "")
+    # a net is named by its number (declared at the top of the file) or, since KiCad 10, by its name itself
+    net_of = lambda n: (lambda w: nets.get(w, w))(word(n, "net"))
     near = lambda a, b: abs(a[0] - b[0]) <= TOL and abs(a[1] - b[1]) <= TOL
     same_ends = lambda a, b: (near(a[0], b[0]) and near(a[1], b[1])) or (near(a[0], b[1]) and near(a[1], b[0]))
     apart = lambda a, b: min(sum(abs(p[0] - q[0]) + abs(p[1] - q[1]) for p, q in zip(a, o)) for o in (b, b[::-1]))
@@ -2158,6 +2189,23 @@ def _offer_rewrites(fresh):
     left = []
     for p in fresh:
         rel = os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/")
+        if rel.lower().endswith(".kicad_dru") and "/" not in rel:
+            # the project's custom design rules, written as a file: they become the project's own rules, which the
+            # design rule check follows, when the person agrees
+            try:
+                with open(p, encoding="utf-8") as fh:
+                    text = fh.read()
+                out = _call("project.saveRules", {"path": rel, "text": text}) or {}
+            except Exception as e:
+                out = {"error": str(e)}
+            if out.get("applied") or out.get("unchanged"):
+                if out.get("applied"):
+                    log.info("%s: stored as the project's custom design rules", rel)
+                continue
+            if out.get("error"):
+                log.warning("%s was written by the plugin but not stored in the project: %s", rel, out["error"])
+            left.append(p)
+            continue
         base = _state["given_text"].get(rel)
         if base is None:
             left.append(p)
@@ -2190,7 +2238,7 @@ def _hand_over_outputs():
     global _seen_files
     now = _tree(PROJECT_DIR)
     board = pcbnew._Host.board
-    skip = {board.GetFileName()} if board is not None else set()
+    skip = {getattr(board, "_saved_as_from", None) or board.GetFileName()} if board is not None else set()
     fresh = sorted(p for p, sig in now.items() if _seen_files.get(p) != sig and p not in skip
                    and not any(part.startswith(".") for part in os.path.relpath(p, PROJECT_DIR).split(os.sep)))   # hidden files and folders are a plugin's own housekeeping
     _seen_files = now
@@ -2620,6 +2668,7 @@ def run_action(index):
     plugin = _actions[index]
     _label[0] = str(getattr(plugin, "name", "") or "edit")[:80]
     _refill_note[0] = False
+    _saved_as[0] = None
     error = None
     _running[0] += 1
     try:
@@ -2645,7 +2694,16 @@ def run_action(index):
     out = {"ok": error is None}
     if error:
         out["error"] = error
-    if _refill_note[0]:
+    if _saved_as[0]:
+        # the copy this interpreter holds is the plugin's new file now; the editor's board is read again before it is used
+        b = pcbnew._Host.board
+        if b is not None:
+            b._modified = False
+        _stale[0] = True
+        out["note"] = ("The plugin saved its result as a board file of its own, %s, which is handed over with its other files. "
+                       "The open board was left as it was, as a “save as” on the desktop leaves the file you opened."
+                       % os.path.relpath(_saved_as[0], PROJECT_DIR).replace(os.sep, "/"))
+    elif _refill_note[0]:
         out["note"] = ("Zones were filled here, by the web editor's own filler. KiCad on the desktop fills them again with its own "
                        "(Edit → Fill All Zones, B), which can differ slightly at the edges."
                        if _refill_note[0] == "filled" else

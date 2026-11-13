@@ -108,8 +108,8 @@ export const reads: Record<string, (a: any) => Promise<unknown>> = {
     const files: { path: string; text: string }[] = []; let budget = 6 * 1024 * 1024;
     if (typeof ed.proSettings === "string" && ed.proSettings) files.push({ path: open.path.replace(/\.kicad_pcb$/, "") + ".kicad_pro", text: ed.proSettings });
     // … and the project's library tables with its own symbol libraries and footprints, for plugins that work on libraries.
-    const beside = design.projectDocs().filter((d: any) => /^(kicad_(sch|pro|pcb)|lib_table|symbol_lib|footprint)$/.test(d.docType))
-      .sort((x: any, y: any) => Number(/^kicad_/.test(y.docType) || y.docType === "lib_table") - Number(/^kicad_/.test(x.docType) || x.docType === "lib_table"));
+    const beside = design.projectDocs().filter((d: any) => /^(kicad_(sch|pro|pcb)|design_rules|lib_table|symbol_lib|footprint)$/.test(d.docType))
+      .sort((x: any, y: any) => Number(/^kicad_/.test(y.docType) || y.docType === "lib_table" || y.docType === "design_rules") - Number(/^kicad_/.test(x.docType) || x.docType === "lib_table" || x.docType === "design_rules"));
     for (const d of beside.slice(0, 120)) {
       if (d.docId === open.docId || files.some((f) => f.path === d.path) || budget <= 0) continue;
       try { const r = await fetch(`/api/docs/${encodeURIComponent(d.docId)}/content`); if (!r.ok) continue; const text = await r.text(); if (text.length > budget) continue; budget -= text.length; files.push({ path: d.path, text }); } catch { /* the plugin runs without it */ }
