@@ -12,10 +12,9 @@
 //   • an entry the web editor lacks stays in place, dimmed, and explains that it runs in the desktop app; an
 //     entry that cannot apply right now (nothing selected, nothing to undo, a view-only visitor) is greyed out.
 //
-// A tool-module action KiCad's menus do not place (CollabTools.<m>.actions) lands in a trailing "Other Commands"
-// sub-menu of the menu it names (default Edit) rather than as a flat list.
+// A tool-module action KiCad's menus do not place (CollabTools.<m>.actions) keeps its hotkey and context menu only.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { FPEDIT_MENUS, HOME_MENUS, LINKS, MENUS, MENU_CHECKS, MODULE_ACTION_MENUS, MODULE_ALIAS, MODULE_DUPLICATES, NEEDS_SELECTION, READ_ONLY_OK, SUBMENU_ICONS, type MenuEntry } from "../tables";
+import { FPEDIT_MENUS, HOME_MENUS, LINKS, MENUS, MENU_CHECKS, NEEDS_SELECTION, READ_ONLY_OK, SUBMENU_ICONS, type MenuEntry } from "../tables";
 import { dispatch, useApp, type AppState, type Editor, type ModuleAction } from "../store";
 import { iconFor, isOn, keyFor, labelFor, runUiAction, unavailable, useAvail, type Avail } from "../actions";
 import { menuKey } from "../keys";
@@ -54,33 +53,10 @@ function listedIds(nodes: MenuNode[], out: Set<string>): Set<string> {
   for (const n of nodes) { if (n.kind === "sub") listedIds(n.nodes, out); else if (n.kind === "item") out.add(n.id); }
   return out;
 }
-/** Where a module action no menu lists goes: its own `menu`, else KiCad's grouping by what the command does, else Edit. */
-function menuOf(a: ModuleAction): string {
-  if (a.menu) return a.menu;
-  if (/drc|erc|inspect|statistic|netInspector|ratsnest|highlight|clearance|marker|simulat/i.test(a.id)) return "Inspect";
-  if (/cleanup|annotat|bom\b|fieldsTable|symbolFields|update|generate|export|import|remap|rescue/i.test(a.id)) return "Tools";
-  return "Edit";
-}
-/** The editor's menus: the static tree plus an "Other Commands" sub-menu for module actions it does not place. */
-export function editorMenus(editor: Editor, moduleActions: ModuleAction[], source?: [string, MenuEntry[]][]): TopMenu[] {
-  const tops = (source || MENUS[editor]).map(([raw, entries]) => { const [title, mnemonic] = splitTitle(raw); return { title, mnemonic, nodes: build(entries) }; });
-  const placed = new Set<string>();
-  for (const t of tops) listedIds(t.nodes, placed);
-  const covered = new Set<string>(MODULE_DUPLICATES[editor]);
-  for (const id of placed) covered.add(id.startsWith("module:") ? id.slice(7) : id);
-  for (const [kicad, own] of Object.entries(MODULE_ALIAS[editor])) if (placed.has(kicad)) covered.add(own);
-  const seen = new Set<string>();
-  for (const a of moduleActions) {
-    if (covered.has(a.id)) continue;
-    const sig = a.label + "\u0000" + (a.key || ""); if (seen.has(sig)) continue; seen.add(sig);   // the same command under two names
-    const want = menuOf(a).toLowerCase();
-    const top = tops.find((t) => t.title.toLowerCase() === want && MODULE_ACTION_MENUS.includes(t.title)) || tops.find((t) => t.title === "Edit");
-    if (!top) continue;
-    let other = top.nodes.find((n): n is SubNode => n.kind === "sub" && n.title === "Other Commands");
-    if (!other) { other = { kind: "sub", title: "Other Commands", mnemonic: "o", nodes: [] }; top.nodes.push({ kind: "sep" }, other); }
-    other.nodes.push({ kind: "item", id: "module:" + a.id });
-  }
-  return tops;
+/** The editor's menus: KiCad's tree as tables.ts has it.  A tool-module command no menu lists stays on its hotkey,
+ *  the toolbars and the context menus, as KiCad's own context-menu commands do: there is no catch-all sub-menu. */
+export function editorMenus(editor: Editor, _moduleActions: ModuleAction[], source?: [string, MenuEntry[]][]): TopMenu[] {
+  return (source || MENUS[editor]).map(([raw, entries]) => { const [title, mnemonic] = splitTitle(raw); return { title, mnemonic, nodes: build(entries) }; });
 }
 
 // ---------------------------------------------------------------- entry state

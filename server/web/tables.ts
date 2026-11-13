@@ -43,46 +43,42 @@ export const RADIO: Record<string, string[]> = {
  * A "&" in a title marks its mnemonic, as in the wxWidgets labels these are copied from.
  */
 export type MenuEntry = string | [string, MenuEntry[]];
-// The menus of eeschema/menubar.cpp and pcbnew/menubar_pcb_editor.cpp (project mode), entry for entry.  The web's
-// own entries sit beside the collaboration block of File, at the end of View > Panels and in a last group of View;
-// the commands KiCad only offers from its context menus follow KiCad's own entries of Edit / Inspect / Route in the
-// sub-menus the context menus use (Select, Align/Distribute, Positioning Tools, Grouping, Locking, Zones, …).
-const COLLAB_FILE: MenuEntry[] = ["share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "archive", "clone", "github", "openInKicad"];
-// KiCad's eeschema and pcbnew View menus have no grid or units entries: the units switch from the left toolbar's
-// Units group and Ctrl+U, the grid from the aux toolbar's choice, the grid button's menu, N / Shift+N and Preferences.
-const VIEW_WEB: MenuEntry[] = ["cursorFullCrosshairs", "togglePolarCoords", "resetLocalCoords"];
-// eeschema has no polar coordinates (only PCB_BASE_FRAME::UpdateStatusBar honours GetShowPolarCoords)
-const VIEW_WEB_SCH: MenuEntry[] = VIEW_WEB.filter((e) => e !== "togglePolarCoords");
-const HELP_MENU: MenuEntry[] = ["help", "gettingStarted", "listHotKeys", "getInvolved", "donate", "reportBug", "-", "downloadDesktop", "sourceCode", "-", "about"];
+// The menus of eeschema/menubar.cpp, pcbnew/menubar_pcb_editor.cpp (project mode) and menubar_footprint_editor.cpp,
+// entry for entry, and nothing more: the commands KiCad offers only from the toolbars, the context menus, the
+// hotkeys and the Appearance panel stay there (crosshair, polar coordinates and local origin on the left toolbar and
+// Space; ratsnest, net names and pad numbers on the left toolbar and the Appearance panel; the item commands in
+// the selection's context menu).
+// File's collaboration block, as this fork's KiCad menus have it (eeschema/menubar.cpp:151-161, menubar_pcb_editor.cpp:199-209)
+const COLLAB_FILE: MenuEntry[] = ["collabStartSession", "collabJoinSession", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabCompare", "collabGithub", "collabVendorParts", "collabLeaveSession"];
+// EDA_BASE_FRAME::AddStandardHelpMenu
+const HELP_MENU: MenuEntry[] = ["help", "gettingStarted", "listHotKeys", "getInvolved", "donate", "reportBug", "-", "about"];
 const LANG_MENU: MenuEntry = ["Set Language", ["languageEnglish"]];
-// the UI theme (web/theme.ts): KiCad's Preferences > Common > "Appearance" choice, as a sub-menu
-const THEME_MENU: MenuEntry = ["&Appearance", ["themeLight", "themeDark", "themeSystem"]];
+// Tools > External Plugins: the plugins' own actions join it above a separator (plugins/PluginUi.tsx, AddApiPluginMenuItems)
+const PLUGINS_MENU: MenuEntry = ["External Plugins", ["pluginsReload", "pluginsShowFolder"]];
 export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
     ["&File", ["save", "saveCurrSheetCopyAs", "revert", "-",
       ["Import", ["importNonKicadSchematic|Non-KiCad Schematic...", "importFPAssignments|Footprint Assignments...", "importGraphics|Graphics..."]],
       ["Export", ["drawSheetOnClipboard|Drawing to Clipboard", "exportNetlist|Netlist...", "exportSymbolsToLibrary|Symbols..."]],
-      "-", ...COLLAB_FILE, "-", "compareSchematicWithFile", "compareSchematicWithHistory|Compare Schematic with History...", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "home"]],
+      "-", ...COLLAB_FILE, "-", "compareSchematicWithFile", "compareSchematicWithHistory|Compare Schematic with History...", "-", "schematicSetup", "-", "pageSettings", "print", "plot", "-", "close"]],
     // eeschema/menubar.cpp: the Edit menu ends at Attributes; the item commands live in the context menus and hotkeys
     ["&Edit", ["undo", "redo", "-", "cut", "copy", "copyAsText", "paste", "pasteSpecial", "doDelete", "-",
       "selectAll", "unselectAll", "-",
       "find", "findAndReplace", "-", "deleteTool", "editTextAndGraphics", "changeSymbols", "editPageNumber",
       ["Attributes", ["setExcludeFromSim", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromPosFiles", "setDNP"]]]],
-    ["&View", [["Panels", ["showProperties", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel|Design Blocks", "showRemoteSymbolPanel|Remote Symbols", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance"]],
+    ["&View", [["Panels", ["showProperties", "showGitCommitPane", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel|Design Blocks", "showRemoteSymbolPanel|Remote Symbols"]],
       "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw",
       "-", "navigateBack", "navigateUp", "navigateForward", "navigatePrevious", "navigateNext",
-      "-", "toggleHiddenPins", "toggleHiddenFields", "toggleDirectiveLabels", "toggleERCErrors", "toggleERCWarnings", "toggleERCExclusions", "markSimExclusions", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons",
-      "-", ...VIEW_WEB_SCH]],
+      "-", "toggleHiddenPins", "toggleHiddenFields", "toggleDirectiveLabels", "toggleERCErrors", "toggleERCWarnings", "toggleERCExclusions", "markSimExclusions", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons"]],
     ["&Place", ["placeSymbol", "placePower", "drawWire", "drawBus", "placeBusWireEntry", "placeNoConnect", "placeJunction", "placeLabel", "placeGlobalLabel", "placeClassLabel", "drawRuleArea",
       "-", "placeHierLabel", "drawSheet", "placeSheetPin", "syncAllSheetsPins", "importSheet",
       "-", "placeSchematicText", "drawTextBox", "drawTable", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawArc", "drawBezier", "drawPolygon", "drawLines", "placeImage"]],
-    ["&Inspect", ["showBusSyntaxHelp", "-", "runERC", "prevMarker", "nextMarker", "excludeMarker", "clearMarkers", "-", "diffSymbol", "-", "showSimulator",
-      "-", "highlightNetTool", "clearHighlight", "measureTool"]],
+    ["&Inspect", ["showBusSyntaxHelp", "-", "runERC", "prevMarker", "nextMarker", "excludeMarker", "-", "diffSymbol", "-", "showSimulator"]],
     ["&Tools", ["updatePcbFromSchematic", "showPcbNew", "showProjectManager", "showCalculatorTools", "-", "showSymbolEditor", "updateSymbols", "-", "rescueSymbols", "remapSymbols",
       "-", "editSymbolFields", "editSymbolLibraryLinks", "-", "annotate", "incrementAnnotations", "-", "assignFootprints", "generateBOM", "generateBOMLegacy",
       "-", "updateSchematicFromPcb", "-", "createNetChain", "-",
-      ["Variants", ["addVariant", "removeVariant", "editVariantDescription", "renameVariant", "copyVariant"]]]],
-    ["P&references", ["configurePaths", "showSymbolLibTable", "showDesignBlockLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
+      ["Variants", ["addVariant", "removeVariant", "editVariantDescription", "renameVariant", "copyVariant"]], "-", PLUGINS_MENU]],
+    ["P&references", ["configurePaths", "showSymbolLibTable", "showDesignBlockLibTable", "openPreferences", "-", LANG_MENU]],
     ["&Help", HELP_MENU],
   ],
   pcb: [
@@ -91,44 +87,32 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       ["Export", ["exportSpecctraDSN|Specctra DSN...", "exportGenCAD|GenCAD...", "exportVRML|VRML...", "exportIDF|IDFv3...", "exportSTEP|STEP/GLB/BREP/XAO/PLY/STL...", "exportCmpFile|Footprint Association (.cmp) File...", "exportHyperlynx|Hyperlynx...",
         "-", "exportFootprints|Footprints..."]],
       ["Fabrication Outputs", ["generateGerbers", "generateDrillFiles", "generateIPC2581File", "generateODBPPFile", "generatePosFile", "generateReportFile", "generateD356File", "generateBOM", "generateBOMLegacy", "-", "fabPackage"]],
-      "-", ...COLLAB_FILE, "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "home"]],
-    ["&Edit", ["undo", "redo", "-", "cut", "copy", "paste", "pasteSpecial", "doDelete", "-",
-      ["&Select", ["selectAll", "unselectAll", "-", "filterSelection", "-", "selectConnection", "selectNet", "deselectNet", "selectNetChain", "selectSameSheet", "selectOnSchematic", "module:selectAllOnLayer", "-", "selectUnconnected", "grabUnconnected"]],
-      "-", "find", "findByProperties", "-", "extendGraphic", "trimGraphic", "editTracksAndVias", "editTextAndGraphics", "editTeardrops", "changeFootprints", "swapLayers", "gridOrigin",
-      "-", "zoneFillAll", "zoneUnfillAll", "regenerateAllTuning", "-", "deleteTool", "globalDeletions",
-      "-", "duplicate", "copyAsText", "createArray",
-      "-", "move", "drag45Degree", "dragFreeAngle", "rotateCcw", "rotateCw", "flip", "mirrorH", "mirrorV", "swap", "packAndMoveFootprints",
-      ["Positioning Tools", ["moveExact", "moveWithReference", "moveIndividually", "positionRelative", "interactiveOffsetTool"]],
-      ["Align/Distribute", ["alignLeft", "alignCenterX", "alignRight", "-", "alignTop", "alignCenterY", "alignBottom", "-", "distributeHorizontallyCenters", "distributeHorizontallyGaps", "distributeVerticallyCenters", "distributeVerticallyGaps"]],
-      "-", "properties",
-      ["Routing", ["changeTrackWidth", "module:setTrackWidthFromNetclass", "-", "changeTrackLayerNext", "changeTrackLayerPrev", "-", "breakTrack", "unrouteSelected", "deleteFull"]],
-      ["Grouping", ["group", "ungroup", "addToGroup", "removeFromGroup"]],
-      ["Locking", ["toggleLock", "lock", "unlock"]],
-      ["Create from Selection", ["convertToPoly", "convertToZone", "convertToKeepout", "convertToLines", "convertToTracks"]],
-      ["Zones", ["zoneDuplicate", "-", ["Zone Priority", ["zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower", "zonePriorityMoveToBottom"]]]],
-      ["Attributes", ["toggleExcludeFromBOM", "toggleExcludeFromSim", "toggleExcludeFromPosFiles", "module:toggleDNP"]],
-      ["Text Justification", ["leftJustify", "centerJustify", "rightJustify"]]]],
-    ["&View", [["Panels", ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments"]],
+      "-", ...COLLAB_FILE, "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "close"]],
+    ["&Edit", ["undo", "redo", "-", "cut", "copy", "paste", "pasteSpecial", "doDelete", "-", ["&Select", ["selectAll", "unselectAll"]],
+      "-", "find", "findByProperties", "-", "extendGraphic", "trimGraphic", "editTracksAndVias", "editTextAndGraphics", "mirrorInteractive", "editTeardrops", "changeFootprints", "swapLayers", "gridOrigin",
+      "-", "zoneFillAll", "zoneUnfillAll", "regenerateAllTuning", "-", "deleteTool", "globalDeletions"]],
+    ["&View", [["Panels", ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel", "showGitCommitPane"]],
       "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw", "-",
       ["&Drawing Mode", ["zoneDisplayFilled", "zoneDisplayOutline", "-", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "graphicsOutlines", "textOutlines"]],
       ["&Contrast Mode", ["highContrastMode", "layerAlphaDec", "layerAlphaInc"]],
-      "flipBoard",
-      "-", ...VIEW_WEB, "-", "showRatsnest", "module:ratsnestLineMode", "showNetNames", "showPadNumbers", "showHiddenText", "zoneFillPreview"]],
+      "flipBoard"]],
     ["&Place", ["placeFootprint", "drawVia", "placeViaStack", "makeViaStack", "drawZone", "drawCopperThievingZone", "drawRuleArea",
       ["Draw Microwave Shapes", ["microwaveCreateLine", "microwaveCreateGap", "microwaveCreateStub", "microwaveCreateStubArc", "microwaveCreateFunctionShape"]],
       "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawPolygon", "drawBezier", "placeReferenceImage", "placeText", "drawTextBox", "drawTable", "placePoint", "placeBarcode", "-",
       ["Draw Dimensions", ["drawOrthogonalDimension", "drawAlignedDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader"]],
-      ["Geometric Constraints", ["removeConstraints"]],
-      "-", "placeCharacteristics", "placeStackup", "-", "drillOrigin", "drillResetOrigin", "gridSetOrigin", "gridResetOrigin", "-", "placeSubGrid", "-",
+      ["Geometric Constraints", ["addConstraintParallel", "addConstraintPerpendicular", "addConstraintEqualLength", "addConstraintCollinear", "addConstraintAngular", "addConstraintTangent",
+        "addConstraintHorizontal", "addConstraintVertical", "addConstraintFixedLength", "addConstraintConcentric", "addConstraintEqualRadius", "addConstraintFixedRadius", "addConstraintArcAngle",
+        "addConstraintCoincident", "addConstraintPointOnLine", "addConstraintMidpoint", "addConstraintSymmetric", "addConstraintFixedPosition", "-", "removeConstraints"]],
+      "-", "placeCharacteristics", "placeStackup", "placeDrillChart", "placeDrillMap", "-", "drillOrigin", "drillResetOrigin", "gridSetOrigin", "gridResetOrigin", "-", "placeSubGrid", "-",
       ["Auto-Place Footprints", ["autoplaceOffboardComponents", "autoplaceSelectedComponents"]]]],
-    ["Ro&ute", ["selectLayerPair", "-", "routeSingleTrack", "routeDiffPair", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "-", "module:autoroute", "module:autoplace", "-", "routerSettingsDialog",
-      "-", "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "module:autoTrackWidth", "module:editPredefinedSizes", "-", "layerTop", "layerBottom", "layerNext", "layerPrev", "module:layerToggle"]],
-    ["&Inspect", ["boardStatistics", "measureTool", "-", "runDRC", "prevMarker", "nextMarker", "excludeMarker", "clearMarkers", "-", "inspectClearance", "inspectConstraints", "showFootprintAssociations", "diffFootprint", "-",
-      ["Net Inspection Tools", ["highlightNet", "clearHighlight", "toggleNetHighlight", "-", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest"]]]],
-    ["&Tools", ["updatePcbFromSchematic", "showEeschema", "showProjectManager", "showCalculatorTools", "-", "drcRuleEditor", "-", "showFootprintEditor", "updateFootprints", "migrate3DModels", "editFootprintFields",
+    ["Ro&ute", ["selectLayerPair", "-", "routeSingleTrack", "routeDiffPair", "routerSpreadTracks", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "-", "routerSettingsDialog"]],
+    ["&Inspect", ["boardStatistics", "measureTool", "-", "runDRC", "prevMarker", "nextMarker", "excludeMarker", "-", "inspectClearance", "inspectConstraints", "showFootprintAssociations", "diffFootprint"]],
+    ["&Tools", ["updatePcbFromSchematic", "showEeschema", "showProjectManager", "showCalculatorTools", "-", "drcRuleEditor", "showDrillGroups", "-", "showFootprintEditor", "updateFootprints", "migrate3DModels", "editFootprintFields",
       "-", "zonesManager", "-", "cleanupTracksAndVias", "removeUnusedPads", "cleanupGraphics", "repairBoard", "-", "collect3DModels", "-", "boardReannotate", "updateSchematicFromPcb",
-      ["Multi-Channel", ["generatePlacementRuleAreas", "repeatLayout"]]]],
-    ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
+      ["Multi-Channel", ["generatePlacementRuleAreas", "expandToMatchingTopology", "expandToLargestTopology", "repeatLayout", "updateLinkedLayouts", "unlinkLayout"]],
+      // the web's own autorouter and placer are external tools, listed like the API plugins' actions above KiCad's two entries
+      "-", ["External Plugins", ["module:autoroute", "module:autoplace", "-", "pluginsReload", "pluginsShowFolder"]]]],
+    ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU]],
     ["&Help", HELP_MENU],
   ],
 };
@@ -137,20 +121,20 @@ export const FPEDIT_MENUS: [string, MenuEntry[]][] = [
   ["&File", ["newLibrary", "addLibrary", "newFootprint", "createFootprint", "editLibFpInFpEditor", "-", "save", "saveAs", "revert", "-",
     ["Import", ["importFootprint|Footprint...", "placeImportedGraphics|Graphics..."]],
     ["Export", ["exportFootprint|Footprint...", "exportFootprintAsSVG|Footprint as &SVG...", "exportFootprintAsPNG|View as &PNG..."]],
-    "-", "compareFpLibraryWithFile", "-", "footprintProperties", "-", "print", "-", ...COLLAB_FILE, "-", "home"]],
+    "-", "compareFpLibraryWithFile", "-", "footprintProperties", "-", "print", "-", "close"]],
   ["&Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "duplicate", "-", ["&Select", ["selectAll", "unselectAll"]], "-",
     "editTextAndGraphics", "mirrorInteractive", "showLibFootprintFieldsTable", "padTable", "extendGraphic", "trimGraphic", "enumeratePads", "gridOrigin"]],
-  ["&View", [["Panels", ["showProperties", "showLibraryTree", "showLayersManager", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments"]], "-",
+  ["&View", [["Panels", ["showProperties", "showLibraryTree", "showLayersManager"]], "-",
     "nextFootprintTab", "prevFootprintTab", "closeFootprintTab", "-", "showFootprintBrowser", "show3DViewer", "-",
     "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomTool", "zoomRedraw", "-",
     ["&Drawing Mode", ["padDisplayMode", "graphicsOutlines", "textOutlines"]],
     ["&Contrast Mode", ["highContrastMode", "layerAlphaDec", "layerAlphaInc"]],
-    "flipBoard", "-", ...VIEW_WEB]],
+    "flipBoard"]],
   ["&Place", ["placePad", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawPolygon", "drawBezier", "placeReferenceImage", "placeText", "drawTextBox", "drawTable", "placePoint", "placeBarcode", "-",
     "drawOrthogonalDimension", "drawAlignedDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "setAnchor", "gridSetOrigin", "-", "gridResetOrigin"]],
   ["&Inspect", ["measureTool", "-", "checkFootprint", "showFootprintUsers", "-", "showDatasheet"]],
-  ["&Tools", ["loadFpFromBoard", "saveFpToBoard", "-", "cleanupGraphics", "repairFootprint", "-", ["External Plugins", ["pluginsReload", "pluginsShowFolder"]]]],
-  ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
+  ["&Tools", ["loadFpFromBoard", "saveFpToBoard", "-", "cleanupGraphics", "repairFootprint", "-", PLUGINS_MENU]],
+  ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU]],
   ["&Help", HELP_MENU],
 ];
 /** Actions only the Footprint Editor runs: the board editor's hotkeys skip them (Ctrl+N stays New there). */
@@ -170,7 +154,7 @@ export const SUBMENU_ICONS: Record<string, string> = { Import: "import", Export:
   "Positioning Tools": "special_tools", Routing: "special_tools", "Align/Distribute": "align_items", Align: "align_items", "Create from Selection": "convert", Units: "unit_mm", "Text Justification": "text_align_left" };
 /** Entries KiCad adds with ACTION_MENU::CHECK (plus the web's own toggles): they carry a checkmark when on. */
 export const MENU_CHECKS = new Set(["showProperties", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel", "showRemoteSymbolPanel", "showLayersManager", "showNetInspector", "showConstraintsPanel",
-  "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance",
+  "showSelectionFilter", "showHistory", "showGitCommitPane", "showPeers", "showComments", "showAppearance", "ratsnestLineMode",
   "toggleHiddenPins", "toggleHiddenFields", "toggleDirectiveLabels", "toggleERCErrors", "toggleERCWarnings", "toggleERCExclusions", "markSimExclusions", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons",
   "setExcludeFromSim", "setExcludeFromBOM", "setExcludeFromBoard", "setExcludeFromPosFiles", "setDNP", "toggleAnnotateAuto",
   "zoneDisplayFilled", "zoneDisplayOutline", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "graphicsOutlines", "textOutlines", "highContrastMode", "flipBoard",
@@ -198,7 +182,9 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "alignToGrid", "alignTop", "alignBottom", "alignLeft", "alignRight", "alignCenterX", "alignCenterY",
     "editReference", "editValue", "editFootprint", "autoplace", "showDatasheet", "nextUnit", "previousUnit", "placeNextSymbolUnit", "cycleBodyStyle",
     "toLabel", "toGLabel", "toHLabel", "toDLabel", "toText", "toTextBox", "breakWire", "slice", "unfoldBus", "syncSheetPins", "cleanupSheetPins",
-    "lock", "unlock", "toggleLock", "clearHighlight"],
+    "lock", "unlock", "toggleLock", "clearHighlight",
+    // the ERC dialog's Delete All Markers button (DIALOG_ERC::OnDeleteAllClick); eeschema's Inspect menu has no entry
+    "clearMarkers"],
   pcb: ["skip",   // Tab while moving individually: the move's own command
     // context menus only (board_editor_control.cpp ZONE_CONTEXT_MENU, the selection tool's menu, EDIT_TOOL's menu)
     "getAndPlace", "copyWithReference", "drawZoneCutout", "drawSimilarZone",
@@ -225,7 +211,17 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     // the arc editing modes: the Arc toolbar group's own menu, Ctrl+Space and the selection menu of one arc
     "pointEditorArcKeepCenter", "pointEditorArcKeepEndpoint", "pointEditorArcKeepRadius", "cycleArcEditMode",
     // DRAWING_TOOL's menu while a dimension is being drawn
-    "changeDimensionArrows"],
+    "changeDimensionArrows",
+    // EDIT_TOOL's and the selection tool's context menus and their hotkeys: pcbnew's Edit menu ends at Global Deletions
+    "flipSelection", "rotateSelection", "rotateSelectionCw", "mirrorH", "mirrorV", "moveExactly", "distributeH", "distributeV", "distributeHCenters", "distributeVCenters",
+    "selectAllOnLayer", "setTrackWidthFromNetclass", "toggleDNP",
+    // the aux toolbar's track / via choices and the board's layer hotkeys (PgUp, PgDn, +, -, Alt+Shift+V): no menubar entry in KiCad
+    "autoTrackWidth", "editPredefinedSizes", "layerToggle",
+    // the left toolbar's Curved Ratsnest toggle and the Appearance panel's net commands; KiCad's Inspect menu has neither
+    "ratsnestLineMode", "showRatsnest", "highlightNet", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "clearMarkers",
+    // the selection's context menu (Select, Positioning Tools, Align/Distribute, Routing, Grouping, Locking, Create from
+    // Selection, Zones, Attributes, Text Justification) and the hotkeys
+    "duplicate", "copyAsText", "selectNet", "deselectNet", "selectConnection", "selectUnconnected", "grabUnconnected", "selectSameSheet", "filterSelection", "move", "moveWithReference", "moveIndividually", "interactiveOffsetTool", "positionRelative", "alignLeft", "alignRight", "alignTop", "alignBottom", "alignCenterX", "alignCenterY", "swap", "createArray", "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "layerTop", "layerBottom", "layerNext", "layerPrev", "changeTrackLayerNext", "changeTrackLayerPrev", "breakTrack", "unrouteSelected", "deleteFull", "clearHighlight", "group", "ungroup", "addToGroup", "removeFromGroup", "toggleLock", "lock", "unlock", "toggleExcludeFromBOM", "toggleExcludeFromPosFiles", "toggleExcludeFromSim", "leftJustify", "centerJustify", "rightJustify", "convertToPoly", "convertToLines", "convertToTracks", "convertToZone", "convertToKeepout", "zonePriorityRaise", "zonePriorityLower", "zonePriorityMoveToTop", "zonePriorityMoveToBottom", "zoneDuplicate"],
 };
 /** What an entry needs before it can run (KiCad's SELECTION_CONDITIONS / the read-only frame): greyed out otherwise. */
 export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete", "duplicate", "increment", "decrement", "move", "drag", "drag45Degree", "dragFreeAngle", "rotateCCW", "rotateCW", "rotateCcw", "rotateCw",
@@ -238,7 +234,7 @@ export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete",
   "toggleLock", "lock", "unlock", "convertToPoly", "convertToZone", "convertToKeepout", "convertToLines", "convertToTracks", "zoneDuplicate", "zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower",
   "zonePriorityMoveToBottom", "toggleExcludeFromBOM", "toggleExcludeFromSim", "toggleExcludeFromPosFiles", "module:toggleDNP", "leftJustify", "centerJustify", "rightJustify", "hideNetInRatsnest", "showNetInRatsnest"]);
 /** Entries that never change the document: everything else is greyed out for a view-only visitor, as in a read-only frame. */
-export const READ_ONLY_OK = new Set(["compareSchematicWithFile", "compareSchematicWithHistory", "compareBoardWithFile", "compareBoardWithHistory", "saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "archive", "clone",
+export const READ_ONLY_OK = new Set(["compareSchematicWithFile", "compareSchematicWithHistory", "compareBoardWithFile", "compareBoardWithHistory", "saveCurrSheetCopyAs", "saveCopy", "drawSheetOnClipboard", "exportNetlist", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "collabLeaveSession", "collabJoinSession", "collabCompare", "collabGithub", "close", "pluginsReload", "pluginsShowFolder", "showGitCommitPane", "archive", "clone",
   "openInKicad", "print", "plot", "home", "copy", "copyAsText", "selectAll", "unselectAll", "selectConnection", "selectNode", "nextNetItem", "previousNetItem", "find", "showDatasheet",
   "selectNet", "deselectNet", "selectSameSheet", "module:selectAllOnLayer", "selectUnconnected", "filterSelection", "runERC", "runDRC", "clearMarkers", "boardStatistics", "measureTool", "inspectClearance",
   "highlightNetTool", "highlightNet", "clearHighlight", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "showPcbNew", "showEeschema", "theme", "themeLight", "themeDark", "themeSystem", "languageEnglish",
@@ -284,7 +280,7 @@ export const HOME_MENUS: [string, MenuEntry[]][] = [];
 export const LOCAL_LABELS: Record<string, string> = {
   github: "GitHub Sync...", fabPackage: "Fabrication Package (JLCPCB, PCBWay)...", drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
   collabCopyLink: "Copy Share Link", collabComments: "Comments...", collabFollow: "Follow Next Peer", collabHistory: "History",
-  collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in Junction...", home: "Back to Projects",
+  collabLeave: "Leave Session", close: "Close", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in Junction...", home: "Back to Projects",
   showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
   theme: "Toggle Dark Theme", themeLight: "Light", themeDark: "Dark", themeSystem: "System", downloadDesktop: "Download Desktop App", sourceCode: "Source on GitHub", about: "About Junction",
@@ -293,7 +289,8 @@ export const LOCAL_LABELS: Record<string, string> = {
   share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Log Out", checkpoint: "Create checkpoint…", kicad: "Open in Junction…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
   "tab-appearance": "Layers", "tab-props": "Properties", "tab-peers": "Collaborators", "tab-comments": "Comments", "tab-history": "History",
 };
-export const LOCAL_KEYS: Record<string, string> = { zoomin: "+", zoomout: "−", fit: "Home", undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", selectAll: "Ctrl+A" };
+// ACTION_MENU::AddClose: "Close" with Ctrl+W (the browser keeps Ctrl+W for its tab, so the key is only shown)
+export const LOCAL_KEYS: Record<string, string> = { close: "Ctrl+W", zoomin: "+", zoomout: "−", fit: "Home", undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", selectAll: "Ctrl+A" };
 /** External links among the menu entries (rendered as anchors). */
 export const LINKS: Record<string, string> = {
   downloadDesktop: "https://github.com/notaroomba/junction/releases", sourceCode: "https://github.com/notaroomba/junction",
@@ -302,15 +299,21 @@ export const LINKS: Record<string, string> = {
 };
 
 /** Docked pane ids and the KiCad "show …" action that toggles each. */
-export const PANE_ACTION: Record<string, string> = { libtree: "showLibraryTree", props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showHistory", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator" };
+export const PANE_ACTION: Record<string, string> = { libtree: "showLibraryTree", props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showGitCommitPane", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator" };
 export const PANE_TITLES: Record<string, string> = { libtree: "Libraries", props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance", search: "Search", netnav: "Net Navigator" };
-/** Dock layout per editor: Properties · Hierarchy · Selection Filter · History left; the board keeps Appearance (with the filter below it) on the right. */
+/**
+ * Dock layout per editor, in KiCad's AUI order.  eeschema's left column (Layer 3) stacks Net Navigator (Position 0),
+ * Schematic Hierarchy (1), Properties (2) and the Selection Filter (4) (eeschema_settings.cpp:64-125,
+ * sch_edit_frame.cpp:305-315); pcbnew's Properties fills its left column alone (pcb_edit_frame.cpp:394-399) and
+ * Appearance with the filter sits right.  The Version Control pane (the web's History) docks right on Layer 5 and
+ * starts hidden in both (sch_edit_frame.cpp:347-360).  Collaborators and Comments are the web's own.
+ */
 export const DOCKS: Record<Editor, { left: string[]; right: string[]; bottom?: string[] }> = {
-  sch: { left: ["props", "hier", "netnav", "filter", "history", "peers", "comments", "appearance"], right: [], bottom: ["search"] },
-  pcb: { left: ["props", "history", "peers", "comments"], right: ["appearance", "filter"], bottom: ["search"] },
+  sch: { left: ["netnav", "hier", "props", "filter", "peers", "comments", "appearance"], right: ["history"], bottom: ["search"] },
+  pcb: { left: ["props", "peers", "comments"], right: ["appearance", "filter", "history"], bottom: ["search"] },
 };
 /** Panes hidden until the user opens them (per editor). */
-export const PANE_DEFAULT_HIDDEN: Record<Editor, string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav"], pcb: ["peers", "comments", "search"] };
+export const PANE_DEFAULT_HIDDEN: Record<Editor, string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav", "history"], pcb: ["peers", "comments", "search", "history"] };
 
 export const FILTERS: Record<Editor, [string, string][]> = {
   sch: [["symbols", "Symbols"], ["pins", "Pins"], ["wires", "Wires"], ["labels", "Labels"], ["graphics", "Graphics"], ["images", "Images"], ["text", "Text"], ["other", "Other items"], ["ruleAreas", "Rule Areas"]],

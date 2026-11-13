@@ -90,11 +90,11 @@ function flatten(entries, trail, out) {
     assert.deepStrictEqual(sub("pcb", "View", "Contrast Mode"), ["highContrastMode", "layerAlphaDec", "layerAlphaInc"]);
     assert.deepStrictEqual(sub("pcb", "Place", "Draw Dimensions"), ["drawOrthogonalDimension", "drawAlignedDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader"]);
     assert.deepStrictEqual(sub("pcb", "Edit", "Select").slice(0, 2), ["selectAll", "unselectAll"]);
-    assert.deepStrictEqual(sub("sch", "View", "Panels").slice(0, 3), ["showProperties", "showSearch", "showHierarchy"]);
-    assert.deepStrictEqual(sub("pcb", "View", "Panels").slice(0, 5), ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel"]);
+    assert.deepStrictEqual(sub("sch", "View", "Panels"), ["showProperties", "showGitCommitPane", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel|Design Blocks", "showRemoteSymbolPanel|Remote Symbols"]);
+    assert.deepStrictEqual(sub("pcb", "View", "Panels"), ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel", "showGitCommitPane"]);
   });
 
-  test("every module command has its place in a menu (nothing falls into Other Commands)", () => {
+  test("every module command has its place in a menu, or is declared hotkey / context-menu only (there is no catch-all sub-menu)", () => {
     for (const ed of ["sch", "pcb"]) {
       const placed = new Set(); for (const [title, entries] of T.MENUS[ed]) for (const e of flatten(entries, [title], [])) placed.add(e.id);
       const covered = new Set(T.MODULE_DUPLICATES[ed]);

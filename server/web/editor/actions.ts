@@ -125,11 +125,18 @@ export const HANDLERS: Record<string, ActionHandler> = {
   lineMode45: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "45"); else runModuleAction("lineMode45"); syncSchModes(); },
   showHierarchy: () => showPane("hier"), showProperties: () => showPane("props"), showLayersManager: () => showPane("appearance"), showAppearance: () => showPane("appearance"),
   showSearch: () => showPane("search"), showNetNavigator: () => showPane("netnav"),
-  showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
+  showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showGitCommitPane: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
   collabCopyLink: (a) => runAction("share", a), collabComments: () => showPane("comments", true), collabFollow: () => cycleFollow(), collabHistory: () => showPane("history", true),
   // design review (web/review): KiCad's File > Compare … entries open the Compare window
   compareSchematicWithHistory: () => openCompare(), compareBoardWithHistory: () => openCompare(), collabCompare: () => openCompare(),
   compareSchematicWithFile: () => openCompare({ pickFile: true }), compareBoardWithFile: () => openCompare({ pickFile: true }),
+  // File's collaboration block (this fork's SCH_ACTIONS / PCB_ACTIONS::collab*): Start Collaboration Session opens the
+  // share dialog, Join Shared Project the home's join box, Vendor Parts the parts window (web/parts)
+  collabStartSession: (a) => runAction("share", a), collabJoinSession: () => runAction("joinLink"), collabGithub: (a) => runAction("github", a),
+  collabVendorParts: () => { if (!runModuleAction("vendorParts")) toast("Vendor parts are not loaded yet"); }, collabLeaveSession: () => navigate("/"), close: () => navigate("/"),
+  // Tools > External Plugins: Refresh Plugins reloads the installed list, Open Plugin Directory shows it (the plugin manager)
+  pluginsReload: () => { const P = (window as unknown as { KcPlugins?: { refresh?: () => Promise<void> } }).KcPlugins; if (P && P.refresh) void P.refresh(); },
+  pluginsShowFolder: () => { const P = (window as unknown as { KcPlugins?: { openManager?: (tab?: string) => void } }).KcPlugins; if (P && P.openManager) P.openManager("installed"); else toast("Plugins are not loaded yet"); },
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
   theme: () => toggleTheme(), themeLight: () => setTheme("light"), themeDark: () => setTheme("dark"), themeSystem: () => setTheme("system"), about: (a) => runAction("about", a),
   // the app menu (the "Junction" title in the menu bar): places outside the current editor
@@ -157,7 +164,7 @@ export function dispatchAction(a: AppAction) {
     switch (a.type) {
       case "action": {
         if (typeof a.id !== "string") return;
-        if (a.id.startsWith("module:")) { runModuleAction(a.id.slice(7)); return; }
+        if (a.id.startsWith("module:")) { runModuleAction(a.id.slice(7)); syncSchModes(); return; }
         const h = HANDLERS[a.id]; if (h) h(a.anchor || null); return;
       }
       case "setTool": setTool(a.tool); return;

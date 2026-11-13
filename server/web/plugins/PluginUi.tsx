@@ -41,9 +41,15 @@ export function usePluginMenus(menus: [string, MenuEntry[]][], editor: string | 
       };
       join("Import", imps.map((x) => x.uiId)); join("Export", exps.map((x) => x.uiId));
     }
-    if (t === "tools") out = [...out, "-", ["External Plugins", [...byMenu("tools"), ...(byMenu("tools").length ? ["-"] : []), ...(panels.length ? ["pluginPanels"] : []), "pluginManager"]]];
+    if (t === "tools") {
+      // KiCad's Tools > External Plugins (AddApiPluginMenuItems): the plugins' actions first, a separator, then the
+      // menu's own Refresh Plugins / Open Plugin Directory; the table already has the sub-menu, so they join it
+      const mine = [...byMenu("tools"), ...(panels.length ? ["pluginPanels"] : [])];
+      const at = out.findIndex((e) => Array.isArray(e) && e[0] === "External Plugins");
+      if (mine.length && at >= 0) { const sub = out[at] as [string, MenuEntry[]]; out = [...out.slice(0, at), ["External Plugins", [...mine, "-", ...sub[1]]] as MenuEntry, ...out.slice(at + 1)]; }
+      else if (mine.length) out = [...out, "-", ["External Plugins", mine]];
+    }
     else if (t === "inspect" || t === "edit" || t === "place") { const mine = byMenu(t); if (mine.length) out = [...out, "-", ...mine]; }
-    if (t === "preferences") out = [...out, "pluginManager"];
     return [title, out] as [string, MenuEntry[]];
   });
 }
