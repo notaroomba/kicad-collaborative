@@ -238,7 +238,7 @@
     return true;
   }
   var ATTR_TYPES = ["smd", "through_hole"];
-  var ATTR_FLAGS = ["board_only", "exclude_from_pos_files", "exclude_from_bom", "dnp", "allow_missing_courtyard", "allow_soldermask_bridges"];
+  var ATTR_FLAGS = ["board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "allow_missing_courtyard", "dnp", "allow_soldermask_bridges"];
   function footprintAttrs(node) {
     const a = kid(node, "attr");
     const toks = a ? a.slice(1).map(str) : [];

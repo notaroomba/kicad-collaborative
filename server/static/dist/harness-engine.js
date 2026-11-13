@@ -132,7 +132,7 @@ var require_pcb_tools = __commonJS({
         if (ctx && ctx.K) K7 = ctx.K;
         if (ctx) ensureDom(ctx);
       }
-      var isList5 = Array.isArray;
+      var isList6 = Array.isArray;
       var r64 = (v) => {
         const x = +(+v).toFixed(6);
         return x === 0 ? 0 : x;
@@ -142,7 +142,7 @@ var require_pcb_tools = __commonJS({
         const v = norm3602(a);
         return v > 180 ? v - 360 : v;
       };
-      var clone2 = (n2) => K7.cloneNode(n2);
+      var clone3 = (n2) => K7.cloneNode(n2);
       var samePt = (a, b) => Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3;
       function rotator2(deg2) {
         const r = deg2 * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
@@ -180,7 +180,9 @@ var require_pcb_tools = __commonJS({
           for (const [k, v] of Object.entries(TEXT_STYLE0)) TEXT_STYLE[k] = v.slice();
         }
       }
+      var rawDefaults = {};
       function layerDefaults(d) {
+        rawDefaults = fpEditorDefaults ? {} : d || {};
         if (fpEditorDefaults) {
           useFootprintEditorDefaults(true);
           return;
@@ -202,6 +204,21 @@ var require_pcb_tools = __commonJS({
           if (typeof sz === "number" && sz > 0) TEXT_STYLE[cls] = [sz, typeof th === "number" && th > 0 ? th : TEXT_STYLE[cls][1]];
         }
       }
+      function layerStyle(layer) {
+        const cls = layerClass(layer);
+        const stem = { silk: "silk", copper: "copper", edges: "board_outline", courtyard: "courtyard", fab: "fab", others: "other" }[cls];
+        const d = rawDefaults;
+        const [size, thick] = TEXT_STYLE[cls];
+        const v = d[stem + "_text_size_v"];
+        return {
+          line: LINE_W[cls],
+          w: size,
+          h: typeof v === "number" && v > 0 ? v : size,
+          thick,
+          italic: d[stem + "_text_italic"] === true,
+          upright: typeof d[stem + "_text_upright"] === "boolean" ? d[stem + "_text_upright"] : true
+        };
+      }
       var textStyle = (layer) => {
         const [size, thick] = TEXT_STYLE[layerClass(layer)];
         return { size, thick };
@@ -216,7 +233,7 @@ var require_pcb_tools = __commonJS({
         const l = Math.hypot(v[0], v[1]);
         return l ? [v[0] / l, v[1] / l] : [0, 0];
       };
-      var ANGLED = (c) => isList5(c) && (c[0] === "pad" || c[0] === "property" || c[0] === "fp_text") && !!K7.kid(c, "at");
+      var ANGLED = (c) => isList6(c) && (c[0] === "pad" || c[0] === "property" || c[0] === "fp_text") && !!K7.kid(c, "at");
       function setAngle(c, a) {
         const at2 = K7.kid(c, "at");
         a = norm1803(r64(a));
@@ -246,7 +263,7 @@ var require_pcb_tools = __commonJS({
         }
         const pts = K7.kid(g2, "pts");
         if (pts) for (const p of pts.slice(1)) {
-          if (!isList5(p)) continue;
+          if (!isList6(p)) continue;
           if (p[0] === "xy") p[1] = r64(-K7.num(p[1]));
           else mirrorShapeX(p);
         }
@@ -285,7 +302,7 @@ var require_pcb_tools = __commonJS({
         const lay = K7.kid(node, "layer");
         if (lay) lay[1] = flipLayerName(K7.str(lay[1]));
         for (const c of node) {
-          if (!isList5(c)) continue;
+          if (!isList6(c)) continue;
           const t = c[0];
           if (ANGLED(c)) {
             const at2 = K7.kid(c, "at");
@@ -299,7 +316,7 @@ var require_pcb_tools = __commonJS({
             if (off) off[1] = r64(-K7.num(off[1]));
             const prims = K7.kid(c, "primitives");
             if (prims) {
-              for (const p of prims.slice(1)) if (isList5(p)) mirrorShapeX(p);
+              for (const p of prims.slice(1)) if (isList6(p)) mirrorShapeX(p);
             }
           } else if (t === "property" || t === "fp_text") {
             if (ANGLED(c)) {
@@ -334,10 +351,10 @@ var require_pcb_tools = __commonJS({
         const mapPts = (n2) => {
           const p = K7.kid(n2, "pts");
           if (p) {
-            for (const xy2 of p.slice(1)) if (isList5(xy2) && xy2[0] === "xy") {
-              const [x, y] = fn(K7.num(xy2[1]), K7.num(xy2[2]));
-              xy2[1] = r64(x);
-              xy2[2] = r64(y);
+            for (const xy3 of p.slice(1)) if (isList6(xy3) && xy3[0] === "xy") {
+              const [x, y] = fn(K7.num(xy3[1]), K7.num(xy3[2]));
+              xy3[1] = r64(x);
+              xy3[2] = r64(y);
             }
           }
         };
@@ -363,11 +380,11 @@ var require_pcb_tools = __commonJS({
         if (k === "generated") {
           for (const key2 of ["origin", "end"]) {
             const c = K7.kid(node, key2);
-            const xy2 = c && K7.kid(c, "xy");
-            if (xy2) {
-              const [x, y] = fn(K7.num(xy2[1]), K7.num(xy2[2]));
-              xy2[1] = r64(x);
-              xy2[2] = r64(y);
+            const xy3 = c && K7.kid(c, "xy");
+            if (xy3) {
+              const [x, y] = fn(K7.num(xy3[1]), K7.num(xy3[2]));
+              xy3[1] = r64(x);
+              xy3[2] = r64(y);
             }
           }
           for (const key2 of ["base_line", "base_line_coupled"]) {
@@ -591,8 +608,8 @@ var require_pcb_tools = __commonJS({
         }
         if (k === "generated") {
           const c = K7.kid(n2, "origin");
-          const xy2 = c && K7.kid(c, "xy");
-          if (xy2) return [K7.num(xy2[1]), K7.num(xy2[2])];
+          const xy3 = c && K7.kid(c, "xy");
+          if (xy3) return [K7.num(xy3[1]), K7.num(xy3[2])];
         }
         const b = item.bbox;
         return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
@@ -615,7 +632,7 @@ var require_pcb_tools = __commonJS({
         for (const id of ids) {
           const it = doc.items.get(id);
           if (!it || it.kind === "group") continue;
-          const node = clone2(it.node);
+          const node = clone3(it.node);
           if (fn(node, it) === false) continue;
           out.push(replacedChange(it, node));
         }
@@ -629,7 +646,7 @@ var require_pcb_tools = __commonJS({
         const items = ids.map((id) => doc.items.get(id)).filter(Boolean);
         const dx = opts.dx || 0, dy = opts.dy || 0, rot32 = opts.rotation || 0;
         const b = bboxUnion(items);
-        let c = opts.about === "anchor" ? null : isList5(opts.about) ? opts.about : b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : selectionCenter(items);
+        let c = opts.about === "anchor" ? null : isList6(opts.about) ? opts.about : b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : selectionCenter(items);
         if (c) c = [c[0] + dx, c[1] + dy];
         return transformChanges(doc, ids, (n2, it) => {
           translateNode(n2, dx, dy);
@@ -724,7 +741,7 @@ var require_pcb_tools = __commonJS({
         const out = [];
         items.forEach((it, i) => {
           const to = slots[(i + 1) % items.length], from = slots[i];
-          const node = clone2(it.node);
+          const node = clone3(it.node);
           translateNode(node, to.p[0] - from.p[0], to.p[1] - from.p[1]);
           if (it.kind === "footprint") {
             if (to.layer !== from.layer) flipNode(node, to.p[0], doc);
@@ -764,7 +781,7 @@ var require_pcb_tools = __commonJS({
         if (rd) rd[2] = r64(-K7.num(rd[2]));
         const prims = K7.kid(node, "primitives");
         if (prims) {
-          for (const p of prims.slice(1)) if (isList5(p)) mirrorShapeX(p);
+          for (const p of prims.slice(1)) if (isList6(p)) mirrorShapeX(p);
         }
         setAngleKid(node, -angleKid(node));
       }
@@ -869,7 +886,7 @@ var require_pcb_tools = __commonJS({
         return out;
       }
       function groupMembersChanges(doc, groupItem, add, remove) {
-        const node = clone2(groupItem.node);
+        const node = clone3(groupItem.node);
         const set = new Set(groupMembers(node));
         for (const id of add || []) if (doc.items.has(id)) set.add(id);
         for (const id of remove || []) set.delete(id);
@@ -986,12 +1003,12 @@ var require_pcb_tools = __commonJS({
         return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
       }
       function pointInPoly4(pts, x, y) {
-        let inside2 = false;
+        let inside22 = false;
         for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
           const a = pts[i], b = pts[j];
-          if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside2 = !inside2;
+          if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside22 = !inside22;
         }
-        return inside2;
+        return inside22;
       }
       function inSweep(t, g2) {
         const norm22 = (v) => (v % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
@@ -1602,14 +1619,14 @@ var require_pcb_tools = __commonJS({
       PCB_ORDER2.push("Margin", "Edge.Cuts", "Eco2.User", "Eco1.User", "Cmts.User", "Dwgs.User");
       var PCB_ZMAP2 = new Map(PCB_ORDER2.map((l, i) => [l, i * 10]));
       var isList22 = Array.isArray;
-      function kid4(node, key2) {
+      function kid5(node, key2) {
         for (let j = 1; j < node.length; j++) {
           const c = node[j];
           if (isList22(c) && c[0] === key2) return c;
         }
         return null;
       }
-      function kids2(node, key2) {
+      function kids3(node, key2) {
         const out = [];
         for (let j = 1; j < node.length; j++) {
           const c = node[j];
@@ -1623,7 +1640,7 @@ var require_pcb_tools = __commonJS({
         const x = Number(v);
         return isNaN(x) ? d : x;
       }
-      function str3(v) {
+      function str4(v) {
         return v === void 0 || v === null ? "" : String(v);
       }
       function has2(node, tok) {
@@ -1631,16 +1648,16 @@ var require_pcb_tools = __commonJS({
         return false;
       }
       function atOf3(node) {
-        const t = kid4(node, "transform");
+        const t = kid5(node, "transform");
         if (t) {
-          const tr = kid4(t, "translate"), ro = kid4(t, "rotate");
+          const tr = kid5(t, "translate"), ro = kid5(t, "rotate");
           return [tr ? num8(tr[1]) : 0, tr ? num8(tr[2]) : 0, ro ? num8(ro[1]) : 0];
         }
-        const a = kid4(node, "at");
+        const a = kid5(node, "at");
         return a ? [num8(a[1]), num8(a[2]), num8(a[3])] : [0, 0, 0];
       }
       function polyPtsOf2(node) {
-        const p = kid4(node, "pts");
+        const p = kid5(node, "pts");
         if (!p) return [];
         const out = [];
         for (let i = 1; i < p.length; i++) {
@@ -1648,7 +1665,7 @@ var require_pcb_tools = __commonJS({
           if (!isList22(c)) continue;
           if (c[0] === "xy") out.push([num8(c[1]), num8(c[2])]);
           else if (c[0] === "arc") {
-            const s = kid4(c, "start"), m = kid4(c, "mid"), e = kid4(c, "end");
+            const s = kid5(c, "start"), m = kid5(c, "mid"), e = kid5(c, "end");
             if (!s || !m || !e) continue;
             const a = arcFrom32([num8(s[1]), num8(s[2])], [num8(m[1]), num8(m[2])], [num8(e[1]), num8(e[2])]);
             if (!a) {
@@ -1717,7 +1734,7 @@ var require_pcb_tools = __commonJS({
         for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
         return a / 2;
       }
-      var K22 = (n2, key2) => n2 ? kid4(n2, key2) : null;
+      var K22 = (n2, key2) => n2 ? kid5(n2, key2) : null;
       function boardSettings2(setup, doc) {
         const n2 = (key2) => {
           const k = K22(setup, key2);
@@ -1732,19 +1749,19 @@ var require_pcb_tools = __commonJS({
             tentBack = tent.includes("back");
           } else {
             const f2 = K22(tent, "front"), b = K22(tent, "back");
-            tentFront = f2 ? str3(f2[1]) !== "no" : false;
-            tentBack = b ? str3(b[1]) !== "no" : false;
+            tentFront = f2 ? str4(f2[1]) !== "no" : false;
+            tentBack = b ? str4(b[1]) !== "no" : false;
           }
         } else {
           const pp = K22(setup, "pcbplotparams");
           const v = K22(pp, "viasonmask");
           if (v) {
-            const open2 = str3(v[1]) === "true" || str3(v[1]) === "yes";
+            const open2 = str4(v[1]) === "true" || str4(v[1]) === "yes";
             tentFront = tentBack = !open2;
           }
         }
         const ax = K22(setup, "aux_axis_origin");
-        const yn2 = (k) => !!k && /^(yes|true)$/.test(str3(k[1]));
+        const yn2 = (k) => !!k && /^(yes|true)$/.test(str4(k[1]));
         const cov = K22(setup, "covering"), plug = K22(setup, "plugging");
         return {
           coverFront: yn2(K22(cov, "front")),
@@ -1793,7 +1810,7 @@ var require_pcb_tools = __commonJS({
         const rd = K22(n2, "rect_delta");
         const opts = K22(n2, "options");
         const an = opts ? K22(opts, "anchor") : null;
-        const chamfers = ch ? ch.slice(1).map(str3) : inherit ? inherit.chamfers : [];
+        const chamfers = ch ? ch.slice(1).map(str4) : inherit ? inherit.chamfers : [];
         let s = shape3 || (inherit ? inherit.shape : "circle");
         if ((s === "roundrect" || s === "rect") && chamfers.length && (cr ? num8(cr[1]) : inherit ? inherit.chamferRatio : 0) > 0) s = "chamfer";
         if (s === "rect" && rd && (num8(rd[1]) || num8(rd[2]))) s = "trapezoid";
@@ -1807,7 +1824,7 @@ var require_pcb_tools = __commonJS({
           chamfers,
           delta: rd ? [num8(rd[1]), num8(rd[2])] : inherit ? inherit.delta : [0, 0],
           offset: off ? [num8(off[1]), num8(off[2])] : inherit ? inherit.offset : [0, 0],
-          anchor: an ? str3(an[1]) : inherit ? inherit.anchor : "rect",
+          anchor: an ? str4(an[1]) : inherit ? inherit.anchor : "rect",
           primitives: K22(n2, "primitives") || (inherit ? inherit.primitives : null)
         };
       }
@@ -1825,34 +1842,34 @@ var require_pcb_tools = __commonJS({
         if (!n2) return [null, null];
         if (n2.slice(1).some((x) => !isList22(x))) return [n2.includes("front") ? true : null, n2.includes("back") ? true : null];
         const f2 = K22(n2, "front"), b = K22(n2, "back");
-        const v = (k) => k ? str3(k[1]) === "none" ? null : str3(k[1]) !== "no" : null;
+        const v = (k) => k ? str4(k[1]) === "none" ? null : str4(k[1]) !== "no" : null;
         return [v(f2), v(b)];
       }
       function readPad3(node, fp, copper, nets) {
         const [px, py, prot] = atOf3(node);
         const [x, y] = fp.tf(px, py);
         const ls = K22(node, "layers");
-        const layers = new Set(expandLayers3(ls ? ls.slice(1).map(str3) : [fp.side], copper));
+        const layers = new Set(expandLayers3(ls ? ls.slice(1).map(str4) : [fp.side], copper));
         const dr = K22(node, "drill");
         let drill22 = null;
         if (dr) {
-          const oval = str3(dr[1]) === "oval";
+          const oval = str4(dr[1]) === "oval";
           const nums = dr.slice(1).filter((v) => typeof v === "number");
           const w = nums.length ? nums[0] : 0, h = nums.length > 1 ? nums[1] : w;
           if (w > 0 || h > 0) drill22 = { w, h: oval ? h : w, oval: oval && Math.abs(w - h) > 1e-9 };
         }
         const netN = K22(node, "net");
-        const net = netN ? typeof netN[1] === "number" ? netN.length > 2 ? str3(netN[2]) : str3(nets.get(netN[1]) || "") : str3(netN[1]) : "";
-        const base = readShape2(node, str3(node[3]), null);
+        const net = netN ? typeof netN[1] === "number" ? netN.length > 2 ? str4(netN[2]) : str4(nets.get(netN[1]) || "") : str4(netN[1]) : "";
+        const base = readShape2(node, str4(node[3]), null);
         const stack = /* @__PURE__ */ new Map();
         let stackMode = "";
         const ps = K22(node, "padstack");
         if (ps) {
           const m = K22(ps, "mode");
-          stackMode = m ? str3(m[1]) : "";
-          for (const l of kids2(ps, "layer")) {
+          stackMode = m ? str4(m[1]) : "";
+          for (const l of kids3(ps, "layer")) {
             const shapeN = K22(l, "shape");
-            stack.set(str3(l[1]), readShape2(l, shapeN ? str3(shapeN[1]) : "", base));
+            stack.set(str4(l[1]), readShape2(l, shapeN ? str4(shapeN[1]) : "", base));
           }
         }
         const ru = K22(node, "remove_unused_layers"), ke = K22(node, "keep_end_layers"), zl = K22(node, "zone_layer_connections");
@@ -1861,21 +1878,21 @@ var require_pcb_tools = __commonJS({
         return {
           node,
           fp,
-          number: str3(node[1]),
-          type: str3(node[2]),
+          number: str4(node[1]),
+          type: str4(node[2]),
           x,
           y,
           rot: prot || 0,
           layers,
           drill: drill22,
           net,
-          property: prop3 ? str3(prop3[1]) : "",
+          property: prop3 ? str4(prop3[1]) : "",
           maskMargin: optNum3(node, "solder_mask_margin"),
           pasteMargin: optNum3(node, "solder_paste_margin"),
           pasteRatio: optNum3(node, "solder_paste_margin_ratio") ?? optNum3(node, "solder_paste_ratio"),
-          removeUnused: ru ? ru.length < 2 || str3(ru[1]) !== "no" : has2(node, "remove_unused_layers"),
-          keepEnds: ke ? ke.length < 2 || str3(ke[1]) !== "no" : has2(node, "keep_end_layers"),
-          zoneLayers: new Set(zl ? zl.slice(1).map(str3) : []),
+          removeUnused: ru ? ru.length < 2 || str4(ru[1]) !== "no" : has2(node, "remove_unused_layers"),
+          keepEnds: ke ? ke.length < 2 || str4(ke[1]) !== "no" : has2(node, "keep_end_layers"),
+          zoneLayers: new Set(zl ? zl.slice(1).map(str4) : []),
           base,
           stackMode,
           stack,
@@ -1884,25 +1901,25 @@ var require_pcb_tools = __commonJS({
         };
       }
       var DEFAULT_VARIANT2 = "< Default >";
-      var isDefaultVariant2 = (v) => !v || v.toLowerCase() === DEFAULT_VARIANT2.toLowerCase();
+      var isDefaultVariant3 = (v) => !v || v.toLowerCase() === DEFAULT_VARIANT2.toLowerCase();
       function applyFootprintVariant2(fp, variant) {
-        if (isDefaultVariant2(variant)) return;
-        const v = kids2(fp.node, "variant").find((x) => {
+        if (isDefaultVariant3(variant)) return;
+        const v = kids3(fp.node, "variant").find((x) => {
           const nm22 = K22(x, "name");
-          return !!nm22 && str3(nm22[1]) === variant;
+          return !!nm22 && str4(nm22[1]) === variant;
         });
         if (!v) return;
         const flag2 = (key2, own) => {
           const k = K22(v, key2);
-          return k ? k.length < 2 || /^(yes|true)$/.test(str3(k[1])) : own;
+          return k ? k.length < 2 || /^(yes|true)$/.test(str4(k[1])) : own;
         };
         fp.dnp = flag2("dnp", fp.dnp);
         fp.excludeFromBom = flag2("exclude_from_bom", fp.excludeFromBom);
         fp.excludeFromPos = flag2("exclude_from_pos_files", fp.excludeFromPos);
         const props = new Map(fp.props);
-        for (const f2 of kids2(v, "field")) {
+        for (const f2 of kids3(v, "field")) {
           const nm22 = K22(f2, "name"), val = K22(f2, "value");
-          if (nm22 && str3(nm22[1])) props.set(str3(nm22[1]), val ? str3(val[1]) : "");
+          if (nm22 && str4(nm22[1])) props.set(str4(nm22[1]), val ? str4(val[1]) : "");
         }
         fp.props = props;
         fp.value = props.get("Value") || "";
@@ -1911,7 +1928,7 @@ var require_pcb_tools = __commonJS({
         const n2 = item.node;
         const [fx, fy, frot] = atOf3(n2);
         const layerN = K22(n2, "layer");
-        const side = layerN ? str3(layerN[1]) : "F.Cu";
+        const side = layerN ? str4(layerN[1]) : "F.Cu";
         const trN = K22(n2, "transform");
         const scN = trN ? K22(trN, "scale") : null;
         const sx = scN ? num8(scN[1], 1) || 1 : 1, sy = scN ? num8(scN[2], 1) || 1 : 1;
@@ -1920,16 +1937,16 @@ var require_pcb_tools = __commonJS({
           return [fx + x, fy + y];
         };
         const props = /* @__PURE__ */ new Map();
-        for (const p of kids2(n2, "property")) if (typeof p[2] !== "object") props.set(str3(p[1]), str3(p[2]));
-        for (const t of kids2(n2, "fp_text")) {
-          const kind = str3(t[1]);
-          if (kind === "reference" && !props.has("Reference")) props.set("Reference", str3(t[2]));
-          else if (kind === "value" && !props.has("Value")) props.set("Value", str3(t[2]));
+        for (const p of kids3(n2, "property")) if (typeof p[2] !== "object") props.set(str4(p[1]), str4(p[2]));
+        for (const t of kids3(n2, "fp_text")) {
+          const kind = str4(t[1]);
+          if (kind === "reference" && !props.has("Reference")) props.set("Reference", str4(t[2]));
+          else if (kind === "value" && !props.has("Value")) props.set("Value", str4(t[2]));
         }
         const attr = K22(n2, "attr");
-        const flags = attr ? attr.slice(1).map(str3) : [];
+        const flags = attr ? attr.slice(1).map(str4) : [];
         const priv = K22(n2, "private_layers");
-        const lib = str3(n2[1]);
+        const lib = str4(n2[1]);
         const fp = {
           id: item.id,
           node: n2,
@@ -1952,24 +1969,24 @@ var require_pcb_tools = __commonJS({
           maskMargin: optNum3(n2, "solder_mask_margin"),
           pasteMargin: optNum3(n2, "solder_paste_margin"),
           pasteRatio: optNum3(n2, "solder_paste_margin_ratio") ?? optNum3(n2, "solder_paste_ratio"),
-          privateLayers: new Set(priv ? priv.slice(1).map(str3) : []),
+          privateLayers: new Set(priv ? priv.slice(1).map(str4) : []),
           pads: [],
           tf: tf2
         };
-        for (const p of kids2(n2, "pad")) fp.pads.push(readPad3(p, fp, copper, nets));
+        for (const p of kids3(n2, "pad")) fp.pads.push(readPad3(p, fp, copper, nets));
         return fp;
       }
       function netName2(node, nets) {
         const nn = K22(node, "net");
         if (!nn) return "";
-        return typeof nn[1] === "number" ? nn.length > 2 ? str3(nn[2]) : str3(nets.get(nn[1]) || "") : str3(nn[1]);
+        return typeof nn[1] === "number" ? nn.length > 2 ? str4(nn[2]) : str4(nets.get(nn[1]) || "") : str4(nn[1]);
       }
       function readTrack2(n2, kind, nets) {
         const s = K22(n2, "start"), e = K22(n2, "end");
         if (!s || !e) return null;
         const ls = K22(n2, "layers");
         const l1 = K22(n2, "layer");
-        const names = ls ? ls.slice(1).map(str3) : [l1 ? str3(l1[1]) : "F.Cu"];
+        const names = ls ? ls.slice(1).map(str4) : [l1 ? str4(l1[1]) : "F.Cu"];
         const layer = names.find(isCopper2) || names[0];
         const maskLayer = names.find((x) => /\.Mask$/.test(x)) || null;
         const wN = K22(n2, "width");
@@ -1986,7 +2003,7 @@ var require_pcb_tools = __commonJS({
         const sz = K22(n2, "size"), dr = K22(n2, "drill");
         const type = has2(n2, "blind") ? "blind" : has2(n2, "buried") ? "blind" : has2(n2, "micro") ? "micro" : "through";
         const ls = K22(n2, "layers");
-        const pair = ls ? [str3(ls[1]), str3(ls[2])] : ["F.Cu", "B.Cu"];
+        const pair = ls ? [str4(ls[1]), str4(ls[2])] : ["F.Cu", "B.Cu"];
         let layers = copper;
         if (type !== "through") {
           const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]);
@@ -1996,11 +2013,11 @@ var require_pcb_tools = __commonJS({
         let sizes = null;
         const ps = K22(n2, "padstack");
         if (ps) {
-          const mode2 = str3((K22(ps, "mode") || [])[1]);
+          const mode2 = str4((K22(ps, "mode") || [])[1]);
           const entry = /* @__PURE__ */ new Map();
-          for (const l of kids2(ps, "layer")) {
+          for (const l of kids3(ps, "layer")) {
             const s = K22(l, "size");
-            if (s) entry.set(str3(l[1]), num8(s[1], size));
+            if (s) entry.set(str4(l[1]), num8(s[1], size));
           }
           sizes = /* @__PURE__ */ new Map();
           for (const l of layers) {
@@ -2012,7 +2029,7 @@ var require_pcb_tools = __commonJS({
         const ru = K22(n2, "remove_unused_layers"), ke = K22(n2, "keep_end_layers"), zl = K22(n2, "zone_layer_connections");
         const [tf2, tb] = frontBack2(K22(n2, "tenting"));
         const [cf, cb] = frontBack2(K22(n2, "covering")), [pf, pb] = frontBack2(K22(n2, "plugging"));
-        const opt = (k) => k && k.length > 1 && str3(k[1]) !== "none" ? str3(k[1]) !== "no" : null;
+        const opt = (k) => k && k.length > 1 && str4(k[1]) !== "none" ? str4(k[1]) !== "no" : null;
         return {
           coverFront: cf,
           coverBack: cb,
@@ -2028,9 +2045,9 @@ var require_pcb_tools = __commonJS({
           layers,
           sizes,
           net: netName2(n2, nets),
-          removeUnused: ru ? ru.length < 2 || str3(ru[1]) !== "no" : has2(n2, "remove_unused_layers"),
-          keepEnds: ke ? ke.length < 2 || str3(ke[1]) !== "no" : has2(n2, "keep_end_layers"),
-          zoneLayers: new Set(zl ? zl.slice(1).map(str3) : []),
+          removeUnused: ru ? ru.length < 2 || str4(ru[1]) !== "no" : has2(n2, "remove_unused_layers"),
+          keepEnds: ke ? ke.length < 2 || str4(ke[1]) !== "no" : has2(n2, "keep_end_layers"),
+          zoneLayers: new Set(zl ? zl.slice(1).map(str4) : []),
           tentFront: tf2,
           tentBack: tb
         };
@@ -2038,8 +2055,8 @@ var require_pcb_tools = __commonJS({
       function readZone3(n2, copper, tf2, out, nets) {
         if (K22(n2, "keepout")) return;
         const single = K22(n2, "layer"), multi = K22(n2, "layers");
-        const layers = expandLayers3(single ? [str3(single[1])] : multi ? multi.slice(1).map(str3) : ["F.Cu"], copper);
-        const fills = kids2(n2, "filled_polygon");
+        const layers = expandLayers3(single ? [str4(single[1])] : multi ? multi.slice(1).map(str4) : ["F.Cu"], copper);
+        const fills = kids3(n2, "filled_polygon");
         if (!fills.length) {
           if (layers.some(isCopper2)) out.unfilledZones++;
           return;
@@ -2048,7 +2065,7 @@ var require_pcb_tools = __commonJS({
           const l = K22(f2, "layer");
           const pts = polyPtsOf2(f2);
           if (pts.length < 3) continue;
-          out.fills.push({ layer: l ? str3(l[1]) : layers[0], pts: tf2 ? pts.map((p) => tf2(p[0], p[1])) : pts, net: nets ? netName2(n2, nets) : void 0 });
+          out.fills.push({ layer: l ? str4(l[1]) : layers[0], pts: tf2 ? pts.map((p) => tf2(p[0], p[1])) : pts, net: nets ? netName2(n2, nets) : void 0 });
         }
       }
       function boardModel2(doc, setup, variant) {
@@ -2060,7 +2077,7 @@ var require_pcb_tools = __commonJS({
             const fp = readFootprint2(item, copper, doc.nets);
             applyFootprintVariant2(fp, variant);
             m.footprints.push(fp);
-            for (const z of kids2(n2, "zone")) readZone3(z, copper, fp.tf, m, doc.nets);
+            for (const z of kids3(n2, "zone")) readZone3(z, copper, fp.tf, m, doc.nets);
           } else if (item.kind === "segment" || item.kind === "arc") {
             const t = readTrack2(n2, item.kind, doc.nets);
             if (t) m.tracks.push(t);
@@ -5256,7 +5273,7 @@ var require_pcb_tools = __commonJS({
         }
         static areaOutPt(op) {
           const maxCoord = InternalClipper2.maxCoordForSafeAreaProduct;
-          let area32 = 0;
+          let area42 = 0;
           let allSmall = true;
           let op2 = op;
           do {
@@ -5266,11 +5283,11 @@ var require_pcb_tools = __commonJS({
               allSmall = false;
               break;
             }
-            area32 += (prev.pt.y + pt22.y) * (prev.pt.x - pt22.x);
+            area42 += (prev.pt.y + pt22.y) * (prev.pt.x - pt22.x);
             op2 = op2.next;
           } while (op2 !== op);
           if (allSmall) {
-            return BigInt(Math.round(area32));
+            return BigInt(Math.round(area42));
           }
           let areaBig = B022;
           op2 = op;
@@ -5292,8 +5309,8 @@ var require_pcb_tools = __commonJS({
         areaTriangle(pt1, pt22, pt32) {
           const maxCoord = InternalClipper2.maxCoordForSafeAreaProduct;
           if (Math.abs(pt1.x) < maxCoord && Math.abs(pt1.y) < maxCoord && Math.abs(pt22.x) < maxCoord && Math.abs(pt22.y) < maxCoord && Math.abs(pt32.x) < maxCoord && Math.abs(pt32.y) < maxCoord) {
-            const area42 = (pt32.y + pt1.y) * (pt32.x - pt1.x) + (pt1.y + pt22.y) * (pt1.x - pt22.x) + (pt22.y + pt32.y) * (pt22.x - pt32.x);
-            return BigInt(Math.round(area42));
+            const area5 = (pt32.y + pt1.y) * (pt32.x - pt1.x) + (pt1.y + pt22.y) * (pt1.x - pt22.x) + (pt22.y + pt32.y) * (pt22.x - pt32.x);
+            return BigInt(Math.round(area5));
           }
           if (Number.isSafeInteger(pt1.x) && Number.isSafeInteger(pt1.y) && Number.isSafeInteger(pt22.x) && Number.isSafeInteger(pt22.y) && Number.isSafeInteger(pt32.x) && Number.isSafeInteger(pt32.y)) {
             const term1 = (BigInt(pt32.y) + BigInt(pt1.y)) * (BigInt(pt32.x) - BigInt(pt1.x));
@@ -5301,8 +5318,8 @@ var require_pcb_tools = __commonJS({
             const term3 = (BigInt(pt22.y) + BigInt(pt32.y)) * (BigInt(pt22.x) - BigInt(pt32.x));
             return term1 + term2 + term3;
           }
-          const area32 = (pt32.y + pt1.y) * (pt32.x - pt1.x) + (pt1.y + pt22.y) * (pt1.x - pt22.x) + (pt22.y + pt32.y) * (pt22.x - pt32.x);
-          return BigInt(Math.round(area32));
+          const area42 = (pt32.y + pt1.y) * (pt32.x - pt1.x) + (pt1.y + pt22.y) * (pt1.x - pt22.x) + (pt22.y + pt32.y) * (pt22.x - pt32.x);
+          return BigInt(Math.round(area42));
         }
         isValidOwner(outRec, testOwner) {
           while (testOwner !== null && testOwner !== outRec) {
@@ -6292,12 +6309,12 @@ var require_pcb_tools = __commonJS({
         return fromPaths2(differenceD2(toPaths2(a), toPaths2(b), FillRule2.NonZero, PRECISION3));
       }
       function pointInPoly22(pts, x, y) {
-        let inside2 = false;
+        let inside22 = false;
         for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
           const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
-          if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside2 = !inside2;
+          if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside22 = !inside22;
         }
-        return inside2;
+        return inside22;
       }
       function fracture2(paths) {
         if (paths.length < 2) return paths;
@@ -6316,9 +6333,9 @@ var require_pcb_tools = __commonJS({
         });
         if (!holes.length) return paths;
         outers.sort((a, b) => a.a - b.a);
-        const inside2 = (c, x, y) => x >= c.box[0] && x <= c.box[2] && y >= c.box[1] && y <= c.box[3] && pointInPoly22(c.pts, x, y);
+        const inside22 = (c, x, y) => x >= c.box[0] && x <= c.box[2] && y >= c.box[1] && y <= c.box[3] && pointInPoly22(c.pts, x, y);
         for (const h of holes) {
-          const o = outers.find((c) => inside2(c, h[0][0], h[0][1]) || inside2(c, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
+          const o = outers.find((c) => inside22(c, h[0][0], h[0][1]) || inside22(c, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
           if (o) o.holes.push(h);
         }
         const out = [];
@@ -7367,14 +7384,14 @@ var require_pcb_tools = __commonJS({
         }
         return encodingTable;
       };
-      encode.MACSTRING = function(str10, encoding) {
+      encode.MACSTRING = function(str11, encoding) {
         var table2 = getMacEncodingTable(encoding);
         if (table2 === void 0) {
           return void 0;
         }
         var result = [];
-        for (var i = 0; i < str10.length; i++) {
-          var c = str10.charCodeAt(i);
+        for (var i = 0; i < str11.length; i++) {
+          var c = str11.charCodeAt(i);
           if (c >= 128) {
             c = table2[c];
             if (c === void 0) {
@@ -7385,8 +7402,8 @@ var require_pcb_tools = __commonJS({
         }
         return result;
       };
-      sizeOf.MACSTRING = function(str10, encoding) {
-        var b = encode.MACSTRING(str10, encoding);
+      sizeOf.MACSTRING = function(str11, encoding) {
+        var b = encode.MACSTRING(str11, encoding);
         if (b !== void 0) {
           return b.length;
         } else {
@@ -7996,9 +8013,9 @@ var require_pcb_tools = __commonJS({
         for (var i = 0; i < count; i++) {
           var rec = {};
           for (var j = 0; j < fields.length; j++) {
-            var fieldName22 = fields[j];
-            var fieldType = recordDescription[fieldName22];
-            rec[fieldName22] = fieldType.call(this);
+            var fieldName4 = fields[j];
+            var fieldType = recordDescription[fieldName4];
+            rec[fieldName4] = fieldType.call(this);
           }
           records[i] = rec;
         }
@@ -8014,9 +8031,9 @@ var require_pcb_tools = __commonJS({
         for (var i = 0; i < count; i++) {
           var rec = {};
           for (var j = 0; j < fields.length; j++) {
-            var fieldName22 = fields[j];
-            var fieldType = recordDescription[fieldName22];
-            rec[fieldName22] = fieldType.call(this);
+            var fieldName4 = fields[j];
+            var fieldType = recordDescription[fieldName4];
+            rec[fieldName4] = fieldType.call(this);
           }
           records[i] = rec;
         }
@@ -8029,9 +8046,9 @@ var require_pcb_tools = __commonJS({
           var fields = Object.keys(description);
           var struct = {};
           for (var j = 0; j < fields.length; j++) {
-            var fieldName22 = fields[j];
-            var fieldType = description[fieldName22];
-            struct[fieldName22] = fieldType.call(this);
+            var fieldName4 = fields[j];
+            var fieldType = description[fieldName4];
+            struct[fieldName4] = fieldType.call(this);
           }
           return struct;
         }
@@ -9641,8 +9658,8 @@ var require_pcb_tools = __commonJS({
         "ccaron",
         "dcroat"
       ];
-      function DefaultEncoding(font) {
-        this.font = font;
+      function DefaultEncoding(font3) {
+        this.font = font3;
       }
       DefaultEncoding.prototype.charToGlyphIndex = function(c) {
         var code = c.codePointAt(0);
@@ -9709,50 +9726,50 @@ var require_pcb_tools = __commonJS({
       GlyphNames.prototype.glyphIndexToName = function(gid) {
         return this.names[gid];
       };
-      function addGlyphNamesAll(font) {
+      function addGlyphNamesAll(font3) {
         var glyph;
-        var glyphIndexMap = font.tables.cmap.glyphIndexMap;
+        var glyphIndexMap = font3.tables.cmap.glyphIndexMap;
         var charCodes = Object.keys(glyphIndexMap);
         for (var i = 0; i < charCodes.length; i += 1) {
           var c = charCodes[i];
           var glyphIndex = glyphIndexMap[c];
-          glyph = font.glyphs.get(glyphIndex);
+          glyph = font3.glyphs.get(glyphIndex);
           glyph.addUnicode(parseInt(c));
         }
-        for (var i$1 = 0; i$1 < font.glyphs.length; i$1 += 1) {
-          glyph = font.glyphs.get(i$1);
-          if (font.cffEncoding) {
-            if (font.isCIDFont) {
+        for (var i$1 = 0; i$1 < font3.glyphs.length; i$1 += 1) {
+          glyph = font3.glyphs.get(i$1);
+          if (font3.cffEncoding) {
+            if (font3.isCIDFont) {
               glyph.name = "gid" + i$1;
             } else {
-              glyph.name = font.cffEncoding.charset[i$1];
+              glyph.name = font3.cffEncoding.charset[i$1];
             }
-          } else if (font.glyphNames.names) {
-            glyph.name = font.glyphNames.glyphIndexToName(i$1);
+          } else if (font3.glyphNames.names) {
+            glyph.name = font3.glyphNames.glyphIndexToName(i$1);
           }
         }
       }
-      function addGlyphNamesToUnicodeMap(font) {
-        font._IndexToUnicodeMap = {};
-        var glyphIndexMap = font.tables.cmap.glyphIndexMap;
+      function addGlyphNamesToUnicodeMap(font3) {
+        font3._IndexToUnicodeMap = {};
+        var glyphIndexMap = font3.tables.cmap.glyphIndexMap;
         var charCodes = Object.keys(glyphIndexMap);
         for (var i = 0; i < charCodes.length; i += 1) {
           var c = charCodes[i];
           var glyphIndex = glyphIndexMap[c];
-          if (font._IndexToUnicodeMap[glyphIndex] === void 0) {
-            font._IndexToUnicodeMap[glyphIndex] = {
+          if (font3._IndexToUnicodeMap[glyphIndex] === void 0) {
+            font3._IndexToUnicodeMap[glyphIndex] = {
               unicodes: [parseInt(c)]
             };
           } else {
-            font._IndexToUnicodeMap[glyphIndex].unicodes.push(parseInt(c));
+            font3._IndexToUnicodeMap[glyphIndex].unicodes.push(parseInt(c));
           }
         }
       }
-      function addGlyphNames(font, opt) {
+      function addGlyphNames(font3, opt) {
         if (opt.lowMemory) {
-          addGlyphNamesToUnicodeMap(font);
+          addGlyphNamesToUnicodeMap(font3);
         } else {
-          addGlyphNamesAll(font);
+          addGlyphNamesAll(font3);
         }
       }
       function line(ctx, x1, y1, x2, y2) {
@@ -9811,7 +9828,7 @@ var require_pcb_tools = __commonJS({
       Glyph.prototype.getBoundingBox = function() {
         return this.path.getBoundingBox();
       };
-      Glyph.prototype.getPath = function(x, y, fontSize, options, font) {
+      Glyph.prototype.getPath = function(x, y, fontSize, options, font3) {
         x = x !== void 0 ? x : 0;
         y = y !== void 0 ? y : 0;
         fontSize = fontSize !== void 0 ? fontSize : 72;
@@ -9822,11 +9839,11 @@ var require_pcb_tools = __commonJS({
         }
         var xScale = options.xScale;
         var yScale = options.yScale;
-        if (options.hinting && font && font.hinting) {
-          hPoints = this.path && font.hinting.exec(this, fontSize);
+        if (options.hinting && font3 && font3.hinting) {
+          hPoints = this.path && font3.hinting.exec(this, fontSize);
         }
         if (hPoints) {
-          commands = font.hinting.getCommands(hPoints);
+          commands = font3.hinting.getCommands(hPoints);
           x = Math.round(x);
           y = Math.round(y);
           xScale = yScale = 1;
@@ -10000,13 +10017,13 @@ var require_pcb_tools = __commonJS({
           configurable: true
         });
       }
-      function GlyphSet(font, glyphs) {
-        this.font = font;
+      function GlyphSet(font3, glyphs) {
+        this.font = font3;
         this.glyphs = {};
         if (Array.isArray(glyphs)) {
           for (var i = 0; i < glyphs.length; i++) {
             var glyph = glyphs[i];
-            glyph.path.unitsPerEm = font.unitsPerEm;
+            glyph.path.unitsPerEm = font3.unitsPerEm;
             this.glyphs[i] = glyph;
           }
         }
@@ -10047,16 +10064,16 @@ var require_pcb_tools = __commonJS({
         this.glyphs[index] = loader;
         this.length++;
       };
-      function glyphLoader(font, index) {
-        return new Glyph({ index, font });
+      function glyphLoader(font3, index) {
+        return new Glyph({ index, font: font3 });
       }
-      function ttfGlyphLoader(font, index, parseGlyph2, data, position, buildPath2) {
+      function ttfGlyphLoader(font3, index, parseGlyph2, data, position, buildPath2) {
         return function() {
-          var glyph = new Glyph({ index, font });
+          var glyph = new Glyph({ index, font: font3 });
           glyph.path = function() {
             parseGlyph2(glyph, data, position);
-            var path2 = buildPath2(font.glyphs, glyph);
-            path2.unitsPerEm = font.unitsPerEm;
+            var path2 = buildPath2(font3.glyphs, glyph);
+            path2.unitsPerEm = font3.unitsPerEm;
             return path2;
           };
           defineDependentProperty(glyph, "xMin", "_xMin");
@@ -10066,12 +10083,12 @@ var require_pcb_tools = __commonJS({
           return glyph;
         };
       }
-      function cffGlyphLoader(font, index, parseCFFCharstring2, charstring) {
+      function cffGlyphLoader(font3, index, parseCFFCharstring2, charstring) {
         return function() {
-          var glyph = new Glyph({ index, font });
+          var glyph = new Glyph({ index, font: font3 });
           glyph.path = function() {
-            var path2 = parseCFFCharstring2(font, glyph, charstring);
-            path2.unitsPerEm = font.unitsPerEm;
+            var path2 = parseCFFCharstring2(font3, glyph, charstring);
+            path2.unitsPerEm = font3.unitsPerEm;
             return path2;
           };
           return glyph;
@@ -10444,7 +10461,7 @@ var require_pcb_tools = __commonJS({
         }
         return new CffEncoding(enc2, charset);
       }
-      function parseCFFCharstring(font, glyph, code) {
+      function parseCFFCharstring(font3, glyph, code) {
         var c1x;
         var c1y;
         var c2x;
@@ -10460,18 +10477,18 @@ var require_pcb_tools = __commonJS({
         var subrsBias;
         var defaultWidthX;
         var nominalWidthX;
-        if (font.isCIDFont) {
-          var fdIndex = font.tables.cff.topDict._fdSelect[glyph.index];
-          var fdDict = font.tables.cff.topDict._fdArray[fdIndex];
+        if (font3.isCIDFont) {
+          var fdIndex = font3.tables.cff.topDict._fdSelect[glyph.index];
+          var fdDict = font3.tables.cff.topDict._fdArray[fdIndex];
           subrs = fdDict._subrs;
           subrsBias = fdDict._subrsBias;
           defaultWidthX = fdDict._defaultWidthX;
           nominalWidthX = fdDict._nominalWidthX;
         } else {
-          subrs = font.tables.cff.topDict._subrs;
-          subrsBias = font.tables.cff.topDict._subrsBias;
-          defaultWidthX = font.tables.cff.topDict._defaultWidthX;
-          nominalWidthX = font.tables.cff.topDict._nominalWidthX;
+          subrs = font3.tables.cff.topDict._subrs;
+          subrsBias = font3.tables.cff.topDict._subrsBias;
+          defaultWidthX = font3.tables.cff.topDict._defaultWidthX;
+          nominalWidthX = font3.tables.cff.topDict._nominalWidthX;
         }
         var width = defaultWidthX;
         function newContour(x2, y2) {
@@ -10749,8 +10766,8 @@ var require_pcb_tools = __commonJS({
                 i += 2;
                 break;
               case 29:
-                codeIndex = stack.pop() + font.gsubrsBias;
-                subrCode = font.gsubrs[codeIndex];
+                codeIndex = stack.pop() + font3.gsubrsBias;
+                subrCode = font3.gsubrs[codeIndex];
                 if (subrCode) {
                   parse22(subrCode);
                 }
@@ -10867,29 +10884,29 @@ var require_pcb_tools = __commonJS({
         }
         return fdSelect;
       }
-      function parseCFFTable(data, start, font, opt) {
-        font.tables.cff = {};
+      function parseCFFTable(data, start, font3, opt) {
+        font3.tables.cff = {};
         var header2 = parseCFFHeader(data, start);
         var nameIndex2 = parseCFFIndex(data, header2.endOffset, parse2.bytesToString);
         var topDictIndex = parseCFFIndex(data, nameIndex2.endOffset);
         var stringIndex = parseCFFIndex(data, topDictIndex.endOffset, parse2.bytesToString);
         var globalSubrIndex = parseCFFIndex(data, stringIndex.endOffset);
-        font.gsubrs = globalSubrIndex.objects;
-        font.gsubrsBias = calcCFFSubroutineBias(font.gsubrs);
+        font3.gsubrs = globalSubrIndex.objects;
+        font3.gsubrsBias = calcCFFSubroutineBias(font3.gsubrs);
         var topDictArray = gatherCFFTopDicts(data, start, topDictIndex.objects, stringIndex.objects);
         if (topDictArray.length !== 1) {
           throw new Error("CFF table has too many fonts in 'FontSet' - count of fonts NameIndex.length = " + topDictArray.length);
         }
         var topDict = topDictArray[0];
-        font.tables.cff.topDict = topDict;
+        font3.tables.cff.topDict = topDict;
         if (topDict._privateDict) {
-          font.defaultWidthX = topDict._privateDict.defaultWidthX;
-          font.nominalWidthX = topDict._privateDict.nominalWidthX;
+          font3.defaultWidthX = topDict._privateDict.defaultWidthX;
+          font3.nominalWidthX = topDict._privateDict.nominalWidthX;
         }
         if (topDict.ros[0] !== void 0 && topDict.ros[1] !== void 0) {
-          font.isCIDFont = true;
+          font3.isCIDFont = true;
         }
-        if (font.isCIDFont) {
+        if (font3.isCIDFont) {
           var fdArrayOffset = topDict.fdArray;
           var fdSelectOffset = topDict.fdSelect;
           if (fdArrayOffset === 0 || fdSelectOffset === 0) {
@@ -10900,48 +10917,48 @@ var require_pcb_tools = __commonJS({
           var fdArray = gatherCFFTopDicts(data, start, fdArrayIndex.objects, stringIndex.objects);
           topDict._fdArray = fdArray;
           fdSelectOffset += start;
-          topDict._fdSelect = parseCFFFDSelect(data, fdSelectOffset, font.numGlyphs, fdArray.length);
+          topDict._fdSelect = parseCFFFDSelect(data, fdSelectOffset, font3.numGlyphs, fdArray.length);
         }
         var privateDictOffset = start + topDict.private[1];
         var privateDict = parseCFFPrivateDict(data, privateDictOffset, topDict.private[0], stringIndex.objects);
-        font.defaultWidthX = privateDict.defaultWidthX;
-        font.nominalWidthX = privateDict.nominalWidthX;
+        font3.defaultWidthX = privateDict.defaultWidthX;
+        font3.nominalWidthX = privateDict.nominalWidthX;
         if (privateDict.subrs !== 0) {
           var subrOffset = privateDictOffset + privateDict.subrs;
           var subrIndex = parseCFFIndex(data, subrOffset);
-          font.subrs = subrIndex.objects;
-          font.subrsBias = calcCFFSubroutineBias(font.subrs);
+          font3.subrs = subrIndex.objects;
+          font3.subrsBias = calcCFFSubroutineBias(font3.subrs);
         } else {
-          font.subrs = [];
-          font.subrsBias = 0;
+          font3.subrs = [];
+          font3.subrsBias = 0;
         }
         var charStringsIndex;
         if (opt.lowMemory) {
           charStringsIndex = parseCFFIndexLowMemory(data, start + topDict.charStrings);
-          font.nGlyphs = charStringsIndex.offsets.length;
+          font3.nGlyphs = charStringsIndex.offsets.length;
         } else {
           charStringsIndex = parseCFFIndex(data, start + topDict.charStrings);
-          font.nGlyphs = charStringsIndex.objects.length;
+          font3.nGlyphs = charStringsIndex.objects.length;
         }
-        var charset = parseCFFCharset(data, start + topDict.charset, font.nGlyphs, stringIndex.objects);
+        var charset = parseCFFCharset(data, start + topDict.charset, font3.nGlyphs, stringIndex.objects);
         if (topDict.encoding === 0) {
-          font.cffEncoding = new CffEncoding(cffStandardEncoding, charset);
+          font3.cffEncoding = new CffEncoding(cffStandardEncoding, charset);
         } else if (topDict.encoding === 1) {
-          font.cffEncoding = new CffEncoding(cffExpertEncoding, charset);
+          font3.cffEncoding = new CffEncoding(cffExpertEncoding, charset);
         } else {
-          font.cffEncoding = parseCFFEncoding(data, start + topDict.encoding, charset);
+          font3.cffEncoding = parseCFFEncoding(data, start + topDict.encoding, charset);
         }
-        font.encoding = font.encoding || font.cffEncoding;
-        font.glyphs = new glyphset.GlyphSet(font);
+        font3.encoding = font3.encoding || font3.cffEncoding;
+        font3.glyphs = new glyphset.GlyphSet(font3);
         if (opt.lowMemory) {
-          font._push = function(i2) {
+          font3._push = function(i2) {
             var charString2 = getCffIndexObject(i2, charStringsIndex.offsets, data, start + topDict.charStrings);
-            font.glyphs.push(i2, glyphset.cffGlyphLoader(font, i2, parseCFFCharstring, charString2));
+            font3.glyphs.push(i2, glyphset.cffGlyphLoader(font3, i2, parseCFFCharstring, charString2));
           };
         } else {
-          for (var i = 0; i < font.nGlyphs; i += 1) {
+          for (var i = 0; i < font3.nGlyphs; i += 1) {
             var charString = charStringsIndex.objects[i];
-            font.glyphs.push(i, glyphset.cffGlyphLoader(font, i, parseCFFCharstring, charString));
+            font3.glyphs.push(i, glyphset.cffGlyphLoader(font3, i, parseCFFCharstring, charString));
           }
         }
       }
@@ -11266,8 +11283,8 @@ var require_pcb_tools = __commonJS({
           glyph.leftSideBearing = leftSideBearing;
         }
       }
-      function parseHmtxTableOnLowMemory(font, data, start, numMetrics, numGlyphs) {
-        font._hmtxTableData = {};
+      function parseHmtxTableOnLowMemory(font3, data, start, numMetrics, numGlyphs) {
+        font3._hmtxTableData = {};
         var advanceWidth;
         var leftSideBearing;
         var p = new parse2.Parser(data, start);
@@ -11276,15 +11293,15 @@ var require_pcb_tools = __commonJS({
             advanceWidth = p.parseUShort();
             leftSideBearing = p.parseShort();
           }
-          font._hmtxTableData[i] = {
+          font3._hmtxTableData[i] = {
             advanceWidth,
             leftSideBearing
           };
         }
       }
-      function parseHmtxTable(font, data, start, numMetrics, numGlyphs, glyphs, opt) {
+      function parseHmtxTable(font3, data, start, numMetrics, numGlyphs, glyphs, opt) {
         if (opt.lowMemory) {
-          parseHmtxTableOnLowMemory(font, data, start, numMetrics, numGlyphs);
+          parseHmtxTableOnLowMemory(font3, data, start, numMetrics, numGlyphs);
         } else {
           parseHmtxTableAll(data, start, numMetrics, numGlyphs, glyphs);
         }
@@ -13076,11 +13093,11 @@ var require_pcb_tools = __commonJS({
         sfnt2.fields = sfnt2.fields.concat(tableFields);
         return sfnt2;
       }
-      function metricsForChar(font, chars, notFoundMetrics) {
+      function metricsForChar(font3, chars, notFoundMetrics) {
         for (var i = 0; i < chars.length; i += 1) {
-          var glyphIndex = font.charToGlyphIndex(chars[i]);
+          var glyphIndex = font3.charToGlyphIndex(chars[i]);
           if (glyphIndex > 0) {
-            var glyph = font.glyphs.get(glyphIndex);
+            var glyph = font3.glyphs.get(glyphIndex);
             return glyph.getMetrics();
           }
         }
@@ -13093,7 +13110,7 @@ var require_pcb_tools = __commonJS({
         }
         return sum / vs.length;
       }
-      function fontToSfntTable(font) {
+      function fontToSfntTable(font3) {
         var xMins = [];
         var yMins = [];
         var xMaxs = [];
@@ -13107,8 +13124,8 @@ var require_pcb_tools = __commonJS({
         var ulUnicodeRange2 = 0;
         var ulUnicodeRange3 = 0;
         var ulUnicodeRange4 = 0;
-        for (var i = 0; i < font.glyphs.length; i += 1) {
-          var glyph = font.glyphs.get(i);
+        for (var i = 0; i < font3.glyphs.length; i += 1) {
+          var glyph = font3.glyphs.get(i);
           var unicode = glyph.unicode | 0;
           if (isNaN(glyph.advanceWidth)) {
             throw new Error("Glyph " + glyph.name + " (" + i + "): advanceWidth is not a number.");
@@ -13156,18 +13173,18 @@ var require_pcb_tools = __commonJS({
           maxLeftSideBearing: Math.max.apply(null, leftSideBearings),
           minRightSideBearing: Math.min.apply(null, rightSideBearings)
         };
-        globals.ascender = font.ascender;
-        globals.descender = font.descender;
+        globals.ascender = font3.ascender;
+        globals.descender = font3.descender;
         var headTable = head.make({
           flags: 3,
           // 00000011 (baseline for font at y=0; left sidebearing point at x=0)
-          unitsPerEm: font.unitsPerEm,
+          unitsPerEm: font3.unitsPerEm,
           xMin: globals.xMin,
           yMin: globals.yMin,
           xMax: globals.xMax,
           yMax: globals.yMax,
           lowestRecPPEM: 3,
-          createdTimestamp: font.createdTimestamp
+          createdTimestamp: font3.createdTimestamp
         });
         var hheaTable = hhea.make({
           ascender: globals.ascender,
@@ -13176,9 +13193,9 @@ var require_pcb_tools = __commonJS({
           minLeftSideBearing: globals.minLeftSideBearing,
           minRightSideBearing: globals.minRightSideBearing,
           xMaxExtent: globals.maxLeftSideBearing + (globals.xMax - globals.xMin),
-          numberOfHMetrics: font.glyphs.length
+          numberOfHMetrics: font3.glyphs.length
         });
-        var maxpTable = maxp.make(font.glyphs.length);
+        var maxpTable = maxp.make(font3.glyphs.length);
         var os2Table = os2.make(Object.assign({
           xAvgCharWidth: Math.round(globals.advanceWidthAvg),
           usFirstCharIndex: firstCharIndex,
@@ -13198,58 +13215,58 @@ var require_pcb_tools = __commonJS({
           usWinDescent: Math.abs(globals.yMin),
           ulCodePageRange1: 1,
           // FIXME: hard-code Latin 1 support for now
-          sxHeight: metricsForChar(font, "xyvw", { yMax: Math.round(globals.ascender / 2) }).yMax,
-          sCapHeight: metricsForChar(font, "HIKLEFJMNTZBDPRAGOQSUVWXY", globals).yMax,
-          usDefaultChar: font.hasChar(" ") ? 32 : 0,
+          sxHeight: metricsForChar(font3, "xyvw", { yMax: Math.round(globals.ascender / 2) }).yMax,
+          sCapHeight: metricsForChar(font3, "HIKLEFJMNTZBDPRAGOQSUVWXY", globals).yMax,
+          usDefaultChar: font3.hasChar(" ") ? 32 : 0,
           // Use space as the default character, if available.
-          usBreakChar: font.hasChar(" ") ? 32 : 0
+          usBreakChar: font3.hasChar(" ") ? 32 : 0
           // Use space as the break character, if available.
-        }, font.tables.os2));
-        var hmtxTable = hmtx.make(font.glyphs);
-        var cmapTable = cmap.make(font.glyphs);
-        var englishFamilyName = font.getEnglishName("fontFamily");
-        var englishStyleName = font.getEnglishName("fontSubfamily");
+        }, font3.tables.os2));
+        var hmtxTable = hmtx.make(font3.glyphs);
+        var cmapTable = cmap.make(font3.glyphs);
+        var englishFamilyName = font3.getEnglishName("fontFamily");
+        var englishStyleName = font3.getEnglishName("fontSubfamily");
         var englishFullName = englishFamilyName + " " + englishStyleName;
-        var postScriptName = font.getEnglishName("postScriptName");
+        var postScriptName = font3.getEnglishName("postScriptName");
         if (!postScriptName) {
           postScriptName = englishFamilyName.replace(/\s/g, "") + "-" + englishStyleName;
         }
         var names = {};
-        for (var n2 in font.names) {
-          names[n2] = font.names[n2];
+        for (var n2 in font3.names) {
+          names[n2] = font3.names[n2];
         }
         if (!names.uniqueID) {
-          names.uniqueID = { en: font.getEnglishName("manufacturer") + ":" + englishFullName };
+          names.uniqueID = { en: font3.getEnglishName("manufacturer") + ":" + englishFullName };
         }
         if (!names.postScriptName) {
           names.postScriptName = { en: postScriptName };
         }
         if (!names.preferredFamily) {
-          names.preferredFamily = font.names.fontFamily;
+          names.preferredFamily = font3.names.fontFamily;
         }
         if (!names.preferredSubfamily) {
-          names.preferredSubfamily = font.names.fontSubfamily;
+          names.preferredSubfamily = font3.names.fontSubfamily;
         }
         var languageTags = [];
         var nameTable = _name.make(names, languageTags);
         var ltagTable = languageTags.length > 0 ? ltag.make(languageTags) : void 0;
         var postTable = post.make();
-        var cffTable = cff.make(font.glyphs, {
-          version: font.getEnglishName("version"),
+        var cffTable = cff.make(font3.glyphs, {
+          version: font3.getEnglishName("version"),
           fullName: englishFullName,
           familyName: englishFamilyName,
           weightName: englishStyleName,
           postScriptName,
-          unitsPerEm: font.unitsPerEm,
+          unitsPerEm: font3.unitsPerEm,
           fontBBox: [0, globals.yMin, globals.ascender, globals.advanceWidthMax]
         });
-        var metaTable = font.metas && Object.keys(font.metas).length > 0 ? meta.make(font.metas) : void 0;
+        var metaTable = font3.metas && Object.keys(font3.metas).length > 0 ? meta.make(font3.metas) : void 0;
         var tables = [headTable, hheaTable, maxpTable, os2Table, nameTable, cmapTable, postTable, cffTable, hmtxTable];
         if (ltagTable) {
           tables.push(ltagTable);
         }
-        if (font.tables.gsub) {
-          tables.push(gsub.make(font.tables.gsub));
+        if (font3.tables.gsub) {
+          tables.push(gsub.make(font3.tables.gsub));
         }
         if (metaTable) {
           tables.push(metaTable);
@@ -13328,8 +13345,8 @@ var require_pcb_tools = __commonJS({
           return range;
         }
       }
-      function Layout(font, tableName) {
-        this.font = font;
+      function Layout(font3, tableName) {
+        this.font = font3;
         this.tableName = tableName;
       }
       Layout.prototype = {
@@ -13593,8 +13610,8 @@ var require_pcb_tools = __commonJS({
           }
         }
       };
-      function Position(font) {
-        Layout.call(this, font, "gpos");
+      function Position(font3) {
+        Layout.call(this, font3, "gpos");
       }
       Position.prototype = Layout.prototype;
       Position.prototype.init = function() {
@@ -13636,8 +13653,8 @@ var require_pcb_tools = __commonJS({
           return this.getLookupTables(script, language, "kern", 2);
         }
       };
-      function Substitution(font) {
-        Layout.call(this, font, "gsub");
+      function Substitution(font3) {
+        Layout.call(this, font3, "gsub");
       }
       function arraysEqual(ar1, ar2) {
         var n2 = ar1.length;
@@ -14160,37 +14177,37 @@ var require_pcb_tools = __commonJS({
         }
         return getPath2(glyph.points);
       }
-      function parseGlyfTableAll(data, start, loca2, font) {
-        var glyphs = new glyphset.GlyphSet(font);
+      function parseGlyfTableAll(data, start, loca2, font3) {
+        var glyphs = new glyphset.GlyphSet(font3);
         for (var i = 0; i < loca2.length - 1; i += 1) {
           var offset = loca2[i];
           var nextOffset = loca2[i + 1];
           if (offset !== nextOffset) {
-            glyphs.push(i, glyphset.ttfGlyphLoader(font, i, parseGlyph, data, start + offset, buildPath));
+            glyphs.push(i, glyphset.ttfGlyphLoader(font3, i, parseGlyph, data, start + offset, buildPath));
           } else {
-            glyphs.push(i, glyphset.glyphLoader(font, i));
+            glyphs.push(i, glyphset.glyphLoader(font3, i));
           }
         }
         return glyphs;
       }
-      function parseGlyfTableOnLowMemory(data, start, loca2, font) {
-        var glyphs = new glyphset.GlyphSet(font);
-        font._push = function(i) {
+      function parseGlyfTableOnLowMemory(data, start, loca2, font3) {
+        var glyphs = new glyphset.GlyphSet(font3);
+        font3._push = function(i) {
           var offset = loca2[i];
           var nextOffset = loca2[i + 1];
           if (offset !== nextOffset) {
-            glyphs.push(i, glyphset.ttfGlyphLoader(font, i, parseGlyph, data, start + offset, buildPath));
+            glyphs.push(i, glyphset.ttfGlyphLoader(font3, i, parseGlyph, data, start + offset, buildPath));
           } else {
-            glyphs.push(i, glyphset.glyphLoader(font, i));
+            glyphs.push(i, glyphset.glyphLoader(font3, i));
           }
         };
         return glyphs;
       }
-      function parseGlyfTable(data, start, loca2, font, opt) {
+      function parseGlyfTable(data, start, loca2, font3, opt) {
         if (opt.lowMemory) {
-          return parseGlyfTableOnLowMemory(data, start, loca2, font);
+          return parseGlyfTableOnLowMemory(data, start, loca2, font3);
         } else {
-          return parseGlyfTableAll(data, start, loca2, font);
+          return parseGlyfTableAll(data, start, loca2, font3);
         }
       }
       var glyf = { getPath: getPath2, parse: parseGlyfTable };
@@ -14198,8 +14215,8 @@ var require_pcb_tools = __commonJS({
       var exec;
       var execGlyph;
       var execComponent;
-      function Hinting(font) {
-        this.font = font;
+      function Hinting(font3) {
+        this.font = font3;
         this.getCommands = function(hPoints) {
           return glyf.getPath(hPoints).commands;
         };
@@ -14538,15 +14555,15 @@ var require_pcb_tools = __commonJS({
         if (this._errorState > 2) {
           return;
         }
-        var font = this.font;
+        var font3 = this.font;
         var prepState = this._prepState;
         if (!prepState || prepState.ppem !== ppem) {
           var fpgmState = this._fpgmState;
           if (!fpgmState) {
             State.prototype = defaultState;
-            fpgmState = this._fpgmState = new State("fpgm", font.tables.fpgm);
+            fpgmState = this._fpgmState = new State("fpgm", font3.tables.fpgm);
             fpgmState.funcs = [];
-            fpgmState.font = font;
+            fpgmState.font = font3;
             if (exports2.DEBUG) {
               console.log("---EXEC FPGM---");
               fpgmState.step = -1;
@@ -14560,12 +14577,12 @@ var require_pcb_tools = __commonJS({
             }
           }
           State.prototype = fpgmState;
-          prepState = this._prepState = new State("prep", font.tables.prep);
+          prepState = this._prepState = new State("prep", font3.tables.prep);
           prepState.ppem = ppem;
-          var oCvt = font.tables.cvt;
+          var oCvt = font3.tables.cvt;
           if (oCvt) {
             var cvt = prepState.cvt = new Array(oCvt.length);
-            var scale = ppem / font.unitsPerEm;
+            var scale = ppem / font3.unitsPerEm;
             for (var c = 0; c < oCvt.length; c++) {
               cvt[c] = oCvt[c] * scale;
             }
@@ -14616,12 +14633,12 @@ var require_pcb_tools = __commonJS({
           execComponent(glyph, state, xScale, yScale);
           gZone = state.gZone;
         } else {
-          var font = prepState.font;
+          var font3 = prepState.font;
           gZone = [];
           contours22 = [];
           for (var i = 0; i < components2.length; i++) {
             var c = components2[i];
-            var cg = font.glyphs.get(c.glyphIndex);
+            var cg = font3.glyphs.get(c.glyphIndex);
             state = new State("glyf", cg.instructions);
             if (exports2.DEBUG) {
               console.log("---EXEC COMP " + i + "---");
@@ -16951,8 +16968,8 @@ var require_pcb_tools = __commonJS({
       function isWhiteSpace(c) {
         return /\s/.test(c);
       }
-      function FeatureQuery(font) {
-        this.font = font;
+      function FeatureQuery(font3) {
+        this.font = font3;
         this.features = {};
       }
       function SubstitutionAction(action) {
@@ -17658,14 +17675,14 @@ var require_pcb_tools = __commonJS({
           this.featuresTags[script] = this.featuresTags[script].concat(supportedTags);
         }
       };
-      Bidi.prototype.applyFeatures = function(font, features) {
-        if (!font) {
+      Bidi.prototype.applyFeatures = function(font3, features) {
+        if (!font3) {
           throw new Error(
             "No valid font was provided to apply features"
           );
         }
         if (!this.query) {
-          this.query = new FeatureQuery(font);
+          this.query = new FeatureQuery(font3);
         }
         for (var f2 = 0; f2 < features.length; f2++) {
           var feature = features[f2];
@@ -18504,25 +18521,25 @@ var require_pcb_tools = __commonJS({
         opt = opt === void 0 || opt === null ? {} : opt;
         var indexToLocFormat;
         var ltagTable;
-        var font = new Font({ empty: true });
+        var font3 = new Font({ empty: true });
         var data = new DataView(buffer, 0);
         var numTables;
         var tableEntries = [];
         var signature = parse2.getTag(data, 0);
         if (signature === String.fromCharCode(0, 1, 0, 0) || signature === "true" || signature === "typ1") {
-          font.outlinesFormat = "truetype";
+          font3.outlinesFormat = "truetype";
           numTables = parse2.getUShort(data, 4);
           tableEntries = parseOpenTypeTableEntries(data, numTables);
         } else if (signature === "OTTO") {
-          font.outlinesFormat = "cff";
+          font3.outlinesFormat = "cff";
           numTables = parse2.getUShort(data, 4);
           tableEntries = parseOpenTypeTableEntries(data, numTables);
         } else if (signature === "wOFF") {
           var flavor = parse2.getTag(data, 4);
           if (flavor === String.fromCharCode(0, 1, 0, 0)) {
-            font.outlinesFormat = "truetype";
+            font3.outlinesFormat = "truetype";
           } else if (flavor === "OTTO") {
-            font.outlinesFormat = "cff";
+            font3.outlinesFormat = "cff";
           } else {
             throw new Error("Unsupported OpenType flavor " + signature);
           }
@@ -18549,13 +18566,13 @@ var require_pcb_tools = __commonJS({
           switch (tableEntry.tag) {
             case "cmap":
               table2 = uncompressTable(data, tableEntry);
-              font.tables.cmap = cmap.parse(table2.data, table2.offset);
-              font.encoding = new CmapEncoding(font.tables.cmap);
+              font3.tables.cmap = cmap.parse(table2.data, table2.offset);
+              font3.encoding = new CmapEncoding(font3.tables.cmap);
               break;
             case "cvt ":
               table2 = uncompressTable(data, tableEntry);
               p = new parse2.Parser(table2.data, table2.offset);
-              font.tables.cvt = p.parseShortList(tableEntry.length / 2);
+              font3.tables.cvt = p.parseShortList(tableEntry.length / 2);
               break;
             case "fvar":
               fvarTableEntry = tableEntry;
@@ -18563,20 +18580,20 @@ var require_pcb_tools = __commonJS({
             case "fpgm":
               table2 = uncompressTable(data, tableEntry);
               p = new parse2.Parser(table2.data, table2.offset);
-              font.tables.fpgm = p.parseByteList(tableEntry.length);
+              font3.tables.fpgm = p.parseByteList(tableEntry.length);
               break;
             case "head":
               table2 = uncompressTable(data, tableEntry);
-              font.tables.head = head.parse(table2.data, table2.offset);
-              font.unitsPerEm = font.tables.head.unitsPerEm;
-              indexToLocFormat = font.tables.head.indexToLocFormat;
+              font3.tables.head = head.parse(table2.data, table2.offset);
+              font3.unitsPerEm = font3.tables.head.unitsPerEm;
+              indexToLocFormat = font3.tables.head.indexToLocFormat;
               break;
             case "hhea":
               table2 = uncompressTable(data, tableEntry);
-              font.tables.hhea = hhea.parse(table2.data, table2.offset);
-              font.ascender = font.tables.hhea.ascender;
-              font.descender = font.tables.hhea.descender;
-              font.numberOfHMetrics = font.tables.hhea.numberOfHMetrics;
+              font3.tables.hhea = hhea.parse(table2.data, table2.offset);
+              font3.ascender = font3.tables.hhea.ascender;
+              font3.descender = font3.tables.hhea.descender;
+              font3.numberOfHMetrics = font3.tables.hhea.numberOfHMetrics;
               break;
             case "hmtx":
               hmtxTableEntry = tableEntry;
@@ -18587,25 +18604,25 @@ var require_pcb_tools = __commonJS({
               break;
             case "maxp":
               table2 = uncompressTable(data, tableEntry);
-              font.tables.maxp = maxp.parse(table2.data, table2.offset);
-              font.numGlyphs = font.tables.maxp.numGlyphs;
+              font3.tables.maxp = maxp.parse(table2.data, table2.offset);
+              font3.numGlyphs = font3.tables.maxp.numGlyphs;
               break;
             case "name":
               nameTableEntry = tableEntry;
               break;
             case "OS/2":
               table2 = uncompressTable(data, tableEntry);
-              font.tables.os2 = os2.parse(table2.data, table2.offset);
+              font3.tables.os2 = os2.parse(table2.data, table2.offset);
               break;
             case "post":
               table2 = uncompressTable(data, tableEntry);
-              font.tables.post = post.parse(table2.data, table2.offset);
-              font.glyphNames = new GlyphNames(font.tables.post);
+              font3.tables.post = post.parse(table2.data, table2.offset);
+              font3.glyphNames = new GlyphNames(font3.tables.post);
               break;
             case "prep":
               table2 = uncompressTable(data, tableEntry);
               p = new parse2.Parser(table2.data, table2.offset);
-              font.tables.prep = p.parseByteList(tableEntry.length);
+              font3.tables.prep = p.parseByteList(tableEntry.length);
               break;
             case "glyf":
               glyfTableEntry = tableEntry;
@@ -18634,52 +18651,52 @@ var require_pcb_tools = __commonJS({
           }
         }
         var nameTable = uncompressTable(data, nameTableEntry);
-        font.tables.name = _name.parse(nameTable.data, nameTable.offset, ltagTable);
-        font.names = font.tables.name;
+        font3.tables.name = _name.parse(nameTable.data, nameTable.offset, ltagTable);
+        font3.names = font3.tables.name;
         if (glyfTableEntry && locaTableEntry) {
           var shortVersion = indexToLocFormat === 0;
           var locaTable = uncompressTable(data, locaTableEntry);
-          var locaOffsets = loca.parse(locaTable.data, locaTable.offset, font.numGlyphs, shortVersion);
+          var locaOffsets = loca.parse(locaTable.data, locaTable.offset, font3.numGlyphs, shortVersion);
           var glyfTable = uncompressTable(data, glyfTableEntry);
-          font.glyphs = glyf.parse(glyfTable.data, glyfTable.offset, locaOffsets, font, opt);
+          font3.glyphs = glyf.parse(glyfTable.data, glyfTable.offset, locaOffsets, font3, opt);
         } else if (cffTableEntry) {
           var cffTable = uncompressTable(data, cffTableEntry);
-          cff.parse(cffTable.data, cffTable.offset, font, opt);
+          cff.parse(cffTable.data, cffTable.offset, font3, opt);
         } else {
           throw new Error("Font doesn't contain TrueType or CFF outlines.");
         }
         var hmtxTable = uncompressTable(data, hmtxTableEntry);
-        hmtx.parse(font, hmtxTable.data, hmtxTable.offset, font.numberOfHMetrics, font.numGlyphs, font.glyphs, opt);
-        addGlyphNames(font, opt);
+        hmtx.parse(font3, hmtxTable.data, hmtxTable.offset, font3.numberOfHMetrics, font3.numGlyphs, font3.glyphs, opt);
+        addGlyphNames(font3, opt);
         if (kernTableEntry) {
           var kernTable = uncompressTable(data, kernTableEntry);
-          font.kerningPairs = kern.parse(kernTable.data, kernTable.offset);
+          font3.kerningPairs = kern.parse(kernTable.data, kernTable.offset);
         } else {
-          font.kerningPairs = {};
+          font3.kerningPairs = {};
         }
         if (gdefTableEntry) {
           var gdefTable = uncompressTable(data, gdefTableEntry);
-          font.tables.gdef = gdef.parse(gdefTable.data, gdefTable.offset);
+          font3.tables.gdef = gdef.parse(gdefTable.data, gdefTable.offset);
         }
         if (gposTableEntry) {
           var gposTable = uncompressTable(data, gposTableEntry);
-          font.tables.gpos = gpos.parse(gposTable.data, gposTable.offset);
-          font.position.init();
+          font3.tables.gpos = gpos.parse(gposTable.data, gposTable.offset);
+          font3.position.init();
         }
         if (gsubTableEntry) {
           var gsubTable = uncompressTable(data, gsubTableEntry);
-          font.tables.gsub = gsub.parse(gsubTable.data, gsubTable.offset);
+          font3.tables.gsub = gsub.parse(gsubTable.data, gsubTable.offset);
         }
         if (fvarTableEntry) {
           var fvarTable = uncompressTable(data, fvarTableEntry);
-          font.tables.fvar = fvar.parse(fvarTable.data, fvarTable.offset, font.names);
+          font3.tables.fvar = fvar.parse(fvarTable.data, fvarTable.offset, font3.names);
         }
         if (metaTableEntry) {
           var metaTable = uncompressTable(data, metaTableEntry);
-          font.tables.meta = meta.parse(metaTable.data, metaTable.offset);
-          font.metas = font.tables.meta;
+          font3.tables.meta = meta.parse(metaTable.data, metaTable.offset);
+          font3.metas = font3.tables.meta;
         }
-        return font;
+        return font3;
       }
       function load(url, callback, opt) {
         opt = opt === void 0 || opt === null ? {} : opt;
@@ -18694,9 +18711,9 @@ var require_pcb_tools = __commonJS({
                 reject(err);
               }
             }
-            var font;
+            var font3;
             try {
-              font = parseBuffer(arrayBuffer, opt);
+              font3 = parseBuffer(arrayBuffer, opt);
             } catch (e) {
               if (callback) {
                 return callback(e, null);
@@ -18705,9 +18722,9 @@ var require_pcb_tools = __commonJS({
               }
             }
             if (callback) {
-              return callback(null, font);
+              return callback(null, font3);
             } else {
-              resolve2(font);
+              resolve2(font3);
             }
           });
         });
@@ -18892,11 +18909,11 @@ var require_pcb_tools = __commonJS({
         }
         return "latn";
       }
-      function glyphsOf2(font, text2) {
+      function glyphsOf2(font3, text2) {
         try {
-          return font.stringToGlyphs(text2);
+          return font3.stringToGlyphs(text2);
         } catch (e) {
-          return [...text2].map((c) => font.charToGlyph(c));
+          return [...text2].map((c) => font3.charToGlyph(c));
         }
       }
       function kerning2(h, script, a, b) {
@@ -18919,9 +18936,9 @@ var require_pcb_tools = __commonJS({
         for (const [b, i] of [[bold, italic], [false, italic], [bold, false], [false, false]]) {
           const held = K42.fontData(face, b, i);
           if (!held) continue;
-          const font = parsed2(held.data);
-          if (!font) continue;
-          return { font, slant: italic && !held.italic };
+          const font3 = parsed2(held.data);
+          if (!font3) continue;
+          return { font: font3, slant: italic && !held.italic };
         }
         return null;
       }
@@ -18998,19 +19015,19 @@ var require_pcb_tools = __commonJS({
         return out;
       }
       function layLine2(held, slant, line3, size, sizeX) {
-        const font = held.font;
+        const font3 = held.font;
         const laid = { contours: [], bars: [], width: 0 };
         let x = 0;
         for (const run2 of runs2(line3)) {
           const small = run2.sup || run2.sub, k = small ? SUPERSUB2 : 1;
           const sx = sizeX * EM2 * k, sy = size * EM2 * k;
           const dy = run2.sub ? size * SUPERSUB2 * SUB_DROP2 : run2.sup ? -size * SUPERSUB2 * SUPER_RISE2 : 0;
-          const glyphs = glyphsOf2(font, run2.text), start = x, script = scriptOf2(run2.text);
+          const glyphs = glyphsOf2(font3, run2.text), start = x, script = scriptOf2(run2.text);
           for (let i = 0; i < glyphs.length; i++) {
             const g2 = glyphs[i];
             for (const c of contours2(g2)) laid.contours.push(c.map(([gx, gy]) => [x + (slant ? SQUEEZE2 * gx - SLANT2 * gy : gx) * sx, dy + gy * sy]));
-            let adv = (g2.advanceWidth || 0) / font.unitsPerEm;
-            if (i + 1 < glyphs.length) adv += kerning2(held, script, g2, glyphs[i + 1]) / font.unitsPerEm;
+            let adv = (g2.advanceWidth || 0) / font3.unitsPerEm;
+            if (i + 1 < glyphs.length) adv += kerning2(held, script, g2, glyphs[i + 1]) / font3.unitsPerEm;
             x += adv * sx;
           }
           if (run2.over && x > start) laid.bars.push([start + sizeX * 0.1, -size * OVERBAR2, x - sizeX * 0.1, -size * OVERBAR2]);
@@ -19047,7 +19064,7 @@ var require_pcb_tools = __commonJS({
         return { polys: merged.length > 1 ? fracture2(merged) : merged, bars: bars2 };
       }
       var canvas2 = () => globalThis.KiCadCanvas;
-      var K32 = (n2, key2) => n2 ? kid4(n2, key2) : null;
+      var K32 = (n2, key2) => n2 ? kid5(n2, key2) : null;
       var N2 = (v, d = 0) => typeof v === "number" ? v : d;
       var S22 = (v) => typeof v === "string" ? v : "";
       var PlotLog2 = class {
@@ -19101,8 +19118,8 @@ var require_pcb_tools = __commonJS({
         if (Math.min(turn, full - turn) > 0.01) return null;
         const polys = [];
         for (const p of rc.slice(3)) {
-          if (!isList22(p) || str3(p[0]) !== "polygon") continue;
-          const outlines = p.filter((c) => isList22(c) && str3(c[0]) === "pts").map((c) => polyPtsOf2(["x", c])).filter((o) => o.length >= 3);
+          if (!isList22(p) || str4(p[0]) !== "polygon") continue;
+          const outlines = p.filter((c) => isList22(c) && str4(c[0]) === "pts").map((c) => polyPtsOf2(["x", c])).filter((o) => o.length >= 3);
           if (!outlines.length) continue;
           if (outlines.length === 1) polys.push(outlines[0]);
           else for (const o of fracture2([clockwise2(outlines[0])].concat(outlines.slice(1).map((h) => clockwise2(h).slice().reverse())))) polys.push(o);
@@ -19309,7 +19326,7 @@ var require_pcb_tools = __commonJS({
           const f2 = K32(p, "fill");
           if (!f2) return false;
           const t = K32(f2, "type");
-          const v = t ? str3(t[1]) : str3(f2[1]);
+          const v = t ? str4(t[1]) : str4(f2[1]);
           return v === "yes" || v === "solid";
         };
         const stroke = (pts, w, close) => {
@@ -19319,7 +19336,7 @@ var require_pcb_tools = __commonJS({
         };
         for (const p of shape3.primitives.slice(1)) {
           if (!isList22(p)) continue;
-          const kind = str3(p[0]);
+          const kind = str4(p[0]);
           const w = widthOf22(p);
           if (kind === "gr_poly") {
             const pts = polyPtsOf2(p);
@@ -19382,7 +19399,7 @@ var require_pcb_tools = __commonJS({
         let mx = 0, my = 0;
         if (onMask) mx = my = maskMargin2(pad, m, shape3);
         if (onPaste) [mx, my] = pasteMargin2(pad, m, shape3);
-        const same = Math.abs(mx - my) < 1e-9;
+        const same2 = Math.abs(mx - my) < 1e-9;
         const w = shape3.w + 2 * mx + adj, h = shape3.h + 2 * my + adj;
         if (shape3.shape !== "custom" && (w <= 0 || h <= 0)) return;
         const [ox, oy] = rot3(shape3.offset[0], shape3.offset[1], pad.rot);
@@ -19399,12 +19416,12 @@ var require_pcb_tools = __commonJS({
             else out.push({ k: "oval", x, y, w, h, rot: r });
             break;
           case "rect":
-            if (mx > 0 && same) out.push({ k: "roundrect", x, y, w, h, r: mx, rot: r });
+            if (mx > 0 && same2) out.push({ k: "roundrect", x, y, w, h, r: mx, rot: r });
             else out.push({ k: "rect", x, y, w, h, rot: r });
             break;
           case "roundrect": {
             const r0 = shape3.rratio * Math.min(shape3.w, shape3.h);
-            const rr = Math.min(same ? Math.max(0, r0 + mx + adj / 2) : shape3.rratio * Math.min(w, h), Math.min(w, h) / 2);
+            const rr = Math.min(same2 ? Math.max(0, r0 + mx + adj / 2) : shape3.rratio * Math.min(w, h), Math.min(w, h) / 2);
             if (rr <= 1e-9) out.push({ k: "rect", x, y, w, h, rot: r });
             else if (Math.abs(w - h) < 1e-9 && Math.abs(rr - w / 2) < 1e-9) out.push({ k: "circle", x, y, d: w });
             else out.push({ k: "roundrect", x, y, w, h, r: rr, rot: r });
@@ -19417,7 +19434,7 @@ var require_pcb_tools = __commonJS({
             break;
           }
           case "chamfer": {
-            if (mx <= 0 || !same) flashPolys([chamferedRect2(w, h, shape3.rratio * Math.min(w, h), shape3.chamferRatio, shape3.chamfers)]);
+            if (mx <= 0 || !same2) flashPolys([chamferedRect2(w, h, shape3.rratio * Math.min(w, h), shape3.chamferRatio, shape3.chamfers)]);
             else flashPolys(inflate3([chamferedRect2(shape3.w, shape3.h, shape3.rratio * Math.min(shape3.w, shape3.h), shape3.chamferRatio, shape3.chamfers)], mx));
             break;
           }
@@ -19969,15 +19986,15 @@ var require_pcb_tools = __commonJS({
               const fill = K7.kid(n2, "fill");
               const fm = fill && K7.kid(fill, "mode") ? K7.str(K7.kid(fill, "mode")[1]) : "";
               add("Fill Mode", fm === "hatch" ? "Hatched" : fm ? "Unknown" : "Solid");
-              let area32 = 0;
+              let area42 = 0;
               for (const fp of K7.kids(n2, "filled_polygon")) {
                 const q = K7.ptsOf(fp);
                 for (let i = 0; i < q.length; i++) {
                   const a = q[i], b = q[(i + 1) % q.length];
-                  area32 += a[0] * b[1] - b[0] * a[1];
+                  area42 += a[0] * b[1] - b[0] * a[1];
                 }
               }
-              add("Filled Area", msgArea(Math.abs(area32) / 2, units));
+              add("Filled Area", msgArea(Math.abs(area42) / 2, units));
               const cp2 = K7.kid(n2, "connect_pads");
               const cc = cp2 && K7.kid(cp2, "clearance");
               const c = msgClearance(s, net);
@@ -19989,10 +20006,10 @@ var require_pcb_tools = __commonJS({
           }
           if (it && /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) {
             const n2 = it.node, kind = it.kind.slice(3);
-            const SHAPE = SHAPE_NAMES;
+            const SHAPE2 = SHAPE_NAMES;
             add("Type", "Drawing");
             if (isLocked2(n2)) add("Status", "Locked");
-            add("Shape", SHAPE[kind]);
+            add("Shape", SHAPE2[kind]);
             const a = pt4(n2, "start"), b = pt4(n2, "end"), c = pt4(n2, "center");
             if (kind === "circle" && c && b) add("Radius", V(Math.hypot(b[0] - c[0], b[1] - c[1])));
             else if (kind === "arc") {
@@ -20942,15 +20959,15 @@ var require_pcb_tools = __commonJS({
         const coupled = res.baselineCoupled ? res.baselineCoupled.map((n2) => [r64(n2.p[0] / TUNE_IU), r64(n2.p[1] / TUNE_IU)]) : null;
         const st = T.st ? Object.assign({}, res.settings, { target: T.st.target, skew: T.st.skew }) : res.settings;
         const mm2 = (v) => fmtG2(v / TUNE_IU);
-        const xy2 = (p) => `(xy ${fmtG2(p[0])} ${fmtG2(p[1])})`;
+        const xy3 = (p) => `(xy ${fmtG2(p[0])} ${fmtG2(p[1])})`;
         const base = res.baseline.map((n2) => [r64(n2.p[0] / TUNE_IU), r64(n2.p[1] / TUNE_IU)]);
         const side = st.initialSide < 0 ? "left" : st.initialSide > 0 ? "right" : "default";
         const yn2 = (b) => b ? "yes" : "no";
         const props = [
-          `(base_line (pts ${base.map(xy2).join(" ")}))`,
-          ...coupled && coupled.length >= 2 ? [`(base_line_coupled (pts ${coupled.map(xy2).join(" ")}))`] : [],
+          `(base_line (pts ${base.map(xy3).join(" ")}))`,
+          ...coupled && coupled.length >= 2 ? [`(base_line_coupled (pts ${coupled.map(xy3).join(" ")}))`] : [],
           `(corner_radius_percent ${st.crPct})`,
-          `(end ${xy2(base[base.length - 1])})`,
+          `(end ${xy3(base[base.length - 1])})`,
           `(initial_side ${sexprQ(side)})`,
           `(is_time_domain no)`,
           `(last_diff_pair_gap ${fmtG2(T.dpGap)})`,
@@ -20961,7 +20978,7 @@ var require_pcb_tools = __commonJS({
           `(max_amplitude ${mm2(st.maxAmp)})`,
           `(min_amplitude ${mm2(st.minAmp)})`,
           `(min_spacing ${mm2(st.spacing)})`,
-          `(origin ${xy2(base[0])})`,
+          `(origin ${xy3(base[0])})`,
           `(override_custom_rules ${yn2(st.overrideCustomRules)})`,
           `(rounded ${yn2(st.round)})`,
           `(single_sided ${yn2(st.singleSided)})`,
@@ -21016,9 +21033,9 @@ var require_pcb_tools = __commonJS({
           }
           const kept = /* @__PURE__ */ new Set();
           for (const pc of tunePieces(fin)) {
-            const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-            if (same && !kept.has(same.id)) {
-              kept.add(same.id);
+            const same2 = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+            if (same2 && !kept.has(same2.id)) {
+              kept.add(same2.id);
               continue;
             }
             const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, net);
@@ -21042,23 +21059,23 @@ var require_pcb_tools = __commonJS({
       var isTuningPattern = (it) => !!it && it.kind === "generated" && K7.str((K7.kid(it.node, "type") || [])[1]) === "tuning_pattern";
       function tuningPatternInfo(gen) {
         const n2 = gen.node;
-        const kid22 = (k) => K7.kid(n2, k);
+        const kid32 = (k) => K7.kid(n2, k);
         const num72 = ((k, d) => {
-          const c = kid22(k);
+          const c = kid32(k);
           return c ? K7.num(c[1]) : d;
         });
         const bool2 = (k, d) => {
-          const c = kid22(k);
+          const c = kid32(k);
           return c ? c.length < 2 || K7.str(c[1]) === "yes" : d;
         };
-        const str10 = (k) => {
-          const c = kid22(k);
+        const str11 = (k) => {
+          const c = kid32(k);
           return c ? K7.str(c[1]) : "";
         };
         const ptsOf3 = (k) => {
-          const c = kid22(k);
+          const c = kid32(k);
           const p = c && K7.kid(c, "pts");
-          return p ? p.slice(1).filter((xy2) => Array.isArray(xy2) && xy2[0] === "xy").map((xy2) => [K7.num(xy2[1]), K7.num(xy2[2])]) : null;
+          return p ? p.slice(1).filter((xy3) => Array.isArray(xy3) && xy3[0] === "xy").map((xy3) => [K7.num(xy3[1]), K7.num(xy3[2])]) : null;
         };
         const st = meanderDefaults();
         const I = (v) => Math.round(v * TUNE_IU);
@@ -21069,15 +21086,15 @@ var require_pcb_tools = __commonJS({
         st.round = bool2("rounded", true);
         st.singleSided = bool2("single_sided", false);
         st.overrideCustomRules = bool2("override_custom_rules", false);
-        const side = str10("initial_side");
+        const side = str11("initial_side");
         st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
         const opt = num72("target_length", null);
         if (opt != null) st.target = { min: I(num72("target_length_min", opt - 0.1)), opt: I(opt), max: I(num72("target_length_max", opt + 0.1)) };
         const so = num72("target_skew", null);
         if (so != null) st.skew = { min: I(num72("target_skew_min", so - 0.1)), opt: I(so), max: I(num72("target_skew_max", so + 0.1)) };
-        const lay = kid22("layer");
+        const lay = kid32("layer");
         const xyOf = (k) => {
-          const c = kid22(k);
+          const c = kid32(k);
           const p = c && K7.kid(c, "xy");
           return p ? [K7.num(p[1]), K7.num(p[2])] : null;
         };
@@ -21086,12 +21103,12 @@ var require_pcb_tools = __commonJS({
           layer: lay ? K7.str(lay[1]) : "F.Cu",
           base: ptsOf3("base_line"),
           coupled: ptsOf3("base_line_coupled"),
-          mode: str10("tuning_mode") || "single",
+          mode: str11("tuning_mode") || "single",
           origin: xyOf("origin"),
           end: xyOf("end"),
-          status: str10("last_status"),
+          status: str11("last_status"),
           tuningLength: num72("last_tuning_length", null),
-          netName: str10("last_netname"),
+          netName: str11("last_netname"),
           width: num72("last_track_width", 0.25),
           gap: num72("last_diff_pair_gap", 0),
           members: K7.groupMemberIds(n2)
@@ -21244,10 +21261,10 @@ var require_pcb_tools = __commonJS({
           }
           const kept = /* @__PURE__ */ new Set();
           for (const pc of tunePieces(fin)) {
-            const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-            if (same && !kept.has(same.id)) {
-              kept.add(same.id);
-              if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id);
+            const same2 = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+            if (same2 && !kept.has(same2.id)) {
+              kept.add(same2.id);
+              if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same2.id);
               continue;
             }
             const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, ln.width, ln.layer, ln.net) : segmentNode(scratch, pc.a, pc.b, ln.width, ln.layer, ln.net);
@@ -21260,23 +21277,23 @@ var require_pcb_tools = __commonJS({
         };
         rebuild(line3, res.final);
         if (lineC && res.finalCoupled) rebuild(lineC, res.finalCoupled);
-        const g2 = clone2(gen.node);
+        const g2 = clone3(gen.node);
         const setKid3 = (k, ...v) => {
           const c = K7.kid(g2, k);
           if (c) c.splice(1, c.length - 1, ...v);
         };
-        const xy2 = (p) => ["xy", +fmtG2(p[0]), +fmtG2(p[1])];
+        const xy3 = (p) => ["xy", +fmtG2(p[0]), +fmtG2(p[1])];
         const base = res.baseline.map((n2) => [r64(n2.p[0] / TUNE_IU), r64(n2.p[1] / TUNE_IU)]);
         const bl = K7.kid(g2, "base_line");
-        if (bl && base.length >= 2) bl.splice(1, bl.length - 1, ["pts", ...base.map(xy2)]);
+        if (bl && base.length >= 2) bl.splice(1, bl.length - 1, ["pts", ...base.map(xy3)]);
         const cbase = res.baselineCoupled ? res.baselineCoupled.map((n2) => [r64(n2.p[0] / TUNE_IU), r64(n2.p[1] / TUNE_IU)]) : null;
         const blc = K7.kid(g2, "base_line_coupled");
-        if (blc && cbase && cbase.length >= 2) blc.splice(1, blc.length - 1, ["pts", ...cbase.map(xy2)]);
+        if (blc && cbase && cbase.length >= 2) blc.splice(1, blc.length - 1, ["pts", ...cbase.map(xy3)]);
         if (base.length >= 2) {
           const o = K7.kid(g2, "origin");
-          if (o) o.splice(1, o.length - 1, xy2(base[0]));
+          if (o) o.splice(1, o.length - 1, xy3(base[0]));
           const e = K7.kid(g2, "end");
-          if (e) e.splice(1, e.length - 1, xy2(base[base.length - 1]));
+          if (e) e.splice(1, e.length - 1, xy3(base[base.length - 1]));
         }
         const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default";
         setKid3("initial_side", side);
@@ -21709,7 +21726,7 @@ var require_pcb_tools = __commonJS({
         else node.splice(node.length - 1, 0, [key2, ...vals]);
       }
       function tuningEditNode(orig, key2, p) {
-        const node = clone2(orig);
+        const node = clone3(orig);
         const info = tuningPatternInfo({ node: orig });
         const F = handleFrame(info);
         const hs = tuningEditPoints({ node: orig });
@@ -21728,14 +21745,14 @@ var require_pcb_tools = __commonJS({
         return node;
       }
       function genStartEdit(ctx, gen, label) {
-        const ge = { id: gen.id, orig: clone2(gen.node), node: clone2(gen.node), fin: null, hidden: /* @__PURE__ */ new Set(), label: label || TUNING_COMMIT_MESSAGE };
+        const ge = { id: gen.id, orig: clone3(gen.node), node: clone3(gen.node), fin: null, hidden: /* @__PURE__ */ new Set(), label: label || TUNING_COMMIT_MESSAGE };
         S2.genEdit = ge;
         return ge;
       }
       function genUpdateEdit(ctx, node, doc) {
         const ge = S2.genEdit;
         if (!ge) return null;
-        ge.node = clone2(node);
+        ge.node = clone3(node);
         const fin = regenerateTuningBranch(ctx, { id: ge.id, kind: "generated", node: ge.node }, doc);
         ge.fin = fin;
         ge.hidden = /* @__PURE__ */ new Set();
@@ -21801,7 +21818,7 @@ var require_pcb_tools = __commonJS({
         c.restore();
       }
       function tuningNodeWithSettings(orig, st, mode2) {
-        const node = clone2(orig);
+        const node = clone3(orig);
         const mm2 = (v) => fmt22(v / 1e6);
         const yn2 = (b) => b ? "yes" : "no";
         setKid2(node, "min_amplitude", mm2(st.minAmp));
@@ -21829,7 +21846,7 @@ var require_pcb_tools = __commonJS({
           for (const id of K7.groupMemberIds(gen.node)) {
             const it = ctx.doc.items.get(id);
             if (!it || it.kind !== "segment" && it.kind !== "arc") continue;
-            const n2 = clone2(it.node);
+            const n2 = clone3(it.node);
             if (memberEdit(n2) === false) continue;
             ops.push({ set: id, node: n2 });
           }
@@ -22003,14 +22020,14 @@ var require_pcb_tools = __commonJS({
         if (kind === "dimension") return dimEditNode(orig, key2, p, raw || p, grid || null);
         if (kind === "gr_arc") {
           const g2 = arcEditGeometry(orig, key2, p, raw || p, arcEditMode());
-          if (!g2) return clone2(orig);
-          const node2 = clone2(orig), cw = crossZ(g2.mid[0] - g2.start[0], g2.mid[1] - g2.start[1], g2.end[0] - g2.mid[0], g2.end[1] - g2.mid[1]) >= 0;
+          if (!g2) return clone3(orig);
+          const node2 = clone3(orig), cw = crossZ(g2.mid[0] - g2.start[0], g2.mid[1] - g2.start[1], g2.end[0] - g2.mid[0], g2.end[1] - g2.mid[1]) >= 0;
           setXY(node2, "start", cw ? g2.start : g2.end);
           setXY(node2, "mid", g2.mid);
           setXY(node2, "end", cw ? g2.end : g2.start);
           return node2;
         }
-        const node = clone2(orig);
+        const node = clone3(orig);
         if (kind === "zone" || kind === "gr_poly") {
           const pn = pePtsNode(node);
           const xs = pn ? K7.kids(pn, "xy") : [];
@@ -22115,7 +22132,7 @@ var require_pcb_tools = __commonJS({
               bp = q;
             }
           }
-          const node = clone2(it.node);
+          const node = clone3(it.node);
           const pn = pePtsNode(node);
           const xs = K7.kids(pn, "xy");
           const after2 = xs[bi];
@@ -22126,9 +22143,9 @@ var require_pcb_tools = __commonJS({
           const a = pt4(it.node, "start"), b = pt4(it.node, "end");
           const q = closestOnSeg(at2, a, b);
           if (samePt(q, a) || samePt(q, b)) return [];
-          const first = clone2(it.node);
+          const first = clone3(it.node);
           setXY(first, "end", q);
-          const second = clone2(it.node);
+          const second = clone3(it.node);
           setXY(second, "start", q);
           const u = K7.kid(second, "uuid");
           if (u) u[1] = K7.newUuid ? K7.newUuid() : u[1] + "-1";
@@ -22164,7 +22181,7 @@ var require_pcb_tools = __commonJS({
           }
         });
         if (bi < 0) return [];
-        const node = clone2(it.node);
+        const node = clone3(it.node);
         const pn = pePtsNode(node);
         pn.splice(pn.indexOf(K7.kids(pn, "xy")[bi]), 1);
         return [replacedChange(it, node)];
@@ -22183,7 +22200,7 @@ var require_pcb_tools = __commonJS({
         if (!hit5) return;
         ev.stopImmediatePropagation();
         ev.preventDefault();
-        S2.pedit = { id: hit5.it.id, kind: hit5.it.kind, key: hit5.h.key, orig: clone2(hit5.it.node), start: mm2, moved: false, ignoreGrid: !!hit5.h.ignoreGrid };
+        S2.pedit = { id: hit5.it.id, kind: hit5.it.kind, key: hit5.h.key, orig: clone3(hit5.it.node), start: mm2, moved: false, ignoreGrid: !!hit5.h.ignoreGrid };
         if (isTuningPattern(hit5.it)) genStartEdit(ctx, hit5.it);
         try {
           stage.setPointerCapture(ev.pointerId);
@@ -22209,7 +22226,7 @@ var require_pcb_tools = __commonJS({
         pe.moved = true;
         pe.node = editPointNode(pe.orig, pe.kind, pe.key, p, mm2, ctx.snapOn && ctx.snap ? ctx.snap : null);
         it.node.length = 0;
-        it.node.push(...clone2(pe.node));
+        it.node.push(...clone3(pe.node));
         K7.replaceChange(ctx.doc, it);
         ctx.requestRender();
       }
@@ -22228,7 +22245,7 @@ var require_pcb_tools = __commonJS({
           return;
         }
         it.node.length = 0;
-        it.node.push(...clone2(pe.orig));
+        it.node.push(...clone3(pe.orig));
         K7.replaceChange(ctx.doc, it);
         if (commit && pe.moved && pe.node && K7.serialize(pe.node) !== K7.serialize(pe.orig)) ctx.commit([replacedChange(it, pe.node)], "edit points");
         ctx.requestRender();
@@ -23157,7 +23174,7 @@ var require_pcb_tools = __commonJS({
         return !!c && (c.length === 1 || K7.str(c[1]) === "yes");
       };
       var fieldOf4 = (fp, name) => {
-        const ps = fp.filter((c) => isList5(c) && c[0] === "property");
+        const ps = fp.filter((c) => isList6(c) && c[0] === "property");
         const p = ps.find((c) => K7.str(c[1]) === name) || ps.find((c) => K7.str(c[1]).toLowerCase() === name.toLowerCase());
         return p ? K7.str(p[2]) : null;
       };
@@ -23172,7 +23189,7 @@ var require_pcb_tools = __commonJS({
       var PAD_PROP = { pad_prop_bga: "BGA pad", pad_prop_fiducial_glob: "Fiducial, global to board", pad_prop_fiducial_loc: "Fiducial, local to footprint", pad_prop_testpoint: "Test point pad", pad_prop_heatsink: "Heatsink pad", pad_prop_castellated: "Castellated pad", pad_prop_mechanical: "Mechanical pad", pad_prop_pressfit: "Press-fit pad" };
       var VIA_TYPE = { blind: "Blind", buried: "Buried", micro: "Micro" };
       var viaTypeOf = (n2) => {
-        const w = n2.slice(1).find((c) => !isList5(c));
+        const w = n2.slice(1).find((c) => !isList6(c));
         const s = w === void 0 ? "" : K7.str(w);
         return VIA_TYPE[s] ? s : kidStr3(n2, "type") || "through";
       };
@@ -23203,7 +23220,7 @@ var require_pcb_tools = __commonJS({
           case "layer":
             return str22(it.layer || layerOf2(n2) || "");
           case "locked":
-            return bool(yes6(n2, "locked") || n2.slice(1).some((c) => !isList5(c) && K7.str(c) === "locked"));
+            return bool(yes6(n2, "locked") || n2.slice(1).some((c) => !isList6(c) && K7.str(c) === "locked"));
           case "parent": {
             const fp = fpOf(it);
             return fp && !isFp ? str22(fieldOf4(fp.node, "Reference") || "") : U;
@@ -23343,7 +23360,7 @@ var require_pcb_tools = __commonJS({
             return isZone ? kidNum2(n2, "min_thickness") : U;
           case "text": {
             const t = n2[1];
-            return it.kind === "property" ? str22(K7.str(n2[2])) : t !== void 0 && !isList5(t) ? str22(K7.str(t)) : U;
+            return it.kind === "property" ? str22(K7.str(n2[2])) : t !== void 0 && !isList6(t) ? str22(K7.str(t)) : U;
           }
           case "height":
           case "thickness": {
@@ -24078,14 +24095,14 @@ var require_pcb_tools = __commonJS({
             l.push(it);
           }
         }
-        const xy2 = (it, k) => {
+        const xy3 = (it, k) => {
           const v = K7.kid(it.node, k);
           return [K7.num(v[1]), K7.num(v[2])];
         };
         const len = (it) => {
-          const a = xy2(it, "start"), b = xy2(it, "end");
+          const a = xy3(it, "start"), b = xy3(it, "end");
           if (it.kind === "arc") {
-            const m = xy2(it, "mid");
+            const m = xy3(it, "mid");
             const c = K7.arcFrom3(a, m, b);
             if (c) return arcLength(c);
           }
@@ -24102,7 +24119,7 @@ var require_pcb_tools = __commonJS({
           }
           return null;
         };
-        const at2 = (it) => xy2(it, "start");
+        const at2 = (it) => xy3(it, "start");
         for (const [name, P] of byNet) {
           const m = matchDpSuffix(name);
           if (m.rv <= 0) continue;
@@ -24117,7 +24134,7 @@ var require_pcb_tools = __commonJS({
             let best = null;
             for (const sn of N22) {
               if (sn.kind !== "segment" || inPattern.has(sn.id) || layerOf2(sn.node) !== layerOf2(sp.node)) continue;
-              const a = { A: I(xy2(sp, "start")), B: I(xy2(sp, "end")) }, b = { A: I(xy2(sn, "start")), B: I(xy2(sn, "end")) };
+              const a = { A: I(xy3(sp, "start")), B: I(xy3(sp, "end")) }, b = { A: I(xy3(sn, "start")), B: I(xy3(sn, "end")) };
               if (!approxParallelT(a, b, 10)) continue;
               const cp2 = commonParallelProjection(a, b);
               if (!cp2) continue;
@@ -24251,7 +24268,7 @@ var require_pcb_tools = __commonJS({
             else rows.set(gy, [i]);
           }
         }
-        const inside2 = (x, y) => {
+        const inside22 = (x, y) => {
           let c = false;
           for (const i of rows.get(cell(y)) || []) {
             const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -24263,7 +24280,7 @@ var require_pcb_tools = __commonJS({
           let best = Infinity;
           for (const sh of e.shapes) {
             const b = shapeBBox(sh);
-            if (inside2((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) return -1;
+            if (inside22((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) return -1;
             const seen = /* @__PURE__ */ new Set();
             const r = reach + Math.max(0, e.grow);
             for (let gx = cell(b[0] - r); gx <= cell(b[2] + r); gx++) for (let gy = cell(b[1] - r); gy <= cell(b[3] + r); gy++) for (const i of cells.get(gx + "," + gy) || []) {
@@ -24304,7 +24321,7 @@ var require_pcb_tools = __commonJS({
         const body = [];
         for (let i = 2; i < n2.length; i++) {
           const g2 = n2[i];
-          if (!isList5(g2)) continue;
+          if (!isList6(g2)) continue;
           if (g2[0] === "layer" || g2[0] === "at" || g2[0] === "transform") body.push(g2);
           else if (g2[0] === "property") body.push(g2 === child ? g2 : g2.concat([["hide", "yes"]]));
         }
@@ -24351,7 +24368,7 @@ var require_pcb_tools = __commonJS({
           if (it.kind === "footprint") {
             for (let i = 2; i < n2.length; i++) {
               const g2 = n2[i];
-              if (!isList5(g2) || !FP_DRAWN.has(String(g2[0]))) continue;
+              if (!isList6(g2) || !FP_DRAWN.has(String(g2[0]))) continue;
               if (g2[0] === "zone") {
                 if (isRuleArea(g2)) continue;
                 if (!expand(zoneLayers(g2), copper).some((l) => layers.has(l))) continue;
@@ -24513,12 +24530,12 @@ var require_pcb_tools = __commonJS({
             break;
           }
           if (crosses2 || !ol.outline || e.shapes.length < 2) continue;
-          const inside2 = (sh) => {
+          const inside22 = (sh) => {
             const b = shapeBBox(sh);
             return pointInPoly4(ol.outline, (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
           };
-          const first = inside2(e.shapes[0]);
-          if (e.shapes.every((sh) => inside2(sh) === first)) continue;
+          const first = inside22(e.shapes[0]);
+          if (e.shapes.every((sh) => inside22(sh) === first)) continue;
           const cx = (e.bbox[0] + e.bbox[2]) / 2, cy = (e.bbox[1] + e.bbox[3]) / 2;
           let best = ol.outline[0], bd = Infinity, bi = -1;
           for (let i = 0; i < ol.outline.length; i++) {
@@ -24884,9 +24901,9 @@ var require_pcb_tools = __commonJS({
         let pts = poly;
         for (const [lim, sign2] of [[hw, 1], [-hw, -1]]) {
           const res = [];
-          const inside2 = (p) => sign2 * p[1] <= sign2 * lim;
+          const inside22 = (p) => sign2 * p[1] <= sign2 * lim;
           for (let i = 0; i < pts.length; i++) {
-            const P = pts[i], Q = pts[(i + 1) % pts.length], pi = inside2(P), qi = inside2(Q);
+            const P = pts[i], Q = pts[(i + 1) % pts.length], pi = inside22(P), qi = inside22(Q);
             if (pi) res.push(P);
             if (pi !== qi) {
               const t = (lim - P[1]) / (Q[1] - P[1]);
@@ -25012,11 +25029,11 @@ var require_pcb_tools = __commonJS({
         const widthTol = Math.round(opt.widthTolerance * 1e6), sqW = widthTol * widthTol;
         const cosTol = 2 * Math.cos(opt.angleTolerance * Math.PI / 180);
         const minLen = Math.round(opt.minimumLength * 1e6);
-        const area32 = (p, q, r) => (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]);
+        const area42 = (p, q, r) => (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]);
         const locallyInside2 = (a, b) => {
           const prev = (n2 + a - 1) % n2, next = (a + 1) % n2;
-          if (area32(pts[prev], pts[a], pts[next]) < 0) return area32(pts[a], pts[b], pts[next]) >= 0 && area32(pts[a], pts[prev], pts[b]) >= 0;
-          return area32(pts[a], pts[b], pts[prev]) < 0 || area32(pts[a], pts[next], pts[b]) < 0;
+          if (area42(pts[prev], pts[a], pts[next]) < 0) return area42(pts[a], pts[b], pts[next]) >= 0 && area42(pts[a], pts[prev], pts[b]) >= 0;
+          return area42(pts[a], pts[b], pts[prev]) < 0 || area42(pts[a], pts[next], pts[b]) < 0;
         };
         let offset = 0;
         for (let kk = 0; kk < n2; kk += offset) {
@@ -25464,7 +25481,7 @@ var require_pcb_tools = __commonJS({
         if (!rules.some((r) => r.constraints.some((c) => c.type === "track_angle"))) return out;
         const segs = conds.filter((c) => c.kind === "segment");
         const pads = conds.filter((c) => c.kind === "pad");
-        const same = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
+        const same2 = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
         const touches = (a, b) => a.anchors.some((p) => dPS(p, b.anchors[0], b.anchors[1]) <= b.width / 2 + 1e-9);
         for (const a of segs) {
           const la = layerOf2(a.item.node);
@@ -25483,10 +25500,10 @@ var require_pcb_tools = __commonJS({
               return [d[0] / l, d[1] / l];
             };
             let da = unit22(a0, a1), db = unit22(b0, b1), below90 = false;
-            if (same(a1, p0)) da = [-da[0], -da[1]];
-            else if (!same(a0, p0)) below90 = true;
-            if (same(b1, p0)) db = [-db[0], -db[1]];
-            else if (!same(b0, p0)) below90 = true;
+            if (same2(a1, p0)) da = [-da[0], -da[1]];
+            else if (!same2(a0, p0)) below90 = true;
+            if (same2(b1, p0)) db = [-db[0], -db[1]];
+            else if (!same2(b0, p0)) below90 = true;
             let actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
             if (below90 && actual > 90) actual -= 90;
             const fmin = r.min != null && actual < r.min, fmax = r.max != null && actual > r.max;
@@ -26004,7 +26021,7 @@ var require_pcb_tools = __commonJS({
             if (t) take(t, it.id, ident2, void 0, layerOf2(n2, "Dwgs.User"));
           } else if (it.kind === "footprint") {
             const tf2 = fpTf(it);
-            for (const g2 of n2) if (isList5(g2) && (g2[0] === "property" || g2[0] === "fp_text" || g2[0] === "fp_text_box") && K7.kid(g2, "layer")) take(g2, it.id, tf2, it);
+            for (const g2 of n2) if (isList6(g2) && (g2[0] === "property" || g2[0] === "fp_text" || g2[0] === "fp_text_box") && K7.kid(g2, "layer")) take(g2, it.id, tf2, it);
           }
         }
         return out;
@@ -26055,7 +26072,7 @@ var require_pcb_tools = __commonJS({
         const tf2 = fpTf(fp);
         const chains = { "F.CrtYd": [], "B.CrtYd": [] };
         for (const g2 of fp.node) {
-          if (!isList5(g2) || !/^fp_(line|rect|circle|arc|poly)$/.test(g2[0])) continue;
+          if (!isList6(g2) || !/^fp_(line|rect|circle|arc|poly)$/.test(g2[0])) continue;
           const layer = layerOf2(g2, "");
           if (!chains[layer]) continue;
           const kind = g2[0].slice(3);
@@ -26180,7 +26197,7 @@ var require_pcb_tools = __commonJS({
           if (it.kind === "zone") take(it.node, it.id, ident2, null);
           else if (it.kind === "footprint") {
             const tf2 = fpTf(it);
-            for (const g2 of it.node) if (isList5(g2) && g2[0] === "zone") take(g2, it.id, tf2, it);
+            for (const g2 of it.node) if (isList6(g2) && g2[0] === "zone") take(g2, it.id, tf2, it);
           }
         }
         return out;
@@ -26615,7 +26632,7 @@ var require_pcb_tools = __commonJS({
         const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults;
         if (dflt) layerDefaults(dflt);
         const ns = src.net_settings;
-        if (ns && isList5(ns.classes)) {
+        if (ns && isList6(ns.classes)) {
           for (const c of ns.classes) if (c && c.name) s.netclasses[c.name] = { clearance: c.clearance !== void 0 ? c.clearance : s.clearance, track_width: c.track_width !== void 0 ? c.track_width : s.trackWidth, via_diameter: c.via_diameter !== void 0 ? c.via_diameter : s.viaDiameter, via_drill: c.via_drill !== void 0 ? c.via_drill : s.viaDrill };
           if (s.netclasses.Default) {
             s.clearance = s.netclasses.Default.clearance;
@@ -26624,7 +26641,7 @@ var require_pcb_tools = __commonJS({
             s.viaDrill = s.netclasses.Default.via_drill;
           }
           if (ns.netclass_assignments) for (const [net, cls] of Object.entries(ns.netclass_assignments)) s.netclassOf[net] = cls;
-          if (isList5(ns.netclass_patterns)) {
+          if (isList6(ns.netclass_patterns)) {
             for (const p of ns.netclass_patterns) if (p && p.pattern) s.patterns.push({ re: new RegExp("^" + String(p.pattern).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"), netclass: p.netclass });
           }
         }
@@ -26710,7 +26727,7 @@ var require_pcb_tools = __commonJS({
               const [dx, dy] = R2(x, y);
               return [fx + dx, fy + dy];
             };
-            for (const g2 of n2) if (isList5(g2) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g2[0])) take(g2[0].slice(3), g2, tf2, layerOf2(g2, "F.SilkS"));
+            for (const g2 of n2) if (isList6(g2) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g2[0])) take(g2[0].slice(3), g2, tf2, layerOf2(g2, "F.SilkS"));
           }
           for (let i = before; i < shapes2.length; i++) ids.push(it.id);
         }
@@ -26720,26 +26737,26 @@ var require_pcb_tools = __commonJS({
         tol = tol || 0.01;
         const loops = [], open2 = chains.map((c) => c.slice());
         let dangling = false;
-        const same = (a, b) => Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
+        const same2 = (a, b) => Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
         while (open2.length) {
           let cur2 = open2.pop();
-          if (cur2.length > 2 && same(cur2[0], cur2[cur2.length - 1])) {
+          if (cur2.length > 2 && same2(cur2[0], cur2[cur2.length - 1])) {
             loops.push(cur2.slice(0, -1));
             continue;
           }
           let grew = true;
-          while (grew && !same(cur2[0], cur2[cur2.length - 1])) {
+          while (grew && !same2(cur2[0], cur2[cur2.length - 1])) {
             grew = false;
             const tail = cur2[cur2.length - 1];
             for (let i = 0; i < open2.length; i++) {
               const c = open2[i];
-              if (same(c[0], tail)) {
+              if (same2(c[0], tail)) {
                 cur2 = cur2.concat(c.slice(1));
                 open2.splice(i, 1);
                 grew = true;
                 break;
               }
-              if (same(c[c.length - 1], tail)) {
+              if (same2(c[c.length - 1], tail)) {
                 cur2 = cur2.concat(c.slice(0, -1).reverse());
                 open2.splice(i, 1);
                 grew = true;
@@ -26747,7 +26764,7 @@ var require_pcb_tools = __commonJS({
               }
             }
           }
-          if (cur2.length > 2 && same(cur2[0], cur2[cur2.length - 1])) loops.push(cur2.slice(0, -1));
+          if (cur2.length > 2 && same2(cur2[0], cur2[cur2.length - 1])) loops.push(cur2.slice(0, -1));
           else dangling = true;
         }
         return { loops, dangling };
@@ -26784,7 +26801,7 @@ var require_pcb_tools = __commonJS({
         };
         const out = { "F.CrtYd": [], "B.CrtYd": [] };
         for (const g2 of n2) {
-          if (!isList5(g2) || !/^fp_(line|rect|circle|arc|poly)$/.test(g2[0])) continue;
+          if (!isList6(g2) || !/^fp_(line|rect|circle|arc|poly)$/.test(g2[0])) continue;
           const layer = layerOf2(g2, "");
           if (!out[layer]) continue;
           const kind = g2[0].slice(3);
@@ -27116,7 +27133,7 @@ var require_pcb_tools = __commonJS({
         }
       }
       var PAD_TOOLS = { pad: "auto", padtht: "tht", padsmd: "smd", padnpth: "npth", padpaste: "paste" };
-      var str4 = (v) => v === void 0 || v === null ? "" : String(v);
+      var str42 = (v) => v === void 0 || v === null ? "" : String(v);
       function refDesPrefix(s) {
         return s.replace(/\d+$/, "");
       }
@@ -27130,17 +27147,17 @@ var require_pcb_tools = __commonJS({
         return out;
       }
       function nextPadNumber(doc, last, extraUsed) {
-        const used = new Set(fpPads(doc).map((p) => str4(p[1])));
+        const used = new Set(fpPads(doc).map((p) => str42(p[1])));
         if (extraUsed) for (const u of extraUsed) used.add(u);
         const prefix = refDesPrefix(last);
         let num72 = trailingInt(last);
         while (used.has(prefix + num72)) num72++;
         return prefix + num72;
       }
-      var layerSet = (pad) => (K7.kid(pad, "layers") || []).slice(1).map(str4);
-      var isAperture = (pad) => str4(pad[2]) === "smd" && !layerSet(pad).some((l) => /\.Cu$/.test(l));
+      var layerSet = (pad) => (K7.kid(pad, "layers") || []).slice(1).map(str42);
+      var isAperture = (pad) => str42(pad[2]) === "smd" && !layerSet(pad).some((l) => /\.Cu$/.test(l));
       function typeFromPad(pad) {
-        const a = str4(pad[2]);
+        const a = str42(pad[2]);
         if (a === "thru_hole") return "tht";
         if (a === "smd") {
           if (isAperture(pad)) {
@@ -27195,30 +27212,30 @@ var require_pcb_tools = __commonJS({
       }
       var padMemory = { lastType: "auto", lastByType: {}, lastNumber: "1" };
       function masterPad(doc, type, selected) {
-        const pads = fpPads(doc).slice().sort((a, b) => strNumCmp2(str4(b[1]), str4(a[1])));
+        const pads = fpPads(doc).slice().sort((a, b) => strNumCmp2(str42(b[1]), str42(a[1])));
         let t = type;
         if (t === "auto") {
           const sel = selected ? typeFromPad(selected) : null;
           t = sel || (padMemory.lastType !== "auto" ? padMemory.lastType : null) || pads.map(typeFromPad).find((x) => !!x) || "tht";
-          if (selected && sel === t) return strip(clone2(selected));
+          if (selected && sel === t) return strip(clone3(selected));
         }
         const lastId = padMemory.lastByType[t];
         if (lastId) {
           const it = doc.items.get(lastId);
-          if (it && it.kind === "pad" && typeFromPad(it.node) === t) return strip(clone2(it.node));
+          if (it && it.kind === "pad" && typeFromPad(it.node) === t) return strip(clone3(it.node));
         }
-        const same = pads.find((p) => typeFromPad(p) === t);
-        if (same) return strip(clone2(same));
+        const same2 = pads.find((p) => typeFromPad(p) === t);
+        if (same2) return strip(clone3(same2));
         return defaultPad(t);
       }
       function strip(n2) {
         for (let i = n2.length - 1; i > 0; i--) {
           const c = n2[i];
-          if (isList5(c) && (c[0] === "uuid" || c[0] === "tstamp" || c[0] === "net" || c[0] === "pinfunction" || c[0] === "pintype")) n2.splice(i, 1);
+          if (isList6(c) && (c[0] === "uuid" || c[0] === "tstamp" || c[0] === "net" || c[0] === "pinfunction" || c[0] === "pintype")) n2.splice(i, 1);
         }
         return n2;
       }
-      var canHaveNumber = (pad) => str4(pad[2]) !== "np_thru_hole" && !isAperture(pad);
+      var canHaveNumber = (pad) => str42(pad[2]) !== "np_thru_hole" && !isAperture(pad);
       function newPadNode(doc, type, selected, at2, angle, number) {
         const p = masterPad(doc, type, selected);
         p[1] = canHaveNumber(p) ? number || "" : "";
@@ -27254,14 +27271,14 @@ var require_pcb_tools = __commonJS({
         if (!dx && !dy) return [];
         const out = [];
         for (const it of doc.items.values()) {
-          const n2 = clone2(it.node);
+          const n2 = clone3(it.node);
           if (it.kind === "zone") {
             for (const poly of K7.kids(n2, "polygon").concat(K7.kids(n2, "filled_polygon"))) {
               const p = K7.kid(poly, "pts");
               if (p) {
-                for (const xy2 of p.slice(1)) if (isList5(xy2) && xy2[0] === "xy") {
-                  xy2[1] = r64(K7.num(xy2[1]) + dx);
-                  xy2[2] = r64(K7.num(xy2[2]) + dy);
+                for (const xy3 of p.slice(1)) if (isList6(xy3) && xy3[0] === "xy") {
+                  xy3[1] = r64(K7.num(xy3[1]) + dx);
+                  xy3[2] = r64(K7.num(xy3[2]) + dy);
                 }
               }
             }
@@ -27275,7 +27292,7 @@ var require_pcb_tools = __commonJS({
         ids.forEach((id, i) => {
           const it = doc.items.get(id);
           if (!it || it.kind !== "pad" || !canHaveNumber(it.node)) return;
-          const n2 = clone2(it.node);
+          const n2 = clone3(it.node);
           n2[1] = prefix + (start + i * step);
           out.push(replacedChange(it, n2));
         });
@@ -27369,7 +27386,7 @@ var require_pcb_tools = __commonJS({
         const parts = [`(kicad_pcb (version ${BOARD_VERSION}) (generator "kicad-collab-web") (generator_version "10.0")`, layersText2(doc), '(net 0 "")'];
         for (const [name, code] of Array.from(refd).sort((a, b) => a[1] - b[1])) parts.push(`(net ${code} ${quote5(name)})`);
         for (const it of items) {
-          const node = clone2(it.node);
+          const node = clone3(it.node);
           translateNode(node, -ref[0], -ref[1]);
           setLocked(node, false);
           parts.push(K7.serialize(node));
@@ -27385,10 +27402,10 @@ var require_pcb_tools = __commonJS({
         }
         const nodes = [], codeToName = /* @__PURE__ */ new Map();
         for (const t of trees || []) {
-          if (!isList5(t)) continue;
+          if (!isList6(t)) continue;
           if (t[0] === "kicad_pcb") {
             for (const c of t.slice(1)) {
-              if (!isList5(c)) continue;
+              if (!isList6(c)) continue;
               if (c[0] === "net" && typeof c[1] === "number") codeToName.set(c[1], K7.str(c[2]));
               else if (PCB_KINDS2.has(c[0])) nodes.push(c);
             }
@@ -27401,7 +27418,7 @@ var require_pcb_tools = __commonJS({
         const walk = (n2) => {
           for (let i = 1; i < n2.length; i++) {
             const c = n2[i];
-            if (!isList5(c)) continue;
+            if (!isList6(c)) continue;
             if ((c[0] === "uuid" || c[0] === "tstamp") && c.length > 1) {
               const old = K7.str(c[1]);
               if (!map.has(old)) map.set(old, K7.newUuid());
@@ -27425,7 +27442,7 @@ var require_pcb_tools = __commonJS({
         const walk = (n2) => {
           for (let i = 1; i < n2.length; i++) {
             const c = n2[i];
-            if (!isList5(c)) continue;
+            if (!isList6(c)) continue;
             if (c[0] === "net" && c.length > 1 && n2[0] !== "kicad_pcb") {
               const name = typeof c[1] === "number" ? c.length > 2 ? K7.str(c[2]) : codeToName.get(c[1]) || "" : K7.str(c[1]);
               if (style === "name") n2[i] = ["net", name];
@@ -27469,7 +27486,7 @@ var require_pcb_tools = __commonJS({
         opts = opts || {};
         const parsed22 = parseClipboard(text2);
         if (!parsed22) return { changes: [], ids: [] };
-        const nodes = parsed22.nodes.map(clone2);
+        const nodes = parsed22.nodes.map(clone3);
         freshUuids(nodes);
         rewriteNets(nodes, parsed22.codeToName, doc);
         annotate(nodes, doc, opts.annotations || "keep");
@@ -27487,7 +27504,7 @@ var require_pcb_tools = __commonJS({
         const walk = (n2) => {
           for (let i = n2.length - 1; i > 0; i--) {
             const c = n2[i];
-            if (!isList5(c)) continue;
+            if (!isList6(c)) continue;
             if (c[0] === "net" && n2[0] !== "kicad_pcb") {
               if (n2[0] === "pad") n2.splice(i, 1);
               else n2[i] = netNode(doc, null);
@@ -27520,7 +27537,7 @@ var require_pcb_tools = __commonJS({
           if (!it || coveredByGroup(id)) continue;
           if (doc.fpEditor && it.kind === "property") continue;
           const src = subtree(it, []);
-          const nodes = src.map((x) => clone2(x.node));
+          const nodes = src.map((x) => clone3(x.node));
           freshUuids(nodes);
           if (doc.fpEditor && opts && opts.increment) {
             for (const n2 of nodes) if (n2[0] === "pad" && canHaveNumber(n2)) {
@@ -27548,7 +27565,7 @@ var require_pcb_tools = __commonJS({
         }
         for (const [gid, add] of joins) {
           const g2 = doc.items.get(gid);
-          out.restore.push({ id: gid, node: clone2(g2.node) });
+          out.restore.push({ id: gid, node: clone3(g2.node) });
           out.changes.push(...groupMembersChanges(doc, g2, add, []));
         }
         return out;
@@ -28003,7 +28020,7 @@ var require_pcb_tools = __commonJS({
           const grp = {};
           for (let i = 0; i < n2; i++) {
             const base = olds[Math.min(i, olds.length - 1)];
-            const node = clone2(base.node);
+            const node = clone3(base.node);
             K7.kid(node, "start").splice(1, 2, r64(pts[i][0]), r64(pts[i][1]));
             K7.kid(node, "end").splice(1, 2, r64(pts[i + 1][0]), r64(pts[i + 1][1]));
             if (i < olds.length) ops.push(opOn(olds[i], { set: olds[i].id, node }, grp));
@@ -28019,27 +28036,27 @@ var require_pcb_tools = __commonJS({
         for (const [id, at2] of st.viaAt) {
           const it = doc.items.get(id);
           if (!it) continue;
-          const node = clone2(it.node);
+          const node = clone3(it.node);
           K7.kid(node, "at").splice(1, 2, r64(at2[0]), r64(at2[1]));
           ops.push(opOn(it, { set: id, node }));
         }
         return ops;
       }
       function shovePreview(doc, st) {
-        const hidden = /* @__PURE__ */ new Set();
+        const hidden2 = /* @__PURE__ */ new Set();
         const lines = [], vias = [];
         for (const L of st.lines.values()) {
-          for (const id of L.ids) hidden.add(id);
+          for (const id of L.ids) hidden2.add(id);
           lines.push({ pts: L.pts, w: L.w, layer: L.layer });
         }
         for (const [id, at2] of st.viaAt) {
           const it = doc.items.get(id);
           if (!it) continue;
-          hidden.add(id);
+          hidden2.add(id);
           const v = viaNow(it.node);
           vias.push({ at: at2, size: v.size, drill: v.drill });
         }
-        return { hidden, lines, vias };
+        return { hidden: hidden2, lines, vias };
       }
       function solidObs(ctx, rt, layer) {
         layer = layer || rt.layer;
@@ -28244,7 +28261,7 @@ var require_pcb_tools = __commonJS({
         return bb ? [bb[0] - w, bb[1] - w, bb[2] + w, bb[3] + w] : null;
       }
       var inBox2 = (b, p) => p[0] >= b[0] - PEPS && p[0] <= b[2] + PEPS && p[1] >= b[1] - PEPS && p[1] <= b[3] + PEPS;
-      function mergeAllowed(path2, v1, v2, bypass, anchor, area32) {
+      function mergeAllowed(path2, v1, v2, bypass, anchor, area42) {
         let covers = false;
         for (let i = v1; i < v2; i++) if (segPtDist(path2[i], path2[i + 1], anchor) <= 1e-6) {
           covers = true;
@@ -28258,14 +28275,14 @@ var require_pcb_tools = __commonJS({
           }
           if (!keeps) return false;
         }
-        const p1 = path2[v1], p2 = path2[v2], in1 = inBox2(area32, p1), in2 = inBox2(area32, p2);
+        const p1 = path2[v1], p2 = path2[v2], in1 = inBox2(area42, p1), in2 = inBox2(area42, p2);
         if (in1 && in2) return true;
         const horiz = (a0, a1, b0, b1) => {
           const d1 = dir8(a0, a1), d2 = dir8(b0, b1);
           return d1 >= 0 && d1 === d2;
         };
-        if (v1 < path2.length - 1 && !in1 && in2 && inBox2(area32, path2[v1 + 1])) return horiz(bypass[0], bypass[1], path2[v1], path2[v1 + 1]);
-        if (in1 && !in2 && inBox2(area32, path2[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path2[v2 - 1], path2[v2]);
+        if (v1 < path2.length - 1 && !in1 && in2 && inBox2(area42, path2[v1 + 1])) return horiz(bypass[0], bypass[1], path2[v1], path2[v1 + 1]);
+        if (in1 && !in2 && inBox2(area42, path2[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path2[v2 - 1], path2[v2]);
         return false;
       }
       function optimizeDragged(O, pts, orig, p, w) {
@@ -28285,7 +28302,7 @@ var require_pcb_tools = __commonJS({
         }
         let path2 = pts.map((q) => q.slice());
         if (!path2.some((q) => peq(q, anchor))) path2.splice(at2 + 1, 0, anchor);
-        const area32 = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
+        const area42 = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
         const r = w / 2;
         path2 = simplifyPts(path2);
         let step = path2.length - 2;
@@ -28301,7 +28318,7 @@ var require_pcb_tools = __commonJS({
             for (let i = 0; i < 2; i++) {
               const bypass = initialTrace(a, b, -1, i === 1);
               if (bypass.length < 2) continue;
-              if (!pathClear(O, bypass, r) || !mergeAllowed(path2, n2, n2 + step + 1, bypass, anchor, area32)) continue;
+              if (!pathClear(O, bypass, r) || !mergeAllowed(path2, n2, n2 + step + 1, bypass, anchor, area42)) continue;
               cands[i] = simplifyPts(path2.slice(0, n2).concat(bypass, path2.slice(n2 + step + 2)));
               cost[i] = cornerCost(cands[i]);
             }
@@ -28423,17 +28440,17 @@ var require_pcb_tools = __commonJS({
           for (let i = 0; i + 1 < pts.length; i++) {
             const a = pts[i], b = pts[i + 1];
             if (peq(a, b)) continue;
-            const same = olds.find((o) => !kept.has(o.id) && (() => {
+            const same2 = olds.find((o) => !kept.has(o.id) && (() => {
               const [p, q] = trackEnds(o);
               return peq(p, a) && peq(q, b) || peq(p, b) && peq(q, a);
             })());
-            if (same) kept.add(same.id);
+            if (same2) kept.add(same2.id);
             else fresh.push([a, b]);
           }
           for (const o of olds) if (!kept.has(o.id)) changes.push(removedChange(o));
           const own = olds.find((o) => o.id === d.id) || olds[0];
           for (const [a, b] of fresh) {
-            const tmpl = own ? clone2(own.node) : segmentNode(doc, a, b, l.width, l.layer, l.net);
+            const tmpl = own ? clone3(own.node) : segmentNode(doc, a, b, l.width, l.layer, l.net);
             const u = K7.kid(tmpl, "uuid");
             if (u) tmpl.splice(tmpl.indexOf(u), 1);
             K7.kid(tmpl, "start").splice(1, 2, r64(a[0]), r64(a[1]));
@@ -28442,7 +28459,7 @@ var require_pcb_tools = __commonJS({
           }
         }
         if (d.sol.viaAt && d.via && !peq(d.sol.viaAt, d.viaAt)) {
-          const node = clone2(d.via.node);
+          const node = clone3(d.via.node);
           K7.kid(node, "at").splice(1, 2, r64(d.sol.viaAt[0]), r64(d.sol.viaAt[1]));
           changes.push(replacedChange(d.via, node));
         }
@@ -28450,13 +28467,95 @@ var require_pcb_tools = __commonJS({
         return changes;
       }
       var solutionChanged = (d) => d.sol && (d.sol.lines.some(({ l, pts }) => pts.length !== l.pts.length || pts.some((p, i) => !peq(p, l.pts[i]))) || d.sol.viaAt && !peq(d.sol.viaAt, d.viaAt));
+      var boardLayerName2 = (doc, name) => {
+        const l = doc && doc.layers && doc.layers.get ? doc.layers.get(name) : null;
+        return l && l.userName ? l.userName : name;
+      };
+      var same = (a, b) => a[0] === b[0] && a[1] === b[1] || a[0] === b[1] && a[1] === b[0];
+      var lastManual = null;
+      function resetLayerPairCycle() {
+        lastManual = null;
+      }
+      function enabledLayerPairs(current, presets) {
+        const on = presets.filter((p) => p.enabled !== false).map((p) => ({ pair: [p.top, p.bottom], name: p.name }));
+        const isPreset = (pr) => on.some((p) => same(p.pair, pr));
+        if (!isPreset(current)) lastManual = [current[0], current[1]];
+        else if (lastManual && isPreset(lastManual)) lastManual = null;
+        const pairs = [];
+        let cur2 = -1;
+        if (lastManual) {
+          pairs.push({ pair: lastManual, name: "Manual" });
+          if (same(current, lastManual)) cur2 = 0;
+        }
+        for (const p of on) {
+          pairs.push(p);
+          if (same(current, p.pair)) cur2 = pairs.length - 1;
+        }
+        return { pairs, current: cur2 };
+      }
+      var popup = () => typeof window !== "undefined" && window.kcHotkeyCyclePopup || null;
+      function pairLabel(doc, p) {
+        const s = boardLayerName2(doc, p.pair[0]) + " / " + boardLayerName2(doc, p.pair[1]);
+        return p.name ? `${s} (${p.name})` : s;
+      }
+      function cycleLayerPairPresets(ctx) {
+        const R2 = K7.pcbSizes.state;
+        const { pairs, current } = enabledLayerPairs(R2.layerPair, R2.layerPairPresets);
+        if (pairs.length < 2) return false;
+        const next = pairs[((current < 0 ? 0 : current) + 1) % pairs.length];
+        R2.setLayerPair(next.pair[0], next.pair[1]);
+        const after2 = enabledLayerPairs(R2.layerPair, R2.layerPairPresets);
+        const show = popup();
+        if (show) show("Preset Layer Pairs", after2.pairs.map((p) => pairLabel(ctx.doc, p)), after2.current);
+        ctx.requestRender();
+        return true;
+      }
+      var SNAP_KEY = (fp) => "kc.magneticAllLayers." + (fp ? "fpedit" : "pcb");
+      function snapAllLayers(ctx) {
+        const fp = !!(ctx && ctx.fpEditor);
+        const v = fp ? S2.snapAllLayersFp : S2.snapAllLayers;
+        if (typeof v === "boolean") return v;
+        let stored = false;
+        try {
+          stored = typeof localStorage !== "undefined" && localStorage.getItem(SNAP_KEY(fp)) === "1";
+        } catch {
+        }
+        if (fp) S2.snapAllLayersFp = stored;
+        else S2.snapAllLayers = stored;
+        return stored;
+      }
+      function setSnapMode(ctx, mode2) {
+        const fp = !!ctx.fpEditor, now2 = snapAllLayers(ctx);
+        const v = mode2 === "toggle" ? !now2 : mode2 === "all";
+        if (fp) S2.snapAllLayersFp = v;
+        else S2.snapAllLayers = v;
+        try {
+          if (typeof localStorage !== "undefined") localStorage.setItem(SNAP_KEY(fp), v ? "1" : "0");
+        } catch {
+        }
+        const show = popup();
+        if (show) show("Object Snapping", ["Active Layer", "All Layers"], v ? 1 : 0);
+        return true;
+      }
+      function itemOnLayer(it, layer) {
+        if (!layer) return true;
+        if (it.kind === "footprint") return it.layer === layer;
+        if (it.kind === "via") {
+          const ls = K7.kid(it.node, "layers");
+          const names = ls ? ls.slice(1).map((v) => K7.str(v)) : [];
+          const through = !K7.kid(it.node, "blind") && !K7.kid(it.node, "micro") && !(it.node[1] === "blind" || it.node[1] === "micro");
+          return /\.Cu$/.test(layer) && (through || names.includes(layer) || names.includes("*.Cu"));
+        }
+        if (it.layer === layer) return true;
+        return it.geom.some((g2) => g2.layer === layer || g2.layer === "*.Cu" && /\.Cu$/.test(layer));
+      }
       function beginSelectDrag(ctx, it, mm2) {
         if (isLocked2(it.node) && !overrideLocks()) {
           ctx.toast(LOCKED_WARNING, 3500);
           return false;
         }
         const m = { ids: [it.id], start: snapCursor(ctx, mm2, /* @__PURE__ */ new Set([it.id]), {}).p, orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false };
-        m.orig.set(it.id, clone2(it.node));
+        m.orig.set(it.id, clone3(it.node));
         if (it.kind === "via") {
           const at2 = pt4(it.node, "at");
           for (const sg of ctx.doc.items.values()) {
@@ -28465,7 +28564,7 @@ var require_pcb_tools = __commonJS({
               const q = pt4(sg.node, key2);
               if (q && at2 && samePt(q, at2)) {
                 m.ends.push({ id: sg.id, key: key2 });
-                if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone2(sg.node));
+                if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone3(sg.node));
               }
             }
           }
@@ -28535,14 +28634,14 @@ var require_pcb_tools = __commonJS({
         if (k === "gr_poly" || k === "zone" || k === "gr_curve") {
           const P = K7.kid(k === "zone" ? K7.kid(n2, "polygon") || n2 : n2, "pts");
           if (P) {
-            for (const xy2 of P.slice(1)) if (isList5(xy2) && xy2[0] === "xy") add([K7.num(xy2[1]), K7.num(xy2[2])], "corner");
+            for (const xy3 of P.slice(1)) if (isList6(xy3) && xy3[0] === "xy") add([K7.num(xy3[1]), K7.num(xy3[2])], "corner");
           }
           return out;
         }
         if (k === "dimension") {
           const P = K7.kid(n2, "pts");
           if (P) {
-            for (const xy2 of P.slice(1)) if (isList5(xy2) && xy2[0] === "xy") add([K7.num(xy2[1]), K7.num(xy2[2])], "none");
+            for (const xy3 of P.slice(1)) if (isList6(xy3) && xy3[0] === "xy") add([K7.num(xy3[1]), K7.num(xy3[2])], "none");
           }
           return out;
         }
@@ -28563,6 +28662,28 @@ var require_pcb_tools = __commonJS({
         }
         return best ? [r64(best[0]), r64(best[1])] : mouse.slice();
       }
+      var FP_SHAPES = { fp_line: "gr_line", fp_rect: "gr_rect", fp_circle: "gr_circle", fp_arc: "gr_arc", fp_poly: "gr_poly", fp_curve: "gr_curve" };
+      function snapAnchors(it, only, gridPitch) {
+        if (it.kind !== "footprint") return !only || itemOnLayer(it, only) ? itemAnchors(it, false, null, gridPitch) : [];
+        const out = !only || it.layer === only ? itemAnchors(it, false, null, gridPitch) : [];
+        const [fx, fy, fa] = K7.atOf(it.node);
+        const R2 = rotator2(fa);
+        for (const c of it.node) {
+          if (!isList6(c)) continue;
+          const kind = FP_SHAPES[String(c[0])];
+          if (!kind) continue;
+          const l = K7.kid(c, "layer");
+          const layer = l ? K7.str(l[1]) : "";
+          if (only && layer !== only) continue;
+          for (const p of itemAnchors({ id: "", kind, node: c, layer, geom: [] }, false, null, gridPitch)) {
+            const [x, y] = R2(p[0], p[1]);
+            const q = [fx + x, fy + y];
+            if (p.t) q.t = p.t;
+            out.push(q);
+          }
+        }
+        return out;
+      }
       function snapCursor(ctx, mm2, skip2, mods, line3) {
         mods = mods || {};
         const gridOn = !!(ctx.snapOn && ctx.snap) && !(mods.ctrlKey || mods.metaKey);
@@ -28571,11 +28692,12 @@ var require_pcb_tools = __commonJS({
         const scale = SNAP_SCREEN_RADIUS / Math.max(1e-6, ctx.pxPerMm || 4);
         const range = gridOn && ctx.gridPitch ? Math.min(scale, ctx.gridPitch) : scale;
         let best = null, bd = range;
+        const only = snapAllLayers(ctx) ? "" : K7.pcbSizes.state.activeLayer || S2.gfxLayer || S2.layer || "";
         for (const it of ctx.doc.items.values()) {
           if (skip2 && skip2.has(it.id)) continue;
           const b = it.bbox;
           if (b && (mm2[0] < b[0] - range || mm2[0] > b[2] + range || mm2[1] < b[1] - range || mm2[1] > b[3] + range)) continue;
-          for (const p of itemAnchors(it, false, null, ctx.gridPitch)) {
+          for (const p of snapAnchors(it, only, ctx.gridPitch)) {
             const d = Math.hypot(p[0] - mm2[0], p[1] - mm2[1]);
             if (d <= bd) {
               bd = d;
@@ -28945,9 +29067,9 @@ var require_pcb_tools = __commonJS({
         if (!it || it.kind !== "segment" || K7.serialize(it.node) !== K7.serialize(split.node)) return [];
         const a = pt4(it.node, "start"), b = pt4(it.node, "end"), p = split.point;
         if (!a || !b || samePt(a, p) || samePt(b, p)) return [];
-        const head2 = clone2(it.node);
+        const head2 = clone3(it.node);
         K7.kid(head2, "end").splice(1, 2, r64(p[0]), r64(p[1]));
-        const tail = clone2(it.node);
+        const tail = clone3(it.node);
         const u = K7.kid(tail, "uuid");
         if (u) tail.splice(tail.indexOf(u), 1);
         K7.kid(tail, "start").splice(1, 2, r64(p[0]), r64(p[1]));
@@ -28969,7 +29091,7 @@ var require_pcb_tools = __commonJS({
           if (snap2.kind === "pad" && snap2.fp) {
             const fp = doc.items.get(snap2.fp);
             if (!fp) return [];
-            const node2 = clone2(fp.node);
+            const node2 = clone3(fp.node);
             const pad = K7.kids(node2, "pad")[snap2.padIndex];
             if (!pad) return [];
             const nk2 = K7.kid(pad, "net");
@@ -28980,7 +29102,7 @@ var require_pcb_tools = __commonJS({
           }
           const it = snap2.id ? doc.items.get(snap2.id) : null;
           if (!it) return [];
-          const node = clone2(it.node);
+          const node = clone3(it.node);
           const nk = K7.kid(node, "net");
           const nn = netNode(doc, rt.net);
           if (nk) node.splice(node.indexOf(nk), 1, nn);
@@ -29285,13 +29407,13 @@ var require_pcb_tools = __commonJS({
       function genMoveStep(ctx, dx, dy) {
         const ge = S2.genEdit;
         if (!ge) return;
-        const node = clone2(ge.orig);
+        const node = clone3(ge.orig);
         for (const k of ["origin", "end"]) {
           const c = K7.kid(node, k);
-          const xy2 = c && K7.kid(c, "xy");
-          if (xy2) {
-            xy2[1] = r64(K7.num(xy2[1]) + dx);
-            xy2[2] = r64(K7.num(xy2[2]) + dy);
+          const xy3 = c && K7.kid(c, "xy");
+          if (xy3) {
+            xy3[1] = r64(K7.num(xy3[1]) + dx);
+            xy3[2] = r64(K7.num(xy3[2]) + dy);
           }
         }
         genUpdateEdit(ctx, node);
@@ -29299,7 +29421,7 @@ var require_pcb_tools = __commonJS({
       function moveNodesAt(m, dx, dy) {
         const out = [];
         for (const [id, orig] of m.orig) {
-          const node = clone2(orig);
+          const node = clone3(orig);
           if (m.ids.includes(id)) translateNode(node, dx, dy);
           for (const e of m.ends) if (e.id === id) {
             const k = K7.kid(node, e.key), o = K7.kid(orig, e.key);
@@ -29330,7 +29452,7 @@ var require_pcb_tools = __commonJS({
           const it = ctx.doc.items.get(id);
           if (!it) continue;
           it.node.length = 0;
-          it.node.push(...clone2(node));
+          it.node.push(...clone3(node));
           K7.replaceChange(ctx.doc, it);
         }
       }
@@ -29339,7 +29461,7 @@ var require_pcb_tools = __commonJS({
         if (!m) return false;
         if (m.gen) return true;
         if (m.conns && m.conns.length || m.ends.length) return true;
-        if (!m.base) m.base = new Map(Array.from(m.orig, ([id, n2]) => [id, clone2(n2)]));
+        if (!m.base) m.base = new Map(Array.from(m.orig, ([id, n2]) => [id, clone3(n2)]));
         let cx = m.start[0], cy = m.start[1];
         if (how === "flip" && m.ids.length > 1) {
           const b = bboxUnion(m.ids.map((id) => ctx.doc.items.get(id)).filter(Boolean));
@@ -29371,6 +29493,7 @@ var require_pcb_tools = __commonJS({
           m.guide = guide;
           ctx.requestRender();
         }
+        if (S2.moveSeq && S2.popup) S2.popup.at = [mm2[0], mm2[1]];
         const sN = sn.p;
         const dx = r64(sN[0] - m.start[0]), dy = r64(sN[1] - m.start[1]);
         if (dx === m.last[0] && dy === m.last[1]) return;
@@ -29386,15 +29509,23 @@ var require_pcb_tools = __commonJS({
       var sameGuide = (a, b) => !a && !b || !!a && !!b && samePt(a[0], b[0]) && samePt(a[1], b[1]);
       function finishSelectMove(ctx, commit, force) {
         const m = S2.move;
-        S2.move = null;
         if (!m) return;
+        if (!m.after) {
+          finishMove(ctx, m, commit, force);
+          return;
+        }
+        const wrote = finishMove(ctx, m, commit, force);
+        m.after(commit, wrote);
+      }
+      function finishMove(ctx, m, commit, force) {
+        S2.move = null;
         moveCursor(ctx, false);
         if (m.gen) {
           if (commit && m.moved && (m.last[0] || m.last[1])) genFinishEdit(ctx);
           else genCancelEdit(ctx);
           if (m.hover) applySelection(ctx, []);
           ctx.requestRender();
-          return;
+          return false;
         }
         const [dx, dy] = m.last;
         moveRestore(ctx, m);
@@ -29407,12 +29538,12 @@ var require_pcb_tools = __commonJS({
           if (gone.length || back.length) ctx.commit(back.concat(deleteChanges(ctx.doc, gone)), "cancel", { amend: true, discard: true });
           applySelection(ctx, []);
           ctx.requestRender();
-          return;
+          return false;
         }
         if (!commit || !m.xformed && (!m.moved || !dx && !dy)) {
           unhover();
           ctx.requestRender();
-          return;
+          return false;
         }
         if (m.conns && !force) {
           moveApply(ctx, m, dx, dy);
@@ -29424,14 +29555,15 @@ var require_pcb_tools = __commonJS({
             showViolations(hits2, hits2.at || cursorPoint(ctx));
             ctx.toast("Track violates DRC.");
             ctx.requestRender();
-            return;
+            return false;
           }
         }
         const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id), node));
         if (m.conns && m.conns.length) changes.push(...dragChanges(ctx, { sol: { lines: connLines(m, dx, dy) } }));
-        ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing ? { amend: true } : void 0);
+        ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing || m.amend ? { amend: true } : void 0);
         unhover();
         ctx.requestRender();
+        return true;
       }
       function beginCarryMove(ctx, opts) {
         const doc = ctx.doc;
@@ -29448,7 +29580,7 @@ var require_pcb_tools = __commonJS({
         const mouse = opts.at ? opts.at.slice() : ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
         const at2 = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || opts.drag && free.length === 1 && doc.items.get(free[0])?.kind === "footprint" ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
         const m = { ids: free, start: at2.slice(), orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
-        for (const id of free) m.orig.set(id, clone2(doc.items.get(id).node));
+        for (const id of free) m.orig.set(id, clone3(doc.items.get(id).node));
         const gen = !opts.placing && !opts.drag ? selectedTuningPattern(ctx, free) : null;
         if (gen) {
           m.skip = new Set(m.orig.keys());
@@ -29505,7 +29637,7 @@ var require_pcb_tools = __commonJS({
             if (!q) continue;
             if (vias.some((v) => samePt(q, v))) {
               m.ends.push({ id: sg.id, key: key2 });
-              if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone2(sg.node));
+              if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone3(sg.node));
               continue;
             }
             if (!padAtEnd(q, l) || seen.has(sg.id)) continue;
@@ -29517,7 +29649,7 @@ var require_pcb_tools = __commonJS({
             if (padAtEnd(first, l) && padAtEnd(last, l)) {
               for (const id of ln.ids) {
                 if (!m.ids.includes(id)) m.ids.push(id);
-                if (!m.orig.has(id)) m.orig.set(id, clone2(doc.items.get(id).node));
+                if (!m.orig.has(id)) m.orig.set(id, clone3(doc.items.get(id).node));
               }
               break;
             }
@@ -29959,11 +30091,11 @@ var require_pcb_tools = __commonJS({
       }
       function drawClearanceOutlines(c, ctx, cpx) {
         const doc = ctx.doc, s = settingsOf2(ctx), layer = S2.layer;
-        const hidden = appGlobal(() => editorState().hiddenLayers, null);
+        const hidden2 = appGlobal(() => editorState().hiddenLayers, null);
         const hl = appGlobal(() => editorState().highlightIds || null, null);
         const sel = new Set(selectionIds(ctx));
         const objHide = appGlobal(() => editorState().renderOpts?.objects?.hide || null, null);
-        const list = clearanceOutlines(doc, s, layer, { tracks: S2.trackClearance === CLEARANCE_MODE.ALWAYS, pads: S2.padClearance !== false, netName: (net) => netNameOf3(ctx, net), hidden, objHide });
+        const list = clearanceOutlines(doc, s, layer, { tracks: S2.trackClearance === CLEARANCE_MODE.ALWAYS, pads: S2.padClearance !== false, netName: (net) => netNameOf3(ctx, net), hidden: hidden2, objHide });
         if (!list.length) return;
         const KC = K7;
         c.save();
@@ -31284,6 +31416,83 @@ var require_pcb_tools = __commonJS({
         const ids = loopRemovals(ctx.doc, b);
         return ids.size ? ids : null;
       }
+      var isList32 = Array.isArray;
+      var str5 = (v) => v === void 0 || v === null ? "" : String(v);
+      var kid22 = (n2, key2) => {
+        if (!n2) return null;
+        for (let i = 1; i < n2.length; i++) {
+          const c = n2[i];
+          if (isList32(c) && c[0] === key2) return c;
+        }
+        return null;
+      };
+      var kids22 = (n2, key2) => n2 ? n2.filter((c) => isList32(c) && c[0] === key2) : [];
+      var clone22 = (n2) => JSON.parse(JSON.stringify(n2));
+      var boolOf3 = (k, dflt) => k ? k.length < 2 || /^(yes|true)$/.test(str5(k[1])) : dflt;
+      var cmpCode2 = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+      var lower2 = (s) => s.toLowerCase();
+      var DEFAULT_VARIANT_NAME2 = "< Default >";
+      var isDefaultVariant22 = (v) => !v || lower2(v) === lower2(DEFAULT_VARIANT_NAME2);
+      var FP_FLAG_KEYS2 = ["dnp", "exclude_from_bom", "exclude_from_sim", "exclude_from_pos_files"];
+      function footprintFlags2(fp) {
+        const a = kid22(fp, "attr");
+        const toks = a ? a.slice(1).map(str5) : [];
+        return { dnp: toks.includes("dnp"), exclude_from_bom: toks.includes("exclude_from_bom"), exclude_from_sim: toks.includes("exclude_from_sim"), exclude_from_pos_files: toks.includes("exclude_from_pos_files") };
+      }
+      var fpField2 = (fp, name) => kids22(fp, "property").find((p) => str5(p[1]) === name) || null;
+      function footprintVariantNode2(fp, name) {
+        if (isDefaultVariant22(name)) return null;
+        return kids22(fp, "variant").find((v) => lower2(str5((kid22(v, "name") || [])[1])) === lower2(name)) || null;
+      }
+      function footprintVariant2(fp, name) {
+        const v = footprintVariantNode2(fp, name);
+        if (!v) return null;
+        const base = footprintFlags2(fp), flags = { ...base };
+        for (const k of FP_FLAG_KEYS2) flags[k] = boolOf3(kid22(v, k), base[k]);
+        const fields = /* @__PURE__ */ new Map();
+        for (const f2 of kids22(v, "field")) {
+          const nm22 = str5((kid22(f2, "name") || [])[1]);
+          if (nm22) fields.set(nm22, str5((kid22(f2, "value") || [])[1]));
+        }
+        return { name: str5((kid22(v, "name") || [])[1]), flags, fields };
+      }
+      function footprintFlagsForVariant(fp, variant) {
+        const st = variant ? footprintVariant2(fp, variant) : null;
+        return st ? st.flags : footprintFlags2(fp);
+      }
+      var VARIANT_BEFORE2 = ["embedded_fonts", "embedded_files", "model", "extruded"];
+      function setFootprintVariant2(fp, name, patch) {
+        if (isDefaultVariant22(name)) throw new Error("Variant name cannot be empty or default.");
+        const out = clone22(fp), base = footprintFlags2(out);
+        const cur2 = footprintVariant2(out, name) || { name, flags: { ...base }, fields: /* @__PURE__ */ new Map() };
+        for (const k of FP_FLAG_KEYS2) if (patch.flags && patch.flags[k] !== void 0) cur2.flags[k] = !!patch.flags[k];
+        if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) cur2.fields.set(k, v);
+        const node = ["variant", ["name", cur2.name]];
+        for (const k of FP_FLAG_KEYS2) if (cur2.flags[k] !== base[k]) node.push([k, cur2.flags[k] ? "yes" : "no"]);
+        for (const k of [...cur2.fields.keys()].sort(cmpCode2)) {
+          const p = fpField2(out, k), v = cur2.fields.get(k);
+          if ((p ? str5(p[2]) : "") === v) continue;
+          node.push(["field", ["name", k], ["value", v]]);
+        }
+        const old = footprintVariantNode2(out, name);
+        if (old) {
+          out[out.indexOf(old)] = node;
+          return out;
+        }
+        const others = kids22(out, "variant");
+        const after2 = others.filter((v) => lower2(str5((kid22(v, "name") || [])[1])) < lower2(name)).pop();
+        if (after2) {
+          out.splice(out.indexOf(after2) + 1, 0, node);
+          return out;
+        }
+        if (others.length) {
+          out.splice(out.indexOf(others[0]), 0, node);
+          return out;
+        }
+        const at2 = out.findIndex((c, i) => i > 0 && isList32(c) && VARIANT_BEFORE2.includes(str5(c[0])));
+        out.splice(at2 > 0 ? at2 : out.length, 0, node);
+        return out;
+      }
       function padAt2(doc, x, y, layer) {
         let best = null;
         for (const it of doc.items.values()) {
@@ -31410,21 +31619,43 @@ var require_pcb_tools = __commonJS({
           } else if (p) n2.splice(n2.indexOf(p), 1);
         });
       }
-      function footprintAttrChanges(doc, ids, flag2) {
-        return transformChanges(doc, ids, (n2, it) => {
+      function footprintAttrChanges(doc, ids, flag2, variant) {
+        const list = [...ids];
+        const v = variant !== void 0 ? variant : String((globalThis.CollabEditor || {}).currentVariant || "");
+        const key2 = flag2;
+        let on = false;
+        for (const id of list) {
+          const it = doc.items.get(id);
+          if (it && it.kind === "footprint" && !footprintFlagsForVariant(it.node, v)[key2]) {
+            on = true;
+            break;
+          }
+        }
+        return transformChanges(doc, list, (n2, it) => {
           if (it.kind !== "footprint") return false;
+          if (v && !isDefaultVariant22(v)) {
+            const out = setFootprintVariant2(n2, v, { flags: { [key2]: on } });
+            n2.splice(0, n2.length, ...out);
+            return;
+          }
           let a = K7.kid(n2, "attr");
           const toks = a ? a.slice(1).map(K7.str) : [];
           const i = toks.indexOf(flag2);
+          if (on === i >= 0) return;
           if (i >= 0) toks.splice(i, 1);
           else toks.push(flag2);
+          const ORDER = ["smd", "through_hole", "board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "allow_missing_courtyard", "dnp", "allow_soldermask_bridges"];
+          toks.sort((x, y) => {
+            const a1 = ORDER.indexOf(x), b1 = ORDER.indexOf(y);
+            return (a1 < 0 ? 99 : a1) - (b1 < 0 ? 99 : b1);
+          });
           if (!toks.length) {
             n2.splice(n2.indexOf(a), 1);
             return;
           }
           if (a) a.splice(1, a.length - 1, ...toks);
           else {
-            const before = n2.find((c) => isList5(c) && /^(fp_|pad|model|embedded_fonts)/.test(c[0]));
+            const before = n2.find((c) => isList6(c) && /^(fp_|pad|model|embedded_fonts)/.test(c[0]));
             n2.splice(before ? n2.indexOf(before) : n2.length, 0, ["attr", ...toks]);
           }
         });
@@ -31501,6 +31732,14 @@ var require_pcb_tools = __commonJS({
         sizesOf(ctx).endRoute();
         refreshChip(ctx);
         ctx.requestRender();
+        if (S2.routeQueue && routeQueueNext) {
+          const next = routeQueueNext;
+          Promise.resolve().then(() => next(ctx));
+        }
+      }
+      var routeQueueNext = null;
+      function setRouteQueueNext(fn) {
+        routeQueueNext = fn;
       }
       function undoRouteLeg(ctx) {
         if (S2.route && S2.route.dp) return dpUndoLeg(ctx);
@@ -31601,7 +31840,7 @@ var require_pcb_tools = __commonJS({
             if (on) {
               p = on.point;
               net = netOf3(on.item.node);
-              split = { id: on.item.id, point: p.slice(), node: clone2(on.item.node) };
+              split = { id: on.item.id, point: p.slice(), node: clone3(on.item.node) };
               startIds.push(on.item.id);
               startKind = "track";
             }
@@ -31684,7 +31923,7 @@ var require_pcb_tools = __commonJS({
         let endSplit = null;
         if (lands && hv.snap.kind === "trackMid" && !(rt.split && rt.split.id === hv.snap.id)) {
           const it = rc.doc.items.get(hv.snap.id);
-          if (it) endSplit = { id: it.id, point: [hv.x, hv.y], node: clone2(it.node) };
+          if (it) endSplit = { id: it.id, point: [hv.x, hv.y], node: clone3(it.node) };
         }
         const markEnd = S2.rs.mode === RM_MARK && hv.snap && samePt(rt.target, [hv.x, hv.y]) ? hv.snap : null;
         const placingVia = !!rt.placingVia;
@@ -31864,10 +32103,120 @@ var require_pcb_tools = __commonJS({
       function setLayerPickerImpl(fn) {
         layerPickerImpl = fn;
       }
+      function attemptFinish(ctx) {
+        const rt = S2.route;
+        if (!rt || rt.dp) return false;
+        leadingRatline(ctx, rt);
+        const a = rt.ratAnchor;
+        if (!a) return false;
+        const goal = a.p.slice();
+        for (let tries = 5; tries > 0; tries--) {
+          const before = rt.target.slice();
+          rt.cursor = goal.slice();
+          updateHead(ctx);
+          if (samePt(rt.target, before)) break;
+        }
+        if (samePt(rt.target, goal) && (a.layers.includes(rt.layer) || a.layers.includes("*.Cu"))) {
+          const hv = hoverPoint(ctx, goal, true);
+          routeClick(ctx, { x: goal[0], y: goal[1], snap: hv.snap }, goal, { enter: true });
+          if (S2.route === rt) endRoute(ctx, false);
+          return true;
+        }
+        ctx.requestRender();
+        return true;
+      }
+      function continueFromEnd(ctx) {
+        const rt = S2.route;
+        if (!rt || rt.dp) return false;
+        leadingRatline(ctx, rt);
+        const a = rt.ratAnchor;
+        if (!a) {
+          ctx.toast("No ratsnest end to continue from.");
+          return true;
+        }
+        const currentEnd = rt.target.slice(), layer = rt.layer;
+        endRoute(ctx, false);
+        const next = a.layers.includes(layer) || a.layers.includes("*.Cu") || !a.layers.length ? layer : a.layers[0];
+        if (next !== S2.layer) setLayer(ctx, next);
+        const hv = hoverPoint(ctx, a.p.slice(), true);
+        routeClick(ctx, { x: a.p[0], y: a.p[1], snap: hv.snap }, a.p.slice());
+        const nr = S2.route;
+        if (!nr) return true;
+        nr.cursor = currentEnd;
+        updateHead(ctx);
+        ctx.requestRender();
+        return true;
+      }
+      function footprintFieldNode(fp, name) {
+        for (const c of fp) if (isList6(c) && c[0] === "property" && K7.str(c[1]) === name) return c;
+        const t = name === "Reference" ? "reference" : name === "Value" ? "value" : null;
+        if (t) {
+          for (const c of fp) if (isList6(c) && c[0] === "fp_text" && K7.str(c[1]) === t) return c;
+        }
+        return null;
+      }
+      function requestField(ctx, cursor) {
+        if (S2.forceHover || selectionIds(ctx).size || S2.padSel) return null;
+        const sel = typeof ctx.selectedField === "function" ? ctx.selectedField() : null;
+        if (sel) return ctx.doc.items.has(sel.id) && footprintFieldNode(ctx.doc.items.get(sel.id).node, sel.name) ? { id: sel.id, name: sel.name, hover: false } : null;
+        if (!cursor || typeof ctx.fieldAt !== "function") return null;
+        const f2 = ctx.fieldAt(cursor);
+        if (!f2 || !ctx.doc.items.has(f2.id)) return null;
+        let others = [];
+        if (typeof ctx.candidatesAt === "function") {
+          try {
+            others = (ctx.candidatesAt(cursor) || []).map((id) => {
+              const h = id.indexOf("#");
+              return h > 0 ? id.slice(0, h) : id;
+            }).filter((id) => id !== f2.id);
+          } catch (e) {
+            others = [];
+          }
+        }
+        return others.length ? null : { id: f2.id, name: f2.name, hover: true };
+      }
+      function fieldChange(doc, ref, fn) {
+        const it = doc.items.get(ref.id);
+        if (!it || it.kind !== "footprint") return null;
+        const node = clone3(it.node);
+        const f2 = footprintFieldNode(node, ref.name);
+        if (!f2 || !K7.kid(f2, "at")) return null;
+        if (fn(f2, node) === false) return null;
+        return replacedChange(it, node);
+      }
+      function rotateFieldChange(doc, ref, deg2) {
+        return fieldChange(doc, ref, (f2) => {
+          setAngleKid(f2, angleKid(f2) + deg2);
+        });
+      }
+      function flipFieldChange(doc, ref) {
+        return fieldChange(doc, ref, (f2, fp) => {
+          const a0 = K7.atOf(fp)[2] || 0;
+          setAngleKid(f2, 2 * a0 - angleKid(f2));
+          flipLayerKid(f2);
+          toggleMirror(f2);
+        });
+      }
+      function hideFieldChanges(doc, ref) {
+        const out = [];
+        const it = doc.items.get(ref.id);
+        if (!it) return out;
+        const node = clone3(it.node);
+        const f2 = footprintFieldNode(node, ref.name);
+        if (!f2) return out;
+        if (fieldIsHidden(f2)) {
+          out.infoError = "Use the Footprint Properties dialog to remove fields.";
+          return out;
+        }
+        node.splice(node.indexOf(f2), 1, hiddenFieldNode(f2));
+        out.push(replacedChange(it, node));
+        out.hideLabel = "Hide Field";
+        return out;
+      }
       function stepLayer(ctx, forward) {
         const R2 = sizesOf(ctx);
-        const hidden = appGlobal(() => editorState().hiddenLayers, null);
-        const to = K7.pcbSizes.stepCopperLayer(copperOf(ctx.doc), S2.route ? S2.route.layer : R2.activeLayer || S2.layer, forward, hidden);
+        const hidden2 = appGlobal(() => editorState().hiddenLayers, null);
+        const to = K7.pcbSizes.stepCopperLayer(copperOf(ctx.doc), S2.route ? S2.route.layer : R2.activeLayer || S2.layer, forward, hidden2);
         if (to) setLayer(ctx, to);
         return true;
       }
@@ -31886,6 +32235,13 @@ var require_pcb_tools = __commonJS({
         ctx.commit(changes, "delete");
       }
       function hoverDelete(ctx) {
+        const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+        if (fr) {
+          ctx.commit(hideFieldChanges(ctx.doc, fr), "delete");
+          if (!fr.hover && ctx.clearField) ctx.clearField();
+          ctx.requestRender();
+          return;
+        }
         const sel = requestSelection(ctx, { rerun: (c) => hoverDelete(c) });
         if (!sel) return;
         ctx.commit(deleteChanges(ctx.doc, sel.ids), "delete");
@@ -31919,7 +32275,7 @@ var require_pcb_tools = __commonJS({
             if (it.kind === "via") continue;
             const w = R2.steppedWidth(widthOf2(it.node, 0), fwd);
             if (w === null) continue;
-            const node = clone2(it.node);
+            const node = clone3(it.node);
             const wn = K7.kid(node, "width");
             if (wn) wn[1] = r64(w);
             else node.splice(node.indexOf(K7.kid(node, "layer")), 0, ["width", r64(w)]);
@@ -31941,7 +32297,7 @@ var require_pcb_tools = __commonJS({
             const sn = K7.kid(it.node, "size");
             const v = R2.steppedVia(sn ? K7.num(sn[1]) : 0, fwd);
             if (!v) continue;
-            const node = clone2(it.node);
+            const node = clone3(it.node);
             const s2 = K7.kid(node, "size"), d2 = K7.kid(node, "drill");
             if (s2) s2[1] = r64(v.diameter);
             if (d2 && v.drill > 0) d2[1] = r64(v.drill);
@@ -32412,11 +32768,11 @@ var require_pcb_tools = __commonJS({
       }
       function snapTarget(doc, x, y, tol, layer, net, strict) {
         let best = null, bd = Infinity;
-        const take = (px, py, n2, kind, inside2, extra) => {
+        const take = (px, py, n2, kind, inside22, extra) => {
           const d = Math.hypot(px - x, py - y);
-          if (!inside2 && d > tol) return;
+          if (!inside22 && d > tol) return;
           if (hasNet(net) && hasNet(n2) && !sameNet(n2, net)) return;
-          if (strict && !sameNet(n2, net) && !(kind === "pad" && inside2)) return;
+          if (strict && !sameNet(n2, net) && !(kind === "pad" && inside22)) return;
           if (d < bd) {
             bd = d;
             best = Object.assign({ x: px, y: py, net: n2, kind, onLayer: layer }, extra);
@@ -32447,8 +32803,8 @@ var require_pcb_tools = __commonJS({
           const k = ((x - a[0]) * dx + (y - a[1]) * dy) / l2;
           if (k <= 0 || k >= 1) continue;
           const q = rp([a[0] + k * dx, a[1] + k * dy]);
-          const inside2 = Math.hypot(q[0] - x, q[1] - y) <= widthOf2(it.node, 0.25) / 2;
-          take(q[0], q[1], netOf3(it.node), "trackMid", inside2, { id: it.id });
+          const inside22 = Math.hypot(q[0] - x, q[1] - y) <= widthOf2(it.node, 0.25) / 2;
+          take(q[0], q[1], netOf3(it.node), "trackMid", inside22, { id: it.id });
         }
         return best;
       }
@@ -32687,6 +33043,154 @@ var require_pcb_tools = __commonJS({
         }
         return out;
       }
+      function sourceZone(ctx, selected, under) {
+        const doc = ctx.doc;
+        if (selected.length) {
+          if (selected.length !== 1) return null;
+          const it = doc.items.get(selected[0]);
+          return it && it.kind === "zone" ? it : null;
+        }
+        const zones = under.map((id) => doc.items.get(id)).filter((it) => !!it && it.kind === "zone");
+        return zones.length === 1 ? zones[0] : null;
+      }
+      function zoneLayerList(node) {
+        const l = K7.kid(node, "layers");
+        if (l) return l.slice(1).map((v) => K7.str(v));
+        const one2 = K7.kid(node, "layer");
+        return one2 ? [K7.str(one2[1])] : [];
+      }
+      function chainPoints(pts, maxErr = 5e-3) {
+        const out = [];
+        if (!pts) return out;
+        for (let i = 1; i < pts.length; i++) {
+          const c = pts[i];
+          if (!isList6(c)) continue;
+          if (c[0] === "xy") out.push([K7.num(c[1]), K7.num(c[2])]);
+          else if (c[0] === "arc") {
+            const g2 = (k) => {
+              const n22 = K7.kid(c, k);
+              return n22 ? [K7.num(n22[1]), K7.num(n22[2])] : null;
+            };
+            const s = g2("start"), m = g2("mid"), e = g2("end");
+            if (!s || !m || !e) continue;
+            const a = K7.arcFrom3(s, m, e);
+            if (!a) {
+              out.push(s, e);
+              continue;
+            }
+            let sweep = a.anticlockwise ? a.a0 - a.a1 : a.a1 - a.a0;
+            sweep = (sweep % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+            const step = a.r > maxErr ? 2 * Math.acos(1 - maxErr / a.r) : Math.PI / 8;
+            const n2 = Math.max(2, Math.ceil(sweep / step));
+            out.push(s);
+            for (let k = 1; k < n2; k++) {
+              const t = a.a0 + (a.anticlockwise ? -1 : 1) * sweep * k / n2;
+              out.push([r64(a.x + a.r * Math.cos(t)), r64(a.y + a.r * Math.sin(t))]);
+            }
+            out.push(e);
+          }
+        }
+        const dedup = [];
+        for (const p of out) {
+          const q = dedup[dedup.length - 1];
+          if (!q || q[0] !== p[0] || q[1] !== p[1]) dedup.push(p);
+        }
+        while (dedup.length > 1 && dedup[0][0] === dedup[dedup.length - 1][0] && dedup[0][1] === dedup[dedup.length - 1][1]) dedup.pop();
+        return dedup;
+      }
+      function zoneChains(node) {
+        return K7.kids(node, "polygon").map((p) => chainPoints(K7.kid(p, "pts"))).filter((c) => c.length >= 3);
+      }
+      var area32 = (p) => {
+        let a = 0;
+        for (let i = 0, j = p.length - 1; i < p.length; j = i++) a += (p[j][0] + p[i][0]) * (p[j][1] - p[i][1]);
+        return a / 2;
+      };
+      function inside2(p, poly) {
+        let c = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+          const [xi, yi] = poly[i], [xj, yj] = poly[j];
+          if (yi > p[1] !== yj > p[1] && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) c = !c;
+        }
+        return c;
+      }
+      function subtractOutline(chains, cut) {
+        const toPath22 = (p) => p.map((q) => ({ x: q[0], y: q[1] }));
+        const res = differenceD2(chains.map(toPath22), [toPath22(cut)], FillRule2.EvenOdd, 6).map((p) => p.map((q) => [r64(q.x), r64(q.y)])).filter((p) => p.length >= 3);
+        if (!res.length) return [];
+        const outers = res.filter((p) => area32(p) > 0), holes = res.filter((p) => area32(p) < 0);
+        const [O, H] = outers.length >= 1 && (holes.length === 0 || Math.max(...outers.map((p) => Math.abs(area32(p)))) >= Math.max(...holes.map((p) => Math.abs(area32(p))))) ? [outers, holes] : [holes, outers];
+        const out = O.map((outline) => ({ outline, holes: [] }));
+        for (const h of H) {
+          let best = null;
+          for (const o of out) if (inside2(h[0], o.outline) && (!best || Math.abs(area32(o.outline)) < Math.abs(area32(best.outline)))) best = o;
+          (best || out[0]).holes.push(h);
+        }
+        return out;
+      }
+      var xy2 = (p) => ["xy", r64(p[0]), r64(p[1])];
+      function withOutline(node, outline, holes = []) {
+        const n2 = clone3(node);
+        const at2 = n2.findIndex((c) => isList6(c) && c[0] === "polygon");
+        for (let i = n2.length - 1; i > 0; i--) {
+          const c = n2[i];
+          if (isList6(c) && (c[0] === "polygon" || c[0] === "filled_polygon" || c[0] === "fill_segments")) n2.splice(i, 1);
+        }
+        const polys = [outline, ...holes].map((ch) => ["polygon", ["pts", ...ch.map(xy2)]]);
+        n2.splice(at2 > 0 ? Math.min(at2, n2.length) : n2.length, 0, ...polys);
+        const fill = K7.kid(n2, "fill");
+        if (fill && fill[1] === "yes") fill.splice(1, 1);
+        return n2;
+      }
+      function freshUuid(n2) {
+        const u = K7.kid(n2, "uuid") || K7.kid(n2, "tstamp");
+        if (u) u[1] = K7.newUuid();
+        else n2.push(["uuid", K7.newUuid()]);
+      }
+      function uniqueZoneName(doc, base) {
+        const used = /* @__PURE__ */ new Set();
+        for (const it of doc.items.values()) if (it.kind === "zone") {
+          const nm22 = K7.kid(it.node, "name");
+          if (nm22) used.add(K7.str(nm22[1]));
+        }
+        if (!base || !used.has(base)) return base;
+        let root22 = base;
+        const us = base.lastIndexOf("_");
+        if (us >= 0 && /^\d+$/.test(base.slice(us + 1))) root22 = base.slice(0, us);
+        for (let i = 1; ; i++) {
+          const c = `${root22}_${i}`;
+          if (!used.has(c)) return c;
+        }
+      }
+      function similarZoneNode(doc, src, outline) {
+        const n2 = withOutline(src, outline);
+        for (let i = n2.length - 1; i > 0; i--) {
+          const c = n2[i];
+          if (isList6(c) && c[0] === "attr") n2.splice(i, 1);
+        }
+        freshUuid(n2);
+        const nm22 = K7.kid(n2, "name");
+        if (nm22) {
+          const u = uniqueZoneName(doc, K7.str(nm22[1]));
+          if (u) nm22[1] = u;
+          else n2.splice(n2.indexOf(nm22), 1);
+        }
+        return n2;
+      }
+      function zoneCutoutChanges(doc, zone, cut) {
+        const parts = subtractOutline(zoneChains(zone.node), cut);
+        const changes = [];
+        let first = null;
+        for (const p of parts) {
+          const n2 = withOutline(zone.node, p.outline, p.holes);
+          freshUuid(n2);
+          const c = addedChange(doc, n2, netOf3(n2));
+          changes.push(c);
+          if (!first) first = c.id;
+        }
+        changes.push(removedChange(zone));
+        return { changes, first };
+      }
       function drawClick(ctx, hv, t, ev) {
         if (S2.draw && S2.draw.shape !== "garc") {
           const c = constrainDraw(S2.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey)));
@@ -32701,6 +33205,18 @@ var require_pcb_tools = __commonJS({
         if (!S2.draw && t === "thievingzone") {
           const tpl = zoneTemplate(ctx, false, true);
           S2.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: tpl, layer: zoneLayers(tpl)[0] };
+          ctx.requestRender();
+          return;
+        }
+        if (!S2.draw && t === "zone" && S2.zoneMode) {
+          const src = ctx.doc.items.get(S2.zoneMode.src);
+          if (!src) {
+            S2.zoneMode = null;
+            ctx.setTool("select");
+            return;
+          }
+          const layers = zoneLayerList(src.node), active = sizesOf(ctx).activeLayer || S2.layer;
+          S2.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: src.node, layer: S2.zoneMode.mode === "similar" && !layers.includes(active) ? layers[0] : active, zoneMode: S2.zoneMode.mode };
           ctx.requestRender();
           return;
         }
@@ -32857,6 +33373,28 @@ var require_pcb_tools = __commonJS({
         S2.draw = null;
         ctx.requestRender();
         d.pts = polyOutline(d);
+        if (d.template && d.zoneMode) {
+          if (d.pts.length < 3) return;
+          const src = S2.zoneMode && ctx.doc.items.get(S2.zoneMode.src);
+          if (!src) return;
+          if (d.zoneMode === "similar") {
+            const c = addedChange(ctx.doc, similarZoneNode(ctx.doc, src.node, d.pts), netOf3(src.node));
+            ctx.commit([c], "Draw Zone");
+            applySelection(ctx, [c.id]);
+            return;
+          }
+          applySelection(ctx, []);
+          const { changes, first } = zoneCutoutChanges(ctx.doc, src, d.pts);
+          ctx.commit(changes, "Add Zone Cutout");
+          if (first) {
+            S2.zoneMode = { mode: "cutout", src: first };
+            applySelection(ctx, [first]);
+          } else {
+            S2.zoneMode = null;
+            ctx.setTool("select");
+          }
+          return;
+        }
         if (d.template) {
           if (d.pts.length < 3) return;
           const node = JSON.parse(JSON.stringify(d.template)), poly = K7.kid(node, "polygon");
@@ -33123,12 +33661,12 @@ var require_pcb_tools = __commonJS({
       var SILK_RE = /\.(SilkS|Silkscreen)$/;
       var CRTYD_RE = /\.(CrtYd|Courtyard)$/;
       var TEXTISH = /* @__PURE__ */ new Set(["gr_text", "gr_text_box", "text", "property", "fp_text"]);
-      function candidateEntry(doc, id, hidden) {
+      function candidateEntry(doc, id, hidden2) {
         const h = typeof id === "string" ? id.indexOf("#") : -1;
         const item = doc.items.get(h > 0 ? id.slice(0, h) : id);
         if (!item) return null;
         const padIndex = h > 0 ? Number(id.slice(h + 1)) : null;
-        const geoms = (item.geom || []).filter((g2) => !(hidden && g2.layer && hidden.has(g2.layer)) && !g2.padText && !g2.padNum && !g2.noBox && !g2.hole && (padIndex === null || g2.padIndex === padIndex));
+        const geoms = (item.geom || []).filter((g2) => !(hidden2 && g2.layer && hidden2.has(g2.layer)) && !g2.padText && !g2.padNum && !g2.noBox && !g2.hole && (padIndex === null || g2.padIndex === padIndex));
         return { id, item, pad: padIndex !== null, geoms };
       }
       function geomDistance(g2, x, y, maxSlop) {
@@ -33751,6 +34289,7 @@ var require_pcb_tools = __commonJS({
           if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt);
         }
         S2.violations = null;
+        S2.routeQueue = null;
         S2.draw = null;
         S2.drag = null;
         S2.image = null;
@@ -34568,20 +35107,20 @@ var require_pcb_tools = __commonJS({
       var ksub = (a, b) => [a[0] - b[0], a[1] - b[1]];
       var kadd = (a, b) => [a[0] + b[0], a[1] + b[1]];
       function dimRead(node) {
-        const kid22 = (p, k) => p ? K7.kid(p, k) : null, val = (p, k, d) => {
-          const n2 = kid22(p, k);
+        const kid32 = (p, k) => p ? K7.kid(p, k) : null, val = (p, k, d) => {
+          const n2 = kid32(p, k);
           return n2 && n2.length > 1 ? n2[1] : d;
         };
-        const fmt32 = kid22(node, "format"), st = kid22(node, "style"), gt = kid22(node, "gr_text");
-        const xs = K7.kids(kid22(node, "pts") || [], "xy").map((x) => toNm([K7.num(x[1]), K7.num(x[2])]));
-        const ef = kid22(gt, "effects"), font = kid22(ef, "font"), sz = kid22(font, "size"), th = kid22(font, "thickness");
-        const at2 = kid22(gt, "at"), just = kid22(ef, "justify");
+        const fmt32 = kid32(node, "format"), st = kid32(node, "style"), gt = kid32(node, "gr_text");
+        const xs = K7.kids(kid32(node, "pts") || [], "xy").map((x) => toNm([K7.num(x[1]), K7.num(x[2])]));
+        const ef = kid32(gt, "effects"), font3 = kid32(ef, "font"), sz = kid32(font3, "size"), th = kid32(font3, "thickness");
+        const at2 = kid32(gt, "at"), just = kid32(ef, "justify");
         const yesno = (p, k, d) => {
-          const n2 = kid22(p, k);
+          const n2 = kid32(p, k);
           if (!n2) return d;
           return n2.length < 2 ? true : K7.str(n2[1]) !== "no";
         };
-        const ov = kid22(fmt32, "override_value");
+        const ov = kid32(fmt32, "override_value");
         return {
           type: K7.str(val(node, "type", "aligned")),
           start: xs[0] || [0, 0],
@@ -34610,7 +35149,7 @@ var require_pcb_tools = __commonJS({
           textH: Math.round((sz ? K7.num(sz[1]) : 1) * NM),
           textW: Math.round((sz ? K7.num(sz.length > 2 ? sz[2] : sz[1]) : 1) * NM),
           textThick: Math.round((th ? K7.num(th[1]) : 0) * NM),
-          bold: yesno(font, "bold", false),
+          bold: yesno(font3, "bold", false),
           hJustify: just ? just.includes("left") ? "left" : just.includes("right") ? "right" : "center" : "center"
         };
       }
@@ -34740,7 +35279,7 @@ var require_pcb_tools = __commonJS({
       }
       var peqNm = (a, b) => a[0] === b[0] && a[1] === b[1];
       function dimWrite(orig, m) {
-        const node = clone2(orig), mm2 = (v) => r64(v / NM), setKid3 = (p, k, v) => {
+        const node = clone3(orig), mm2 = (v) => r64(v / NM), setKid3 = (p, k, v) => {
           const n2 = K7.kid(p, k);
           if (n2) n2[1] = v;
           return !!n2;
@@ -34802,7 +35341,7 @@ var require_pcb_tools = __commonJS({
           if (key2 === "cbstart" || key2 === "cbend") {
             if (type === "aligned") {
               const base = key2 === "cbstart" ? m.start : m.end, d = ksub(m.end, m.start), L = Math.hypot(d[0], d[1]);
-              if (!L) return clone2(orig);
+              if (!L) return clone3(orig);
               const q = N22(p), n2 = [-d[1] / L, d[0] / L];
               const t = (q[0] - base[0]) * n2[0] + (q[1] - base[1]) * n2[1];
               const fl = [kiRound(n2[0] * t), kiRound(n2[1] * t)];
@@ -34844,7 +35383,7 @@ var require_pcb_tools = __commonJS({
             m.textPos = kadd(m.textPos, ksub(k1, k0));
           } else if (key2 === "knee") {
             const k0 = dimKnee(m), q = N22(raw || p), d = ksub(m.start, m.end), L2 = d[0] * d[0] + d[1] * d[1];
-            if (!L2) return clone2(orig);
+            if (!L2) return clone3(orig);
             const t = ((q[0] - m.end[0]) * d[0] + (q[1] - m.end[1]) * d[1]) / L2, kp = [kiRound(m.end[0] + d[0] * t), kiRound(m.end[1] + d[1] * t)];
             m.leaderLength = kiRound(Math.hypot(kp[0] - m.end[0], kp[1] - m.end[1]));
             const k1 = dimKnee(m);
@@ -34917,7 +35456,7 @@ var require_pcb_tools = __commonJS({
       }
       function deleteChanges(doc, items) {
         const out = [], gens = [], ids = /* @__PURE__ */ new Set();
-        let hidden = 0, alreadyHidden = 0, removed2 = 0;
+        let hidden2 = 0, alreadyHidden = 0, removed2 = 0;
         for (const x of items || []) {
           const it = typeof x === "string" ? doc.items.get(x) : x;
           if (!it || !it.id || !it.kind || ids.has(it.id)) continue;
@@ -34926,7 +35465,7 @@ var require_pcb_tools = __commonJS({
             if (fieldIsHidden(it.node)) alreadyHidden++;
             else {
               out.push(replacedChange(it, hiddenFieldNode(it.node)));
-              hidden++;
+              hidden2++;
             }
             continue;
           }
@@ -34935,7 +35474,7 @@ var require_pcb_tools = __commonJS({
           if (isTuningPattern(it)) gens.push(it);
         }
         if (!removed2) {
-          if (hidden) out.hideLabel = hidden === 1 ? "Hide Field" : "Hide Fields";
+          if (hidden2) out.hideLabel = hidden2 === 1 ? "Hide Field" : "Hide Fields";
           else if (alreadyHidden) out.infoError = "Use the Footprint Properties dialog to remove fields.";
         }
         if (!gens.length) return out;
@@ -35624,6 +36163,13 @@ var require_pcb_tools = __commonJS({
           return false;
         }
         const inputs = {};
+        const set = (k, v) => {
+          const i = inputs[k];
+          if (!i || i.type === "radio") return;
+          const e = i;
+          if (e.type === "checkbox") e.checked = !!v;
+          else e.value = v === void 0 || v === null ? "" : String(v);
+        };
         kd.open({
           title: spec.title,
           width: spec.width || 420,
@@ -35694,6 +36240,20 @@ var require_pcb_tools = __commonJS({
                 body.appendChild(box);
                 continue;
               }
+              if (f2.type === "button") {
+                const b = document.createElement("button");
+                b.type = "button";
+                b.className = "btn";
+                b.textContent = f2.label;
+                b.dataset.k = f2.k;
+                if (f2.tip) b.title = f2.tip;
+                b.style.cssText = "margin:6px 0 2px;justify-self:start";
+                b.addEventListener("click", () => {
+                  if (spec.change) spec.change(f2.k, true, set);
+                });
+                body.appendChild(b);
+                continue;
+              }
               const row2 = document.createElement("label");
               row2.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0";
               if (f2.tip) row2.title = f2.tip;
@@ -35705,8 +36265,8 @@ var require_pcb_tools = __commonJS({
                 inp = document.createElement("k-select");
                 for (const o of f2.options) {
                   const op = document.createElement("option");
-                  op.value = isList5(o) ? o[0] : o;
-                  op.textContent = isList5(o) ? o[1] : o;
+                  op.value = isList6(o) ? o[0] : o;
+                  op.textContent = isList6(o) ? o[1] : o;
                   inp.appendChild(op);
                 }
                 inp.value = f2.value;
@@ -35725,8 +36285,21 @@ var require_pcb_tools = __commonJS({
               inp.dataset.k = f2.k;
               inp.style.cssText += ";font:inherit;background:var(--panel,#0A1421);color:inherit;border:1px solid var(--line,#24374E);border-radius:3px;padding:3px 5px";
               inputs[f2.k] = inp;
-              row2.appendChild(inp);
+              if (f2.unit) {
+                const w = document.createElement("span");
+                w.style.cssText = "display:flex;gap:6px;align-items:center";
+                inp.style.flex = "1";
+                inp.style.minWidth = "0";
+                const u = document.createElement("span");
+                u.textContent = f2.unit;
+                w.append(inp, u);
+                row2.appendChild(w);
+              } else row2.appendChild(inp);
               body.appendChild(row2);
+              if (spec.change) {
+                const k = f2.k, el = inp;
+                el.addEventListener(f2.type === "select" || f2.type === "check" ? "change" : "input", () => spec.change(k, el.type === "checkbox" ? el.checked : el.value, set));
+              }
             }
           },
           ok() {
@@ -35794,7 +36367,7 @@ var require_pcb_tools = __commonJS({
           ],
           apply(v) {
             if (ctx.viewOnly) return;
-            const node = clone2(fp.node);
+            const node = clone3(fp.node);
             const drill22 = /^\s*$/.test(v.drill) ? "" : /x/i.test(v.drill) ? v.drill.split(/x/i).map((s) => parseFloat(s)) : parseFloat(v.drill);
             H.setPad(node, index, { number: v.number, type: v.type, shape: v.shape, w: num0(v.w, info.w), h: num0(v.h, info.h), rot: num0(v.rot, 0) + frot, drill: drill22, layers: v.layers.split(/\s+/).filter(Boolean), net: v.net, maskMargin: isNaN(v.maskMargin) ? null : v.maskMargin, rratio: isNaN(v.rratio) ? null : v.rratio }, doc);
             ctx.commit([replacedChange(fp, node)], "pad");
@@ -35882,8 +36455,8 @@ var require_pcb_tools = __commonJS({
         return out;
       }
       function otherCopperLayers(ctx, active) {
-        const hidden = appGlobal(() => editorState().hiddenLayers, null);
-        return copperOf(ctx.doc).filter((l) => l !== active && !(hidden && hidden.has(l)));
+        const hidden2 = appGlobal(() => editorState().hiddenLayers, null);
+        return copperOf(ctx.doc).filter((l) => l !== active && !(hidden2 && hidden2.has(l)));
       }
       function otherLayerSnap(ctx, mm2, active) {
         let best = null, bd = Infinity;
@@ -36074,9 +36647,9 @@ var require_pcb_tools = __commonJS({
         const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / L2));
         if (t < 1e-4 || t > 1 - 1e-4) return [];
         const m = [r64(a[0] + t * (b[0] - a[0])), r64(a[1] + t * (b[1] - a[1]))];
-        const first = clone2(seg.node);
+        const first = clone3(seg.node);
         K7.kid(first, "end").splice(1, 2, m[0], m[1]);
-        const second = clone2(seg.node);
+        const second = clone3(seg.node);
         K7.kid(second, "start").splice(1, 2, m[0], m[1]);
         const u = K7.kid(second, "uuid");
         if (u) second.splice(second.indexOf(u), 1);
@@ -36116,8 +36689,8 @@ var require_pcb_tools = __commonJS({
           for (const c of tracks()) if (c.kind === "segment") {
             const [a, b] = c.anchors;
             const layer = layerOfC(c);
-            const inside2 = (p) => conds.find((o) => o.kind === "pad" && o.layers.has(layer) && boxesTouch(o.bbox, [p[0], p[1], p[0], p[1]], 0) && coreDist(o.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= shapeOffset(o.shape) + 1e-9);
-            const pa = inside2(a), pb = inside2(b);
+            const inside22 = (p) => conds.find((o) => o.kind === "pad" && o.layers.has(layer) && boxesTouch(o.bbox, [p[0], p[1], p[0], p[1]], 0) && coreDist(o.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= shapeOffset(o.shape) + 1e-9);
+            const pa = inside22(a), pb = inside22(b);
             if (pa && pb && pa === pb) {
               remove.add(c.id);
               report3("track_in_pad", "Remove track inside pad", [c.id]);
@@ -36153,7 +36726,7 @@ var require_pcb_tools = __commonJS({
               if (!joint) continue;
               if (Math.abs(along2(joint[2]) - along2(joint[1])) <= Math.abs(along2(joint[0]) - along2(joint[1])) + EPS && lo > -EPS && hi < L + EPS) continue;
               if (touchesPt(joint[0], layerOfC(p), p) && conds.filter(alive).some((o) => o !== p && o !== q && o.layers.has(layerOfC(p)) && (o.kind !== "segment" ? shapeGap(o.shape, { t: "circle", x: joint[0][0], y: joint[0][1], r: 0 }) <= EPS : o.anchors.some((r) => near(r, joint[0]))))) continue;
-              const merged = clone2(pn);
+              const merged = clone3(pn);
               K7.kid(merged, "start").splice(1, 2, r64(joint[1][0]), r64(joint[1][1]));
               K7.kid(merged, "end").splice(1, 2, r64(joint[2][0]), r64(joint[2][1]));
               replace.set(p.id, merged);
@@ -36201,6 +36774,451 @@ var require_pcb_tools = __commonJS({
           if (it) out.push(removedChange(it));
         }
         return out;
+      }
+      function itemRatsnestAnchors(doc, id) {
+        const out = [];
+        for (const l of ratsnest(doc, netlist2(doc))) {
+          if (l.ids[0] === id) out.push(l.a.slice());
+          else if (l.ids[1] === id) out.push(l.b.slice());
+        }
+        return out;
+      }
+      function routeSelected(ctx, mode2) {
+        if (S2.route) return false;
+        const ids = Array.from(selectionIds(ctx));
+        if (!ids.length) return false;
+        applySelection(ctx, []);
+        S2.routeQueue = { items: ids, idx: 0, anchors: [], mode: mode2, layer: S2.layer };
+        if (S2.modTool !== "route") ctx.setTool("route");
+        routeNext(ctx);
+        return true;
+      }
+      function routeNext(ctx) {
+        const q = S2.routeQueue;
+        if (!q || S2.route) return false;
+        for (; ; ) {
+          if (!q.anchors.length) {
+            if (q.idx >= q.items.length) {
+              S2.routeQueue = null;
+              return false;
+            }
+            const id = q.items[q.idx++];
+            if (!ctx.doc.items.has(id)) continue;
+            q.anchors = itemRatsnestAnchors(ctx.doc, id);
+            continue;
+          }
+          const p = q.anchors.shift();
+          if (!ratsnest(ctx.doc, netlist2(ctx.doc)).some((l) => samePt(l.a, p) || samePt(l.b, p))) continue;
+          if (S2.layer !== q.layer) setLayer(ctx, q.layer);
+          const hv = hoverPoint(ctx, p, true);
+          routeClick(ctx, { x: p[0], y: p[1], snap: hv.snap }, p);
+          if (!S2.route) continue;
+          if (q.mode === "auto") {
+            attemptFinish(ctx);
+            if (S2.route) return true;
+            continue;
+          }
+          if (q.mode === "otherEnd") continueFromEnd(ctx);
+          return true;
+        }
+      }
+      function touching(doc, gone) {
+        const ends = [];
+        const endsOf = (it) => {
+          if (it.kind === "via") {
+            const a = pt4(it.node, "at");
+            return a ? [{ p: a, layer: null }] : [];
+          }
+          const l = it.layer || null;
+          const out2 = [];
+          for (const k of ["start", "end"]) {
+            const q = pt4(it.node, k);
+            if (q) out2.push({ p: q, layer: l });
+          }
+          return out2;
+        };
+        for (const id of gone) {
+          const it = doc.items.get(id);
+          if (it) ends.push(...endsOf(it));
+        }
+        const out = [];
+        for (const it of doc.items.values()) {
+          if (gone.has(it.id) || it.kind !== "segment" && it.kind !== "arc" && it.kind !== "via") continue;
+          if (endsOf(it).some((e) => ends.some((g2) => samePt(g2.p, e.p) && (!g2.layer || !e.layer || g2.layer === e.layer)))) out.push(it.id);
+        }
+        return out;
+      }
+      function unrouteSegment(ctx) {
+        const ids = Array.from(selectionIds(ctx)).filter((id) => {
+          const it = ctx.doc.items.get(id);
+          return !!it && (it.kind === "segment" || it.kind === "arc" || it.kind === "via" || it.kind === "generated");
+        });
+        if (!ids.length) return false;
+        const gone = new Set(ids);
+        for (const id of ids) {
+          const it = ctx.doc.items.get(id);
+          if (it.kind === "generated") for (const c of K_members(it)) gone.add(c);
+        }
+        const after2 = touching(ctx.doc, gone);
+        applySelection(ctx, []);
+        ctx.commit(deleteChanges(ctx.doc, Array.from(gone).filter((id) => ctx.doc.items.has(id))), "Unroute Segment");
+        applySelection(ctx, after2.filter((id) => ctx.doc.items.has(id)));
+        ctx.requestRender();
+        return true;
+      }
+      function K_members(it) {
+        const out = [];
+        for (const c of it.node) if (Array.isArray(c) && c[0] === "members") for (const m of c.slice(1)) out.push(String(m));
+        return out;
+      }
+      setRouteQueueNext(routeNext);
+      function itemWord(it) {
+        if (it.kind === "footprint") return it.ref || "";
+        const T = {
+          segment: "track",
+          arc: "track",
+          via: "via",
+          zone: "zone",
+          gr_line: "graphic",
+          gr_rect: "graphic",
+          gr_circle: "graphic",
+          gr_arc: "graphic",
+          gr_poly: "graphic",
+          gr_curve: "graphic",
+          gr_text: "text",
+          gr_text_box: "text box",
+          dimension: "dimension",
+          image: "reference image",
+          table: "table",
+          group: "group",
+          generated: "generator",
+          target: "target",
+          point: "point",
+          barcode: "barcode"
+        };
+        return T[it.kind] || it.kind;
+      }
+      var moveIndividuallyText = (it, i, n2) => `Click to place ${itemWord(it)} (item ${i} of ${n2})
+Press <esc> to cancel all; double-click to finish`;
+      function moveWithReference(ctx, ids, hover) {
+        pickInteractively(ctx, "point", "Select reference point for move...", (res) => {
+          if (!res || !Array.isArray(res)) {
+            if (hover) applySelection(ctx, []);
+            return;
+          }
+          applySelection(ctx, ids);
+          beginCarryMove(ctx, { ids, origin: res.slice(), hover });
+        });
+        return true;
+      }
+      function copyWithReference(ctx, ids, hover) {
+        pickInteractively(ctx, "point", "Select reference point for the copy...", (res) => {
+          const at2 = ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
+          if (!res || !Array.isArray(res)) {
+            statusPopup(ctx, "Copy canceled", at2, 800);
+            if (hover) applySelection(ctx, []);
+            return;
+          }
+          clipSet(ctx, clipboardText(ctx.doc, ids, res.slice()));
+          statusPopup(ctx, "Selection copied", at2, 800);
+          if (ctx.setStatus) ctx.setStatus("Selection copied");
+          if (hover) applySelection(ctx, []);
+          else applySelection(ctx, ids);
+        });
+        return true;
+      }
+      function moveIndividually(ctx, ids) {
+        const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => !!it && it.kind !== "group");
+        if (!items.length) return true;
+        const seq = { ids: items.map((it) => it.id), idx: 0, base: /* @__PURE__ */ new Map(), committed: false };
+        for (const it of items) seq.base.set(it.id, clone3(it.node));
+        S2.moveSeq = seq;
+        pickUp(ctx, seq);
+        return true;
+      }
+      function pickUp(ctx, seq) {
+        const id = seq.ids[seq.idx], it = ctx.doc.items.get(id);
+        if (!it) {
+          nextItem(ctx, seq);
+          return;
+        }
+        applySelection(ctx, [id]);
+        if (!beginCarryMove(ctx, { ids: [id], origin: anchorOf(it) }) || !S2.move) {
+          S2.moveSeq = null;
+          return;
+        }
+        const m = S2.move;
+        m.amend = seq.committed;
+        m.after = (placed, wrote) => {
+          if (S2.moveSeq !== seq) return;
+          if (wrote) seq.committed = true;
+          if (!placed) {
+            cancelAll(ctx, seq);
+            return;
+          }
+          nextItem(ctx, seq);
+        };
+        S2.popup = { text: moveIndividuallyText(it, seq.idx + 1, seq.ids.length), at: ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx), until: Number.MAX_SAFE_INTEGER };
+        ctx.requestRender();
+      }
+      function nextItem(ctx, seq) {
+        if (++seq.idx < seq.ids.length) {
+          pickUp(ctx, seq);
+          return;
+        }
+        S2.moveSeq = null;
+        S2.popup = null;
+        applySelection(ctx, seq.ids.filter((id) => ctx.doc.items.has(id)));
+        ctx.requestRender();
+      }
+      function cancelAll(ctx, seq) {
+        S2.moveSeq = null;
+        S2.popup = null;
+        if (seq.committed) {
+          const back = seq.ids.slice(0, seq.idx).filter((id) => ctx.doc.items.has(id)).map((id) => replacedChange(ctx.doc.items.get(id), seq.base.get(id)));
+          if (back.length) ctx.commit(back, "cancel", { amend: true, discard: true });
+        }
+        applySelection(ctx, []);
+        ctx.requestRender();
+      }
+      function skipMoveItem(ctx) {
+        const seq = S2.moveSeq, m = S2.move;
+        if (!seq || !m || !m.after) return false;
+        m.after = void 0;
+        finishSelectMove(ctx, false);
+        nextItem(ctx, seq);
+        return true;
+      }
+      function interactiveOffset(ctx, ids, hover) {
+        const done = () => {
+          if (hover) applySelection(ctx, []);
+        };
+        const round = () => {
+          pickInteractively(ctx, "point", "Select the reference point on the item to move.", (a) => {
+            if (!a || !Array.isArray(a)) {
+              done();
+              return;
+            }
+            pickInteractively(ctx, "point", "Select the point to define the new offset from.", (b) => {
+              if (!b || !Array.isArray(b)) {
+                round();
+                return;
+              }
+              const P = a, Q = b;
+              const off = [r64(P[0] - Q[0]), r64(P[1] - Q[1])];
+              openOffsetDialog(ctx, off, (o) => {
+                const mv2 = [Q[0] - P[0] + o[0], Q[1] - P[1] + o[1]];
+                const ch = offsetChanges(ctx, ids, mv2);
+                if (ch.length) ctx.commit(ch, "Set Relative Position Interactively");
+                ctx.requestRender();
+                round();
+              }, round);
+            });
+          });
+        };
+        round();
+        return true;
+      }
+      function offsetChanges(ctx, ids, mv2) {
+        const items = ids.map((id) => ctx.doc.items.get(id)).filter((it) => !!it);
+        if (!items.length || !mv2[0] && !mv2[1]) return [];
+        return moveChanges(ctx.doc, ids, mv2[0], mv2[1]);
+      }
+      function userLengthUnits(u) {
+        return u === "mil" || u === "mils" ? { per: 0.0254, dp: 2, label: "mils" } : u === "in" ? { per: 25.4, dp: 5, label: "in" } : { per: 1, dp: 4, label: "mm" };
+      }
+      var OffsetItemState = class _OffsetItemState {
+        constructor(original, units, polar = true) {
+          this.original = original;
+          this.polar = polar;
+          this.stateX = 0;
+          this.stateY = 0;
+          this.stateRadius = 0;
+          this.stateTheta = 0;
+          this.x = "0";
+          this.y = "0";
+          this.u = userLengthUnits(units);
+          this.x = this.showLen(original[0]);
+          this.y = this.showLen(original[1]);
+          if (this.polar) this.setPolar(true);
+        }
+        showLen(mm2) {
+          return String(+(mm2 / this.u.per).toFixed(this.u.dp));
+        }
+        showDeg(d) {
+          return String(+d.toFixed(4));
+        }
+        /** an entry's value: mm for a length, degrees for the polar angle (empty / unparsable = 0, OnTextFocusLost) */
+        readLen(t) {
+          const v = parseFloat(t);
+          return isFinite(v) ? +(v * this.u.per).toFixed(9) : 0;
+        }
+        readDeg(t) {
+          const v = parseFloat(t);
+          return isFinite(v) ? v : 0;
+        }
+        get labels() {
+          return this.polar ? ["Distance:", "Angle:"] : ["Offset X:", "Offset Y:"];
+        }
+        get units() {
+          return this.polar ? [this.u.label, "deg"] : [this.u.label, this.u.label];
+        }
+        get tips() {
+          return this.polar ? ["Reset to the current distance from the reference position.", "Reset to the current angle from the reference position."] : ["Reset to the current X offset from the reference position.", "Reset to the current Y offset from the reference position."];
+        }
+        static toPolar(x, y) {
+          const r = Math.hypot(x, y);
+          return [r, r !== 0 ? Math.atan2(y, x) * 180 / Math.PI : 0];
+        }
+        /** OnPolarChanged */
+        setPolar(newPolar) {
+          const xOffset = this.readLen(this.x), yOffset = this.polar && !newPolar ? this.readDeg(this.y) : this.readLen(this.y);
+          this.polar = newPolar;
+          if (newPolar) {
+            if (xOffset !== this.stateX || yOffset !== this.stateY) {
+              this.stateX = xOffset;
+              this.stateY = yOffset;
+              const [r, q] = _OffsetItemState.toPolar(xOffset, yOffset);
+              this.x = this.showLen(r);
+              this.stateRadius = this.readLen(this.x);
+              this.y = this.showDeg(q);
+              this.stateTheta = this.readDeg(this.y);
+            } else {
+              this.x = this.showLen(this.stateRadius);
+              this.y = this.showDeg(this.stateTheta);
+            }
+          } else if (xOffset !== this.stateRadius || yOffset !== this.stateTheta) {
+            this.stateRadius = xOffset;
+            this.stateTheta = yOffset;
+            const t = yOffset * Math.PI / 180;
+            this.x = this.showLen(xOffset * Math.cos(t));
+            this.stateX = this.readLen(this.x);
+            this.y = this.showLen(xOffset * Math.sin(t));
+            this.stateY = this.readLen(this.y);
+          } else {
+            this.x = this.showLen(this.stateX);
+            this.y = this.showLen(this.stateY);
+          }
+        }
+        /** OnClear: the Reset button beside an entry */
+        clear(which) {
+          const [r, q] = _OffsetItemState.toPolar(this.original[0], this.original[1]);
+          if (which === "x") {
+            this.stateX = this.original[0];
+            this.stateRadius = this.readLen(this.showLen(r));
+            this.x = this.polar ? this.showLen(this.stateRadius) : this.showLen(this.stateX);
+          } else {
+            this.stateY = this.original[1];
+            this.stateTheta = this.readDeg(this.showDeg(q));
+            this.y = this.polar ? this.showDeg(this.stateTheta) : this.showLen(this.stateY);
+          }
+        }
+        /** TransferDataFromWindow: the offset in mm */
+        result() {
+          if (this.polar) {
+            const r = this.readLen(this.x), t = this.readDeg(this.y) * Math.PI / 180;
+            return [r64(r * Math.cos(t)), r64(r * Math.sin(t))];
+          }
+          return [r64(this.readLen(this.x)), r64(this.readLen(this.y))];
+        }
+      };
+      function openOffsetDialog(ctx, off, ok2, cancel) {
+        const st = new OffsetItemState(off, sizeUnits());
+        const kd = KD();
+        if (!kd || typeof document === "undefined") {
+          return openForm({
+            title: "Offset Item",
+            width: 360,
+            fields: [
+              { k: "x", label: st.labels[0], type: "text", value: st.x, unit: st.units[0] },
+              { k: "y", label: st.labels[1], type: "text", value: st.y, unit: st.units[1] },
+              { k: "polar", label: "Use polar coordinates", type: "check", value: st.polar }
+            ],
+            apply: (v) => {
+              st.x = String(v.x);
+              st.y = String(v.y);
+              st.polar = !!v.polar;
+              ok2(st.result());
+            }
+          });
+        }
+        const mk2 = (tag, css, text2) => {
+          const e = document.createElement(tag);
+          if (css) e.style.cssText = css;
+          if (text2 !== void 0) e.textContent = text2;
+          return e;
+        };
+        const inputCss = "font:inherit;background:var(--panel,#0A1421);color:inherit;border:1px solid var(--line,#24374E);border-radius:3px;padding:3px 5px;min-width:0";
+        kd.open({
+          title: "Offset Item",
+          width: 360,
+          build(body) {
+            const grid = mk2("div", "display:grid;grid-template-columns:auto 1fr auto auto;gap:6px 8px;align-items:center;margin:4px 0 10px");
+            const row2 = (k) => {
+              const lab = mk2("span");
+              const inp = mk2("input", inputCss);
+              inp.type = "text";
+              inp.dataset.k = k;
+              const unit22 = mk2("span");
+              const reset = mk2("button");
+              reset.type = "button";
+              reset.className = "btn";
+              reset.textContent = "Reset";
+              reset.dataset.k = k === "x" ? "clearX" : "clearY";
+              inp.addEventListener("input", () => {
+                st[k] = inp.value;
+              });
+              inp.addEventListener("blur", () => {
+                if (!inp.value.trim()) {
+                  inp.value = "0";
+                  st[k] = "0";
+                }
+              });
+              reset.addEventListener("click", () => {
+                st.clear(k);
+                sync();
+              });
+              grid.append(lab, inp, unit22, reset);
+              return { lab, inp, unit: unit22, reset };
+            };
+            const rx = row2("x"), ry = row2("y");
+            const polarBox = mk2("input", "width:auto;margin:0");
+            polarBox.type = "checkbox";
+            polarBox.dataset.k = "polar";
+            polarBox.checked = st.polar;
+            const polarLab = mk2("label", "display:flex;gap:6px;align-items:center");
+            polarLab.append(polarBox, document.createTextNode("Use polar coordinates"));
+            polarBox.addEventListener("change", () => {
+              st.setPolar(polarBox.checked);
+              sync();
+            });
+            const sync = () => {
+              const [lx, ly] = st.labels, [ux, uy] = st.units, [tx, ty] = st.tips;
+              rx.lab.textContent = lx;
+              ry.lab.textContent = ly;
+              rx.unit.textContent = ux;
+              ry.unit.textContent = uy;
+              rx.reset.title = tx;
+              ry.reset.title = ty;
+              rx.inp.value = st.x;
+              ry.inp.value = st.y;
+            };
+            sync();
+            body.append(grid, polarLab);
+            setTimeout(() => {
+              rx.inp.focus();
+              rx.inp.select();
+            }, 0);
+          },
+          ok() {
+            ok2(st.result());
+            return true;
+          },
+          cancel() {
+            if (cancel) cancel();
+          }
+        });
+        return true;
       }
       var VIA_SIZES = [[0.6, 0.3], [0.8, 0.4], [1, 0.5], [1.2, 0.6], [1.6, 0.8]];
       var ACTIONS = {};
@@ -36558,6 +37576,77 @@ var require_pcb_tools = __commonJS({
         });
       });
       alias("moveExact", "moveExactly");
+      act("moveWithReference", "Move with Reference...", "", (ctx) => {
+        if (S2.route || S2.move || !canEdit(ctx)) return true;
+        const sel = requestSelection(ctx, { rerun: (c) => runAction("moveWithReference", c) });
+        if (!sel) return true;
+        return moveWithReference(ctx, sel.ids, sel.hover);
+      }, { tip: "Moves the selected item(s) with a specified starting point" });
+      act("copyWithReference", "Copy with Reference...", "", (ctx) => {
+        if (S2.route || S2.move) return true;
+        const sel = requestSelection(ctx, { locks: false, rerun: (c) => runAction("copyWithReference", c) });
+        if (!sel) return true;
+        return copyWithReference(ctx, sel.ids, sel.hover);
+      }, { tip: "Copy selected item(s) to clipboard with a specified starting point" });
+      act("moveIndividually", "Move Individually", "Ctrl+M", (ctx) => {
+        if (S2.route || S2.move || !canEdit(ctx)) return true;
+        const sel = requestSelection(ctx, { rerun: (c) => runAction("moveIndividually", c) });
+        if (!sel) return true;
+        return moveIndividually(ctx, sel.ids.filter((id) => {
+          const it = ctx.doc.items.get(id);
+          return it && it.kind !== "group" && !topParentOf(ctx.doc, id);
+        }).concat(sel.ids.filter((id) => ctx.doc.items.get(id)?.kind === "group" && !topParentOf(ctx.doc, id))));
+      }, { tip: "Moves the selected items one-by-one" });
+      act("skip", "Skip", "Tab", (ctx) => skipMoveItem(ctx), { menu: false, tip: "Skip to next item" });
+      act("interactiveOffsetTool", "Interactive Offset Tool", "", (ctx) => {
+        if (S2.route || S2.move || !canEdit(ctx)) return true;
+        const sel = requestSelection(ctx, { rerun: (c) => runAction("interactiveOffsetTool", c) });
+        if (!sel) return true;
+        return interactiveOffset(ctx, sel.ids, sel.hover);
+      }, { tip: "Interactive tool for offsetting items by exact amounts" });
+      function footprintRefChoices(doc) {
+        const out = [];
+        for (const it of doc.items.values()) if (it.kind === "footprint") out.push(`${it.ref || ""}    ( ${it.value || ""} )`);
+        return out.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+      }
+      function footprintByRef(doc, text2) {
+        const want = String(text2 || "").trim().toLowerCase();
+        if (!want) return null;
+        for (const it of doc.items.values()) if (it.kind === "footprint" && (it.ref || "").toLowerCase() === want) return it;
+        return null;
+      }
+      act("getAndPlace", "Get and Move Footprint", "T", (ctx) => {
+        if (S2.route || S2.move) return true;
+        if (appGlobal(() => editorState().DOC_TYPE === "footprint", false) || !canEdit(ctx)) return true;
+        const choices = footprintRefChoices(ctx.doc);
+        const refOf2 = (c) => c.split(" ")[0];
+        return openForm({
+          title: "Get and Move Footprint",
+          width: 400,
+          fields: [
+            { k: "ref", label: "Reference designator:", type: "text", value: "" },
+            { k: "list", label: "Available footprints:", type: "select", value: "", options: choices.map((c) => [refOf2(c), c.replace(/ /g, "\xA0")]) }
+          ],
+          // a wxChoice keeps the spaces an HTML option collapses
+          change: (k, v, set) => {
+            if (k === "list") set("ref", v);
+            else if (k === "ref") {
+              const e = String(v).trim().toLowerCase();
+              const hit5 = choices.find((c) => refOf2(c).toLowerCase() === e);
+              set("list", hit5 ? refOf2(hit5) : "");
+            }
+          },
+          apply: (v) => {
+            getAndPlaceRef(ctx, v.ref);
+          }
+        });
+      });
+      function getAndPlaceRef(ctx, ref) {
+        const fp = footprintByRef(ctx.doc, ref);
+        if (!fp) return false;
+        applySelection(ctx, [fp.id]);
+        return beginCarryMove(ctx, { ids: [fp.id], origin: [fp.x || 0, fp.y || 0] });
+      }
       act("positionRelative", "Position Relative To\u2026", "Shift+P", (ctx) => {
         if (!canEdit(ctx)) return true;
         const sel = requestSelection(ctx, { rerun: (c) => runAction("positionRelative", c) });
@@ -36606,6 +37695,13 @@ var require_pcb_tools = __commonJS({
         if (S2.route) return true;
         if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg2);
         if (!canEdit(ctx)) return true;
+        const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+        if (fr) {
+          const ch2 = rotateFieldChange(ctx.doc, fr, deg2);
+          if (ch2) ctx.commit([ch2], "rotate");
+          ctx.requestRender();
+          return true;
+        }
         const sel = requestSelection(ctx, { rerun: (c2) => rotateBy(c2, deg2) });
         if (!sel) return true;
         const c = modificationPoint(ctx, sel.items, true);
@@ -36620,9 +37716,19 @@ var require_pcb_tools = __commonJS({
       act("rotateSelectionCw", "Rotate Clockwise", "", (ctx) => rotateBy(ctx, -90));
       alias("rotateCw", "rotateSelectionCw");
       function flipBy(ctx) {
-        if (S2.route) return true;
+        if (S2.route) {
+          attemptFinish(ctx);
+          return true;
+        }
         if (moveInFlight(ctx)) return moveTransform(ctx, "flip");
         if (!canEdit(ctx)) return true;
+        const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+        if (fr) {
+          const ch2 = flipFieldChange(ctx.doc, fr);
+          if (ch2) ctx.commit([ch2], "flip");
+          ctx.requestRender();
+          return true;
+        }
         const sel = requestSelection(ctx, { rerun: (c) => flipBy(c) });
         if (!sel) return true;
         const items = sel.items, one2 = items.length === 1 && items[0].kind !== "gr_rect" && items[0].kind !== "table";
@@ -36985,6 +38091,31 @@ var require_pcb_tools = __commonJS({
         else ctx.toast("Differential Pair Dimensions: dialogs are unavailable here");
         return true;
       }, Object.assign({ tip: "Open Differential Pair Dimension settings" }, ROUTER_ACTION));
+      act("routerAttemptFinish", "Attempt Finish", "F", (ctx) => S2.route ? (attemptFinish(ctx), true) : false, Object.assign({ tip: "Attempts to complete current route to nearest ratsnest end." }, ROUTER_ACTION));
+      act("routerContinueFromEnd", "Route From Other End", "Ctrl+E", (ctx) => S2.route ? (continueFromEnd(ctx), true) : false, Object.assign({ tip: "Commits current segments and starts next segment from nearest ratsnest end." }, ROUTER_ACTION));
+      act("routerRouteSelected", "Route Selected", "Shift+X", (ctx) => {
+        if (!canEdit(ctx)) return true;
+        routeSelected(ctx, "manual");
+        return true;
+      }, { menu: false, tip: "Sequentially route selected items from ratsnest anchor" });
+      act("routerRouteSelectedFromEnd", "Route Selected From Other End", "Shift+E", (ctx) => {
+        if (!canEdit(ctx)) return true;
+        routeSelected(ctx, "otherEnd");
+        return true;
+      }, { menu: false, tip: "Sequentially route selected items to ratsnest anchor" });
+      act("routerAutorouteSelected", "Attempt Finish Selected (Autoroute)", "Shift+F", (ctx) => {
+        if (!canEdit(ctx)) return true;
+        routeSelected(ctx, "auto");
+        return true;
+      }, { menu: false, tip: "Sequentially trigger routing and attempt to finish all selected items" });
+      act("unrouteSegment", "Unroute Segment", "Backspace", (ctx) => S2.route || S2.draw || S2.move || !canEdit(ctx) ? false : unrouteSegment(ctx), { menu: false, tip: "Unroutes the selected track segment and selects the connected tracks" });
+      act("layerPairPresetsCycle", "Cycle Layer Pair Presets", "Shift+V", (ctx) => {
+        cycleLayerPairPresets(ctx);
+        return true;
+      }, { menu: false, tip: "Cycle between preset layer pairs" });
+      act("magneticSnapToggle", "Toggle Snapping Between Active and All Layers", "Shift+S", (ctx) => setSnapMode(ctx, "toggle"), { menu: false, tip: "Toggles between snapping on all visible layers and only the active area" });
+      act("magneticSnapActiveLayer", "Snap to Objects on the Active Layer Only", "", (ctx) => setSnapMode(ctx, "active"), { menu: false, tip: "Enables snapping to objects on the active layer only" });
+      act("magneticSnapAllLayers", "Snap to Objects on All Layers", "", (ctx) => setSnapMode(ctx, "all"), { menu: false, tip: "Enables snapping to objects on all visible layers" });
       act("routerUndoLastSegment", "Undo Last Segment", "", (ctx) => routingOnly(ctx, () => undoRouteLeg(ctx)), Object.assign({ tip: "Walks the current track back one segment." }, ROUTER_ACTION));
       act("selectLayerPair", "Set Layer Pair...", "", (ctx) => {
         if (routingDialogs.layerPair) routingDialogs.layerPair(ctx);
@@ -36996,6 +38127,10 @@ var require_pcb_tools = __commonJS({
         else ctx.toast("Edit Pre-defined Sizes: dialogs are unavailable here");
         return true;
       }, { menu: "-" });
+      act("gridOrigin", "Grid Origin...", "", (ctx) => {
+        openGridOrigin(ctx);
+        return true;
+      }, { menu: false, tip: "Set the grid origin point" });
       act("gridResetOrigin", "Reset Grid Origin", "", (ctx) => {
         sizesOf(ctx).setGridOrigin([0, 0]);
         ctx.toast("Grid origin reset");
@@ -37246,17 +38381,22 @@ var require_pcb_tools = __commonJS({
       act("toggleExcludeFromBOM", "Exclude from Bill of Materials", "", (ctx) => {
         const ids = selectionOrToast(ctx, "Select footprints first");
         if (!ids) return true;
-        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "exclude_from_bom"), "exclude from BOM");
+        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "exclude_from_bom"), "Toggle Attribute");
       });
       act("toggleExcludeFromPosFiles", "Exclude from Position Files", "", (ctx) => {
         const ids = selectionOrToast(ctx, "Select footprints first");
         if (!ids) return true;
-        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "exclude_from_pos_files"), "exclude from position files");
+        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "exclude_from_pos_files"), "Toggle Attribute");
+      });
+      act("toggleExcludeFromSim", "Exclude from Simulation", "", (ctx) => {
+        const ids = selectionOrToast(ctx, "Select footprints first");
+        if (!ids) return true;
+        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "exclude_from_sim"), "Toggle Attribute");
       });
       act("toggleDNP", "Do Not Populate", "", (ctx) => {
         const ids = selectionOrToast(ctx, "Select footprints first");
         if (!ids) return true;
-        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "dnp"), "dnp");
+        return commitSel(ctx, footprintAttrChanges(ctx.doc, ids, "dnp"), "Toggle Attribute");
       });
       for (const [id, how, label] of [["leftJustify", "left", "Left Justify"], ["centerJustify", "center", "Center Justify"], ["rightJustify", "right", "Right Justify"]])
         act(id, label, "", (ctx) => {
@@ -37287,6 +38427,20 @@ var require_pcb_tools = __commonJS({
           if (!ids) return true;
           return commitSel(ctx, zonePriorityChanges(ctx.doc, ids, how), label.toLowerCase());
         });
+      function zoneModeAction(mode2) {
+        return (ctx) => {
+          if (!canEdit(ctx) || S2.route || S2.move) return true;
+          const sel = Array.from(selectionIds(ctx));
+          const z = sourceZone(ctx, sel, sel.length ? [] : cursorCandidates(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx)));
+          if (!z) return true;
+          if (!sel.length) applySelection(ctx, [z.id]);
+          S2.zoneModeNext = { mode: mode2, src: z.id };
+          ctx.setTool("zone");
+          return true;
+        };
+      }
+      act("drawZoneCutout", "Add a Zone Cutout", "Shift+C", zoneModeAction("cutout"), { tip: "Add a cutout to an existing zone or rule area" });
+      act("drawSimilarZone", "Add a Similar Zone", "Ctrl+Shift+.", zoneModeAction("similar"), { tip: "Add a zone with the same settings as an existing zone" });
       act("zoneDuplicate", "Duplicate Zone onto Layer\u2026", "", (ctx) => {
         const ids = selectionOrToast(ctx, "Select a zone first");
         if (!ids) return true;
@@ -37298,7 +38452,7 @@ var require_pcb_tools = __commonJS({
         return openForm({ title: "Duplicate Zone", fields: [{ k: "layer", label: "Layer", type: "select", value: zoneLayers(zones[0].node)[0] || "F.Cu", options: copperOf(ctx.doc) }], apply: (v) => {
           const out = [];
           for (const z of zones) {
-            const node = clone2(z.node);
+            const node = clone3(z.node);
             const u = K7.kid(node, "uuid");
             if (u) node.splice(node.indexOf(u), 1);
             for (const fp of K7.kids(node, "filled_polygon")) node.splice(node.indexOf(fp), 1);
@@ -37411,7 +38565,7 @@ var require_pcb_tools = __commonJS({
         const out = [];
         for (const z of zones) {
           if (!z || z.kind !== "zone") continue;
-          const node = clone2(z.node);
+          const node = clone3(z.node);
           let changed = false;
           for (let i = node.length - 1; i > 0; i--) if (Array.isArray(node[i]) && node[i][0] === "filled_polygon") {
             node.splice(i, 1);
@@ -37466,6 +38620,147 @@ var require_pcb_tools = __commonJS({
       Object.freeze(ACTIONS);
       function setRoutingDialogsImpl(d) {
         routingDialogs = d;
+      }
+      function openGridOrigin(ctx) {
+        const R2 = sizesOf(ctx), u = sizeUnits(), per = u === "mil" ? 0.0254 : u === "in" ? 25.4 : 1, dp = u === "mil" ? 2 : u === "in" ? 5 : 4;
+        const show = (mm2) => +(mm2 / per).toFixed(dp), back = (v) => Math.round(v * per * 1e6) / 1e6;
+        const [gx, gy] = R2.gridOrigin;
+        return openForm({
+          title: "Grid Origin",
+          width: 300,
+          fields: [
+            { k: "x", label: "X:", type: "num", value: show(gx), unit: u === "mil" ? "mils" : u },
+            { k: "y", label: "Y:", type: "num", value: show(gy), unit: u === "mil" ? "mils" : u },
+            { k: "reset", label: "Reset", type: "button" }
+          ],
+          change: (k, _v, set) => {
+            if (k === "reset") {
+              set("x", 0);
+              set("y", 0);
+            }
+          },
+          apply: (v) => {
+            const x = isNaN(v.x) ? gx : back(v.x), y = isNaN(v.y) ? gy : back(v.y);
+            R2.setGridOrigin([x, y]);
+            ctx.requestRender();
+          }
+        });
+      }
+      function unescapeKiCad(s) {
+        const map = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "	", return: "\n", brace: "{" };
+        return String(s).replace(/\{(\w+)\}/g, (m, k) => k in map ? map[k] : m);
+      }
+      var isWordChar = (c) => /[\p{L}\p{N}_]/u.test(c);
+      function wildcardMatch(text2, pat) {
+        const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*").replace(/\?/g, "[\\s\\S]") + "$", "u");
+        return re.test(text2);
+      }
+      function edaMatches(aText, o) {
+        let text2 = String(aText ?? ""), search = String(o.findString ?? "");
+        if (!o.matchCase) {
+          text2 = text2.toUpperCase();
+          search = search.toUpperCase();
+        }
+        if (o.wholeWord) {
+          if (!search) return false;
+          let ii = 0;
+          while (ii < text2.length) {
+            let next = text2.indexOf(search, ii);
+            if (next < 0) return false;
+            ii = next;
+            next += search.length;
+            const startOK = ii === 0 || !isWordChar(text2[ii - 1]);
+            const endOK = next === text2.length || !isWordChar(text2[next]);
+            if (startOK && endOK) return true;
+            ii++;
+          }
+          return false;
+        }
+        if (o.wildcards) return wildcardMatch(text2, search);
+        return text2.includes(search);
+      }
+      function fieldsOf2(fp) {
+        const out = [];
+        for (const p of K7.kids(fp, "property")) out.push({ name: K7.str(p[1]), text: K7.str(p[2]), hidden: fieldIsHidden(p) });
+        for (const t of K7.kids(fp, "fp_text")) {
+          const k = K7.str(t[1]);
+          if (k === "reference" || k === "value") out.push({ name: k === "reference" ? "Reference" : "Value", text: K7.str(t[2]), hidden: fieldIsHidden(t) });
+        }
+        return out;
+      }
+      var fieldMatches = (f2, o) => (!f2.hidden || !!o.hiddenFields) && edaMatches(unescapeKiCad(f2.text), o);
+      function netNameCmp(a, b) {
+        const x = Array.from(a), y = Array.from(b), n2 = Math.min(x.length, y.length);
+        for (let i = 0; i < n2; i++) {
+          const d = x[i].codePointAt(0) - y[i].codePointAt(0);
+          if (d) return d;
+        }
+        return x.length - y.length;
+      }
+      function boardFindHits(doc, o, src = {}) {
+        const hits2 = [];
+        if (!o.findString) return hits2;
+        const on = (v) => v !== false;
+        const items = Array.from(doc.items.values());
+        if (on(o.texts) || on(o.values) || on(o.references)) {
+          for (const it of items) {
+            if (it.kind !== "footprint") continue;
+            const fields = fieldsOf2(it.node);
+            const ref = fields.find((f2) => f2.name === "Reference"), val = fields.find((f2) => f2.name === "Value");
+            let found = false;
+            if (on(o.references) && ref && fieldMatches(ref, o)) found = true;
+            if (!found && on(o.values) && val && fieldMatches(val, o)) found = true;
+            if (!found && on(o.texts)) for (const t of K7.kids(it.node, "fp_text")) {
+              const k = K7.str(t[1]);
+              if (k !== "reference" && k !== "value" && edaMatches(unescapeKiCad(K7.str(t[2])), o)) {
+                found = true;
+                break;
+              }
+            }
+            if (!found && on(o.texts)) {
+              for (const f2 of fields) if (fieldMatches(f2, o)) {
+                found = true;
+                break;
+              }
+            }
+            if (found) hits2.push({ kind: "item", id: it.id, what: "footprint" });
+          }
+          if (on(o.texts)) {
+            for (const it of items) if (it.kind === "gr_text" && edaMatches(unescapeKiCad(K7.str(it.node[1])), o)) hits2.push({ kind: "item", id: it.id, what: "text" });
+            for (const it of items) if (it.kind === "zone") {
+              const nm22 = K7.kid(it.node, "name");
+              if (edaMatches(nm22 ? K7.str(nm22[1]) : "", o)) hits2.push({ kind: "item", id: it.id, what: "zone" });
+            }
+          }
+        }
+        if (on(o.markers)) (src.markers || []).forEach((m, index) => {
+          if (edaMatches(m.text || m.title || "", o)) hits2.push({ kind: "marker", index, x: m.x, y: m.y, text: m.text });
+        });
+        if (on(o.nets)) {
+          for (const n2 of [...src.nets || []].sort((a, b) => netNameCmp(a.name, b.name))) if (edaMatches(n2.name, o)) hits2.push({ kind: "net", name: n2.name, code: n2.code });
+        }
+        return hits2;
+      }
+      function findStep(pos, count, forward, fresh, wrap) {
+        if (!count) return { pos: -1, endReached: false };
+        let it = fresh ? forward ? 0 : count : pos, end = false;
+        if (forward) {
+          if (it !== count && !fresh) it++;
+          if (it === count) {
+            if (wrap) it = 0;
+            else {
+              end = true;
+              it--;
+            }
+          }
+        } else {
+          if (it === 0) {
+            if (wrap) it = count;
+            else end = true;
+          }
+          if (it !== 0) it--;
+        }
+        return { pos: it, endReached: end };
       }
       var TOOLS = [
         { id: "route", label: "Route track", key: "X", cursor: "PENCIL", icon: '<path d="M4 18h6l4-4h6"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="14" r="1.5"/>' },
@@ -37536,11 +38831,11 @@ var require_pcb_tools = __commonJS({
         for (const pts of heads) for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rt.width]);
         return out;
       }
-      var str5 = (v) => v === void 0 || v === null ? "" : String(v);
+      var str6 = (v) => v === void 0 || v === null ? "" : String(v);
       function eachChildUuid(n2, fn) {
         for (let i = 1; i < n2.length; i++) {
           const c = n2[i];
-          if (!isList5(c)) continue;
+          if (!isList6(c)) continue;
           if ((c[0] === "uuid" || c[0] === "tstamp") && c.length > 1) fn(c);
           else eachChildUuid(c, fn);
         }
@@ -37551,7 +38846,7 @@ var require_pcb_tools = __commonJS({
       function setLocked2(n2, on) {
         for (let i = n2.length - 1; i > 0; i--) {
           const c = n2[i];
-          if (c === "locked" || isList5(c) && c[0] === "locked") n2.splice(i, 1);
+          if (c === "locked" || isList6(c) && c[0] === "locked") n2.splice(i, 1);
         }
         if (on) {
           const lay = K7.kid(n2, "layer");
@@ -37561,7 +38856,7 @@ var require_pcb_tools = __commonJS({
       function stripNets(n2) {
         for (let i = n2.length - 1; i > 0; i--) {
           const c = n2[i];
-          if (isList5(c) && c[0] === "net") n2.splice(i, 1);
+          if (isList6(c) && c[0] === "net") n2.splice(i, 1);
         }
       }
       function scaleOf3(n2) {
@@ -37582,10 +38877,10 @@ var require_pcb_tools = __commonJS({
         const n2 = K7.cloneNode(boardFp);
         const uuidMap = {};
         const own = ownUuid(n2);
-        const link = own ? str5(own[1]) : "";
+        const link = own ? str6(own[1]) : "";
         const fresh = (u) => {
           const id = K7.newUuid();
-          uuidMap[id] = str5(u[1]);
+          uuidMap[id] = str6(u[1]);
           u[0] = "uuid";
           u[1] = id;
         };
@@ -37593,30 +38888,30 @@ var require_pcb_tools = __commonJS({
         const back = {};
         eachChildUuid(n2, (u) => {
           fresh(u);
-          back[uuidMap[str5(u[1])]] = str5(u[1]);
+          back[uuidMap[str6(u[1])]] = str6(u[1]);
         });
         for (const g2 of K7.kids(n2, "group")) {
           const m = K7.kid(g2, "members");
           if (m) for (let i = 1; i < m.length; i++) {
-            const nu = back[str5(m[i])];
+            const nu = back[str6(m[i])];
             if (nu) m[i] = nu;
           }
         }
         setLocked2(n2, false);
-        for (const c of n2) if (isList5(c) && c[0] === "pad") {
+        for (const c of n2) if (isList6(c) && c[0] === "pad") {
           setLocked2(c, false);
           stripNets(c);
         }
-        for (const c of n2) if (isList5(c) && c[0] === "zone") stripNets(c);
+        for (const c of n2) if (isList6(c) && c[0] === "zone") stripNets(c);
         const [, , rot32] = K7.atOf(n2);
         setFootprintAt(n2, 0, 0, rot32);
-        if (str5((K7.kid(n2, "layer") || [])[1]) !== "F.Cu") flipFootprintNode(n2);
+        if (str6((K7.kid(n2, "layer") || [])[1]) !== "F.Cu") flipFootprintNode(n2);
         const a = K7.atOf(n2)[2];
         if (a) rotateFootprintNode(n2, -a);
         setScale(n2, 1, 1);
         if (!K7.kid(n2, "version")) n2.splice(2, 0, ["version", boardVersion2 || 20260728], ["generator", "pcbnew"]);
-        const refP = K7.kids(n2, "property").find((p) => str5(p[1]) === "Reference");
-        return { node: n2, uuidMap, link, reference: refP ? str5(refP[2]) : "" };
+        const refP = K7.kids(n2, "property").find((p) => str6(p[1]) === "Reference");
+        return { node: n2, uuidMap, link, reference: refP ? str6(refP[2]) : "" };
       }
       function orthoAlign(to, from, tol = 1e-4) {
         if (!to.length || to.length !== from.length) return null;
@@ -37631,7 +38926,7 @@ var require_pcb_tools = __commonJS({
       function uniquePads(fp) {
         const out = /* @__PURE__ */ new Map(), dup = /* @__PURE__ */ new Set();
         for (const p of K7.kids(fp, "pad")) {
-          const num72 = str5(p[1]);
+          const num72 = str6(p[1]);
           if (dup.has(num72)) continue;
           if (out.has(num72)) {
             out.delete(num72);
@@ -37662,7 +38957,7 @@ var require_pcb_tools = __commonJS({
       function boardCopyFromEditor(editorFp, uuidMap) {
         const n2 = K7.cloneNode(editorFp);
         const fix = (u) => {
-          const id = str5(u[1]);
+          const id = str6(u[1]);
           u[0] = "uuid";
           u[1] = uuidMap && uuidMap[id] ? uuidMap[id] : K7.newUuid();
         };
@@ -37670,34 +38965,298 @@ var require_pcb_tools = __commonJS({
         if (own) fix(own);
         const back = {};
         eachChildUuid(n2, (u) => {
-          const was = str5(u[1]);
+          const was = str6(u[1]);
           fix(u);
-          back[was] = str5(u[1]);
+          back[was] = str6(u[1]);
         });
         for (const g2 of K7.kids(n2, "group")) {
           const m = K7.kid(g2, "members");
           if (m) for (let i = 1; i < m.length; i++) {
-            const nu = back[str5(m[i])];
+            const nu = back[str6(m[i])];
             if (nu) m[i] = nu;
           }
         }
         for (let i = n2.length - 1; i > 1; i--) {
           const c = n2[i];
-          if (isList5(c) && (c[0] === "version" || c[0] === "generator" || c[0] === "generator_version")) n2.splice(i, 1);
+          if (isList6(c) && (c[0] === "version" || c[0] === "generator" || c[0] === "generator_version")) n2.splice(i, 1);
         }
         return n2;
       }
-      var field2 = (fp, name) => K7.kids(fp, "property").find((p) => str5(p[1]) === name) || K7.kids(fp, "fp_text").find((p) => str5(p[1]) === name.toLowerCase()) || null;
-      var isRefOrValue = (p) => p[0] === "property" && (str5(p[1]) === "Reference" || str5(p[1]) === "Value") || p[0] === "fp_text" && (str5(p[1]) === "reference" || str5(p[1]) === "value");
+      var field2 = (fp, name) => K7.kids(fp, "property").find((p) => str6(p[1]) === name) || K7.kids(fp, "fp_text").find((p) => str6(p[1]) === name.toLowerCase()) || null;
       var COPPER2 = /(^|\*|\.)Cu$|^\*\.Cu$|^F&B\.Cu$/;
-      function exchangeFootprint(existing, aNew, opts = {}) {
+      var MANDATORY2 = ["Reference", "Value", "Datasheet", "Description"];
+      var SHAPES = /^fp_(line|rect|circle|arc|poly|curve)$/;
+      var isField = (c) => c[0] === "property" || c[0] === "fp_text" && (str6(c[1]) === "reference" || str6(c[1]) === "value");
+      var fieldName2 = (c) => c[0] === "fp_text" ? str6(c[1]) === "reference" ? "Reference" : "Value" : str6(c[1]);
+      var isRefOrValue = (c) => isField(c) && (fieldName2(c) === "Reference" || fieldName2(c) === "Value");
+      var extraFields = (fp) => fp.filter((c) => isList6(c) && isField(c) && !isRefOrValue(c) && !/^ki_/.test(fieldName2(c)));
+      var graphical = (fp) => fp.filter((c) => isList6(c) && (c[0] === "fp_text" && !isField(c) || c[0] === "fp_text_box" || SHAPES.test(String(c[0])) || c[0] === "dimension" || c[0] === "image" || c[0] === "table"));
+      var typeOf2 = (c) => SHAPES.test(String(c[0])) ? "shape" : String(c[0]);
+      var textOf = (n2) => str6(n2[2]);
+      function levenshteinRatio(a, b) {
+        const m = a.length, n2 = b.length;
+        if (!m && !n2) return 1;
+        let prev = Array.from({ length: n2 + 1 }, (_, j) => j);
+        for (let i = 1; i <= m; i++) {
+          const cur2 = [i];
+          for (let j = 1; j <= n2; j++) cur2[j] = Math.min(prev[j] + 1, cur2[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+          prev = cur2;
+        }
+        return 1 - prev[n2] / Math.max(m, n2);
+      }
+      var atXY = (n2) => {
+        const a = K7.kid(n2, "at");
+        return [K7.num(a && a[1]), K7.num(a && a[2])];
+      };
+      var atAngle = (n2) => {
+        const a = K7.kid(n2, "at");
+        return K7.num(a && a[3]);
+      };
+      function textSimilarity(a, b) {
+        let s = 1;
+        if (kidText(a, "effects") !== kidText(b, "effects") || atAngle(a) !== atAngle(b) || !!K7.kid(a, "unlocked") !== !!K7.kid(b, "unlocked")) s *= 0.9;
+        const pa = atXY(a), pb = atXY(b);
+        if (Math.abs(pa[0] - pb[0]) > 1e-6 || Math.abs(pa[1] - pb[1]) > 1e-6) s *= 0.9;
+        return s * levenshteinRatio(textOf(a), textOf(b));
+      }
+      function fieldSimilarity(a, b) {
+        const na = fieldName2(a), nb = fieldName2(b);
+        if (MANDATORY2.includes(na) || MANDATORY2.includes(nb)) return na === nb ? 1 : 0;
+        return na === nb ? 1 : textSimilarity(a, b);
+      }
+      function itemSimilarity(a, b) {
+        if (typeOf2(a) !== typeOf2(b)) return 0;
+        if (a[0] === "fp_text" || a[0] === "fp_text_box") return textSimilarity(a, b);
+        let s = a[0] === b[0] ? 1 : 0.9;
+        const keys = /* @__PURE__ */ new Set();
+        for (const n2 of [a, b]) for (const c of n2) if (isList6(c) && c[0] !== "uuid" && c[0] !== "tstamp") keys.add(String(c[0]));
+        for (const k of keys) if (kidText(a, k) !== kidText(b, k)) s *= 0.9;
+        return s;
+      }
+      function matchBySimilarity(olds, news, score) {
+        const cand = [];
+        olds.forEach((a, o) => news.forEach((b, w) => {
+          const s = score(a, b);
+          if (s > 0) cand.push({ o, w, s });
+        }));
+        cand.sort((x, y) => y.s - x.s || x.o - y.o || x.w - y.w);
+        const uo = /* @__PURE__ */ new Set(), uw = /* @__PURE__ */ new Set(), out = [];
+        for (const c of cand) {
+          if (uo.has(c.o) || uw.has(c.w)) continue;
+          uo.add(c.o);
+          uw.add(c.w);
+          out.push([olds[c.o], news[c.w]]);
+        }
+        return out;
+      }
+      function copyKid(n2, from, key2, before = "uuid") {
+        const src = K7.kid(from, key2), cur2 = K7.kid(n2, key2);
+        if (cur2 && src) {
+          n2[n2.indexOf(cur2)] = K7.cloneNode(src);
+          return;
+        }
+        if (cur2) {
+          n2.splice(n2.indexOf(cur2), 1);
+          return;
+        }
+        if (src) {
+          const at2 = K7.kid(n2, before);
+          n2.splice(at2 ? n2.indexOf(at2) : n2.length, 0, K7.cloneNode(src));
+        }
+      }
+      var layerName22 = (n2) => str6((K7.kid(n2, "layer") || [])[1]);
+      var knockout = (n2) => (K7.kid(n2, "layer") || []).slice(2).includes("knockout");
+      function setKnockout(n2, on) {
+        const l = K7.kid(n2, "layer");
+        if (!l) return;
+        const i = l.indexOf("knockout");
+        if (on && i < 0) l.push("knockout");
+        else if (!on && i > 1) l.splice(i, 1);
+      }
+      function setLayerName(n2, name) {
+        const l = K7.kid(n2, "layer");
+        if (l) l[1] = name;
+        else {
+          const at2 = K7.kid(n2, "uuid");
+          n2.splice(at2 ? n2.indexOf(at2) : n2.length, 0, ["layer", name]);
+        }
+      }
+      function hidden(n2) {
+        const h = K7.kid(n2, "hide");
+        if (h) return str6(h[1]) !== "no";
+        if (n2.includes("hide")) return true;
+        const e = K7.kid(n2, "effects");
+        return !!e && (e.includes("hide") || str6((K7.kid(e, "hide") || ["", "no"])[1]) === "yes");
+      }
+      function setHidden(n2, on) {
+        for (let i = n2.length - 1; i > 0; i--) {
+          const c = n2[i];
+          if (c === "hide" || isList6(c) && c[0] === "hide") n2.splice(i, 1);
+        }
+        const e = K7.kid(n2, "effects");
+        if (e) for (let i = e.length - 1; i > 0; i--) {
+          const c = e[i];
+          if (c === "hide" || isList6(c) && c[0] === "hide") e.splice(i, 1);
+        }
+        if (on) {
+          const at2 = K7.kid(n2, "uuid") || K7.kid(n2, "effects");
+          n2.splice(at2 ? n2.indexOf(at2) : n2.length, 0, ["hide", "yes"]);
+        }
+      }
+      var font = (n2) => {
+        const e = K7.kid(n2, "effects");
+        return e ? K7.kid(e, "font") : null;
+      };
+      var justify = (n2) => {
+        const e = K7.kid(n2, "effects");
+        return e ? kidText(e, "justify") : "";
+      };
+      function setAtXYA(n2, x, y, a) {
+        let at2 = K7.kid(n2, "at");
+        if (!at2) {
+          at2 = ["at", 0, 0];
+          const l = K7.kid(n2, "layer");
+          n2.splice(l ? n2.indexOf(l) : 3, 0, at2);
+        }
+        const had = at2.length >= 4;
+        at2[1] = r64(x);
+        at2[2] = r64(y);
+        if (a || had) at2[3] = a;
+        else at2.length = 3;
+      }
+      var norm3604 = (a) => (a % 360 + 360) % 360;
+      var isLockedText = (n2) => {
+        const l = K7.kid(n2, "locked");
+        return !!l && str6(l[1]) !== "no";
+      };
+      function processTextItem(src, dest, c, resetText, resetLayers, resetEffects, resetPositions) {
+        if (resetText) c.updated = c.updated || textOf(src) !== textOf(dest);
+        else dest[2] = src[2];
+        if (resetLayers) c.updated = c.updated || layerName22(src) !== layerName22(dest) || hidden(src) !== hidden(dest);
+        else {
+          setLayerName(dest, layerName22(src));
+          setHidden(dest, hidden(src));
+        }
+        const origPos = atXY(dest);
+        if (resetEffects) {
+          const fs2 = font(src), fd = font(dest);
+          c.updated = c.updated || justify(src) !== justify(dest) || (fs2 ? kidText(fs2, "size") : "") !== (fd ? kidText(fd, "size") : "") || (fs2 ? kidText(fs2, "thickness") : "") !== (fd ? kidText(fd, "thickness") : "") || knockout(src) !== knockout(dest);
+        } else {
+          let origAngle = norm3604(atAngle(dest));
+          copyKid(dest, src, "effects", "");
+          copyKid(dest, src, "unlocked", "layer");
+          if (origAngle >= 180 && !K7.kid(dest, "unlocked")) origAngle -= 180;
+          setAtXYA(dest, origPos[0], origPos[1], origAngle);
+          setKnockout(dest, knockout(src));
+        }
+        if (resetPositions) {
+          const sp = atXY(src);
+          c.updated = c.updated || Math.abs(sp[0] - origPos[0]) > 1e-6 || Math.abs(sp[1] - origPos[1]) > 1e-6 || atAngle(src) !== atAngle(dest);
+          setAtXYA(dest, origPos[0], origPos[1], atAngle(dest));
+        } else {
+          const sp = atXY(src);
+          const p = rotator2(-c.angleShift)(sp[0] - c.posShift[0], sp[1] - c.posShift[1]);
+          setAtXYA(dest, p[0], p[1], atAngle(src));
+        }
+        for (let i = dest.length - 1; i > 0; i--) {
+          const k = dest[i];
+          if (isList6(k) && k[0] === "locked") dest.splice(i, 1);
+        }
+        if (isLockedText(src)) {
+          const at2 = K7.kid(dest, "at");
+          dest.splice(at2 ? dest.indexOf(at2) : 3, 0, ["locked", "yes"]);
+        }
+        setUuidFrom(dest, src);
+      }
+      function setUuidFrom(dest, src) {
+        const su = ownUuid(src);
+        if (!su) return;
+        const du = ownUuid(dest);
+        if (du) {
+          du[0] = "uuid";
+          du[1] = su[1];
+        } else dest.push(["uuid", su[1]]);
+      }
+      function freshUuid2(n2) {
+        const u = ownUuid(n2);
+        if (u) u[1] = K7.newUuid();
+      }
+      function applyScale(n2, sx, sy) {
+        if (K7.kid(n2, "transform")) {
+          setScale(n2, sx, sy);
+          return;
+        }
+        if (sx === 1 && sy === 1) return;
+        const [x, y, a] = K7.atOf(n2);
+        const at2 = K7.kid(n2, "at");
+        const i = at2 ? n2.indexOf(at2) : 3;
+        if (at2) n2.splice(i, 1);
+        n2.splice(i, 0, ["transform", ["translate", x, y], ["rotate", a], ["scale", sx, sy]]);
+      }
+      var attrFlags2 = (n2) => (K7.kid(n2, "attr") || []).slice(1).map(str6).filter((f2) => f2 !== "allow_soldermask_bridges").sort().join(" ");
+      var maskBridges = (n2) => (K7.kid(n2, "attr") || []).slice(1).map(str6).includes("allow_soldermask_bridges");
+      function setAttr(n2, flags) {
+        const cur2 = K7.kid(n2, "attr");
+        if (!flags.length) {
+          if (cur2) n2.splice(n2.indexOf(cur2), 1);
+          return;
+        }
+        const node = ["attr", ...flags];
+        if (cur2) {
+          n2[n2.indexOf(cur2)] = node;
+          return;
+        }
+        const before = n2.findIndex((c, i) => i > 1 && isList6(c) && ["fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_text", "fp_text_box", "pad", "zone", "group", "model", "embedded_files"].includes(String(c[0])));
+        n2.splice(before > 0 ? before : n2.length, 0, node);
+      }
+      var FP_CLEARANCE = ["clearance", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio", "zone_connect"];
+      var PAD_CLEARANCE = ["clearance", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "solder_paste_ratio", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_gap"];
+      var ITEM_KEYS = /* @__PURE__ */ new Set(["fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_text", "fp_text_box", "pad", "zone", "group", "model", "embedded_files", "dimension", "image", "table", "point"]);
+      function insertFpKid(n2, kid32) {
+        const i = n2.findIndex((c, j) => j > 1 && isList6(c) && ITEM_KEYS.has(String(c[0])));
+        n2.splice(i > 0 ? i : n2.length, 0, kid32);
+      }
+      function copyFpKid(n2, from, key2) {
+        const src = K7.kid(from, key2), cur2 = K7.kid(n2, key2);
+        if (cur2 && src) n2[n2.indexOf(cur2)] = K7.cloneNode(src);
+        else if (cur2) n2.splice(n2.indexOf(cur2), 1);
+        else if (src) insertFpKid(n2, K7.cloneNode(src));
+      }
+      function canon(n2, depth = 0) {
+        if (!isList6(n2)) return JSON.stringify(n2);
+        const l = n2;
+        if (l[0] === "at" && l.length === 4 && K7.num(l[3]) === 0) return canon(l.slice(0, 3), depth);
+        if (depth > 0) return K7.serialize(l);
+        const atoms = l.filter((c) => !isList6(c)).map((c) => canon(c)), lists = l.filter((c) => isList6(c)).map((c) => canon(c, depth + 1)).sort();
+        return "(" + atoms.concat(lists).join(" ") + ")";
+      }
+      function canonical2(n2) {
+        return n2.slice(2).filter((c) => !(isList6(c) && (c[0] === "version" || c[0] === "generator" || c[0] === "generator_version"))).map((c) => canon(c)).sort().join("\n");
+      }
+      var EXCHANGE_DEFAULTS = {
+        matchPadPositions: true,
+        deleteExtraTexts: true,
+        resetTextLayers: true,
+        resetTextEffects: true,
+        resetTextPositions: true,
+        resetTextContent: true,
+        resetFabricationAttrs: true,
+        resetClearanceOverrides: true,
+        reset3DModels: true,
+        resetTransform: false
+      };
+      function exchangeFootprint(existing, aNew, o = {}) {
+        const opt = Object.assign({}, EXCHANGE_DEFAULTS, o);
         const n2 = K7.cloneNode(aNew);
+        const tc = { posShift: [0, 0], angleShift: 0, updated: false };
         const [ex, ey, eo] = K7.atOf(existing);
-        if (str5((K7.kid(n2, "layer") || [])[1]) !== str5((K7.kid(existing, "layer") || [])[1])) flipFootprintNode(n2);
+        if (layerName22(n2) !== layerName22(existing)) flipFootprintNode(n2);
         let px = ex, py = ey, orient = eo, shifted = false;
-        if (opts.matchPadPositions !== false) {
+        if (opt.matchPadPositions) {
           const s = footprintShift(existing, n2);
           if (s) {
+            tc.posShift = s.shift;
+            tc.angleShift = s.angle;
             px = r64(px + s.shift[0]);
             py = r64(py + s.shift[1]);
             orient += s.angle;
@@ -37707,9 +39266,11 @@ var require_pcb_tools = __commonJS({
         const [, , no] = K7.atOf(n2);
         setFootprintAt(n2, px, py, no);
         if (orient - no) rotateFootprintNode(n2, orient - no);
-        const [sx, sy] = scaleOf3(existing);
-        setScale(n2, sx, sy);
-        setLocked2(n2, !!(K7.kid(existing, "locked") || existing.includes("locked")) && str5((K7.kid(existing, "locked") || ["", "yes"])[1]) !== "no");
+        if (!opt.resetTransform) {
+          const [sx, sy] = scaleOf3(existing), [nx, ny] = scaleOf3(n2);
+          if (sx !== nx || sy !== ny) applyScale(n2, sx, sy);
+        }
+        setLocked2(n2, !!(K7.kid(existing, "locked") || existing.includes("locked")) && str6((K7.kid(existing, "locked") || ["", "yes"])[1]) !== "no");
         const eu = ownUuid(existing), nu = ownUuid(n2);
         if (eu) {
           if (nu) nu[1] = eu[1];
@@ -37717,61 +39278,207 @@ var require_pcb_tools = __commonJS({
         }
         const oldRef = field2(existing, "Reference"), newRef = field2(n2, "Reference");
         const oldVal = field2(existing, "Value"), newVal = field2(n2, "Value");
-        const keepUuid = (o, w) => {
-          if (!o || !w) return;
-          const ou = ownUuid(o), wu = ownUuid(w);
-          if (ou && wu) wu[1] = ou[1];
-          else if (ou) w.push(["uuid", ou[1]]);
-        };
-        keepUuid(oldRef, newRef);
-        keepUuid(oldVal, newVal);
-        if (oldRef && newRef) newRef[2] = oldRef[2];
-        const libName = str5(existing[1]).split(":").pop();
-        if (oldVal && newVal && str5(oldVal[2]) !== libName) newVal[2] = oldVal[2];
+        copyFpKid(n2, existing, "height");
         const pairs = matchPads(K7.kids(existing, "pad"), K7.kids(n2, "pad"), K7.atOf(existing), K7.atOf(n2));
-        const newPads = K7.kids(n2, "pad");
+        const matched = /* @__PURE__ */ new Set();
         for (const [op, np] of pairs) {
-          const ou = ownUuid(op), wu = ownUuid(np);
-          if (ou) {
-            if (wu) wu[1] = ou[1];
-            else np.push(["uuid", ou[1]]);
-          }
-          for (const key2 of ["pinfunction", "pintype"]) {
-            const o = K7.kid(op, key2), w = K7.kid(np, key2);
-            if (w) np.splice(np.indexOf(w), 1);
-            if (o) {
-              const at2 = K7.kid(np, "uuid");
-              np.splice(at2 ? np.indexOf(at2) : np.length, 0, K7.cloneNode(o));
-            }
+          matched.add(np);
+          setUuidFrom(np, op);
+          for (const key2 of ["pinfunction", "pintype"]) copyKid(np, op, key2);
+          if (!opt.resetClearanceOverrides) {
+            for (const key2 of PAD_CLEARANCE) if (K7.kid(op, key2) || K7.kid(np, key2)) copyKid(np, op, key2);
           }
           stripNets(np);
-          const onCopper = (K7.kid(np, "layers") || []).slice(1).some((l) => COPPER2.test(str5(l)));
+          const onCopper = (K7.kid(np, "layers") || []).slice(1).some((l) => COPPER2.test(str6(l)));
           const onet = K7.kid(op, "net");
           if (onCopper && onet) {
             const pf = K7.kid(np, "pinfunction") || K7.kid(np, "pintype") || K7.kid(np, "uuid");
             np.splice(pf ? np.indexOf(pf) : np.length, 0, K7.cloneNode(onet));
           }
         }
-        const taken = new Set(pairs.map(([, np]) => str5((ownUuid(np) || [])[1])));
-        for (const np of newPads) if (!pairs.some((pp) => pp[1] === np)) {
+        for (const np of K7.kids(n2, "pad")) if (!matched.has(np)) {
           stripNets(np);
-          const u = ownUuid(np);
-          if (u && taken.has(str5(u[1]))) u[1] = K7.newUuid();
+          freshUuid2(np);
         }
-        void isRefOrValue;
-        return { node: n2, shifted };
+        const oldDraw = graphical(existing), newDraw = graphical(n2);
+        const drawPairs = matchBySimilarity(oldDraw, newDraw, itemSimilarity);
+        const oldToNewText = /* @__PURE__ */ new Map();
+        for (const [a, b] of drawPairs) {
+          setUuidFrom(b, a);
+          if (a[0] === "fp_text" && b[0] === "fp_text") oldToNewText.set(a, b);
+        }
+        for (const b of newDraw) if (!drawPairs.some((pp) => pp[1] === b)) freshUuid2(b);
+        for (const key2 of ["zone", "group", "point"]) {
+          const prs = matchBySimilarity(K7.kids(existing, key2), K7.kids(n2, key2), itemSimilarity);
+          for (const [a, b] of prs) setUuidFrom(b, a);
+          for (const b of K7.kids(n2, key2)) if (!prs.some((pp) => pp[1] === b)) freshUuid2(b);
+        }
+        const oldFields = extraFields(existing), newFields = extraFields(n2);
+        const fieldPairs = matchBySimilarity(oldFields, newFields, fieldSimilarity);
+        const oldToNewField = /* @__PURE__ */ new Map();
+        for (const [a, b] of fieldPairs) {
+          oldToNewField.set(a, b);
+          setUuidFrom(b, a);
+        }
+        for (const b of newFields) if (!fieldPairs.some((pp) => pp[1] === b)) freshUuid2(b);
+        const handled = /* @__PURE__ */ new Set();
+        const insertItem = (c) => {
+          const i = n2.findIndex((k, j) => j > 1 && isList6(k) && (k[0] === "pad" || k[0] === "zone" || k[0] === "group" || k[0] === "model" || k[0] === "embedded_files"));
+          n2.splice(i > 0 ? i : n2.length, 0, c);
+        };
+        for (const ot of oldDraw) {
+          if (ot[0] !== "fp_text") continue;
+          const nt = oldToNewText.get(ot);
+          if (nt) {
+            handled.add(nt);
+            processTextItem(ot, nt, tc, opt.resetTextContent, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions);
+          } else if (opt.deleteExtraTexts) tc.updated = true;
+          else {
+            const c = K7.cloneNode(ot);
+            handled.add(c);
+            insertItem(c);
+          }
+        }
+        if (graphical(n2).some((c) => c[0] === "fp_text" && !handled.has(c))) tc.updated = true;
+        if (oldRef && newRef) processTextItem(oldRef, newRef, tc, false, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions);
+        const libName = str6(existing[1]).split(":").pop();
+        if (oldVal && newVal) processTextItem(oldVal, newVal, tc, textOf(oldVal) === libName, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions);
+        const handledFields = /* @__PURE__ */ new Set();
+        const insertField2 = (c) => {
+          let last = -1;
+          n2.forEach((k, j) => {
+            if (isList6(k) && isField(k)) last = j;
+          });
+          n2.splice(last > 0 ? last + 1 : n2.length, 0, c);
+        };
+        for (const of2 of oldFields) {
+          const nf2 = oldToNewField.get(of2);
+          if (nf2) {
+            handledFields.add(nf2);
+            processTextItem(of2, nf2, tc, opt.resetTextContent, opt.resetTextLayers, opt.resetTextEffects, opt.resetTextPositions);
+          } else if (opt.deleteExtraTexts) tc.updated = true;
+          else {
+            const c = K7.cloneNode(of2);
+            freshUuid2(c);
+            handledFields.add(c);
+            insertField2(c);
+          }
+        }
+        if (extraFields(n2).some((c) => !handledFields.has(c))) tc.updated = true;
+        if (opt.resetFabricationAttrs) {
+          if (attrFlags2(n2) !== attrFlags2(existing)) tc.updated = true;
+        } else {
+          const flags = (K7.kid(existing, "attr") || []).slice(1).map(str6).filter((f2) => f2 !== "allow_soldermask_bridges");
+          if (maskBridges(n2)) flags.push("allow_soldermask_bridges");
+          setAttr(n2, flags);
+        }
+        if (opt.resetClearanceOverrides) {
+          if (maskBridges(existing) !== maskBridges(n2) || FP_CLEARANCE.some((k) => kidText(existing, k) !== kidText(n2, k))) tc.updated = true;
+        } else {
+          for (const k of FP_CLEARANCE) copyFpKid(n2, existing, k);
+          const flags = (K7.kid(n2, "attr") || []).slice(1).map(str6).filter((f2) => f2 !== "allow_soldermask_bridges");
+          if (maskBridges(existing)) flags.push("allow_soldermask_bridges");
+          setAttr(n2, flags);
+        }
+        const models = (fp) => K7.kids(fp, "model");
+        if (opt.reset3DModels) {
+          const a = models(n2).map((m) => K7.serialize(m)), b = models(existing).map((m) => K7.serialize(m));
+          if (a.length !== b.length || a.some((t, i) => t !== b[i])) tc.updated = true;
+        } else {
+          for (let i = n2.length - 1; i > 1; i--) {
+            const c = n2[i];
+            if (isList6(c) && c[0] === "model") n2.splice(i, 1);
+          }
+          for (const m of models(existing)) n2.push(K7.cloneNode(m));
+          const ee = K7.kid(existing, "embedded_files");
+          if (ee) {
+            let ne = K7.kid(n2, "embedded_files");
+            if (!ne) {
+              ne = ["embedded_files"];
+              n2.push(ne);
+            }
+            const fileName = (f2) => str6((K7.kid(f2, "name") || [])[1]);
+            const isModel = (f2) => str6((K7.kid(f2, "type") || [])[1]) === "model";
+            for (const f2 of K7.kids(ee, "file")) {
+              if (!isModel(f2)) continue;
+              const name = fileName(f2);
+              for (let i = ne.length - 1; i > 0; i--) {
+                const c = ne[i];
+                if (isList6(c) && c[0] === "file" && fileName(c) === name) ne.splice(i, 1);
+              }
+              ne.push(K7.cloneNode(f2));
+            }
+          }
+        }
+        for (const key2 of ["path", "sheetname", "sheetfile", "component_classes", "variants", "units"]) copyFpKid(n2, existing, key2);
+        const filt = (fp) => K7.kids(fp, "property").find((p) => str6(p[1]) === "ki_fp_filters") || null;
+        const of = filt(existing), nf = filt(n2);
+        if (nf && of) n2[n2.indexOf(nf)] = K7.cloneNode(of);
+        else if (nf) n2.splice(n2.indexOf(nf), 1);
+        else if (of) insertField2(K7.cloneNode(of));
+        const updated = tc.updated || canonical2(n2) !== canonical2(existing);
+        return { node: n2, shifted, updated };
+      }
+      var NEEDS_UPDATE_ATTRS = ["through_hole", "smd", "board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "dnp"];
+      function footprintAttrsNeedUpdate(board, lib) {
+        const flags = (n2) => new Set((K7.kid(n2, "attr") || []).slice(1).map(str6));
+        const a = flags(board), b = flags(lib);
+        if (NEEDS_UPDATE_ATTRS.some((f2) => a.has(f2) !== b.has(f2))) return true;
+        if (maskBridges(board) !== maskBridges(lib)) return true;
+        for (const k of FP_CLEARANCE) if (K7.kid(board, k) && kidText(board, k) !== kidText(lib, k)) return true;
+        return kidText(board, "net_tie_pad_groups") !== kidText(lib, "net_tie_pad_groups");
+      }
+      function validFpid(id) {
+        const t = id.trim();
+        if (!t) return false;
+        const i = t.indexOf(":");
+        const name = i >= 0 ? t.slice(i + 1) : t;
+        return !!name.trim() && !/[\r\n\t]/.test(t);
+      }
+      function planExchange(fps, job) {
+        const out = { modified: [], report: [], ids: [] };
+        if (!fps.length) return out;
+        if (!job.updateMode && !validFpid(job.newFpid || "")) return out;
+        for (const fp of fps.slice().reverse()) {
+          if (!job.match(fp.node, fp.id)) continue;
+          const oldId = str6(fp.node[1]), newId = job.updateMode ? oldId : (job.newFpid || "").trim();
+          const refN = field2(fp.node, "Reference");
+          const ref = refN ? textOf(refN) : "";
+          let msg = job.updateMode ? `Updated footprint ${ref} (${oldId}): ` : `Changed footprint ${ref} from '${oldId}' to '${newId}': `;
+          const lib = job.library(newId);
+          if (!lib) {
+            out.report.push({ severity: "error", text: msg + "*** library footprint not found ***" });
+            continue;
+          }
+          const r = exchangeFootprint(fp.node, lib, job.opts);
+          if (job.updateMode && footprintAttrsNeedUpdate(fp.node, lib)) r.updated = true;
+          out.ids.push(fp.id);
+          if (canonical2(r.node) !== canonical2(fp.node)) out.modified.push([fp.id, r.node]);
+          if (job.updateMode && !r.updated) {
+            msg += r.shifted ? ": (shifted/rotated to match pad positions)" : ": (no changes)";
+            out.report.push({ severity: "info", text: msg });
+          } else {
+            msg += ": OK";
+            out.report.push({ severity: "action", text: msg });
+          }
+        }
+        return out;
+      }
+      function wildCompare2(pattern, text2) {
+        const re = new RegExp("^" + pattern.toLowerCase().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "s");
+        return re.test(text2.toLowerCase());
       }
       var kidText = (n2, key2) => {
         const k = K7.kid(n2, key2);
         return k ? K7.serialize(k) : "";
       };
-      var padLayerSet = (p) => (K7.kid(p, "layers") || []).slice(1).map(str5).sort().join(" ");
+      var padLayerSet = (p) => (K7.kid(p, "layers") || []).slice(1).map(str6).sort().join(" ");
       function padstackSimilarity(a, b) {
         let s = 1;
         const differ = (x, y) => {
           if (x !== y) s *= 0.9;
         };
-        differ(kidText(a, "padstack") ? str5((K7.kid(K7.kid(a, "padstack"), "mode") || [])[1]) : "", kidText(b, "padstack") ? str5((K7.kid(K7.kid(b, "padstack"), "mode") || [])[1]) : "");
+        differ(kidText(a, "padstack") ? str6((K7.kid(K7.kid(a, "padstack"), "mode") || [])[1]) : "", kidText(b, "padstack") ? str6((K7.kid(K7.kid(b, "padstack"), "mode") || [])[1]) : "");
         differ(padLayerSet(a), padLayerSet(b));
         differ(String(K7.num((K7.kid(a, "at") || [])[3])), String(K7.num((K7.kid(b, "at") || [])[3])));
         differ(["solder_mask_margin", "tenting"].map((k) => kidText(a, k)).join(), ["solder_mask_margin", "tenting"].map((k) => kidText(b, k)).join());
@@ -37779,7 +39486,7 @@ var require_pcb_tools = __commonJS({
         differ(kidText(a, "options"), kidText(b, "options"));
         differ(kidText(a, "drill"), kidText(b, "drill"));
         for (const k of ["size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "primitives"]) differ(kidText(a, k), kidText(b, k));
-        differ(str5(a[3]), str5(b[3]));
+        differ(str6(a[3]), str6(b[3]));
         return s;
       }
       function padSimilarity(a, b, fa = [0, 0, 0], fb = [0, 0, 0]) {
@@ -37791,13 +39498,13 @@ var require_pcb_tools = __commonJS({
         };
         const pa = pos(a, fa), pb = pos(b, fb);
         if (Math.abs(pa[0] - pb[0]) > 1e-6 || Math.abs(pa[1] - pb[1]) > 1e-6) s *= 0.9;
-        if (str5(a[2]) !== str5(b[2])) s *= 0.9;
+        if (str6(a[2]) !== str6(b[2])) s *= 0.9;
         return s * padstackSimilarity(a, b);
       }
       function matchPads(oldPads, newPads, fOld = [0, 0, 0], fNew = [0, 0, 0]) {
         const cand = [];
         oldPads.forEach((op, o) => newPads.forEach((np, w) => {
-          const score = padSimilarity(op, np, fOld, fNew) + (str5(op[1]) === str5(np[1]) ? 2 : 0);
+          const score = padSimilarity(op, np, fOld, fNew) + (str6(op[1]) === str6(np[1]) ? 2 : 0);
           if (score > 0) cand.push({ o, w, score });
         }));
         cand.sort((x, y) => y.score - x.score || x.o - y.o || x.w - y.w);
@@ -37810,10 +39517,388 @@ var require_pcb_tools = __commonJS({
         }
         return out;
       }
-      var exchangeApi = { editableCopy, exchangeFootprint, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };
-      var str6 = (v) => v === void 0 || v === null ? "" : String(v);
+      var exchangeApi = { editableCopy, exchangeFootprint, EXCHANGE_DEFAULTS, wildCompare: wildCompare2, levenshteinRatio, planExchange, footprintAttrsNeedUpdate, validFpid, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };
+      var GLOBAL_DELETION_DEFAULTS = { unlockedGraphics: true, unlockedFootprints: true, unlockedTracks: true, unlockedVias: true };
+      var SHAPE = /* @__PURE__ */ new Set(["gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_curve", "gr_bbox"]);
+      var DRAWING = /* @__PURE__ */ new Set([...SHAPE, "gr_text", "gr_text_box", "dimension", "target", "image", "table"]);
+      var isTeardrop2 = (n2) => {
+        const a = K7.kid(n2, "attr");
+        return !!(a && K7.kid(a, "teardrop"));
+      };
+      var nonCopper = (l) => !/\.Cu$/.test(l) && l !== "*.Cu";
+      function globalDeletionIds(doc, o, currentLayer) {
+        const all2 = !!o.all;
+        const onFilter = (it) => !o.currentLayerOnly || itemOnLayer(it, currentLayer);
+        const out = [];
+        const items = Array.from(doc.items.values());
+        for (const it of items) {
+          if (it.kind !== "zone") continue;
+          if (all2) out.push(it.id);
+          else if (isTeardrop2(it.node)) {
+            if (o.teardrops && onFilter(it)) out.push(it.id);
+          } else if (o.zones && onFilter(it)) out.push(it.id);
+        }
+        const shapes2 = !!(o.graphics || o.boardOutlines), texts = !!o.texts;
+        if (all2 || shapes2 || texts) {
+          const drawingLayer = (l) => o.graphics && nonCopper(l) && l !== "Edge.Cuts" || o.boardOutlines && l === "Edge.Cuts";
+          const drawingOk = (it) => {
+            const layers = it.layer ? [it.layer] : Array.from(new Set(it.geom.map((g2) => g2.layer).filter(Boolean)));
+            return layers.some((l) => drawingLayer(l) && (!o.currentLayerOnly || l === currentLayer));
+          };
+          for (const it of items) {
+            if (!DRAWING.has(it.kind)) continue;
+            if (all2) out.push(it.id);
+            else if (shapes2) {
+              if (!SHAPE.has(it.kind)) continue;
+              if (isLocked2(it.node) ? o.lockedGraphics : o.unlockedGraphics) {
+                if (drawingOk(it)) out.push(it.id);
+              }
+            } else if (texts) {
+              if ((it.kind === "gr_text" || it.kind === "gr_text_box") && onFilter(it)) out.push(it.id);
+            }
+          }
+        }
+        if (all2 || o.footprints) for (const it of items) {
+          if (it.kind !== "footprint") continue;
+          if (all2) out.push(it.id);
+          else if (isLocked2(it.node) ? o.lockedFootprints : o.unlockedFootprints) {
+            if (onFilter(it)) out.push(it.id);
+          }
+        }
+        if (all2 || o.tracks) {
+          for (const it of items) {
+            if (it.kind !== "segment" && it.kind !== "arc" && it.kind !== "via") continue;
+            if (all2) out.push(it.id);
+            else if (it.kind === "via") {
+              if (isLocked2(it.node) ? o.lockedVias : o.unlockedVias) {
+                if (onFilter(it)) out.push(it.id);
+              }
+            } else if (isLocked2(it.node) ? o.lockedTracks : o.unlockedTracks) {
+              if (onFilter(it)) out.push(it.id);
+            }
+          }
+          for (const it of items) {
+            if (it.kind !== "generated") continue;
+            const m = K7.kid(it.node, "members");
+            if (!m || m.length <= 1) out.push(it.id);
+          }
+        }
+        return out;
+      }
+      var globalDeletionApi = { globalDeletionIds, GLOBAL_DELETION_DEFAULTS };
+      var SHAPES2 = /* @__PURE__ */ new Set(["gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_curve", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve"]);
+      var GRAPHICS = /* @__PURE__ */ new Set([...SHAPES2, "barcode"]);
+      var storesUpright = (n2) => n2[0] === "fp_text" || n2[0] === "property";
+      var isText = (n2) => n2[0] === "gr_text" || n2[0] === "fp_text" || n2[0] === "gr_text_box" || n2[0] === "fp_text_box" || n2[0] === "property" || n2[0] === "table_cell";
+      var isField2 = (n2) => n2[0] === "property" || n2[0] === "fp_text" && (n2[1] === "reference" || n2[1] === "value");
+      var fieldName22 = (n2) => n2[0] === "fp_text" ? n2[1] === "reference" ? "Reference" : "Value" : K7.str(n2[1]);
+      var textOf2 = (n2) => n2[0] === "gr_text_box" || n2[0] === "fp_text_box" || n2[0] === "table_cell" ? K7.str(n2[1]) : K7.str(n2[2]);
+      var layerOfNode = (n2) => {
+        const l = K7.kid(n2, "layer");
+        return l ? K7.str(l[1]) : "";
+      };
+      function effects(n2) {
+        let e = K7.kid(n2, "effects");
+        if (!e) {
+          e = ["effects"];
+          n2.push(e);
+        }
+        return e;
+      }
+      function font2(n2) {
+        const e = effects(n2);
+        let f2 = K7.kid(e, "font");
+        if (!f2) {
+          f2 = ["font"];
+          e.splice(1, 0, f2);
+        }
+        return f2;
+      }
+      function setFontFlag(f2, key2, on) {
+        for (let i = f2.length - 1; i > 0; i--) {
+          const c = f2[i];
+          if (c === key2 || isList6(c) && c[0] === key2) f2.splice(i, 1);
+        }
+        if (on) f2.push([key2, "yes"]);
+      }
+      var fontFlag = (n2, key2) => {
+        const e = K7.kid(n2, "effects");
+        const f2 = e && K7.kid(e, "font");
+        if (!f2) return false;
+        if (f2.includes(key2)) return true;
+        const k = K7.kid(f2, key2);
+        return !!k && K7.str(k[1]) !== "no";
+      };
+      function setSize(n2, w, h) {
+        const f2 = font2(n2);
+        let s = K7.kid(f2, "size");
+        if (!s) {
+          s = ["size", 1, 1];
+          f2.splice(1, 0, s);
+        }
+        if (h !== null) s[1] = r64(h);
+        if (w !== null) s[2] = r64(w);
+      }
+      function setThickness(n2, t) {
+        const f2 = font2(n2);
+        const k = K7.kid(f2, "thickness");
+        if (t === null) {
+          if (k) f2.splice(f2.indexOf(k), 1);
+          return;
+        }
+        if (k) k[1] = r64(t);
+        else {
+          const s = K7.kid(f2, "size");
+          f2.splice(s ? f2.indexOf(s) + 1 : f2.length, 0, ["thickness", r64(t)]);
+        }
+      }
+      function setLayer2(n2, layer) {
+        const l = K7.kid(n2, "layer");
+        if (l) l[1] = layer;
+      }
+      function setBarcodeTextHeight(n2, h) {
+        const t = K7.kid(n2, "text_height");
+        if (t) t[1] = r64(h);
+        else {
+          const tx = K7.kid(n2, "text");
+          n2.splice(tx ? n2.indexOf(tx) + 1 : n2.length, 0, ["text_height", r64(h)]);
+        }
+      }
+      function setHidden2(n2, hidden2) {
+        for (let i = n2.length - 1; i > 0; i--) {
+          const c = n2[i];
+          if (c === "hide" || isList6(c) && c[0] === "hide") n2.splice(i, 1);
+        }
+        const e = K7.kid(n2, "effects");
+        if (e) for (let i = e.length - 1; i > 0; i--) {
+          const c = e[i];
+          if (c === "hide" || isList6(c) && c[0] === "hide") e.splice(i, 1);
+        }
+        if (hidden2) {
+          const at2 = K7.kid(n2, "uuid") || K7.kid(n2, "effects");
+          n2.splice(at2 ? n2.indexOf(at2) : n2.length, 0, ["hide", "yes"]);
+        }
+      }
+      function setKeepUpright(n2, upright) {
+        for (let i = n2.length - 1; i > 0; i--) {
+          const c = n2[i];
+          if (isList6(c) && c[0] === "unlocked") n2.splice(i, 1);
+        }
+        const at2 = K7.kid(n2, "at");
+        if (at2) {
+          for (let i = at2.length - 1; i > 3; i--) if (at2[i] === "unlocked") at2.splice(i, 1);
+        }
+        if (!upright) {
+          const l = K7.kid(n2, "layer");
+          n2.splice(l ? n2.indexOf(l) : n2.length, 0, ["unlocked", "yes"]);
+        }
+      }
+      function setLineWidth(n2, w) {
+        if (n2[0] === "dimension") {
+          let st = K7.kid(n2, "style");
+          if (!st) {
+            st = ["style"];
+            n2.push(st);
+          }
+          const t = K7.kid(st, "thickness");
+          if (t) t[1] = r64(w);
+          else st.splice(1, 0, ["thickness", r64(w)]);
+          return;
+        }
+        const stroke = K7.kid(n2, "stroke");
+        if (stroke) {
+          const ww2 = K7.kid(stroke, "width");
+          if (ww2) ww2[1] = r64(w);
+          else stroke.splice(1, 0, ["width", r64(w)]);
+          return;
+        }
+        const ww = K7.kid(n2, "width");
+        if (ww) ww[1] = r64(w);
+        else n2.push(["stroke", ["width", r64(w)], ["type", "default"]]);
+      }
+      var dimText = (n2) => K7.kid(n2, "gr_text") || K7.kid(n2, "fp_text");
+      function processNode(n2, job, inFootprint, fpCenterLocal) {
+        const v = job.values;
+        const text2 = isText(n2) ? n2 : null;
+        const shape3 = SHAPES2.has(String(n2[0])) || n2[0] === "gr_text_box" || n2[0] === "fp_text_box" ? n2 : null;
+        const dim = n2[0] === "dimension" ? n2 : null;
+        if (job.specified) {
+          const t2 = text2 || (dim ? dimText(dim) : null);
+          if (v.layer) {
+            setLayer2(n2, v.layer);
+            if (dim && t2) setLayer2(t2, v.layer);
+          }
+          if (t2) {
+            {
+              if (v.textWidth !== null && v.textWidth !== void 0) setSize(t2, v.textWidth, null);
+              if (v.textHeight !== null && v.textHeight !== void 0) setSize(t2, null, v.textHeight);
+              if (v.autoThickness) setThickness(t2, null);
+              else if (v.thickness !== null && v.thickness !== void 0) setThickness(t2, v.thickness);
+              if (v.bold !== null && v.bold !== void 0) setFontFlag(font2(t2), "bold", v.bold);
+              if (v.italic !== null && v.italic !== void 0) setFontFlag(font2(t2), "italic", v.italic);
+              const fontChoice = v.font !== void 0 && v.font !== null ? v.font : v.kicadFont ? "" : null;
+              if (fontChoice !== null) {
+                const f2 = font2(t2);
+                const face = K7.kid(f2, "face");
+                if (face) f2.splice(f2.indexOf(face), 1);
+                if (fontChoice) f2.splice(1, 0, ["face", fontChoice]);
+              }
+              if (inFootprint) {
+                if (v.keepUpright !== null && v.keepUpright !== void 0 && storesUpright(t2)) setKeepUpright(t2, v.keepUpright);
+                if (v.centerOnFootprint && fpCenterLocal) {
+                  const at2 = K7.kid(t2, "at");
+                  if (at2) {
+                    at2[1] = r64(fpCenterLocal[0]);
+                    at2[2] = r64(fpCenterLocal[1]);
+                  }
+                }
+              }
+            }
+          }
+          if (n2[0] === "barcode") {
+            if (v.textHeight !== null && v.textHeight !== void 0) setBarcodeTextHeight(n2, v.textHeight);
+            else if (v.textWidth !== null && v.textWidth !== void 0) setBarcodeTextHeight(n2, v.textWidth);
+          }
+          if (isField2(n2) && v.visible !== null && v.visible !== void 0) setHidden2(n2, !v.visible);
+          if (v.lineWidth !== null && v.lineWidth !== void 0 && (shape3 && !text2 || dim)) setLineWidth(n2, v.lineWidth);
+          if (v.lineWidth !== null && v.lineWidth !== void 0 && (n2[0] === "gr_text_box" || n2[0] === "fp_text_box")) setLineWidth(n2, v.lineWidth);
+          return;
+        }
+        const st = layerStyle(layerOfNode(n2));
+        if (n2[0] === "barcode") {
+          setBarcodeTextHeight(n2, st.h);
+          return;
+        }
+        if (shape3) setLineWidth(n2, st.line);
+        const t = text2 || (dim ? dimText(dim) : null);
+        if (t) {
+          setSize(t, st.w, st.h);
+          setThickness(t, st.thick);
+          setFontFlag(font2(t), "italic", st.italic);
+          if (inFootprint && text2 && storesUpright(text2)) setKeepUpright(t, st.upright);
+        }
+        if (dim) {
+          setLineWidth(dim, st.line);
+          const fmt32 = K7.kid(dim, "format");
+          if (fmt32) {
+            const put = (k, val) => {
+              const c = K7.kid(fmt32, k);
+              if (c) c[1] = val;
+              else fmt32.push([k, val]);
+            };
+            put("units", DIM_DEFAULTS.units);
+            put("units_format", DIM_DEFAULTS.unitsFormat);
+            put("precision", DIM_DEFAULTS.precision);
+            for (let i = fmt32.length - 1; i > 0; i--) {
+              const c = fmt32[i];
+              if (c === "suppress_zeroes" || isList6(c) && c[0] === "suppress_zeroes") fmt32.splice(i, 1);
+            }
+            if (DIM_DEFAULTS.suppressZeroes) fmt32.push(["suppress_zeroes", "yes"]);
+          }
+          const style = K7.kid(dim, "style");
+          if (style) {
+            const tp = K7.kid(style, "text_position_mode");
+            if (tp) tp[1] = DIM_DEFAULTS.textPosition;
+            else style.push(["text_position_mode", DIM_DEFAULTS.textPosition]);
+            for (let i = style.length - 1; i > 0; i--) {
+              const c = style[i];
+              if (c === "keep_text_aligned" || isList6(c) && c[0] === "keep_text_aligned") style.splice(i, 1);
+            }
+            if (DIM_DEFAULTS.keepAligned) style.push(["keep_text_aligned", "yes"]);
+          }
+        }
+      }
+      function editTextAndGraphics(doc, job) {
+        const out = [];
+        const sc = job.scope, f2 = job.filter, sel = job.selection || /* @__PURE__ */ new Set();
+        const layerOk2 = (n2) => !f2.layer || layerOfNode(n2) === f2.layer;
+        const memberOfSelectedGroup = (id) => {
+          for (const it of doc.items.values()) if (it.kind === "group" && sel.has(it.id) && K7.groupMemberIds(it.node).includes(id)) return true;
+          return false;
+        };
+        for (const it of doc.items.values()) {
+          if (it.kind !== "footprint") continue;
+          const n2 = K7.cloneNode(it.node);
+          let changed = false;
+          const ref = (() => {
+            const p = K7.kids(n2, "property").find((x) => x[1] === "Reference") || K7.kids(n2, "fp_text").find((x) => x[1] === "reference");
+            return p ? K7.str(p[2]) : "";
+          })();
+          let center = null;
+          if (it.bbox) {
+            const [fx, fy, fa] = K7.atOf(n2);
+            const c = [(it.bbox[0] + it.bbox[2]) / 2 - fx, (it.bbox[1] + it.bbox[3]) / 2 - fy];
+            const r = rotator2(-fa)(c[0], c[1]);
+            center = [r[0], r[1]];
+          }
+          const visit = (c) => {
+            if (job.filter.selectedOnly && !sel.has(it.id) && !memberOfSelectedGroup(it.id)) return;
+            if (!layerOk2(c)) return;
+            if (f2.reference && !wildCompare2(f2.reference, ref)) return;
+            if (f2.footprint && !wildCompare2(f2.footprint, K7.str(n2[1]))) return;
+            const before = K7.serialize(c);
+            processNode(c, job, true, center);
+            if (K7.serialize(c) !== before) changed = true;
+          };
+          for (const c of n2) {
+            if (!isList6(c)) continue;
+            const node = c;
+            if (isField2(node)) {
+              const name = fieldName22(node);
+              if (name === "Reference") {
+                if (sc.references) visit(node);
+                continue;
+              }
+              if (name === "Value") {
+                if (sc.values) visit(node);
+                continue;
+              }
+              if (/^ki_/.test(name)) continue;
+              if (sc.otherFootprintFields) visit(node);
+              else if (sc.references && textOf2(node) === "${REFERENCE}") visit(node);
+              else if (sc.values && textOf2(node) === "${VALUE}") visit(node);
+            } else if (node[0] === "fp_text" || node[0] === "fp_text_box") {
+              if (sc.footprintTexts) visit(node);
+              else if (sc.references && textOf2(node) === "${REFERENCE}") visit(node);
+              else if (sc.values && textOf2(node) === "${VALUE}") visit(node);
+            } else if (node[0] === "table") {
+              if (sc.footprintTexts) for (const cell of K7.kids(K7.kid(node, "cells") || node, "table_cell")) visit(cell);
+            } else if (node[0] === "dimension") {
+              if (sc.footprintDimensions) visit(node);
+            } else if (GRAPHICS.has(String(node[0]))) {
+              if (sc.footprintGraphics) visit(node);
+            }
+          }
+          if (changed) out.push([it.id, n2]);
+        }
+        for (const it of doc.items.values()) {
+          const k = it.kind;
+          const n2 = K7.cloneNode(it.node);
+          const visit = (c) => {
+            if (job.filter.selectedOnly && !sel.has(it.id) && !memberOfSelectedGroup(it.id)) return false;
+            if (!layerOk2(c)) return false;
+            const before = K7.serialize(c);
+            processNode(c, job, false, null);
+            return K7.serialize(c) !== before;
+          };
+          let changed = false;
+          if (k === "gr_text" || k === "gr_text_box") {
+            if (sc.boardText) changed = visit(n2);
+          } else if (k === "table") {
+            if (sc.boardText) for (const cell of K7.kids(K7.kid(n2, "cells") || n2, "table_cell")) changed = visit(cell) || changed;
+          } else if (k === "dimension") {
+            if (sc.boardDimensions) changed = visit(n2);
+          } else if (GRAPHICS.has(k)) {
+            if (sc.boardGraphics) changed = visit(n2);
+          }
+          if (changed) out.push([it.id, n2]);
+        }
+        return out;
+      }
+      var textGraphicsApi = { editTextAndGraphics, fontFlag };
+      var str7 = (v) => v === void 0 || v === null ? "" : String(v);
       var num42 = (v, d = 0) => typeof v === "number" ? v : v !== void 0 && v !== null && v !== "" && isFinite(Number(v)) ? Number(v) : d;
-      var yes22 = (n2) => !!n2 && (n2.length < 2 || str6(n2[1]) !== "no");
+      var yes22 = (n2) => !!n2 && (n2.length < 2 || str7(n2[1]) !== "no");
       var TEXT_MIN_SIZE_MM = 1e-3;
       var TEXT_MAX_SIZE_MM = 250;
       var LIB_NAME_INVALID = '\\ / : " * ? < > |';
@@ -37824,13 +39909,13 @@ var require_pcb_tools = __commonJS({
         const st = doc.fpState;
         return st ? st.fp : null;
       };
-      var fieldName2 = (n2) => n2[0] === "fp_text" ? n2[1] === "reference" ? "Reference" : n2[1] === "value" ? "Value" : str6(n2[1]) : str6(n2[1]);
-      var MANDATORY2 = ["Reference", "Value", "Datasheet", "Description"];
+      var fieldName3 = (n2) => n2[0] === "fp_text" ? n2[1] === "reference" ? "Reference" : n2[1] === "value" ? "Value" : str7(n2[1]) : str7(n2[1]);
+      var MANDATORY22 = ["Reference", "Value", "Datasheet", "Description"];
       function fieldItems(doc) {
         const all2 = Array.from(doc.items.values()).filter((i) => i.kind === "property");
         const rank = (it) => {
-          const i = MANDATORY2.indexOf(fieldName2(it.node));
-          return i >= 0 ? i : MANDATORY2.length;
+          const i = MANDATORY22.indexOf(fieldName3(it.node));
+          return i >= 0 ? i : MANDATORY22.length;
         };
         return all2.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map((x) => x.it);
       }
@@ -37842,19 +39927,19 @@ var require_pcb_tools = __commonJS({
         const sz = f2 ? K7.kid(f2, "size") : null;
         const th = f2 ? K7.kid(f2, "thickness") : null;
         const hide = K7.kid(p, "hide");
-        const hidden = hide ? yes22(hide) : !!(e && (e.includes("hide") || yes22(K7.kid(e, "hide"))));
+        const hidden2 = hide ? yes22(hide) : !!(e && (e.includes("hide") || yes22(K7.kid(e, "hide"))));
         const italic = !!(f2 && (f2.includes("italic") || yes22(K7.kid(f2, "italic"))));
         const unl = !!(at2.includes("unlocked") || yes22(K7.kid(p, "unlocked")));
         return {
           id: it.id,
-          name: fieldName2(p),
-          value: str6(p[2]),
-          show: !hidden,
+          name: fieldName3(p),
+          value: str7(p[2]),
+          show: !hidden2,
           w: num42(sz && sz[2], 1),
           h: num42(sz && sz[1], 1),
           thick: num42(th && th[1], 0.15),
           italic,
-          layer: str6((K7.kid(p, "layer") || [])[1]) || "F.Fab",
+          layer: str7((K7.kid(p, "layer") || [])[1]) || "F.Fab",
           rot: num42(at2[3], 0),
           unconstrained: unl,
           x: num42(at2[1]),
@@ -37869,20 +39954,20 @@ var require_pcb_tools = __commonJS({
       function readFpProps(doc) {
         const h = header(doc) || ["footprint", ""];
         const one2 = (key2) => K7.kid(h, key2);
-        const attrs = (one2("attr") || []).slice(1).map(str6);
+        const attrs = (one2("attr") || []).slice(1).map(str7);
         const opt = (key2) => {
           const k = one2(key2);
           return k ? num42(k[1], NaN) : NaN;
         };
         const zc = one2("zone_connect");
         const stack = one2("stackup");
-        const stackLayers = stack ? K7.kids(stack, "layer").map((l) => str6(l[1])) : [];
+        const stackLayers = stack ? K7.kids(stack, "layer").map((l) => str7(l[1])) : [];
         const usedLayers = /* @__PURE__ */ new Set();
         for (const it of doc.items.values()) {
           const l = K7.kid(it.node, "layer");
-          if (l) usedLayers.add(str6(l[1]));
+          if (l) usedLayers.add(str7(l[1]));
           const ls = K7.kid(it.node, "layers");
-          if (ls) ls.slice(1).forEach((x) => usedLayers.add(str6(x)));
+          if (ls) ls.slice(1).forEach((x) => usedLayers.add(str7(x)));
         }
         const nt = one2("net_tie_pad_groups");
         const jg = one2("jumper_pad_groups");
@@ -37890,13 +39975,13 @@ var require_pcb_tools = __commonJS({
         const models = K7.kids(h, "model").filter((m) => typeof m[1] === "string").map((m) => {
           const hide = K7.kid(m, "hide");
           const op = K7.kid(m, "opacity");
-          return { file: str6(m[1]), show: !(hide ? yes22(hide) : m.includes("hide")), opacity: op ? num42(op[1], 1) : 1, offset: xyz(m, "offset", 0), scale: xyz(m, "scale", 1), rotate: xyz(m, "rotate", 0) };
+          return { file: str7(m[1]), show: !(hide ? yes22(hide) : m.includes("hide")), opacity: op ? num42(op[1], 1) : 1, offset: xyz(m, "offset", 0), scale: xyz(m, "scale", 1), rotate: xyz(m, "rotate", 0) };
         });
         const cuCount = stack ? stackLayers.filter((l) => /\.Cu$/.test(l)).length : minimalCopperCount(usedLayers);
         return {
-          name: str6(h[1]),
-          descr: str6((one2("descr") || [])[1]),
-          tags: str6((one2("tags") || [])[1]),
+          name: str7(h[1]),
+          descr: str7((one2("descr") || [])[1]),
+          tags: str7((one2("tags") || [])[1]),
           height: opt("height"),
           type: attrs.includes("through_hole") ? "through_hole" : attrs.includes("smd") ? "smd" : "",
           excludeFromSim: attrs.includes("exclude_from_sim"),
@@ -37910,14 +39995,14 @@ var require_pcb_tools = __commonJS({
           pasteRatio: one2("solder_paste_margin_ratio") ? opt("solder_paste_margin_ratio") : opt("solder_paste_ratio"),
           allowBridges: attrs.includes("allow_soldermask_bridges"),
           noCourtyard: attrs.includes("allow_missing_courtyard"),
-          zoneConnect: zc ? str6(zc[1]) : "",
-          privateLayers: (one2("private_layers") || []).slice(1).map(str6),
+          zoneConnect: zc ? str7(zc[1]) : "",
+          privateLayers: (one2("private_layers") || []).slice(1).map(str7),
           customStackup: !!stack,
           copperCount: COPPER_COUNTS.includes(cuCount) ? cuCount : 2,
           userLayers: stack ? stackLayers.filter((l) => /^User\.\d+$/.test(l)) : Array.from(usedLayers).filter((l) => /^User\.\d+$/.test(l)),
-          netTieGroups: nt ? nt.slice(1).map(str6).filter(Boolean) : [],
+          netTieGroups: nt ? nt.slice(1).map(str7).filter(Boolean) : [],
           dupPadsAreJumpers: yes22(one2("duplicate_pad_numbers_are_jumpers")),
-          jumperGroups: jg ? jg.slice(1).filter(isList5).map((g2) => g2.map(str6).join(", ")) : [],
+          jumperGroups: jg ? jg.slice(1).filter(isList6).map((g2) => g2.map(str7).join(", ")) : [],
           models,
           fields: fieldItems(doc).map(fieldRow),
           otherAttrs: attrs.filter((a) => !known.includes(a))
@@ -37964,19 +40049,19 @@ var require_pcb_tools = __commonJS({
           for (const it of doc.items.values()) {
             const ls = [];
             const l = K7.kid(it.node, "layer");
-            if (l) ls.push(str6(l[1]));
+            if (l) ls.push(str7(l[1]));
             const lss = K7.kid(it.node, "layers");
-            if (lss) ls.push(...lss.slice(1).map(str6));
+            if (lss) ls.push(...lss.slice(1).map(str7));
             for (const x of ls) if ((/\.Cu$/.test(x) || /^User\.\d+$/.test(x)) && !/^\*/.test(x) && !allowed.has(x)) orphans.add(x);
           }
           if (orphans.size) return { msg: `You are trying to remove layers that are used by the footprint: ${Array.from(orphans).join(", ")}.
 Please remove the objects that use these layers first.`, page: 1 };
         }
         const pads = /* @__PURE__ */ new Set();
-        for (const it of doc.items.values()) if (it.kind === "pad") pads.add(str6(it.node[1]));
+        for (const it of doc.items.values()) if (it.kind === "pad") pads.add(str7(it.node[1]));
         for (let i = 0; i < m.jumperGroups.length; i++) for (const t of splitPadList(m.jumperGroups[i])) if (!pads.has(t)) return { msg: `Pad '${t}' in jumper pad group ${i + 1} does not exist in this footprint.`, page: 3 };
         const orig = header(doc);
-        const origName = orig ? str6(orig[1]) : "";
+        const origName = orig ? str7(orig[1]) : "";
         if (name !== origName && opts && opts.libHas && opts.libHas(name)) return { msg: "", page: 0, overwrite: name };
         return null;
       }
@@ -38018,7 +40103,7 @@ Please remove the objects that use these layers first.`, page: 1 };
       var qs = (v) => '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
       var mk = (text2) => K7.parse(text2);
       function setHeader(h, key2, vals) {
-        const i = h.findIndex((c, j) => j > 1 && isList5(c) && c[0] === key2);
+        const i = h.findIndex((c, j) => j > 1 && isList6(c) && c[0] === key2);
         if (vals === null) {
           if (i > 0) h.splice(i, 1);
           return;
@@ -38134,7 +40219,7 @@ Please remove the objects that use these layers first.`, page: 1 };
         const h0 = header(doc);
         if (!h0) return [];
         const before = readFpProps(doc);
-        const h = clone2(h0);
+        const h = clone3(h0);
         if (m.name !== before.name) h[1] = m.name;
         if (m.descr !== before.descr) setHeader(h, "descr", m.descr ? qs(m.descr) : null);
         if (m.tags !== before.tags) setHeader(h, "tags", m.tags ? qs(m.tags) : null);
@@ -38169,7 +40254,7 @@ Please remove the objects that use these layers first.`, page: 1 };
         const jgBefore = before.jumperGroups.map((g2) => Array.from(new Set(splitPadList(g2))).sort());
         if (JSON.stringify(jg) !== JSON.stringify(jgBefore)) setHeader(h, "jumper_pad_groups", jg.length ? jg.map((g2) => "(" + g2.map(qs).join(" ") + ")").join(" ") : null);
         if (m.models.map(modelSig).join() !== before.models.map(modelSig).join()) {
-          const old = h.filter((c, j) => j > 1 && isList5(c) && c[0] === "model" && typeof c[1] === "string");
+          const old = h.filter((c, j) => j > 1 && isList6(c) && c[0] === "model" && typeof c[1] === "string");
           const oldBySig = /* @__PURE__ */ new Map();
           old.forEach((n2, i) => oldBySig.set(modelSig(before.models[i]), n2));
           for (const n2 of old) h.splice(h.indexOf(n2), 1);
@@ -38186,7 +40271,7 @@ Please remove the objects that use these layers first.`, page: 1 };
             continue;
           }
           keep.add(it.id);
-          const n2 = clone2(it.node);
+          const n2 = clone3(it.node);
           applyFieldRow(n2, r, modern);
           if (K7.serialize(n2) !== K7.serialize(it.node)) changes.push(replacedChange(it, n2));
         }
@@ -38211,12 +40296,12 @@ Please remove the objects that use these layers first.`, page: 1 };
         while (used.has(name)) name = `Field${++i}`;
         return { id: "", name, value: "", show: true, w: s.w, h: s.h, thick: s.thick, italic: s.italic, layer, rot: 0, unconstrained: false, x: 0, y: 0 };
       }
-      var isMandatoryName = (name) => MANDATORY2.includes(name);
+      var isMandatoryName = (name) => MANDATORY22.includes(name);
       var fpPropsApi = { readFpProps, validateFpProps, fpPropsChanges, newFieldRow, fieldItems, parsePaste, formatPaste, customLayerSet, sortLayers, minimalCopperCount, clampTextPenSize, splitPadList, ZONE_CHOICES, COPPER_COUNTS, isMandatoryName };
-      var str7 = (v) => v === void 0 || v === null ? "" : String(v);
+      var str8 = (v) => v === void 0 || v === null ? "" : String(v);
       var num52 = (v, d = 0) => typeof v === "number" ? v : d;
       var padItems = (doc) => Array.from(doc.items.values()).filter((i) => i.kind === "pad");
-      var layersOf = (n2) => (K7.kid(n2, "layers") || []).slice(1).map(str7);
+      var layersOf = (n2) => (K7.kid(n2, "layers") || []).slice(1).map(str8);
       var atOf22 = (n2) => {
         const a = K7.kid(n2, "at") || [];
         return [num52(a[1]), num52(a[2]), num52(a[3])];
@@ -38249,27 +40334,27 @@ Please remove the objects that use these layers first.`, page: 1 };
         else setKid22(n2, "layers", layersNode(ls));
       };
       var after = (key2) => PAD_ORDER2.slice(0, Math.max(0, PAD_ORDER2.indexOf(key2)));
-      var isAperture2 = (n2) => str7(n2[2]) === "smd" && !layersOf(n2).some((l) => /\.Cu$/.test(l));
+      var isAperture2 = (n2) => str8(n2[2]) === "smd" && !layersOf(n2).some((l) => /\.Cu$/.test(l));
       var sizeSig = (n2) => K7.serialize(["s", K7.kid(n2, "size") || [], K7.kid(n2, "rect_delta") || [], K7.kid(n2, "drill") || [], K7.kid(n2, "roundrect_rratio") || [], K7.kid(n2, "chamfer_ratio") || [], K7.kid(n2, "primitives") || []]);
       function importPadSettings(target2, master) {
-        const n2 = clone2(master);
+        const n2 = clone3(master);
         const keep = ["net", "pinfunction", "pintype", "die_length", "die_delay", "uuid", "tstamp"];
         for (const k of keep) {
           const t = K7.kid(target2, k), m = K7.kid(n2, k);
-          if (t && m) n2[n2.indexOf(m)] = clone2(t);
+          if (t && m) n2[n2.indexOf(m)] = clone3(t);
           else if (m) n2.splice(n2.indexOf(m), 1);
-          else if (t) setKid22(n2, k, clone2(t).slice(1), k === "uuid" || k === "tstamp" ? n2.filter(isList5).map((c) => str7(c[0])) : after(k));
+          else if (t) setKid22(n2, k, clone3(t).slice(1), k === "uuid" || k === "tstamp" ? n2.filter(isList6).map((c) => str8(c[0])) : after(k));
         }
         n2[1] = canHaveNumber(n2) ? target2[1] : "";
         const [x, y] = atOf22(target2);
         const ma = K7.kid(n2, "at");
         ma[1] = x;
         ma[2] = y;
-        if (str7(n2[3]) === "circle") {
+        if (str8(n2[3]) === "circle") {
           const s = K7.kid(n2, "size");
           if (s) s[2] = s[1];
         }
-        if (["smd", "connect", "non_component"].includes(str7(n2[2]))) setKid22(n2, "drill", null);
+        if (["smd", "connect", "non_component"].includes(str8(n2[2]))) setKid22(n2, "drill", null);
         return n2;
       }
       function pushPadChanges(doc, srcId, f2) {
@@ -38279,12 +40364,12 @@ Please remove the objects that use these layers first.`, page: 1 };
         for (const it of padItems(doc)) {
           if (it.id === srcId) continue;
           const p = it.node, s = src.node;
-          if (f2.shape && (str7(p[3]) !== str7(s[3]) || K7.serialize(K7.kid(p, "padstack") || []) !== K7.serialize(K7.kid(s, "padstack") || []))) continue;
+          if (f2.shape && (str8(p[3]) !== str8(s[3]) || K7.serialize(K7.kid(p, "padstack") || []) !== K7.serialize(K7.kid(s, "padstack") || []))) continue;
           if (f2.size && sizeSig(p) !== sizeSig(s)) continue;
           if (f2.orient && r64(atOf22(p)[2]) !== r64(atOf22(s)[2])) continue;
           if (f2.layers && layersOf(p).join() !== layersOf(s).join()) continue;
-          if (f2.type && str7(p[2]) !== str7(s[2])) continue;
-          if (f2.type && str7(p[2]) === "connect" && isAperture2(p) !== isAperture2(s)) continue;
+          if (f2.type && str8(p[2]) !== str8(s[2])) continue;
+          if (f2.type && str8(p[2]) === "connect" && isAperture2(p) !== isAperture2(s)) continue;
           const n2 = importPadSettings(p, s);
           if (K7.serialize(n2) !== K7.serialize(p)) out.push(replacedChange(it, n2));
         }
@@ -38306,8 +40391,8 @@ Please remove the objects that use these layers first.`, page: 1 };
         return [x + ox, y + oy];
       }
       function primitiveToShape(g2, pad, layer) {
-        const n2 = clone2(g2);
-        const k = str7(n2[0]);
+        const n2 = clone3(g2);
+        const k = str8(n2[0]);
         const w = K7.kid(n2, "width");
         const width = w ? num52(w[1]) : 0;
         if (w) n2.splice(n2.indexOf(w), 1);
@@ -38318,22 +40403,22 @@ Please remove the objects that use these layers first.`, page: 1 };
         if (a) rotateNode(n2, 0, 0, a);
         translateNode(n2, px, py);
         n2.push(["stroke", ["width", r64(width)], ["type", "solid"]]);
-        if (k !== "gr_line" && k !== "gr_arc" && k !== "gr_curve") n2.push(["fill", fill && str7(fill[1]) !== "no" && str7(fill[1]) !== "none" ? "yes" : "no"]);
+        if (k !== "gr_line" && k !== "gr_arc" && k !== "gr_curve") n2.push(["fill", fill && str8(fill[1]) !== "no" && str8(fill[1]) !== "none" ? "yes" : "no"]);
         n2.push(K7.parse(`(layer ${qs2(layer)})`), ["uuid", K7.newUuid()]);
         return n2;
       }
       function explodePadChanges(doc, padId) {
         const it = doc.items.get(padId);
         if (!it || it.kind !== "pad") return [];
-        const pad = clone2(it.node);
+        const pad = clone3(it.node);
         const out = [];
-        if (str7(pad[3]) === "custom") {
+        if (str8(pad[3]) === "custom") {
           const prims = K7.kid(pad, "primitives");
           const layer = principalLayer(pad);
-          for (const g2 of prims ? prims.slice(1) : []) if (isList5(g2) && /^gr_/.test(str7(g2[0])) && g2[0] !== "gr_bbox") out.push(addedChange(doc, primitiveToShape(g2, pad, layer)));
+          for (const g2 of prims ? prims.slice(1) : []) if (isList6(g2) && /^gr_/.test(str8(g2[0])) && g2[0] !== "gr_bbox") out.push(addedChange(doc, primitiveToShape(g2, pad, layer)));
           const opts = K7.kid(pad, "options");
           const anchor = opts ? K7.kid(opts, "anchor") : null;
-          pad[3] = anchor ? str7(anchor[1]) : "circle";
+          pad[3] = anchor ? str8(anchor[1]) : "circle";
           setKid22(pad, "primitives", null);
           setKid22(pad, "options", null);
         }
@@ -38358,12 +40443,12 @@ Please remove the objects that use these layers first.`, page: 1 };
         return padShapePolygon(pad, shapePos(pad));
       }
       function shapePoints(n2) {
-        const k = str7(n2[0]);
+        const k = str8(n2[0]);
         const p = (key2) => {
           const c = K7.kid(n2, key2);
           return c ? [num52(c[1]), num52(c[2])] : null;
         };
-        if (k === "gr_poly" || k === "gr_curve") return (K7.kid(n2, "pts") || []).slice(1).filter((xy2) => isList5(xy2) && xy2[0] === "xy").map((xy2) => [num52(xy2[1]), num52(xy2[2])]);
+        if (k === "gr_poly" || k === "gr_curve") return (K7.kid(n2, "pts") || []).slice(1).filter((xy3) => isList6(xy3) && xy3[0] === "xy").map((xy3) => [num52(xy3[1]), num52(xy3[2])]);
         if (k === "gr_rect") {
           const a = p("start"), b = p("end");
           return a && b ? [a, [b[0], a[1]], b, [a[0], b[1]]] : [];
@@ -38388,7 +40473,7 @@ Please remove the objects that use these layers first.`, page: 1 };
         if (!pts.length) return false;
         const w = K7.kid(n2, "stroke");
         const sw = w ? num52((K7.kid(w, "width") || [])[1]) : num52((K7.kid(n2, "width") || [])[1]);
-        const closed = ["gr_poly", "gr_rect", "gr_circle"].includes(str7(n2[0]));
+        const closed = ["gr_poly", "gr_rect", "gr_circle"].includes(str8(n2[0]));
         if (pts.some((q) => pointInPoly32(q, outline))) return true;
         if (closed && outline.some((q) => pointInPoly32(q, pts))) return true;
         const segs = [];
@@ -38405,7 +40490,7 @@ Please remove the objects that use these layers first.`, page: 1 };
         return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
       }
       function shapeToPrimitive(n2, pad) {
-        const g2 = clone2(n2);
+        const g2 = clone3(n2);
         const [px, py] = shapePos(pad);
         const a = atOf22(pad)[2];
         translateNode(g2, -px, -py);
@@ -38413,18 +40498,18 @@ Please remove the objects that use these layers first.`, page: 1 };
         const st = K7.kid(g2, "stroke");
         const width = st ? num52((K7.kid(st, "width") || [])[1]) : 0;
         const fill = K7.kid(g2, "fill");
-        const filled = !!fill && !["no", "none"].includes(str7(fill[1]));
+        const filled = !!fill && !["no", "none"].includes(str8(fill[1]));
         for (const k of ["stroke", "fill", "layer", "uuid", "tstamp", "locked", "net"]) setKid22(g2, k, null);
         g2.push(["width", r64(width)]);
-        if (str7(g2[0]) !== "gr_line" && str7(g2[0]) !== "gr_arc" && str7(g2[0]) !== "gr_curve") g2.push(["fill", filled ? "yes" : "no"]);
+        if (str8(g2[0]) !== "gr_line" && str8(g2[0]) !== "gr_arc" && str8(g2[0]) !== "gr_curve") g2.push(["fill", filled ? "yes" : "no"]);
         return g2;
       }
       function recombinePadChanges(doc, padId, dryRun = false) {
         const it = doc.items.get(padId);
         if (!it || it.kind !== "pad") return { changes: [], merged: [] };
-        const pad = clone2(it.node);
+        const pad = clone3(it.node);
         const layer = principalLayer(pad);
-        const shapes2 = Array.from(doc.items.values()).filter((s) => /^gr_(line|rect|circle|arc|poly|curve)$/.test(s.kind) && str7((K7.kid(s.node, "layer") || [])[1]) === layer);
+        const shapes2 = Array.from(doc.items.values()).filter((s) => /^gr_(line|rect|circle|arc|poly|curve)$/.test(s.kind) && str8((K7.kid(s.node, "layer") || [])[1]) === layer);
         const merged = [];
         const used = /* @__PURE__ */ new Set();
         let grew = true;
@@ -38440,7 +40525,7 @@ Please remove the objects that use these layers first.`, page: 1 };
           }
         }
         if (dryRun || !merged.length) return { changes: [], merged: merged.map((m) => m.id) };
-        const shape3 = str7(pad[3]);
+        const shape3 = str8(pad[3]);
         let prims = K7.kid(pad, "primitives");
         if (shape3 !== "custom") {
           if (shape3 === "circle" || shape3 === "rect") setKid22(pad, "options", [["clearance", "outline"], ["anchor", shape3]], after("chamfer").concat(["net", "pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap"]));
@@ -38476,7 +40561,7 @@ Please remove the objects that use these layers first.`, page: 1 };
         const pa = shapePoints(a), pb = shapePoints(b);
         if (!pa.length || !pb.length) return false;
         const wa = num52((K7.kid(K7.kid(a, "stroke") || [], "width") || [])[1]), wb = num52((K7.kid(K7.kid(b, "stroke") || [], "width") || [])[1]);
-        const ca = ["gr_poly", "gr_rect", "gr_circle"].includes(str7(a[0])), cb = ["gr_poly", "gr_rect", "gr_circle"].includes(str7(b[0]));
+        const ca = ["gr_poly", "gr_rect", "gr_circle"].includes(str8(a[0])), cb = ["gr_poly", "gr_rect", "gr_circle"].includes(str8(b[0]));
         if (ca && pb.some((q) => pointInPoly32(q, pa))) return true;
         if (cb && pa.some((q) => pointInPoly32(q, pb))) return true;
         const segs = (p, closed) => {
@@ -38494,10 +40579,10 @@ Please remove the objects that use these layers first.`, page: 1 };
       var PAD_TABLE_COLS = [["number", "Number"], ["type", "Type"], ["shape", "Shape"], ["x", "Pos X"], ["y", "Pos Y"], ["w", "Size X"], ["h", "Size Y"], ["dx", "Drill X"], ["dy", "Drill Y"], ["dieLen", "Pad to die length"], ["dieDelay", "Pad to die delay"]];
       var drillsEditable = (type) => type === "thru_hole" || type === "np_thru_hole";
       function padTypeKey(n2) {
-        return isAperture2(n2) ? "aperture" : str7(n2[2]);
+        return isAperture2(n2) ? "aperture" : str8(n2[2]);
       }
       function padShapeKey(n2) {
-        const s = str7(n2[3]);
+        const s = str8(n2[3]);
         return s === "roundrect" && K7.kid(n2, "chamfer") ? "chamfered" : s;
       }
       function padRow(it) {
@@ -38509,7 +40594,7 @@ Please remove the objects that use these layers first.`, page: 1 };
         const dl = K7.kid(n2, "die_length"), dd = K7.kid(n2, "die_delay");
         return {
           id: it.id,
-          number: str7(n2[1]),
+          number: str8(n2[1]),
           type: padTypeKey(n2),
           shape: padShapeKey(n2),
           x,
@@ -38530,18 +40615,18 @@ Please remove the objects that use these layers first.`, page: 1 };
       var isBackOnly = (ls) => ls.some((l) => /^B\./.test(l)) && !ls.some((l) => /^F\./.test(l) || /^\*\./.test(l));
       var flipSide = (ls) => ls.map((l) => l.replace(/^F\./, "B."));
       function applyPadRow(node, r) {
-        const n2 = clone2(node);
+        const n2 = clone3(node);
         const cur2 = padRow({ id: "", kind: "pad", node });
         if (r.number !== cur2.number) n2[1] = r.number;
         if (r.type !== cur2.type) {
           const ls = layersOf(n2);
           if (r.type === "thru_hole") n2[2] = "thru_hole";
           else if (r.type === "smd") {
-            if (str7(n2[2]) !== "smd" || isAperture2(n2)) setLayers(n2, isBackOnly(ls) ? flipSide(SMD_MASK) : SMD_MASK);
+            if (str8(n2[2]) !== "smd" || isAperture2(n2)) setLayers(n2, isBackOnly(ls) ? flipSide(SMD_MASK) : SMD_MASK);
             n2[2] = "smd";
           } else if (r.type === "connect") n2[2] = "connect";
           else if (r.type === "non_component") {
-            if (str7(n2[2]) !== "non_component") {
+            if (str8(n2[2]) !== "non_component") {
               const cu = ls.filter((l) => /\.Cu$/.test(l));
               setLayers(n2, [cu.length ? cu[0] === "*.Cu" ? "F.Cu" : cu[0] : "F.Cu"]);
               n2[2] = "non_component";
@@ -38576,7 +40661,7 @@ Please remove the objects that use these layers first.`, page: 1 };
           a[2] = r64(r.y);
         }
         if (r.w !== cur2.w || r.h !== cur2.h) setKid22(n2, "size", [r64(r.w), r64(r.h)], after("size"));
-        if (drillsEditable(str7(n2[2])) && (r.dx !== cur2.dx && !(isNaN(r.dx) && isNaN(cur2.dx)) || r.dy !== cur2.dy && !(isNaN(r.dy) && isNaN(cur2.dy)))) {
+        if (drillsEditable(str8(n2[2])) && (r.dx !== cur2.dx && !(isNaN(r.dx) && isNaN(cur2.dx)) || r.dy !== cur2.dy && !(isNaN(r.dy) && isNaN(cur2.dy)))) {
           const d = K7.kid(n2, "drill");
           const off = d ? K7.kid(d, "offset") : null;
           const oval = !!d && d.includes("oval");
@@ -38688,7 +40773,7 @@ Press <esc> to cancel all; double-click to finish`;
           if (!st.picked.has(it.id)) {
             const val = st.stored.length ? st.stored.shift() : (st.next += st.step, st.next - st.step);
             const label = enumLabel(st, val);
-            st.old.set(it.id, { val, was: st.numbers.has(it.id) ? st.numbers.get(it.id) : str7(it.node[1]) });
+            st.old.set(it.id, { val, was: st.numbers.has(it.id) ? st.numbers.get(it.id) : str8(it.node[1]) });
             st.numbers.set(it.id, label);
             st.picked.add(it.id);
             any = true;
@@ -38719,8 +40804,8 @@ Press <esc> to cancel all; double-click to finish`;
         const out = [];
         for (const [id, label] of st.numbers) {
           const it = doc.items.get(id);
-          if (!it || str7(it.node[1]) === label) continue;
-          const n2 = clone2(it.node);
+          if (!it || str8(it.node[1]) === label) continue;
+          const n2 = clone3(it.node);
           n2[1] = label;
           out.push(replacedChange(it, n2));
         }
@@ -38755,7 +40840,7 @@ Press <esc> to cancel all; double-click to finish`;
         padsAlong,
         setKid: setKid22
       };
-      var str8 = (v) => v === void 0 || v === null ? "" : String(v);
+      var str9 = (v) => v === void 0 || v === null ? "" : String(v);
       var num62 = (v, d = 0) => typeof v === "number" ? v : d;
       var FP_CHECK_TITLES = {
         malformed_courtyard: "Footprint has malformed courtyard",
@@ -38771,7 +40856,7 @@ Press <esc> to cancel all; double-click to finish`;
       };
       var SEVERITY = { missing_courtyard: "warning", footprint_type_mismatch: "ignore", padstack: "warning", holes_co_located: "warning", hole_to_hole: "warning", silk_over_copper: "warning" };
       var sev2 = (code) => SEVERITY[code] || "error";
-      var layersOf2 = (n2) => (K7.kid(n2, "layers") || []).slice(1).map(str8);
+      var layersOf2 = (n2) => (K7.kid(n2, "layers") || []).slice(1).map(str9);
       var onLayer2 = (ls, l) => ls.includes(l) || ls.includes("*." + l.split(".")[1]) || l.endsWith(".Cu") && (ls.includes("*.Cu") || ls.includes("F&B.Cu") && (l === "F.Cu" || l === "B.Cu"));
       var atOf32 = (n2) => {
         const a = K7.kid(n2, "at") || [];
@@ -38784,10 +40869,10 @@ Press <esc> to cancel all; double-click to finish`;
         return { w: v[0] || 0, h: v[1] ?? v[0] ?? 0, oval: d.includes("oval") };
       }
       var PAD_TYPE2 = { thru_hole: "Through-hole", smd: "SMD", np_thru_hole: "NPTH", connect: "Connector", non_component: "Non-component" };
-      var prop2 = (n2) => str8((K7.kid(n2, "property") || [])[1]);
+      var prop2 = (n2) => str9((K7.kid(n2, "property") || [])[1]);
       function checkPad2(n2) {
         const out = [];
-        const attr = str8(n2[2]);
+        const attr = str9(n2[2]);
         const t = PAD_TYPE2[attr] || attr;
         const ls = layersOf2(n2);
         const d = drill2(n2);
@@ -38798,7 +40883,7 @@ Press <esc> to cancel all; double-click to finish`;
           if (has22("F.Cu") && has22("B.Paste") || has22("B.Cu") && has22("F.Paste")) P(`${t} pad has copper and paste layers on different sides of the board`);
         };
         const s = K7.kid(n2, "size");
-        if (s && (num62(s[1]) <= 0 || num62(s[2]) <= 0) && str8(n2[3]) !== "custom") P("Pad size must be greater than zero");
+        if (s && (num62(s[1]) <= 0 || num62(s[2]) <= 0) && str9(n2[3]) !== "custom") P("Pad size must be greater than zero");
         if (!has22("F.Cu") && !has22("B.Cu") && (d.w || d.h) && attr !== "np_thru_hole") P("plated through holes normally have a copper pad on at least one outer layer");
         const pr = prop2(n2);
         if ((pr === "pad_prop_fiducial_glob" || pr === "pad_prop_fiducial_loc") && attr === "np_thru_hole") P("'fiducial' pads are normally plated");
@@ -38866,12 +40951,12 @@ Press <esc> to cancel all; double-click to finish`;
         return Math.min(ps(a, c, d), ps(b, c, d), ps(c, a, b), ps(d, a, b));
       }
       function graphicPoints(n2) {
-        const k = str8(n2[0]);
+        const k = str9(n2[0]);
         const p = (key2) => {
           const c = K7.kid(n2, key2);
           return c ? [num62(c[1]), num62(c[2])] : null;
         };
-        if (k === "gr_poly" || k === "gr_curve") return (K7.kid(n2, "pts") || []).slice(1).filter((xy2) => Array.isArray(xy2) && xy2[0] === "xy").map((xy2) => [num62(xy2[1]), num62(xy2[2])]);
+        if (k === "gr_poly" || k === "gr_curve") return (K7.kid(n2, "pts") || []).slice(1).filter((xy3) => Array.isArray(xy3) && xy3[0] === "xy").map((xy3) => [num62(xy3[1]), num62(xy3[2])]);
         if (k === "gr_rect") {
           const a = p("start"), b = p("end");
           return a && b ? [a, [b[0], a[1]], b, [a[0], b[1]]] : [];
@@ -38910,13 +40995,13 @@ Press <esc> to cancel all; double-click to finish`;
           out.push({ code, severity: s, title: FP_CHECK_TITLES[code] || code, detail: detail2, ids, at: at2 });
         };
         const header2 = (doc.fpState || { fp: ["footprint", ""] }).fp;
-        const attrs = (K7.kid(header2, "attr") || []).slice(1).map(str8);
+        const attrs = (K7.kid(header2, "attr") || []).slice(1).map(str9);
         const items = Array.from(doc.items.values());
         const pads = items.filter((i) => i.kind === "pad");
         for (const side of ["F.CrtYd", "B.CrtYd"]) {
           const chains = [];
           for (const it of items) {
-            if (!/^gr_(line|rect|circle|arc|poly)$/.test(it.kind) || str8((K7.kid(it.node, "layer") || [])[1]) !== side) continue;
+            if (!/^gr_(line|rect|circle|arc|poly)$/.test(it.kind) || str9((K7.kid(it.node, "layer") || [])[1]) !== side) continue;
             const pts = graphicPoints(it.node);
             if (pts.length < 2) continue;
             chains.push(/^gr_(rect|circle|poly)$/.test(it.kind) ? pts.concat([pts[0]]) : pts);
@@ -38925,16 +41010,16 @@ Press <esc> to cancel all; double-click to finish`;
           const { dangling } = chainLoops2(chains);
           if (dangling) add("malformed_courtyard", `(not a closed shape)`, [], [0, 0]);
         }
-        const hasCrtYd = items.some((i) => ["F.CrtYd", "B.CrtYd"].includes(str8((K7.kid(i.node, "layer") || [])[1])));
+        const hasCrtYd = items.some((i) => ["F.CrtYd", "B.CrtYd"].includes(str9((K7.kid(i.node, "layer") || [])[1])));
         if (!attrs.includes("allow_missing_courtyard") && !hasCrtYd) add("missing_courtyard", "", [], [0, 0]);
-        const likely = pads.some((p) => str8(p.node[2]) === "thru_hole") ? "through_hole" : pads.some((p) => str8(p.node[2]) === "smd") ? "smd" : "";
+        const likely = pads.some((p) => str9(p.node[2]) === "thru_hole") ? "through_hole" : pads.some((p) => str9(p.node[2]) === "smd") ? "smd" : "";
         const set = attrs.includes("through_hole") ? "through_hole" : attrs.includes("smd") ? "smd" : "";
         if (set && likely && set !== likely) add("footprint_type_mismatch", `(expected '${likely === "smd" ? "SMD" : "Through hole"}'; actual '${set === "smd" ? "SMD" : "Through hole"}')`, [], [0, 0]);
         for (const p of pads) for (const r of checkPad2(p.node)) {
           const [x, y] = atOf32(p.node);
           add(r.code, r.msg ? `(${r.msg})` : "", [p.id], [x, y]);
         }
-        const netTie = (K7.kid(header2, "net_tie_pad_groups") || []).slice(1).map((g2) => str8(g2).split(/[,\s]+/).filter(Boolean));
+        const netTie = (K7.kid(header2, "net_tie_pad_groups") || []).slice(1).map((g2) => str9(g2).split(/[,\s]+/).filter(Boolean));
         const tied = (a, b) => netTie.some((g2) => g2.includes(a) && g2.includes(b));
         for (let i = 0; i < pads.length; i++) for (let j = i + 1; j < pads.length; j++) {
           const a = pads[i].node, b = pads[j].node;
@@ -38944,7 +41029,7 @@ Press <esc> to cancel all; double-click to finish`;
             if (Math.abs(pa[0] - pb[0]) < 1e-6 && Math.abs(pa[1] - pb[1]) < 1e-6) add("holes_co_located", "", [pads[i].id, pads[j].id], [pa[0], pa[1]]);
             else if (segSeg(ha.a, ha.b, hb.a, hb.b) < ha.r + hb.r) add("hole_to_hole", "", [pads[i].id, pads[j].id], [pa[0], pa[1]]);
           }
-          const na = str8(a[1]), nb = str8(b[1]);
+          const na = str9(a[1]), nb = str9(b[1]);
           if (na && na === nb || tied(na, nb)) continue;
           const la = layersOf2(a), lb = layersOf2(b);
           const cu = ["F.Cu", "B.Cu", ...Array.from({ length: 30 }, (_, k) => `In${k + 1}.Cu`)];
@@ -38953,7 +41038,7 @@ Press <esc> to cancel all; double-click to finish`;
           if (hit5) add("shorting_items", "", [pads[i].id, pads[j].id], hit5);
         }
         if (netTie.length) {
-          const nums = new Set(pads.map((p) => str8(p.node[1])));
+          const nums = new Set(pads.map((p) => str9(p.node[1])));
           const seen = /* @__PURE__ */ new Set();
           for (const g2 of netTie) for (const n2 of g2) {
             if (!nums.has(n2)) add("footprint", `(net-tie pad group contains unknown pad number ${n2})`, [], [0, 0]);
@@ -38964,7 +41049,7 @@ Press <esc> to cancel all; double-click to finish`;
         const fpMask = num62((K7.kid(header2, "solder_mask_margin") || [])[1]);
         for (const g2 of items) {
           if (!/^gr_(line|rect|circle|arc|poly|curve)$/.test(g2.kind)) continue;
-          const gl = str8((K7.kid(g2.node, "layer") || [])[1]);
+          const gl = str9((K7.kid(g2.node, "layer") || [])[1]);
           if (gl !== "F.SilkS" && gl !== "B.SilkS") continue;
           const mask = gl === "F.SilkS" ? "F.Mask" : "B.Mask";
           const pts = graphicPoints(g2.node);
@@ -38994,7 +41079,7 @@ Press <esc> to cancel all; double-click to finish`;
         return out;
       }
       var fpCheckApi = { checkFootprint, checkPad: checkPad2, FP_CHECK_TITLES };
-      var str9 = (v) => v === void 0 || v === null ? "" : String(v);
+      var str10 = (v) => v === void 0 || v === null ? "" : String(v);
       var MAX_USER_RESULTS = 400;
       var splitId2 = (id) => {
         const i = id.indexOf(":");
@@ -39012,7 +41097,7 @@ Press <esc> to cancel all; double-click to finish`;
         return re.test(cand);
       }
       var prop22 = (s, key2) => {
-        for (const k of K7.kids(s, "property")) if (str9(k[1]) === key2) return str9(k[2]);
+        for (const k of K7.kids(s, "property")) if (str10(k[1]) === key2) return str10(k[2]);
         return "";
       };
       function pinCount(s) {
@@ -39033,10 +41118,10 @@ Press <esc> to cancel all; double-click to finish`;
         if (!q.name || !wantFilter && !wantField && !wantMap) return { matches: out, limited };
         for (const lib of libs) {
           const syms = K7.kids(lib.tree, "symbol");
-          const byName = new Map(syms.map((s) => [str9(s[1]), s]));
+          const byName = new Map(syms.map((s) => [str10(s[1]), s]));
           const parentOf2 = (s) => {
             const e = K7.kid(s, "extends");
-            return e ? byName.get(str9(e[1])) || null : null;
+            return e ? byName.get(str10(e[1])) || null : null;
           };
           const effFootprint = (s, depth = 0) => {
             const t = prop22(s, "Footprint");
@@ -39051,7 +41136,7 @@ Press <esc> to cancel all; double-click to finish`;
             return p ? effAssoc(p, depth + 1) : [];
           };
           for (const s of syms) {
-            const m = { lib: lib.nickname, symbol: str9(s[1]), pins: 0, derived: !!K7.kid(s, "extends"), filter: "", field: false, pinMaps: [] };
+            const m = { lib: lib.nickname, symbol: str10(s[1]), pins: 0, derived: !!K7.kid(s, "extends"), filter: "", field: false, pinMaps: [] };
             let filt = prop22(s, "ki_fp_filters");
             if (!filt) {
               const p = parentOf2(s);
@@ -39063,9 +41148,9 @@ Press <esc> to cancel all; double-click to finish`;
             }
             const fpText = effFootprint(s);
             if (fpText && referenceMatches(fpText, q.lib, q.name)) m.field = true;
-            for (const a of effAssoc(s)) if (referenceMatches(str9(a[1]), q.lib, q.name)) {
+            for (const a of effAssoc(s)) if (referenceMatches(str10(a[1]), q.lib, q.name)) {
               const mp = K7.kid(a, "map");
-              m.pinMaps.push(mp ? str9(mp[1]) : "");
+              m.pinMaps.push(mp ? str10(mp[1]) : "");
             }
             if (!m.filter && !m.field && !m.pinMaps.length) continue;
             if (!(wantFilter && m.filter || wantField && m.field || wantMap && m.pinMaps.length)) continue;
@@ -39105,7 +41190,7 @@ Press <esc> to cancel all; double-click to finish`;
           if (ev.key === "Escape" && run) run.cancelled = true;
         }, true);
       }
-      function popup(ctx, at2) {
+      function popup2(ctx, at2) {
         if (!run) return;
         S2.popup = { text: enumPopup(run.st), at: at2.slice(), until: Number.MAX_SAFE_INTEGER };
         ctx.requestRender();
@@ -39116,9 +41201,9 @@ Press <esc> to cancel all; double-click to finish`;
         for (const [id, label] of run.st.numbers) {
           const it = ctx.doc.items.get(id);
           if (!it) continue;
-          if (!run.orig.has(id)) run.orig.set(id, clone2(it.node));
+          if (!run.orig.has(id)) run.orig.set(id, clone3(it.node));
           if (String(it.node[1]) === label) continue;
-          const n2 = clone2(it.node);
+          const n2 = clone3(it.node);
           n2[1] = label;
           ch.push(replacedChange(it, n2));
         }
@@ -39141,7 +41226,7 @@ Press <esc> to cancel all; double-click to finish`;
         S2.sel.clear();
         S2.padSel = null;
         if (ctx.setStatus) ctx.setStatus("Renumber Pads");
-        popup(ctx, ctx.cursor || [0, 0]);
+        popup2(ctx, ctx.cursor || [0, 0]);
       }
       function enumLeave(ctx, commit) {
         if (!run) return;
@@ -39170,7 +41255,7 @@ Press <esc> to cancel all; double-click to finish`;
         }
         run.last = mm2.slice();
         if (enumPick(run.st, ctx.doc, padsAt(ctx.doc, mm2), true)) preview(ctx);
-        popup(ctx, mm2);
+        popup2(ctx, mm2);
       }
       function enumMove(ev, mm2, ctx) {
         if (!run || !ctx.doc) return;
@@ -39178,7 +41263,7 @@ Press <esc> to cancel all; double-click to finish`;
           if (enumPick(run.st, ctx.doc, padsAlong(ctx.doc, run.last, mm2), false)) preview(ctx);
         }
         run.last = ev && (ev.buttons || 0) & 1 ? mm2.slice() : null;
-        popup(ctx, mm2);
+        popup2(ctx, mm2);
       }
       var DRCET = { unconnected_items: "UNCONNECTED_ITEMS", shorting_items: "SHORTING_ITEMS", items_not_allowed: "ALLOWED_ITEMS", text_on_edge_cuts: "TEXT_ON_EDGECUTS", clearance: "CLEARANCE", creepage: "CREEPAGE", tracks_crossing: "TRACKS_CROSSING", copper_edge_clearance: "EDGE_CLEARANCE", copper_outside_board: "COPPER_OUTSIDE_BOARD", isolated_copper: "ISOLATED_COPPER", starved_thermal: "STARVED_THERMAL", via_dangling: "DANGLING_VIA", track_dangling: "DANGLING_TRACK", hole_clearance: "HOLE_CLEARANCE", hole_to_hole: "DRILLED_HOLES_TOO_CLOSE", holes_co_located: "DRILLED_HOLES_COLOCATED", connection_width: "CONNECTION_WIDTH", track_width: "TRACK_WIDTH", track_angle: "TRACK_ANGLE", track_segment_length: "TRACK_SEGMENT_LENGTH", annular_width: "ANNULAR_WIDTH", drill_out_of_range: "DRILL_OUT_OF_RANGE", via_diameter: "VIA_DIAMETER", padstack: "PADSTACK", padstack_invalid: "PADSTACK_INVALID", microvia_drill_out_of_range: "MICROVIA_DRILL_OUT_OF_RANGE", malformed_microvia_stack_span: "MALFORMED_MICROVIA_STACK_SPAN", microvia_stack_not_filled: "MICROVIA_STACK_NOT_FILLED", microvia_stack_depth: "MICROVIA_STACK_DEPTH", hole_aspect_ratio: "HOLE_ASPECT_RATIO", microvia_crosses_core: "MICROVIA_CROSSES_CORE", courtyards_overlap: "OVERLAPPING_FOOTPRINTS", missing_courtyard: "MISSING_COURTYARD", malformed_courtyard: "MALFORMED_COURTYARD", pth_inside_courtyard: "PTH_IN_COURTYARD", npth_inside_courtyard: "NPTH_IN_COURTYARD", item_on_disabled_layer: "DISABLED_LAYER_ITEM", invalid_outline: "INVALID_OUTLINE", duplicate_footprints: "DUPLICATE_FOOTPRINT", missing_footprint: "MISSING_FOOTPRINT", extra_footprint: "EXTRA_FOOTPRINT", net_conflict: "NET_CONFLICT", footprint_symbol_mismatch: "SCHEMATIC_PARITY", footprint_filters_mismatch: "FOOTPRINT_FILTERS", footprint_symbol_field_mismatch: "SCHEMATIC_FIELDS_PARITY", lib_footprint_issues: "LIB_FOOTPRINT_ISSUES", lib_footprint_mismatch: "LIB_FOOTPRINT_MISMATCH", unresolved_variable: "UNRESOLVED_VARIABLE", assertion_failure: "ASSERTION_FAILURE", generic_warning: "GENERIC_WARNING", generic_error: "GENERIC_ERROR", copper_sliver: "COPPER_SLIVER", solder_mask_bridge: "SOLDERMASK_BRIDGE", silk_over_copper: "SILK_MASK_CLEARANCE", silk_edge_clearance: "SILK_EDGE_CLEARANCE", silk_overlap: "SILK_CLEARANCE", text_height: "TEXT_HEIGHT", text_thickness: "TEXT_THICKNESS", length_out_of_range: "LENGTH_OUT_OF_RANGE", net_chain_stub_length: "NET_CHAIN_STUB_TOO_LONG", net_chain_return_path: "NET_CHAIN_RETURN_PATH_BREAK", net_chain_tuning_profiles: "NET_CHAIN_TUNING_PROFILES", skew_out_of_range: "SKEW_OUT_OF_RANGE", too_many_vias: "VIA_COUNT_OUT_OF_RANGE", diff_pair_gap_out_of_range: "DIFF_PAIR_GAP_OUT_OF_RANGE", diff_pair_uncoupled_length_too_long: "DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG", footprint: "FOOTPRINT", footprint_type_mismatch: "FOOTPRINT_TYPE_MISMATCH", through_hole_pad_without_hole: "PAD_TH_WITH_NO_HOLE", footprint_scaled_with_pads: "FOOTPRINT_SCALED_WITH_PADS", mirrored_text_on_front_layer: "MIRRORED_TEXT_ON_FRONT_LAYER", nonmirrored_text_on_back_layer: "NONMIRRORED_TEXT_ON_BACK_LAYER", missing_tuning_profile: "MISSING_TUNING_PROFILE", tuning_profile_track_geometries: "TUNING_PROFILE_IMPLICIT_RULES", track_on_post_machined_layer: "TRACK_ON_POST_MACHINED_LAYER", track_not_centered_on_via: "TRACK_NOT_CENTERED_ON_VIA" };
       var LAYER_STORED = /* @__PURE__ */ new Set(["copper_sliver", "generic_warning", "generic_error", "unconnected_items", "starved_thermal"]);
@@ -39366,6 +41451,8 @@ Press <esc> to cancel all; double-click to finish`;
             S2.drag = null;
             routeUnhighlight(ctx, D.subs[0]);
           }
+          S2.zoneMode = t === "zone" ? S2.zoneModeNext || null : null;
+          S2.zoneModeNext = null;
           S2.draw = null;
           S2.strokeW = null;
           closeTextPrompt();
@@ -39730,6 +41817,9 @@ Press <esc> to cancel all; double-click to finish`;
             case "4":
               if (!isTuneTool(S2.modTool) || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
               return runAction({ 1: "spacingIncrease", 2: "spacingDecrease", 3: "amplIncrease", 4: "amplDecrease" }[k], ctx);
+            case "Tab":
+              return S2.moveSeq ? runAction("skip", ctx) : false;
+            // PCB_ACTIONS::skip while moving individually
             case "End":
               if (S2.route) {
                 if (editing()) endRoute(ctx, true);
@@ -39810,7 +41900,8 @@ Press <esc> to cancel all; double-click to finish`;
                 if (editing()) undoRouteLeg(ctx);
                 return true;
               }
-            // routerUndoLastSegment: silent with nothing fixed
+              if (!S2.draw && !S2.move && !ev.shiftKey && !ctx.viewOnly && unrouteSegment(ctx)) return true;
+            // PCB_ACTIONS::unrouteSegment on selected tracks / vias
             // fall through: deleteLastPoint and doDelete are the same while drawing; with nothing drawn Backspace deletes like Delete
             case "Delete":
               if (S2.draw && S2.draw.shape === "garc") {
@@ -40063,6 +42154,25 @@ Press <esc> to cancel all; double-click to finish`;
       root4.CollabTools = root4.CollabTools || {};
       root4.CollabTools.pcb = pcb;
       root4.PcbTools = {
+        OffsetItemState,
+        snapAnchors,
+        textGraphics: textGraphicsApi,
+        layerStyle,
+        globalDeletion: globalDeletionApi,
+        enabledLayerPairs,
+        resetLayerPairCycle,
+        itemOnLayer,
+        itemRatsnestAnchors,
+        uniqueZoneName,
+        subtractOutline,
+        footprintRefChoices,
+        footprintByRef,
+        netNameCmp,
+        fieldEdit: { requestField, rotateFieldChange, flipFieldChange, hideFieldChanges, footprintFieldNode },
+        boardFindHits,
+        edaMatches,
+        findStep,
+        unescapeKiCad,
         nearestSnapLinePoint,
         angleSnapDirections,
         MOVE_SNAP_MSG,
@@ -40528,9 +42638,9 @@ Press <esc> to cancel all; double-click to finish`;
   }
 });
 
-// node_modules/opentype.js/dist/opentype.js
+// ../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.js
 var require_opentype = __commonJS({
-  "node_modules/opentype.js/dist/opentype.js"(exports2, module2) {
+  "../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.js"(exports2, module2) {
     (function(global, factory) {
       typeof exports2 === "object" && typeof module2 !== "undefined" ? factory(exports2) : typeof define === "function" && define.amd ? define(["exports"], factory) : (global = global || self, factory(global.opentype = {}));
     })(exports2, (function(exports3) {
@@ -41418,14 +43528,14 @@ var require_opentype = __commonJS({
         }
         return encodingTable;
       };
-      encode.MACSTRING = function(str3, encoding) {
+      encode.MACSTRING = function(str4, encoding) {
         var table2 = getMacEncodingTable(encoding);
         if (table2 === void 0) {
           return void 0;
         }
         var result = [];
-        for (var i = 0; i < str3.length; i++) {
-          var c = str3.charCodeAt(i);
+        for (var i = 0; i < str4.length; i++) {
+          var c = str4.charCodeAt(i);
           if (c >= 128) {
             c = table2[c];
             if (c === void 0) {
@@ -41436,8 +43546,8 @@ var require_opentype = __commonJS({
         }
         return result;
       };
-      sizeOf.MACSTRING = function(str3, encoding) {
-        var b = encode.MACSTRING(str3, encoding);
+      sizeOf.MACSTRING = function(str4, encoding) {
+        var b = encode.MACSTRING(str4, encoding);
         if (b !== void 0) {
           return b.length;
         } else {
@@ -53601,13 +55711,13 @@ function layout(text2, italic) {
   const strokes = [];
   const tilt = italic ? ITALIC_TILT : 0;
   let cursor = 0;
-  const run = (str3, sub, sup) => {
+  const run = (str4, sub, sup) => {
     const k = sub || sup ? SUPER_SUB_SIZE_MULTIPLIER : 1;
     const dy = sub ? k * SUB_HEIGHT_OFFSET : sup ? -k * SUPER_HEIGHT_OFFSET : 0;
     const x0 = cursor;
     let count = 0;
     const space = strokeGlyph(32).adv;
-    for (const ch of str3) {
+    for (const ch of str4) {
       const cp2 = ch.codePointAt(0);
       if (cp2 === 9) {
         count = (Math.floor(count / TAB_WIDTH) + 1) * TAB_WIDTH - 1;
@@ -54167,8 +56277,10 @@ function sheetTextVars(doc) {
     PROJECTNAME: str(doc && doc.projectName),
     PAPER: str(doc && doc.paper) || "A4",
     LAYER: str(doc && doc.sheetLayer),
-    VARIANT: "",
-    VARIANT_DESC: "",
+    // the drawing sheet's ${VARIANT} / ${VARIANT_DESC}: the current variant (PCB_EDIT_FRAME / SCH_EDIT_FRAME
+    // SetCurrentVariant hand them to the drawing sheet; empty for the default)
+    VARIANT: str(doc && doc.variantName),
+    VARIANT_DESC: str(doc && doc.variantDesc),
     ISSUE_DATE: str(tb.date),
     CURRENT_DATE: `${now.getFullYear()}-${TWO(now.getMonth() + 1)}-${TWO(now.getDate())}`,
     CURRENT_TIME_HH_MM_SS: `${TWO(now.getHours())}:${TWO(now.getMinutes())}:${TWO(now.getSeconds())}`,
@@ -62779,6 +64891,7 @@ function applyHeaderChange(header, change) {
     if (p.name === "layers") out.layers = v;
     else if (p.name === "setup") out.setup = v;
     else if (p.name === "general") out.general = v;
+    else if (p.name === "variants") out.variants = v;
   }
   return out;
 }
@@ -63388,14 +65501,131 @@ var DRC_ITEMS = [
   ["Warning", "generic_warning", "error"]
 ];
 
-// web/canvas/pcb-netlist.ts
+// web/canvas/variant-model.ts
 var isList3 = Array.isArray;
+var str2 = (v) => v === void 0 || v === null ? "" : String(v);
+var kid2 = (n2, key2) => {
+  if (!n2) return null;
+  for (let i = 1; i < n2.length; i++) {
+    const c = n2[i];
+    if (isList3(c) && c[0] === key2) return c;
+  }
+  return null;
+};
+var kids2 = (n2, key2) => n2 ? n2.filter((c) => isList3(c) && c[0] === key2) : [];
+var clone = (n2) => JSON.parse(JSON.stringify(n2));
+var boolOf2 = (k, dflt) => k ? k.length < 2 || /^(yes|true)$/.test(str2(k[1])) : dflt;
+var cmpCode = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+var lower = (s) => s.toLowerCase();
+var DEFAULT_VARIANT_NAME = "< Default >";
+var isDefaultVariant = (v) => !v || lower(v) === lower(DEFAULT_VARIANT_NAME);
+var FP_FLAG_KEYS = ["dnp", "exclude_from_bom", "exclude_from_sim", "exclude_from_pos_files"];
+function footprintFlags(fp) {
+  const a = kid2(fp, "attr");
+  const toks = a ? a.slice(1).map(str2) : [];
+  return { dnp: toks.includes("dnp"), exclude_from_bom: toks.includes("exclude_from_bom"), exclude_from_sim: toks.includes("exclude_from_sim"), exclude_from_pos_files: toks.includes("exclude_from_pos_files") };
+}
+var fpField = (fp, name) => kids2(fp, "property").find((p) => str2(p[1]) === name) || null;
+function footprintVariantNode(fp, name) {
+  if (isDefaultVariant(name)) return null;
+  return kids2(fp, "variant").find((v) => lower(str2((kid2(v, "name") || [])[1])) === lower(name)) || null;
+}
+function footprintVariant(fp, name) {
+  const v = footprintVariantNode(fp, name);
+  if (!v) return null;
+  const base = footprintFlags(fp), flags = { ...base };
+  for (const k of FP_FLAG_KEYS) flags[k] = boolOf2(kid2(v, k), base[k]);
+  const fields = /* @__PURE__ */ new Map();
+  for (const f2 of kids2(v, "field")) {
+    const nm3 = str2((kid2(f2, "name") || [])[1]);
+    if (nm3) fields.set(nm3, str2((kid2(f2, "value") || [])[1]));
+  }
+  return { name: str2((kid2(v, "name") || [])[1]), flags, fields };
+}
+var VARIANT_BEFORE = ["embedded_fonts", "embedded_files", "model", "extruded"];
+function setFootprintVariant(fp, name, patch) {
+  if (isDefaultVariant(name)) throw new Error("Variant name cannot be empty or default.");
+  const out = clone(fp), base = footprintFlags(out);
+  const cur2 = footprintVariant(out, name) || { name, flags: { ...base }, fields: /* @__PURE__ */ new Map() };
+  for (const k of FP_FLAG_KEYS) if (patch.flags && patch.flags[k] !== void 0) cur2.flags[k] = !!patch.flags[k];
+  if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) cur2.fields.set(k, v);
+  const node = ["variant", ["name", cur2.name]];
+  for (const k of FP_FLAG_KEYS) if (cur2.flags[k] !== base[k]) node.push([k, cur2.flags[k] ? "yes" : "no"]);
+  for (const k of [...cur2.fields.keys()].sort(cmpCode)) {
+    const p = fpField(out, k), v = cur2.fields.get(k);
+    if ((p ? str2(p[2]) : "") === v) continue;
+    node.push(["field", ["name", k], ["value", v]]);
+  }
+  const old = footprintVariantNode(out, name);
+  if (old) {
+    out[out.indexOf(old)] = node;
+    return out;
+  }
+  const others = kids2(out, "variant");
+  const after = others.filter((v) => lower(str2((kid2(v, "name") || [])[1])) < lower(name)).pop();
+  if (after) {
+    out.splice(out.indexOf(after) + 1, 0, node);
+    return out;
+  }
+  if (others.length) {
+    out.splice(out.indexOf(others[0]), 0, node);
+    return out;
+  }
+  const at2 = out.findIndex((c, i) => i > 0 && isList3(c) && VARIANT_BEFORE.includes(str2(c[0])));
+  out.splice(at2 > 0 ? at2 : out.length, 0, node);
+  return out;
+}
+var SYM_KEYS = [["dnp", "dnp", false], ["exclude_from_sim", "excludedFromSim", false], ["in_bom", "excludedFromBOM", true], ["on_board", "excludedFromBoard", true], ["in_pos_files", "excludedFromPosFiles", true]];
+var VARIANT_IN_BOM_POSITIVE_VERSION = 20260306;
+var variantInBomPositive = (ver) => !ver || ver >= VARIANT_IN_BOM_POSITIVE_VERSION;
+var variantKeys = (ver) => variantInBomPositive(ver) ? SYM_KEYS : SYM_KEYS.map(([k, f2, inv]) => [k, f2, k === "in_bom" ? false : inv]);
+function symbolFlags(sym) {
+  const out = {};
+  for (const [key2, f2, inv] of SYM_KEYS) {
+    const k = kid2(sym, key2);
+    out[f2] = inv ? !boolOf2(k, true) : boolOf2(k, false);
+  }
+  return out;
+}
+function symbolInstancePaths(sym) {
+  const out = [];
+  for (const proj of kids2(kid2(sym, "instances"), "project")) for (const p of kids2(proj, "path")) out.push(p);
+  return out;
+}
+function symbolInstance(sym, path2) {
+  const all2 = symbolInstancePaths(sym);
+  return (path2 ? all2.find((p) => str2(p[1]) === path2) : null) || all2[0] || null;
+}
+var symVariantIn = (inst, name) => kids2(inst, "variant").find((v) => str2((kid2(v, "name") || [])[1]) === name) || null;
+function symbolVariant(sym, name, path2, ver) {
+  if (isDefaultVariant(name)) return null;
+  const v = symVariantIn(symbolInstance(sym, path2), name);
+  if (!v) return null;
+  const base = symbolFlags(sym), flags = { ...base };
+  for (const [key2, f2, inv] of variantKeys(ver)) {
+    const k = kid2(v, key2);
+    if (k) flags[f2] = inv ? !boolOf2(k, true) : boolOf2(k, false);
+  }
+  const fields = /* @__PURE__ */ new Map();
+  for (const f2 of kids2(v, "field")) {
+    const nm3 = str2((kid2(f2, "name") || [])[1]);
+    if (nm3) fields.set(nm3, str2((kid2(f2, "value") || [])[1]));
+  }
+  return { flags, fields };
+}
+function symbolFlagsForVariant(sym, variant, path2, ver) {
+  const st = variant ? symbolVariant(sym, variant, path2, ver) : null;
+  return st ? st.flags : symbolFlags(sym);
+}
+
+// web/canvas/pcb-netlist.ts
+var isList4 = Array.isArray;
 var r4 = (v) => +(+v).toFixed(4);
 var pkey = (p) => r4(p[0]) + "," + r4(p[1]);
 function idxOf2(node, key2) {
   for (let j = 1; j < node.length; j++) {
     const c = node[j];
-    if (isList3(c) && c[0] === key2) return j;
+    if (isList4(c) && c[0] === key2) return j;
   }
   return -1;
 }
@@ -63557,6 +65787,35 @@ function defaultPinNet(p, forceNoConnect) {
     return name + ")";
   }
   return name + p.ref + "-Pad" + escapeNetName(number) + ")";
+}
+var lowerCmp = (a, b) => {
+  const x = a.toLowerCase(), y = b.toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+};
+function componentVariants(sym, path2, ref, ver) {
+  const inst = symbolInstance(sym, path2);
+  if (!inst || str(inst[1]) !== path2) return [];
+  const base = symbolFlags(sym), out = [];
+  const fieldText2 = (k) => {
+    if (k === "Reference") return ref;
+    const p = kids(sym, "property").find((q) => str(q[1]) === k);
+    return p ? str(p[2]) : "";
+  };
+  for (const v of kids(inst, "variant")) {
+    const name = str((kid(v, "name") || [])[1]);
+    if (!name || out.some((o) => o.name.toLowerCase() === name.toLowerCase())) continue;
+    const eff = symbolFlagsForVariant(sym, name, path2, ver), st = symbolVariant(sym, name, path2, ver);
+    const nv = { name, fields: /* @__PURE__ */ new Map() };
+    if (eff.dnp !== base.dnp) nv.dnp = eff.dnp;
+    if (eff.excludedFromBOM !== base.excludedFromBOM) nv.excludedFromBOM = eff.excludedFromBOM;
+    if (eff.excludedFromSim !== base.excludedFromSim) nv.excludedFromSim = eff.excludedFromSim;
+    if (eff.excludedFromPosFiles !== base.excludedFromPosFiles) nv.excludedFromPosFiles = eff.excludedFromPosFiles;
+    if (st) {
+      for (const [k, val] of st.fields) if (val !== fieldText2(k)) nv.fields.set(k, val);
+    }
+    if (nv.dnp !== void 0 || nv.excludedFromBOM !== void 0 || nv.excludedFromSim !== void 0 || nv.excludedFromPosFiles !== void 0 || nv.fields.size) out.push(nv);
+  }
+  return out.sort((a, b) => lowerCmp(a.name, b.name));
 }
 function buildNetlist(root4, loadSheet, h, project) {
   const warnings = [];
@@ -63728,6 +65987,8 @@ function buildNetlist(root4, loadSheet, h, project) {
               excludeFromBoard: false,
               pins: /* @__PURE__ */ new Map()
             };
+            const variants = componentVariants(n2, "/" + inst.uuidPath.join("/"), ref, doc.version);
+            if (variants.length) comp.variants = variants;
             components2.set(ref, comp);
             compPins.set(ref, []);
           } else {
@@ -63894,7 +66155,7 @@ function buildNetlist(root4, loadSheet, h, project) {
 }
 var MANDATORY = /* @__PURE__ */ new Set(["Reference", "Value", "Datasheet", "Description"]);
 var PAD_AFTER_NET = ["pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "custom", "primitives", "tenting", "teardrops", "padstack", "uuid", "tstamp"];
-var clone = (n2) => typeof KiCadCanvas !== "undefined" && KiCadCanvas.cloneNode ? KiCadCanvas.cloneNode(n2) : JSON.parse(JSON.stringify(n2));
+var clone2 = (n2) => typeof KiCadCanvas !== "undefined" && KiCadCanvas.cloneNode ? KiCadCanvas.cloneNode(n2) : JSON.parse(JSON.stringify(n2));
 function netNameOf2(doc, node) {
   const n2 = kid(node, "net");
   if (!n2) return "";
@@ -63930,6 +66191,12 @@ function setFpText(node, name, text2) {
   }
   for (const t of kids(node, "fp_text")) if (str(t[1]) === name.toLowerCase()) t[2] = text2;
 }
+var codeCmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+function fpidsEquivalent(board, sch) {
+  const i = sch.indexOf(":");
+  if (i < 0 || i === 0) return board.slice(board.indexOf(":") + 1) === sch.slice(i + 1);
+  return board === sch;
+}
 function attrFlags(node) {
   const a = kid(node, "attr");
   return new Set(a ? a.slice(1).map(str) : []);
@@ -63961,7 +66228,7 @@ function insertField(fp, field2) {
   let at2 = -1;
   for (let j = 1; j < fp.length; j++) {
     const c = fp[j];
-    if (isList3(c) && c[0] === "property" && !str(c[1]).startsWith("ki_")) at2 = j;
+    if (isList4(c) && c[0] === "property" && !str(c[1]).startsWith("ki_")) at2 = j;
   }
   if (at2 < 0) at2 = Math.max(idxOf2(fp, "tags"), idxOf2(fp, "descr"), idxOf2(fp, "at"), 1);
   fp.splice(at2 + 1, 0, field2);
@@ -64080,8 +66347,100 @@ function planUpdate(doc, netlist, o = {}) {
     }
     return changed;
   };
-  const applyComponent = (fp, c, fresh) => {
+  const applyVariants = (fp, c, orig, isBaseOverride) => {
+    if (!c.footprint) return false;
+    const ref = c.ref, fpid = str(fp[1]);
     let changed = false;
+    const isBase = isBaseOverride || fpidsEquivalent(fpid, c.footprint);
+    const baseDnp = attrFlags(fp).has("dnp");
+    let effDnp = baseDnp;
+    if (!isBase && !effDnp) {
+      say("action", `Add ${ref} 'Do not place' fabrication attribute.`);
+      setAttrFlag(fp, "dnp", true);
+      effDnp = true;
+      changed = true;
+    }
+    const excess = /* @__PURE__ */ new Map();
+    for (const v of kids(orig, "variant")) {
+      const n2 = str((kid(v, "name") || [])[1]);
+      if (n2) excess.set(n2.toLowerCase(), n2);
+    }
+    const writes = [];
+    for (const v of c.variants || []) {
+      const vFpid = v.fields.get("Footprint") || c.footprint;
+      if (!fpidsEquivalent(fpid, vFpid)) continue;
+      excess.delete(v.name.toLowerCase());
+      const cur2 = footprintVariant(orig, v.name), flagsNow = () => {
+        const f2 = attrFlags(fp);
+        return { dnp: f2.has("dnp"), exclude_from_bom: f2.has("exclude_from_bom"), exclude_from_sim: f2.has("exclude_from_sim"), exclude_from_pos_files: f2.has("exclude_from_pos_files") };
+      };
+      let st = cur2 ? { name: cur2.name, flags: { ...cur2.flags }, fields: new Map(cur2.fields) } : null;
+      let touched = false;
+      const add = () => {
+        if (!st) st = { name: v.name, flags: flagsNow(), fields: /* @__PURE__ */ new Map() };
+        touched = true;
+        return st;
+      };
+      const attr = (key2, label, target2, current) => {
+        if (current === target2) return;
+        say("action", target2 ? `Add ${ref} '${label}' attribute to variant ${v.name}.` : `Remove ${ref} '${label}' attribute from variant ${v.name}.`);
+        add().flags[key2] = target2;
+        changed = true;
+      };
+      const now = flagsNow();
+      attr("dnp", "Do not place", v.dnp ?? baseDnp, cur2 ? cur2.flags.dnp : effDnp);
+      attr("exclude_from_bom", "exclude from BOM", v.excludedFromBOM ?? now.exclude_from_bom, cur2 ? cur2.flags.exclude_from_bom : now.exclude_from_bom);
+      attr("exclude_from_sim", "exclude from simulation", v.excludedFromSim ?? now.exclude_from_sim, cur2 ? cur2.flags.exclude_from_sim : now.exclude_from_sim);
+      attr("exclude_from_pos_files", "exclude from position files", v.excludedFromPosFiles ?? now.exclude_from_pos_files, cur2 ? cur2.flags.exclude_from_pos_files : now.exclude_from_pos_files);
+      if (o.updateFields !== false) {
+        const fpFields = /* @__PURE__ */ new Map();
+        for (const p of kids(fp, "property")) fpFields.set(str(p[1]), str(p[2]));
+        for (const k of [...v.fields.keys()].sort(codeCmp)) {
+          if (k.toLowerCase() === "footprint") continue;
+          const val = v.fields.get(k);
+          const s2 = st;
+          const current = s2 && s2.fields.has(k) ? s2.fields.get(k) : fpFields.get(k) ?? "";
+          fpFields.delete(k);
+          if (current !== val) {
+            say("action", `Change ${ref} field '${k}' to '${val}' on variant ${v.name}.`);
+            add().fields.set(k, val);
+            changed = true;
+          }
+        }
+        for (const k of [...fpFields.keys()].sort(codeCmp)) {
+          if (k.toLowerCase() === "footprint") continue;
+          const s2 = st;
+          if (cur2 && s2 && s2.fields.has(k)) {
+            say("action", `Remove ${ref} field '${k}' override on variant ${v.name}.`);
+            s2.fields.delete(k);
+            touched = true;
+            changed = true;
+          }
+        }
+      }
+      if (touched && st) writes.push(st);
+    }
+    for (const w of writes) {
+      const old = footprintVariantNode(fp, w.name);
+      if (old) fp.splice(fp.indexOf(old), 1);
+      const fields = {};
+      for (const [k, v] of w.fields) fields[k] = v;
+      const out = setFootprintVariant(fp, w.name, { flags: w.flags, fields });
+      fp.length = 0;
+      fp.push(...out);
+    }
+    for (const lowerName of [...excess.keys()].sort((a, b) => codeCmp(excess.get(a), excess.get(b)))) {
+      const name = excess.get(lowerName);
+      say("action", `Remove variant ${ref}:${name} no longer associated with footprint ${fpid}.`);
+      const node = footprintVariantNode(fp, name);
+      if (node) fp.splice(fp.indexOf(node), 1);
+      changed = true;
+    }
+    return changed;
+  };
+  const applyComponent = (fp, c, fresh, isBase = false) => {
+    let changed = false;
+    const orig = clone2(fp);
     const oldRef = fpRef(fp);
     if (oldRef !== c.ref) {
       if (!fresh) say("action", `Change ${oldRef} reference designator to ${c.ref}.`);
@@ -64124,7 +66483,7 @@ function planUpdate(doc, netlist, o = {}) {
       let dropped = false;
       for (let j = fp.length - 1; j > 0; j--) {
         const p = fp[j];
-        if (!isList3(p) || p[0] !== "property") continue;
+        if (!isList4(p) || p[0] !== "property") continue;
         const name = str(p[1]);
         if (MANDATORY.has(name) || name === "Footprint" || name.startsWith("ki_") || name in c.fields) continue;
         fp.splice(j, 1);
@@ -64157,6 +66516,7 @@ function planUpdate(doc, netlist, o = {}) {
       changed = true;
     }
     if (applyNets(c.ref, fp, c)) changed = true;
+    if (applyVariants(fp, c, orig, isBase)) changed = true;
     return changed;
   };
   const bb = doc.bbox || [0, 0, 0, 0];
@@ -64164,7 +66524,7 @@ function planUpdate(doc, netlist, o = {}) {
   const place2 = (fp) => {
     let w = 10, hgt = 10;
     try {
-      const probe2 = { id: "probe", kind: "footprint", node: clone(fp), geom: [], bbox: null, movable: false, docType: "pcb" };
+      const probe2 = { id: "probe", kind: "footprint", node: clone2(fp), geom: [], bbox: null, movable: false, docType: "pcb" };
       KiCadCanvas.buildGeom(doc, probe2);
       if (probe2.bbox) {
         const a = atOf(fp);
@@ -64198,22 +66558,23 @@ function planUpdate(doc, netlist, o = {}) {
         say("error", `Cannot add ${c.ref} (footprint '${c.footprint}': library not available).`);
         continue;
       }
-      const node2 = clone(lib);
+      const node2 = clone2(lib);
       say("action", `Add ${c.ref} (footprint '${c.footprint}').`);
       applyComponent(node2, c, true);
       place2(node2);
       added2.push(node2);
       continue;
     }
-    let node = clone(fp.node);
+    let node = clone2(fp.node), noLibrary = false;
     const curId = str(node[1]);
     if (o.replaceFootprints !== false && c.footprint && curId !== c.footprint) {
       const lib = o.footprintFor ? o.footprintFor(c.footprint) : null;
+      if (!lib) noLibrary = true;
       if (!lib || lib === "missing") say("error", `Cannot update ${c.ref} (footprint '${c.footprint}' ${lib === "missing" ? "not found" : "not available: no footprint library"}).`);
       else if (isLocked(node) && !o.overrideLocks) say("warning", `Cannot change ${c.ref} footprint from '${curId}' to '${c.footprint}' (footprint is locked).`);
       else {
         say("action", `Change ${c.ref} footprint from '${curId}' to '${c.footprint}'.`);
-        const fresh = clone(lib), a = atOf(node);
+        const fresh = clone2(lib), a = atOf(node);
         const at2 = [a[0], a[1]];
         if (a[2]) at2.push(a[2]);
         setKid(fresh, "at", at2, ["descr", "tags", "property"], true);
@@ -64223,7 +66584,7 @@ function planUpdate(doc, netlist, o = {}) {
           if (from && to) {
             const keep = to[2];
             to.length = 0;
-            to.push(...clone(from));
+            to.push(...clone2(from));
             if (name === "Value" && !c.value) to[2] = keep;
           }
         }
@@ -64232,14 +66593,14 @@ function planUpdate(doc, netlist, o = {}) {
           const n2 = old && kid(old, "net");
           if (n2) {
             const i = idxOf2(pad, "net");
-            if (i > 0) pad[i] = clone(n2);
+            if (i > 0) pad[i] = clone2(n2);
             else setKid(pad, "net", n2.slice(1), PAD_AFTER_NET);
           }
         }
         node = fresh;
       }
     }
-    if (applyComponent(node, c, false) || node !== fp.node && JSON.stringify(node) !== JSON.stringify(fp.node)) modified2.set(fp.id, node);
+    if (applyComponent(node, c, false, noLibrary) || node !== fp.node && JSON.stringify(node) !== JSON.stringify(fp.node)) modified2.set(fp.id, node);
   }
   for (const fp of fps) {
     if (claimed.has(fp.id)) continue;
@@ -64253,7 +66614,7 @@ function planUpdate(doc, netlist, o = {}) {
       say("action", `Remove unused footprint ${ref}.`);
       removed2.push(fp.id);
     } else if (padsOf(fp.node).some((p) => netNameOf2(doc, p))) {
-      const node = clone(fp.node);
+      const node = clone2(fp.node);
       let changed = false;
       for (const pad of padsOf(node)) if (netNameOf2(doc, pad)) {
         say("action", `Disconnect ${ref} pin ${str(pad[1])}.`);
@@ -64273,7 +66634,7 @@ function planUpdate(doc, netlist, o = {}) {
     if (!cur2 || still.has(cur2)) continue;
     const to = oldToNew.get(cur2);
     if (!to) continue;
-    const node = clone(it.node);
+    const node = clone2(it.node);
     if (it.kind === "zone") {
       const zn = kidStr2(node, "name");
       say("action", zn ? `Reconnect copper zone '${zn}' from ${unescapeNetName(cur2)} to ${unescapeNetName(to)}.` : `Reconnect copper zone from ${unescapeNetName(cur2)} to ${unescapeNetName(to)}.`);
@@ -64304,7 +66665,7 @@ function planUpdate(doc, netlist, o = {}) {
   return { report: report3, modified: modified2, removed: removed2, added: added2, warnings, errors };
 }
 function footprintFromLibrary(mod, fpid, newUuid2) {
-  const fp = clone(mod);
+  const fp = clone2(mod);
   fp[0] = "footprint";
   fp[1] = fpid;
   for (const k of ["version", "generator", "generator_version", "tedit", "uuid", "at", "locked", "placed"]) while (delKid(fp, k)) {
@@ -64312,7 +66673,7 @@ function footprintFromLibrary(mod, fpid, newUuid2) {
   const stamp2 = (n2) => {
     for (let j = 1; j < n2.length; j++) {
       const c = n2[j];
-      if (!isList3(c)) continue;
+      if (!isList4(c)) continue;
       if (c[0] === "uuid" || c[0] === "tstamp") {
         n2[j] = qnode("uuid", [newUuid2()]);
         continue;
@@ -64402,7 +66763,7 @@ function projectBoardPath(docs) {
   const doc = docs.find((d) => d.docType === "kicad_pcb" && d.path === path2) || (pro ? null : docs.find((d) => d.docType === "kicad_pcb") || null);
   return { path: path2 || (doc ? doc.path : ""), doc };
 }
-var pcbNetlist = { newBoardText, projectBoardPath, buildNetlist, planUpdate, schematicParity, footprintFromLibrary, escapeNetName, unescapeNetName, busVector };
+var pcbNetlist = { newBoardText, projectBoardPath, buildNetlist, planUpdate, componentVariants, schematicParity, footprintFromLibrary, escapeNetName, unescapeNetName, busVector };
 
 // web/canvas/sch-nets.ts
 function memberKeys(m) {
@@ -64580,7 +66941,7 @@ function parseProject(text2) {
       else break;
     }
   };
-  const str3 = () => {
+  const str4 = () => {
     const start = i;
     i++;
     while (i < n2) {
@@ -64607,7 +66968,7 @@ function parseProject(text2) {
       for (; ; ) {
         ws();
         if (text2[i] !== '"') fail("expected a key");
-        const k = str3();
+        const k = str4();
         ws();
         if (text2[i] !== ":") fail("expected ':'");
         i++;
@@ -64646,7 +67007,7 @@ function parseProject(text2) {
         fail("expected ',' or ']'");
       }
     }
-    if (c === '"') return str3();
+    if (c === '"') return str4();
     if (text2.startsWith("true", i)) {
       i += 4;
       return true;
@@ -65007,9 +67368,9 @@ function presenceSelection(doc, selection, IU, moving, max = 60) {
 }
 
 // web/canvas/pad-model.ts
-var isList4 = Array.isArray;
-var kid2 = (n2, key2) => n2 ? kid(n2, key2) : null;
-var str2 = (v) => v === void 0 || v === null ? "" : String(v);
+var isList5 = Array.isArray;
+var kid3 = (n2, key2) => n2 ? kid(n2, key2) : null;
+var str3 = (v) => v === void 0 || v === null ? "" : String(v);
 var num2 = (v, d = 0) => typeof v === "number" ? v : v === void 0 || v === null || v === "" || isNaN(Number(v)) ? d : Number(v);
 var quote4 = (s) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 var f6 = (v) => {
@@ -65069,7 +67430,7 @@ function setPadChild(pad, key2, text2) {
   let i = -1;
   for (let j = 1; j < pad.length; j++) {
     const c = pad[j];
-    if (isList4(c) && c[0] === key2) {
+    if (isList5(c) && c[0] === key2) {
       i = j;
       break;
     }
@@ -65087,7 +67448,7 @@ function setPadChild(pad, key2, text2) {
   let at2 = pad.length;
   for (let j = 4; j < pad.length; j++) {
     const c = pad[j];
-    if (isList4(c) && PAD_ORDER.indexOf(String(c[0])) > rank) {
+    if (isList5(c) && PAD_ORDER.indexOf(String(c[0])) > rank) {
       at2 = j;
       break;
     }
@@ -65171,51 +67532,51 @@ function copperChoices(type) {
       return ["None"];
   }
 }
-var yes4 = (n2) => !!n2 && str2(n2[1]) !== "no";
+var yes4 = (n2) => !!n2 && str3(n2[1]) !== "no";
 function readPad(doc, fp, pad, netName2) {
   const [fx, fy, frot] = atOf(fp);
   const [px, py, prot] = atOf(pad);
   const [rx, ry] = rot(frot)(px, py);
-  const flipped = str2((kid2(fp, "layer") || [])[1]) === "B.Cu";
-  const raw = (kid2(pad, "layers") || []).slice(1).map(str2);
+  const flipped = str3((kid3(fp, "layer") || [])[1]) === "B.Cu";
+  const raw = (kid3(pad, "layers") || []).slice(1).map(str3);
   const layers0 = expandLayers(raw, doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]);
   const layers = flipped ? new Set(Array.from(layers0, flipName)) : layers0;
   const hasCu = Array.from(layers).some((l) => /\.Cu$/.test(l));
-  const t = str2(pad[2]);
+  const t = str3(pad[2]);
   const type = t === "thru_hole" ? "pth" : t === "np_thru_hole" ? "npth" : t === "connect" ? "conn" : hasCu ? "smd" : "aperture";
-  const sz = kid2(pad, "size");
+  const sz = kid3(pad, "size");
   const w = num2(sz && sz[1], 1), hh = num2(sz && sz[2], w);
-  const s = str2(pad[3]);
-  const ch = kid2(pad, "chamfer");
+  const s = str3(pad[3]);
+  const ch = kid3(pad, "chamfer");
   const cornersOn = ["top_left", "top_right", "bottom_left", "bottom_right"].map((c) => !!ch && ch.includes(c));
-  const rr = num2((kid2(pad, "roundrect_rratio") || [])[1], 0.25), cr = num2((kid2(pad, "chamfer_ratio") || [])[1], 0.2);
-  const opts = kid2(pad, "options"), anchor = str2((kid2(opts, "anchor") || [])[1]);
+  const rr = num2((kid3(pad, "roundrect_rratio") || [])[1], 0.25), cr = num2((kid3(pad, "chamfer_ratio") || [])[1], 0.2);
+  const opts = kid3(pad, "options"), anchor = str3((kid3(opts, "anchor") || [])[1]);
   const chamfered = s === "roundrect" && cornersOn.some(Boolean);
   const shape3 = s === "circle" ? "circle" : s === "oval" ? "oval" : s === "rect" ? "rect" : s === "trapezoid" ? "trapezoid" : s === "custom" ? anchor === "rect" ? "custom_rect" : "custom_circle" : chamfered ? rr > 0 ? "mixed" : "chamfer" : "roundrect";
-  const rd = kid2(pad, "rect_delta");
+  const rd = kid3(pad, "rect_delta");
   const dx = num2(rd && rd[1]), dy = num2(rd && rd[2]);
-  const dr = kid2(pad, "drill");
-  const drVals = (dr || []).slice(1).filter((v) => !isList4(v));
+  const dr = kid3(pad, "drill");
+  const drVals = (dr || []).slice(1).filter((v) => !isList5(v));
   const oblong = drVals[0] === "oval";
   const dn = drVals.filter((v) => typeof v === "number");
-  const off = kid2(dr, "offset");
+  const off = kid3(dr, "offset");
   const copperSet = Array.from(layers).filter((l) => /\.Cu$/.test(l));
   let copper = 0;
-  if (type === "pth") copper = !copperSet.length ? 3 : yes4(kid2(pad, "remove_unused_layers")) ? yes4(kid2(pad, "keep_end_layers")) ? 1 : 2 : 0;
+  if (type === "pth") copper = !copperSet.length ? 3 : yes4(kid3(pad, "remove_unused_layers")) ? yes4(kid3(pad, "keep_end_layers")) ? 1 : 2 : 0;
   else if (type === "npth") copper = layers.has("F.Cu") && layers.has("B.Cu") ? 0 : layers.has("F.Cu") ? 1 : layers.has("B.Cu") ? 2 : 3;
   else if (type === "smd" || type === "conn") copper = layers.has("B.Cu") && !layers.has("F.Cu") ? 1 : 0;
   const tech = {};
   for (const [, l] of TECH) tech[l] = layers.has(l);
   const opt = (key2) => {
-    const n2 = kid2(pad, key2);
+    const n2 = kid3(pad, key2);
     return n2 ? num2(n2[1], NaN) : NaN;
   };
-  const zc = kid2(pad, "zone_connect");
+  const zc = kid3(pad, "zone_connect");
   const defAngle = s === "circle" || s === "custom" || s === "trapezoid" ? 45 : 90;
-  const sa = kid2(pad, "thermal_bridge_angle");
+  const sa = kid3(pad, "thermal_bridge_angle");
   return {
     type,
-    number: str2(pad[1]),
+    number: str3(pad[1]),
     net: netName2,
     x: fx + rx,
     y: fy + ry,
@@ -65234,13 +67595,13 @@ function readPad(doc, fp, pad, netName2) {
     holeOblong: oblong,
     hx: dn.length ? dn[0] : 0,
     hy: dn.length > 1 ? dn[1] : dn.length ? dn[0] : 0,
-    dieOn: !!kid2(pad, "die_length") && num2((kid2(pad, "die_length") || [])[1]) !== 0,
-    die: num2((kid2(pad, "die_length") || [])[1]),
+    dieOn: !!kid3(pad, "die_length") && num2((kid3(pad, "die_length") || [])[1]) !== 0,
+    die: num2((kid3(pad, "die_length") || [])[1]),
     copper,
     tech,
-    property: str2((kid2(pad, "property") || [])[1]),
+    property: str3((kid3(pad, "property") || [])[1]),
     zoneConnect: zc ? num2(zc[1], -1) : -1,
-    knockout: str2((kid2(opts, "clearance") || [])[1]) === "convexhull" ? "convexhull" : "outline",
+    knockout: str3((kid3(opts, "clearance") || [])[1]) === "convexhull" ? "convexhull" : "outline",
     gap: opt("thermal_gap"),
     spoke: opt("thermal_bridge_width"),
     spokeAngle: sa ? num2(sa[1], defAngle) : defAngle,
@@ -65284,12 +67645,12 @@ function checkPad(m) {
 }
 function writePad(doc, fp, pad, m, was, netCode2) {
   const [fx, fy, frot] = atOf(fp);
-  const flipped = str2((kid2(fp, "layer") || [])[1]) === "B.Cu";
+  const flipped = str3((kid3(fp, "layer") || [])[1]) === "B.Cu";
   const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
   const hasConn = m.type !== "npth" && m.type !== "aperture";
   const t = m.type === "pth" ? "thru_hole" : m.type === "npth" ? "np_thru_hole" : m.type === "conn" ? "connect" : "smd";
   if (m.type !== was.type) pad[2] = t;
-  if (fileShape(m.shape) !== str2(pad[3])) pad[3] = fileShape(m.shape);
+  if (fileShape(m.shape) !== str3(pad[3])) pad[3] = fileShape(m.shape);
   if (!hasConn && was.number && m.type !== was.type) pad[1] = "";
   else if (m.number !== was.number) pad[1] = m.number;
   if (!sameNum(m.x, was.x) || !sameNum(m.y, was.y) || !sameNum(m.angle, was.angle)) {
@@ -65330,7 +67691,7 @@ function writePad(doc, fp, pad, m, was, netCode2) {
     setPadChild(pad, "remove_unused_layers", `(remove_unused_layers ${remove ? "yes" : "no"})`);
     if (remove) {
       setPadChild(pad, "keep_end_layers", `(keep_end_layers ${m.copper === 1 ? "yes" : "no"})`);
-      if (!kid2(pad, "zone_layer_connections")) setPadChild(pad, "zone_layer_connections", "(zone_layer_connections)");
+      if (!kid3(pad, "zone_layer_connections")) setPadChild(pad, "zone_layer_connections", "(zone_layer_connections)");
     } else {
       setPadChild(pad, "keep_end_layers", null);
       setPadChild(pad, "zone_layer_connections", null);
@@ -65355,9 +67716,9 @@ function writePad(doc, fp, pad, m, was, netCode2) {
   }
   if (!hasConn) setPadChild(pad, "net", null);
   else if (m.net !== was.net) {
-    const cur2 = kid2(pad, "net");
+    const cur2 = kid3(pad, "net");
     const numbered = cur2 ? typeof cur2[1] === "number" : Array.from(doc.items.values()).some((it) => it.kind === "footprint" && kids(it.node, "pad").some((p) => {
-      const n2 = kid2(p, "net");
+      const n2 = kid3(p, "net");
       return !!n2 && typeof n2[1] === "number";
     }));
     setPadChild(pad, "net", !m.net ? null : numbered ? `(net ${netCode2(m.net)} ${quote4(m.net)})` : `(net ${quote4(m.net)})`);
@@ -65378,7 +67739,7 @@ function writePad(doc, fp, pad, m, was, netCode2) {
   const custom = m.shape === "custom_circle" || m.shape === "custom_rect";
   if (custom) {
     if (m.shape !== was.shape || m.knockout !== was.knockout) setPadChild(pad, "options", `(options (clearance ${m.knockout}) (anchor ${m.shape === "custom_rect" ? "rect" : "circle"}))`);
-    if (!kid2(pad, "primitives")) setPadChild(pad, "primitives", "(primitives)");
+    if (!kid3(pad, "primitives")) setPadChild(pad, "primitives", "(primitives)");
   } else {
     setPadChild(pad, "options", null);
     setPadChild(pad, "primitives", null);
@@ -66493,7 +68854,7 @@ root.KiCadCanvas = api;
   var root4 = typeof window !== "undefined" ? window : globalThis;
   var K7 = root4.KiCadCanvas;
   if (!K7) throw new Error("sch-tools.js needs kicad-canvas.js loaded first");
-  var { kid: kid4, kids: kids2, num: num8, str: str3, atOf: atOf3, ptsOf: ptsOf3, setPts: setPts2, setAt: setAt2, uuidOf: uuidOf2 } = K7;
+  var { kid: kid5, kids: kids3, num: num8, str: str4, atOf: atOf3, ptsOf: ptsOf3, setPts: setPts2, setAt: setAt2, uuidOf: uuidOf2 } = K7;
   var CLR = { wire: "#009600", bus: "#0000C2", sel: "#FFB43A", hover: "#4D7FC4" };
   var LINE_KINDS = /* @__PURE__ */ new Set(["wire", "bus", "polyline"]);
   var TEXT_KINDS = /* @__PURE__ */ new Set(["label", "global_label", "hierarchical_label", "text"]);
@@ -66584,11 +68945,11 @@ root.KiCadCanvas = api;
     return TYPE_NAMES[item.kind] || K7.typeNameOf(item);
   }
   function ruleAreaId(node) {
-    const pl = kid4(node, "polyline");
+    const pl = kid5(node, "polyline");
     return pl ? uuidOf2(pl) : "";
   }
   function itemSexpr(doc, kind, node) {
-    if (kind === "rule_area" && kid4(node, "uuid")) {
+    if (kind === "rule_area" && kid5(node, "uuid")) {
       node = deep(node);
       dropKid(node, "uuid");
     }
@@ -66604,7 +68965,7 @@ root.KiCadCanvas = api;
   }
   function addNode(doc, node) {
     if (node[0] === "rule_area") {
-      let pl = kid4(node, "polyline");
+      let pl = kid5(node, "polyline");
       if (!pl) {
         pl = ["polyline", ["pts"]];
         node.splice(1, 0, pl);
@@ -66763,8 +69124,8 @@ root.KiCadCanvas = api;
     return { rot: 0, mirror: "" };
   }
   function symOrient(node) {
-    const m = kid4(node, "mirror");
-    return { rot: atOf3(node)[2], mirror: m ? str3(m[1]) : "" };
+    const m = kid5(node, "mirror");
+    return { rot: atOf3(node)[2], mirror: m ? str4(m[1]) : "" };
   }
   function orientSymbol(node, op) {
     const { rot: rot3, mirror } = symOrient(node);
@@ -66777,8 +69138,8 @@ root.KiCadCanvas = api;
       node.splice(ai + 1, 0, ["mirror", o.mirror]);
     }
     const f2 = SCREEN_OP[op];
-    for (const p of kids2(node, "property")) {
-      const a = kid4(p, "at");
+    for (const p of kids3(node, "property")) {
+      const a = kid5(p, "at");
       if (!a) continue;
       const [dx, dy] = f2(num8(a[1]) - ax, num8(a[2]) - ay);
       a[1] = r45(ax + dx);
@@ -66788,11 +69149,11 @@ root.KiCadCanvas = api;
   }
   function setTextRot(kind, node, rot3) {
     rot3 = (rot3 % 360 + 360) % 360;
-    const a = kid4(node, "at");
+    const a = kid5(node, "at");
     if (!a) return;
     if (a.length >= 4) a[3] = rot3;
     else a.push(rot3);
-    let ef = kid4(node, "effects");
+    let ef = kid5(node, "effects");
     if (!ef) {
       ef = ["effects", fontNode(1.27)];
       node.push(ef);
@@ -66802,7 +69163,7 @@ root.KiCadCanvas = api;
   function rotateNode(kind, node, cw) {
     if (kind === "symbol") return orientSymbol(node, cw ? "cw" : "ccw");
     if (kind === "bus_entry") {
-      const s = kid4(node, "size");
+      const s = kid5(node, "size");
       if (!s) return;
       const [dx, dy] = SCREEN_OP[cw ? "cw" : "ccw"](num8(s[1]), num8(s[2]));
       s[1] = r45(dx);
@@ -66818,7 +69179,7 @@ root.KiCadCanvas = api;
   function mirrorNode(kind, node, axis) {
     if (kind === "symbol") return orientSymbol(node, axis);
     if (kind === "bus_entry") {
-      const s = kid4(node, "size");
+      const s = kid5(node, "size");
       if (!s) return;
       const [dx, dy] = SCREEN_OP[axis](num8(s[1]), num8(s[2]));
       s[1] = r45(dx);
@@ -66841,17 +69202,17 @@ root.KiCadCanvas = api;
       return p[0] || [0, 0];
     }
     if (SHAPE_KINDS.has(kind)) {
-      const k = kid4(node, SHAPE_POINTS[kind][0]);
+      const k = kid5(node, SHAPE_POINTS[kind][0]);
       return k ? [num8(k[1]), num8(k[2])] : [0, 0];
     }
     if (kind === "rule_area") {
-      const pl = kid4(node, "polyline");
+      const pl = kid5(node, "polyline");
       const p = pl ? ptsOf3(pl) : [];
       return p[0] || [0, 0];
     }
     if (kind === "table") {
-      const cells = kid4(node, "cells");
-      const c = cells && kid4(cells, "table_cell");
+      const cells = kid5(node, "cells");
+      const c = cells && kid5(cells, "table_cell");
       if (c) {
         const [x2, y2] = atOf3(c);
         return [x2, y2];
@@ -66862,7 +69223,7 @@ root.KiCadCanvas = api;
     return [x, y];
   }
   function shiftAt(n2, dx, dy) {
-    const a = kid4(n2, "at");
+    const a = kid5(n2, "at");
     if (a) {
       a[1] = r45(num8(a[1]) + dx);
       a[2] = r45(num8(a[2]) + dy);
@@ -66876,7 +69237,7 @@ root.KiCadCanvas = api;
     }
     if (SHAPE_KINDS.has(kind)) {
       for (const key2 of SHAPE_POINTS[kind]) {
-        const k = kid4(node, key2);
+        const k = kid5(node, key2);
         if (k) {
           k[1] = r45(num8(k[1]) + dx);
           k[2] = r45(num8(k[2]) + dy);
@@ -66885,30 +69246,30 @@ root.KiCadCanvas = api;
       return;
     }
     if (kind === "rule_area") {
-      for (const pl of kids2(node, "polyline")) setPts2(pl, ptsOf3(pl).map(([x2, y2]) => [x2 + dx, y2 + dy]));
+      for (const pl of kids3(node, "polyline")) setPts2(pl, ptsOf3(pl).map(([x2, y2]) => [x2 + dx, y2 + dy]));
       return;
     }
     if (kind === "table") {
-      const cells = kid4(node, "cells");
-      if (cells) for (const c of kids2(cells, "table_cell")) shiftAt(c, dx, dy);
+      const cells = kid5(node, "cells");
+      if (cells) for (const c of kids3(cells, "table_cell")) shiftAt(c, dx, dy);
       return;
     }
     const [x, y] = atOf3(node);
     setAt2(node, r45(x + dx), r45(y + dy));
-    for (const pr of kids2(node, "property")) shiftAt(pr, dx, dy);
-    if (kind === "sheet") for (const pin of kids2(node, "pin")) shiftAt(pin, dx, dy);
+    for (const pr of kids3(node, "property")) shiftAt(pr, dx, dy);
+    if (kind === "sheet") for (const pin of kids3(node, "pin")) shiftAt(pin, dx, dy);
   }
   function cloneNode2(item) {
     const node = deep(item.node);
     if (item.kind === "rule_area") {
       dropKid(node, "uuid");
-      for (const pl of kids2(node, "polyline")) replaceKid(pl, ["uuid", K7.newUuid()]);
+      for (const pl of kids3(node, "polyline")) replaceKid(pl, ["uuid", K7.newUuid()]);
       return node;
     }
     replaceKid(node, ["uuid", K7.newUuid()]);
-    for (const pin of kids2(node, "pin")) replaceKid(pin, ["uuid", K7.newUuid()]);
-    const cells = item.kind === "table" ? kid4(node, "cells") : null;
-    if (cells) for (const c of kids2(cells, "table_cell")) replaceKid(c, ["uuid", K7.newUuid()]);
+    for (const pin of kids3(node, "pin")) replaceKid(pin, ["uuid", K7.newUuid()]);
+    const cells = item.kind === "table" ? kid5(node, "cells") : null;
+    if (cells) for (const c of kids3(cells, "table_cell")) replaceKid(c, ["uuid", K7.newUuid()]);
     dropKid(node, "instances");
     return node;
   }
@@ -67078,8 +69439,8 @@ root.KiCadCanvas = api;
     return ["image", ["at", r45(p[0]), r45(p[1])], ["uuid", K7.newUuid()], ["data", ...chunks]];
   }
   function imageData(node) {
-    const d = kid4(node, "data");
-    return d ? d.slice(1).map(str3).join("") : "";
+    const d = kid5(node, "data");
+    return d ? d.slice(1).map(str4).join("") : "";
   }
   function imageSize(b) {
     if (!b || b.length < 4) return null;
@@ -67151,28 +69512,28 @@ root.KiCadCanvas = api;
     const n2 = ["symbol", ["lib_id", libId], ["at", r45(p[0]), r45(p[1]), rot3 || 0]];
     if (mirror) n2.push(["mirror", mirror]);
     n2.push(["unit", 1], ["body_style", 1], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["uuid", K7.newUuid()]);
-    const isPrivate = (lp) => str3(lp[1]) === "private" && lp.length > 3 && !Array.isArray(lp[2]) && !Array.isArray(lp[3]);
-    const libProps = lib ? kids2(lib, "property").filter((lp) => !str3(lp[1]).startsWith("ki_") && !isPrivate(lp)) : [];
-    const fromLib = (name) => libProps.find((lp) => str3(lp[1]) === name);
+    const isPrivate = (lp) => str4(lp[1]) === "private" && lp.length > 3 && !Array.isArray(lp[2]) && !Array.isArray(lp[3]);
+    const libProps = lib ? kids3(lib, "property").filter((lp) => !str4(lp[1]).startsWith("ki_") && !isPrivate(lp)) : [];
+    const fromLib = (name) => libProps.find((lp) => str4(lp[1]) === name);
     const prop2 = (name, lp) => {
-      let val = lp ? str3(lp[2]) : name === "Value" ? libId.split(":").pop() : name === "Datasheet" ? "~" : "";
+      let val = lp ? str4(lp[2]) : name === "Value" ? libId.split(":").pop() : name === "Datasheet" ? "~" : "";
       if (name === "Reference") val = (val || "U") + "?";
       else if (name === "Value" && !val) val = libId.split(":").pop();
       const [lx, ly, lr] = lp ? atOf3(lp) : [0, 0, 0];
       const [px, py] = tf2(lx, ly);
       const out = ["property", name, val, ["at", px, py, lr || 0]];
-      const h = lp && kid4(lp, "hide");
-      const hidden2 = lp ? h ? str3(h[1]) !== "no" : lp.includes("hide") : name !== "Reference" && name !== "Value";
+      const h = lp && kid5(lp, "hide");
+      const hidden2 = lp ? h ? str4(h[1]) !== "no" : lp.includes("hide") : name !== "Reference" && name !== "Value";
       if (hidden2) out.push(["hide", "yes"]);
-      const ef = lp && kid4(lp, "effects");
+      const ef = lp && kid5(lp, "effects");
       out.push(ef ? deep(ef) : ["effects", fontNode(1.27)]);
       return out;
     };
     for (const name of MANDATORY2) n2.push(prop2(name, fromLib(name)));
-    for (const lp of libProps) if (!MANDATORY2.includes(str3(lp[1]))) n2.push(prop2(str3(lp[1]), lp));
-    if (lib) for (const sub of kids2(lib, "symbol")) for (const pin of kids2(sub, "pin")) {
-      const nn = kid4(pin, "number");
-      n2.push(["pin", str3(nn ? nn[1] : ""), ["uuid", K7.newUuid()]]);
+    for (const lp of libProps) if (!MANDATORY2.includes(str4(lp[1]))) n2.push(prop2(str4(lp[1]), lp));
+    if (lib) for (const sub of kids3(lib, "symbol")) for (const pin of kids3(sub, "pin")) {
+      const nn = kid5(pin, "number");
+      n2.push(["pin", str4(nn ? nn[1] : ""), ["uuid", K7.newUuid()]]);
     }
     return n2;
   }
@@ -67235,7 +69596,7 @@ root.KiCadCanvas = api;
       if (pts.length !== 2) continue;
       const a = deep(it.node);
       setPts2(a, [pts[0], [r45(p[0]), r45(p[1])]]);
-      const tail = lineNode(it.kind, p, pts[1]), st = kid4(it.node, "stroke");
+      const tail = lineNode(it.kind, p, pts[1]), st = kid5(it.node, "stroke");
       if (st) replaceKid(tail, deep(st));
       const b = addNode(doc, tail);
       doc.items.delete(b.item.id);
@@ -67262,7 +69623,7 @@ root.KiCadCanvas = api;
     return p[0] >= Math.min(a[0], b[0]) - m && p[0] <= Math.max(a[0], b[0]) + m && p[1] >= Math.min(a[1], b[1]) - m && p[1] <= Math.max(a[1], b[1]) + m;
   }
   var lineW = (n2, kind) => {
-    const s = kid4(n2, "stroke"), w = s && kid4(s, "width");
+    const s = kid5(n2, "stroke"), w = s && kid5(s, "width");
     const v = w ? num8(w[1]) : 0;
     return v > 0 ? v : kind === "bus" ? 0.3048 : 0.1524;
   };
@@ -67279,7 +69640,7 @@ root.KiCadCanvas = api;
       const n2 = it.node;
       if (it.kind === "bus_entry") {
         const [x, y] = atOf3(n2);
-        const sz = kid4(n2, "size");
+        const sz = kid5(n2, "size");
         const dx = sz ? num8(sz[1]) : 2.54, dy = sz ? num8(sz[2]) : 2.54;
         const e0 = [x, y], e1 = [x + dx, y + dy];
         if (!overlapsLine(e0, e1, 0, p)) continue;
@@ -67324,12 +69685,12 @@ root.KiCadCanvas = api;
     return Math.round(r / 90) % 4;
   };
   function setSpinOfNode(kind, n2, spin) {
-    const a = kid4(n2, "at");
+    const a = kid5(n2, "at");
     if (a) a[3] = spin * 90;
-    const e = kid4(n2, "effects");
+    const e = kid5(n2, "effects");
     if (!e) return;
     const right = spin === SPIN_LEFT || spin === SPIN_BOTTOM;
-    const j = kid4(e, "justify");
+    const j = kid5(e, "justify");
     const mirror = !!j && j.includes("mirror");
     const jv = ["justify", right ? "right" : "left"];
     if (kind === "label") jv.push("bottom");
@@ -67374,7 +69735,7 @@ root.KiCadCanvas = api;
   function sheetPinSideAt(doc, p) {
     for (const it of doc.items.values()) {
       if (it.kind !== "sheet") continue;
-      for (const pin of kids2(it.node, "pin")) {
+      for (const pin of kids3(it.node, "pin")) {
         const [x, y, rot3] = atOf3(pin);
         if (!same([x, y], p)) continue;
         const r = (Math.round(rot3 || 0) % 360 + 360) % 360;
@@ -67452,7 +69813,7 @@ root.KiCadCanvas = api;
   function startWire(ctx, kind, p, opts) {
     const segs2 = [[p.slice(), p.slice()]];
     if (twoSegments()) segs2.push([p.slice(), p.slice()]);
-    const src = opts && opts.source || sourceLine(ctx.doc, kind, p), st = src && kid4(src.node, "stroke");
+    const src = opts && opts.source || sourceLine(ctx.doc, kind, p), st = src && kid5(src.node, "stroke");
     S2.wire = { kind, segs: segs2, cur: p.slice(), quitOnDraw: !!(opts && opts.quitOnDraw), stroke: st ? deep(st) : null };
     ctx.requestRender();
   }
@@ -67655,12 +70016,12 @@ root.KiCadCanvas = api;
           exits.wire.add(unique++);
         }
       } else if (it.kind === "sheet") {
-        if (kids2(it.node, "pin").some((pin) => same(atOf3(pin), p))) {
+        if (kids3(it.node, "pin").some((pin) => same(atOf3(pin), p))) {
           brk.wire = true;
           exits.wire.add(unique++);
         }
       } else if (same(atOf3(it.node), p)) {
-        if (it.kind === "label" && BUS_TEXT.test(str3(it.node[1]))) brk.bus = true;
+        if (it.kind === "label" && BUS_TEXT.test(str4(it.node[1]))) brk.bus = true;
         else brk.wire = true;
       }
     }
@@ -67768,7 +70129,7 @@ root.KiCadCanvas = api;
       const a = deep(it.node);
       setPts2(a, [s[0], [r45(p[0]), r45(p[1])]]);
       t.modify(it, a);
-      const tail = lineNode(it.kind, p, s[1]), st = kid4(it.node, "stroke");
+      const tail = lineNode(it.kind, p, s[1]), st = kid5(it.node, "stroke");
       if (st) replaceKid(tail, deep(st));
       t.add(tail);
     }
@@ -67802,7 +70163,7 @@ root.KiCadCanvas = api;
           if (!sb) continue;
           if (Math.max(Math.min(sa[0][0], sa[1][0]), Math.min(sb[0][0], sb[1][0])) > Math.min(Math.max(sa[0][0], sa[1][0]), Math.max(sb[0][0], sb[1][0])) + 1e-6) continue;
           if (Math.max(Math.min(sa[0][1], sa[1][1]), Math.min(sb[0][1], sb[1][1])) > Math.min(Math.max(sa[0][1], sa[1][1]), Math.max(sb[0][1], sb[1][1])) + 1e-6) continue;
-          const sameStroke = K7.serialize(kid4(A.node, "stroke") || []) === K7.serialize(kid4(B.node, "stroke") || []);
+          const sameStroke = K7.serialize(kid5(A.node, "stroke") || []) === K7.serialize(kid5(B.node, "stroke") || []);
           if (!sameStroke) continue;
           const [keepIt, dropIt] = t.isNew(A.id) && !t.isNew(B.id) ? [B, A] : [A, B];
           if (same(sa[0], sb[0]) && same(sa[1], sb[1]) || same(sa[0], sb[1]) && same(sa[1], sb[0])) {
@@ -67837,7 +70198,7 @@ root.KiCadCanvas = api;
       if (same(s[0], a) && same(s[1], b) || same(s[0], b) && same(s[1], a)) continue;
       const da = Math.hypot(a[0] - s[0][0], a[1] - s[0][1]), db = Math.hypot(b[0] - s[0][0], b[1] - s[0][1]);
       const [near, far] = da <= db ? [a, b] : [b, a];
-      const st = kid4(it.node, "stroke");
+      const st = kid5(it.node, "stroke");
       if (!same(s[0], near)) {
         const n2 = deep(it.node);
         setPts2(n2, [s[0], near]);
@@ -67922,7 +70283,7 @@ root.KiCadCanvas = api;
   function unfoldFollow(ctx, w, p) {
     const u = S2.unfold, doc = ctx.doc, en = doc.items.get(u.entryId), lb = doc.items.get(u.labelId);
     if (!en || !lb) return;
-    const sz = kid4(en.node, "size"), sx = p[0] - u.origin[0] < 0 ? -1 : 1, sy = p[1] - u.origin[1] < 0 ? -1 : 1;
+    const sz = kid5(en.node, "size"), sx = p[0] - u.origin[0] < 0 ? -1 : 1, sy = p[1] - u.origin[1] < 0 ? -1 : 1;
     if (sz && (Math.sign(num8(sz[1])) !== sx || Math.sign(num8(sz[2])) !== sy)) {
       sz[1] = r45(Math.abs(num8(sz[1])) * sx);
       sz[2] = r45(Math.abs(num8(sz[2])) * sy);
@@ -67978,11 +70339,11 @@ root.KiCadCanvas = api;
     return best ? [r45(best[0]), r45(best[1])] : null;
   }
   function fontSize(node) {
-    const e = kid4(node, "effects"), f2 = e && kid4(e, "font"), s = f2 && kid4(f2, "size");
+    const e = kid5(node, "effects"), f2 = e && kid5(e, "font"), s = f2 && kid5(f2, "size");
     return s ? num8(s[2], num8(s[1], 1.27)) : 1.27;
   }
   function textRect(item) {
-    const n2 = item.node, [x, y, rot3] = atOf3(n2), size = fontSize(n2), lines = str3(n2[1]).split("\n");
+    const n2 = item.node, [x, y, rot3] = atOf3(n2), size = fontSize(n2), lines = str4(n2[1]).split("\n");
     const longest = Math.max(1, ...lines.map((l) => l.length));
     let w = longest * size * 0.75 + size * 0.4;
     if (item.kind !== "label" && item.kind !== "text") w += size * 1.6;
@@ -68035,7 +70396,7 @@ root.KiCadCanvas = api;
         d += 0.01;
       } else if (it.kind === "text_box" || it.kind === "netclass_flag" || it.kind === "directive_label" || it.kind === "table" || it.kind === "image") d = boxDist(it.bbox, x, y);
       else if (it.kind === "bus_entry") {
-        const [ax, ay] = atOf3(it.node), s = kid4(it.node, "size");
+        const [ax, ay] = atOf3(it.node), s = kid5(it.node, "size");
         d = segDist2([x, y], [ax, ay], [ax + (s ? num8(s[1]) : 2.54), ay + (s ? num8(s[2]) : 2.54)]);
       } else if (it.kind === "junction" || it.kind === "no_connect") {
         const [ax, ay] = atOf3(it.node);
@@ -68776,12 +71137,12 @@ root.KiCadCanvas = api;
   }
   function setFlagRot(node, rot3) {
     rot3 = (rot3 % 360 + 360) % 360;
-    const a = kid4(node, "at");
+    const a = kid5(node, "at");
     if (!a) return;
     if (a.length >= 4) a[3] = rot3;
     else a.push(rot3);
     const p = [num8(a[1]), num8(a[2])];
-    for (const pr of kids2(node, "property")) replaceKid(pr, flagFieldAt(p, rot3));
+    for (const pr of kids3(node, "property")) replaceKid(pr, flagFieldAt(p, rot3));
   }
   function sideOfEdge(p, box) {
     const d = [["left", Math.abs(p[0] - box[0])], ["right", Math.abs(p[0] - box[2])], ["top", Math.abs(p[1] - box[1])], ["bottom", Math.abs(p[1] - box[3])]];
@@ -68791,7 +71152,7 @@ root.KiCadCanvas = api;
   function transformNode(kind, node, op, C, lone = false, end = null) {
     const rot3 = op === "ccw" || op === "cw";
     const mapAt = (n2) => {
-      const a = kid4(n2, "at");
+      const a = kid5(n2, "at");
       if (!a) return;
       const q = mapPoint(op, C, [num8(a[1]), num8(a[2])]);
       a[1] = q[0];
@@ -68837,12 +71198,12 @@ root.KiCadCanvas = api;
       case "image": {
         mapAt(node);
         if (rot3) {
-          const r = kid4(node, "rotate"), a = (((r ? num8(r[1], 0) : 0) + (op === "ccw" ? 90 : 270)) % 360 + 360) % 360, v = r45(a);
+          const r = kid5(node, "rotate"), a = (((r ? num8(r[1], 0) : 0) + (op === "ccw" ? 90 : 270)) % 360 + 360) % 360, v = r45(a);
           if (!v) {
             if (r) node.splice(node.indexOf(r), 1);
           } else if (r) r[1] = v;
           else {
-            const at2 = kid4(node, "at");
+            const at2 = kid5(node, "at");
             node.splice(at2 ? node.indexOf(at2) + 1 : 1, 0, ["rotate", v]);
           }
         }
@@ -68850,7 +71211,7 @@ root.KiCadCanvas = api;
       }
       case "bus_entry": {
         mapAt(node);
-        const s = kid4(node, "size");
+        const s = kid5(node, "size");
         if (s) {
           const [dx, dy] = SCREEN_OP[op](num8(s[1]), num8(s[2]));
           s[1] = r45(dx);
@@ -68873,10 +71234,10 @@ root.KiCadCanvas = api;
         return true;
       }
       case "rule_area":
-        for (const pl of kids2(node, "polyline")) mapPts(pl);
+        for (const pl of kids3(node, "polyline")) mapPts(pl);
         return true;
       case "rectangle": {
-        const a = kid4(node, "start"), b = kid4(node, "end");
+        const a = kid5(node, "start"), b = kid5(node, "end");
         const [x0, y0, x1, y1] = corners(mapPoint(op, C, [num8(a[1]), num8(a[2])]), mapPoint(op, C, [num8(b[1]), num8(b[2])]));
         a[1] = x0;
         a[2] = y0;
@@ -68885,7 +71246,7 @@ root.KiCadCanvas = api;
         return true;
       }
       case "circle": {
-        const c = kid4(node, "center");
+        const c = kid5(node, "center");
         const p = mapPoint(op, C, [num8(c[1]), num8(c[2])]);
         c[1] = p[0];
         c[2] = p[1];
@@ -68893,13 +71254,13 @@ root.KiCadCanvas = api;
       }
       case "ellipse":
       case "ellipse_arc": {
-        const c = kid4(node, "center");
+        const c = kid5(node, "center");
         const p = mapPoint(op, C, [num8(c[1]), num8(c[2])]);
         c[1] = p[0];
         c[2] = p[1];
-        const ra = kid4(node, "rotation_angle"), phi = ra ? num8(ra[1]) : 0;
+        const ra = kid5(node, "rotation_angle"), phi = ra ? num8(ra[1]) : 0;
         const set = (key2, v) => {
-          const k = kid4(node, key2);
+          const k = kid5(node, key2);
           v = r45(v);
           if (k) k[1] = v;
           else node.push([key2, v]);
@@ -68908,7 +71269,7 @@ root.KiCadCanvas = api;
         else {
           set("rotation_angle", -phi);
           if (kind === "ellipse_arc") {
-            const s = num8((kid4(node, "start_angle") || [])[1], 0), e = num8((kid4(node, "end_angle") || [])[1], 0);
+            const s = num8((kid5(node, "start_angle") || [])[1], 0), e = num8((kid5(node, "end_angle") || [])[1], 0);
             if (op === "y") {
               set("start_angle", 180 - e);
               set("end_angle", 180 - s);
@@ -68922,7 +71283,7 @@ root.KiCadCanvas = api;
       }
       case "arc": {
         for (const key2 of ["start", "mid", "end"]) {
-          const k = kid4(node, key2);
+          const k = kid5(node, key2);
           if (k) {
             const p = mapPoint(op, C, [num8(k[1]), num8(k[2])]);
             k[1] = p[0];
@@ -68932,7 +71293,7 @@ root.KiCadCanvas = api;
         return true;
       }
       case "text_box": {
-        const [x, y, a] = atOf3(node), s = kid4(node, "size");
+        const [x, y, a] = atOf3(node), s = kid5(node, "size");
         if (!s) return false;
         const [x0, y0, x1, y1] = corners(mapPoint(op, C, [x, y]), mapPoint(op, C, [x + num8(s[1]), y + num8(s[2])]));
         const vertical = a === 90 || a === 270;
@@ -68940,7 +71301,7 @@ root.KiCadCanvas = api;
         s[1] = r45(x1 - x0);
         s[2] = r45(y1 - y0);
         if (!rot3 && (op === "y" && !vertical || op === "x" && vertical)) {
-          const ef = kid4(node, "effects"), j = ef && kid4(ef, "justify");
+          const ef = kid5(node, "effects"), j = ef && kid5(ef, "justify");
           if (j) {
             const i = j.indexOf("left") > 0 ? j.indexOf("left") : j.indexOf("right");
             if (i > 0) j[i] = j[i] === "left" ? "right" : "left";
@@ -68949,12 +71310,12 @@ root.KiCadCanvas = api;
         return true;
       }
       case "table": {
-        const cells = kid4(node, "cells");
+        const cells = kid5(node, "cells");
         if (!cells || !rot3) return false;
         if (lone) C = tableCentre(node);
         const before = tableRawCentre(node);
-        for (const c of kids2(cells, "table_cell")) {
-          const a = kid4(c, "at"), sz = kid4(c, "size");
+        for (const c of kids3(cells, "table_cell")) {
+          const a = kid5(c, "at"), sz = kid5(c, "size");
           if (!a || !sz) continue;
           const p0 = [num8(a[1]), num8(a[2])], p1 = [p0[0] + num8(sz[1]), p0[1] + num8(sz[2])];
           const q0 = mapPoint(op, C, p0), q1 = mapPoint(op, C, p1), na = num8(a[3]) === 90 ? 0 : 90;
@@ -68973,25 +71334,25 @@ root.KiCadCanvas = api;
         return true;
       }
       case "sheet": {
-        const [x, y] = atOf3(node), s = kid4(node, "size");
+        const [x, y] = atOf3(node), s = kid5(node, "size");
         if (!s) return false;
         const [x0, y0, x1, y1] = corners(mapPoint(op, C, [x, y]), mapPoint(op, C, [x + num8(s[1]), y + num8(s[2])]));
         setAt2(node, x0, y0);
         s[1] = r45(x1 - x0);
         s[2] = r45(y1 - y0);
-        for (const pin of kids2(node, "pin")) {
+        for (const pin of kids3(node, "pin")) {
           const pp = mapPoint(op, C, atOf3(pin).slice(0, 2)), [prot, just] = PIN_SIDE[sideOfEdge(pp, [x0, y0, x1, y1])];
           setAt2(pin, pp[0], pp[1], prot);
-          let ef = kid4(pin, "effects");
+          let ef = kid5(pin, "effects");
           if (!ef) {
             ef = ["effects", fontNode(1.27)];
             pin.push(ef);
           }
           replaceKid(ef, ["justify", just]);
         }
-        const auto = kid4(node, "fields_autoplaced") && str3(kid4(node, "fields_autoplaced")[1]) !== "no";
-        for (const pr of kids2(node, "property")) {
-          const name = str3(pr[1]);
+        const auto = kid5(node, "fields_autoplaced") && str4(kid5(node, "fields_autoplaced")[1]) !== "no";
+        for (const pr of kids3(node, "property")) {
+          const name = str4(pr[1]);
           if (auto && name === "Sheetname") replaceKid(pr, ["at", x0, r45(y0 - SHEET_NAME_OFF), 0]);
           else if (auto && name === "Sheetfile") replaceKid(pr, ["at", x0, r45(y1 + SHEET_FILE_OFF), 0]);
           else shiftAt(pr, r45(x0 - x), r45(y0 - y));
@@ -69132,12 +71493,12 @@ root.KiCadCanvas = api;
       const n2 = deep(it.node);
       if (LINE_KINDS.has(it.kind) || it.kind === "bezier") setPts2(n2, ptsOf3(n2).map(snap2));
       else if (it.kind === "sheet") {
-        const [x, y] = atOf3(n2), s = kid4(n2, "size"), tl = snap2([x, y]), br = snap2([x + num8(s[1]), y + num8(s[2])]);
+        const [x, y] = atOf3(n2), s = kid5(n2, "size"), tl = snap2([x, y]), br = snap2([x + num8(s[1]), y + num8(s[2])]);
         setAt2(n2, tl[0], tl[1]);
         s[1] = r45(br[0] - tl[0]);
         s[2] = r45(br[1] - tl[1]);
-        for (const pr of kids2(n2, "property")) shiftAt(pr, r45(tl[0] - x), r45(tl[1] - y));
-        for (const pin of kids2(n2, "pin")) {
+        for (const pr of kids3(n2, "property")) shiftAt(pr, r45(tl[0] - x), r45(tl[1] - y));
+        for (const pin of kids3(n2, "pin")) {
           const [px, py, prot] = atOf3(pin), q = snap2([px, py]);
           const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
           if (prot === 180) setAt2(pin, tl[0], clamp(q[1], tl[1], br[1]));
@@ -69488,7 +71849,7 @@ root.KiCadCanvas = api;
   function clipboardText(doc, items, opts) {
     const libs = /* @__PURE__ */ new Map();
     for (const it of items) if (it.kind === "symbol") {
-      const name = str3((kid4(it.node, "lib_id") || [])[1]);
+      const name = str4((kid5(it.node, "lib_id") || [])[1]);
       const lib = doc.lib.get(name);
       if (lib && !libs.has(name)) libs.set(name, lib);
     }
@@ -69496,7 +71857,7 @@ root.KiCadCanvas = api;
     if (libs.size) parts.push("(lib_symbols " + Array.from(libs.values()).map((l) => K7.serialize(l)).join(" ") + ")");
     for (const it of items) {
       let node = it.node;
-      if (it.kind === "rule_area" && kid4(node, "uuid")) {
+      if (it.kind === "rule_area" && kid5(node, "uuid")) {
         node = deep(node);
         dropKid(node, "uuid");
       }
@@ -69512,18 +71873,18 @@ ${body}
   function parseClipboard(text2) {
     let trees;
     try {
-      trees = K7.parseAll(str3(text2));
+      trees = K7.parseAll(str4(text2));
     } catch (e) {
       return null;
     }
     const nodes = [], libs = [];
     const takeLibs = (ls) => {
-      for (const s of kids2(ls, "symbol")) libs.push(s);
+      for (const s of kids3(ls, "symbol")) libs.push(s);
     };
     for (const t of trees || []) {
       if (!Array.isArray(t)) continue;
       if (t[0] === "kicad_sch") {
-        const ls = kid4(t, "lib_symbols");
+        const ls = kid5(t, "lib_symbols");
         if (ls) takeLibs(ls);
         for (const c of t.slice(1)) if (Array.isArray(c) && PASTE_KINDS.has(c[0])) nodes.push(c);
       } else if (t[0] === "lib_symbols") takeLibs(t);
@@ -69531,7 +71892,7 @@ ${body}
     }
     return nodes.length ? { nodes, libs } : null;
   }
-  var refPrefix = (ref) => str3(ref).replace(/\?$/, "").replace(/\d+$/, "");
+  var refPrefix = (ref) => str4(ref).replace(/\?$/, "").replace(/\d+$/, "");
   var unannotated = (ref) => refPrefix(ref) + "?";
   function usedReferences(doc, skip) {
     const used = new Set(S2.otherRefs || []);
@@ -69539,20 +71900,20 @@ ${body}
     return used;
   }
   function refField(node) {
-    return kids2(node, "property").find((p) => str3(p[1]) === "Reference") || null;
+    return kids3(node, "property").find((p) => str4(p[1]) === "Reference") || null;
   }
   function setReference(node, ref) {
     const p = refField(node);
     if (p) p[2] = ref;
-    for (const inst of kids2(node, "instances")) for (const pr of kids2(inst, "project")) for (const pa of kids2(pr, "path")) {
-      const r = kid4(pa, "reference");
+    for (const inst of kids3(node, "instances")) for (const pr of kids3(inst, "project")) for (const pa of kids3(pr, "path")) {
+      const r = kid5(pa, "reference");
       if (r) r[1] = ref;
     }
   }
   function assignPastedRef(doc, node, used) {
     const p = refField(node);
     if (!p) return;
-    const ref = str3(p[2]);
+    const ref = str4(p[2]);
     if (!/\?$/.test(ref) && !used.has(ref)) {
       used.add(ref);
       return;
@@ -69585,7 +71946,7 @@ ${body}
   function pasteChanges(doc, parsed2, at2, opts) {
     const libs = [];
     for (const lib of parsed2.libs) {
-      const name = str3(lib[1]);
+      const name = str4(lib[1]);
       if (!doc.lib.has(name)) {
         doc.lib.set(name, lib);
         libs.push(name);
@@ -69598,7 +71959,7 @@ ${body}
       if (n2[0] !== "symbol" || mode2 === "keep") continue;
       if (mode2 === "remove") {
         const p = refField(n2);
-        if (p) setReference(n2, unannotated(str3(p[2])));
+        if (p) setReference(n2, unannotated(str4(p[2])));
         continue;
       }
       if (mode2 === "unique") {
@@ -69645,7 +72006,7 @@ ${body}
   function pasteText(ctx, text2, opts) {
     const parsed2 = parseClipboard(text2);
     if (!parsed2) {
-      if (str3(text2).trim()) ctx.toast("Clipboard has no schematic items");
+      if (str4(text2).trim()) ctx.toast("Clipboard has no schematic items");
       return false;
     }
     const label = opts && opts.label || "paste", live = canFollow(ctx);
@@ -69726,10 +72087,10 @@ ${body}
     const lines = [];
     for (const it of items) {
       if (it.kind === "symbol") lines.push([it.ref, it.value].filter(Boolean).join(" "));
-      else if (TEXT_KINDS.has(it.kind) || it.kind === "text_box") lines.push(str3(it.node[1]));
+      else if (TEXT_KINDS.has(it.kind) || it.kind === "text_box") lines.push(str4(it.node[1]));
       else if (it.kind === "netclass_flag" || it.kind === "directive_label") {
-        const nc = kids2(it.node, "property").find((p) => str3(p[1]) === "Netclass");
-        if (nc) lines.push(str3(nc[2]));
+        const nc = kids3(it.node, "property").find((p) => str4(p[1]) === "Netclass");
+        if (nc) lines.push(str4(nc[2]));
       } else if (it.kind === "sheet") lines.push([it.name, it.file].filter(Boolean).join(" "));
     }
     clipWrite(ctx, lines.join("\n"));
@@ -69740,8 +72101,8 @@ ${body}
     S2.lastPlaced = [{ kind, node: deep(node) }];
   }
   function incrementText(text2, delta) {
-    const m = str3(text2).match(/^([\s\S]*?)(\d+)(\D*)$/);
-    if (!m) return str3(text2);
+    const m = str4(text2).match(/^([\s\S]*?)(\d+)(\D*)$/);
+    if (!m) return str4(text2);
     const n2 = parseInt(m[2], 10) + (delta === void 0 ? 1 : delta);
     if (n2 < 0) return null;
     return m[1] + String(n2).padStart(m[2].length, "0") + m[3];
@@ -69798,7 +72159,7 @@ ${body}
           shiftNode("symbol", node, r45(p[0] - a[0]), r45(p[1] - a[1]));
           if (S2.annotateAuto) {
             const rf = refField(node);
-            if (rf) setReference(node, unannotated(str3(rf[2])));
+            if (rf) setReference(node, unannotated(str4(rf[2])));
             assignPastedRef(doc, node, used);
           }
         } else shiftNode(lp.kind, node, S2.repeatOffset[0], S2.repeatOffset[1]);
@@ -69840,7 +72201,7 @@ ${body}
     for (const it of selectedItems(ctx)) {
       if (!TEXT_KINDS.has(it.kind) && it.kind !== "text_box") continue;
       const t = incrementText(it.node[1], delta);
-      if (t === null || t === str3(it.node[1])) continue;
+      if (t === null || t === str4(it.node[1])) continue;
       const n2 = deep(it.node);
       n2[1] = t;
       changes.push(modChange(ctx.doc, it, n2));
@@ -70384,9 +72745,9 @@ ${body}
     return off <= sweep + 1e-12;
   }
   var SHEET_EXT = ".kicad_sch";
-  var baseName3 = (p) => str3(p).split("/").pop();
+  var baseName3 = (p) => str4(p).split("/").pop();
   var dirName = (p) => {
-    const s = str3(p).split("/");
+    const s = str4(p).split("/");
     s.pop();
     return s.join("/");
   };
@@ -70411,13 +72772,13 @@ ${body}
     return stem && docs.find((d) => baseName3(d.path) === stem + SHEET_EXT) || docs.slice().sort((x, y) => x.path.split("/").length - y.path.split("/").length || x.path.length - y.path.length)[0] || null;
   }
   function normSheetFile(file) {
-    file = str3(file).trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    file = str4(file).trim().replace(/\\/g, "/").replace(/^\/+/, "");
     if (!file) return "";
     if (!/\.kicad_sch$/i.test(file)) file += SHEET_EXT;
     return file;
   }
   function sheetFileFor(name) {
-    return normSheetFile(str3(name).trim().replace(/[\\/:*?"<>|]+/g, "_"));
+    return normSheetFile(str4(name).trim().replace(/[\\/:*?"<>|]+/g, "_"));
   }
   function emptySheetDoc() {
     return `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0") (uuid "${K7.newUuid()}") (paper "A4") (lib_symbols) (sheet_instances (path "/" (page "1"))))
@@ -70443,9 +72804,9 @@ ${body}
     };
     for (const it of doc.items.values()) {
       if (it.kind !== "symbol" && it.kind !== "sheet") continue;
-      for (const inst of kids2(it.node, "instances")) for (const pr of kids2(inst, "project")) {
-        vote(names, str3(pr[1]));
-        for (const pa of kids2(pr, "path")) vote(paths, str3(pa[1]));
+      for (const inst of kids3(it.node, "instances")) for (const pr of kids3(inst, "project")) {
+        vote(names, str4(pr[1]));
+        for (const pa of kids3(pr, "path")) vote(paths, str4(pa[1]));
       }
     }
     const top = (m) => {
@@ -70460,9 +72821,9 @@ ${body}
   }
   function nextPage(ctx, doc) {
     const used = /* @__PURE__ */ new Set(["1"]);
-    for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids2(it.node, "instances")) for (const pr of kids2(inst, "project")) for (const pa of kids2(pr, "path")) {
-      const pg = kid4(pa, "page");
-      if (pg) used.add(str3(pg[1]));
+    for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids3(it.node, "instances")) for (const pr of kids3(inst, "project")) for (const pa of kids3(pr, "path")) {
+      const pg = kid5(pa, "page");
+      if (pg) used.add(str4(pg[1]));
     }
     let n2 = Math.max(2, schDocs(ctx).length);
     while (used.has(String(n2))) n2++;
@@ -70521,7 +72882,7 @@ ${body}
 Link '${target2}' to this file?`)) return null;
         const ref = await ensureSheetDoc(ctx, file);
         if (S2.sheetJob !== job || ctx.doc !== doc) return null;
-        const fp = kids2(node, "property").find((q) => /^Sheet ?file$/i.test(str3(q[1])));
+        const fp = kids3(node, "property").find((q) => /^Sheet ?file$/i.test(str4(q[1])));
         if (fp) fp[2] = ref.file;
         const { item, change } = addNode(doc, node);
         ctx.commit([change], "sheet");
@@ -70542,7 +72903,7 @@ Link '${target2}' to this file?`)) return null;
     let best = null;
     for (const it of doc.items.values()) {
       if (it.kind !== "sheet") continue;
-      const [x, y] = atOf3(it.node), s = kid4(it.node, "size"), w = num8(s && s[1], 0), h = num8(s && s[2], 0);
+      const [x, y] = atOf3(it.node), s = kid5(it.node, "size"), w = num8(s && s[1], 0), h = num8(s && s[2], 0);
       const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
       for (const side of ["top", "right", "bottom", "left"]) {
         const d = segDist2(p, edges[side][0], edges[side][1]);
@@ -70698,8 +73059,8 @@ Link '${target2}' to this file?`)) return null;
         }, onCreate(staged) {
           if (S2.draw !== d) return;
           S2.draw = null;
-          const fp = kids2(staged, "property").find((q) => /^Sheet ?file$/i.test(str3(q[1])));
-          placeSheetNode(ctx, staged, fp ? str3(fp[2]) : "untitled" + SHEET_EXT);
+          const fp = kids3(staged, "property").find((q) => /^Sheet ?file$/i.test(str4(q[1])));
+          placeSheetNode(ctx, staged, fp ? str4(fp[2]) : "untitled" + SHEET_EXT);
         } });
         return;
       }
@@ -70793,7 +73154,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function schSeedShapeOf(it) {
     const n2 = it.node, pt4 = (k) => {
-      const c = kid4(n2, k);
+      const c = kid5(n2, k);
       return c ? toNm([+c[1], +c[2]]) : null;
     };
     if (it.kind === "arc") {
@@ -71056,15 +73417,15 @@ Link '${target2}' to this file?`)) return null;
   function boxOf2(item) {
     const n2 = item.node;
     if (item.kind === "rectangle") {
-      const s = kid4(n2, "start"), e = kid4(n2, "end");
+      const s = kid5(n2, "start"), e = kid5(n2, "end");
       return [Math.min(num8(s[1]), num8(e[1])), Math.min(num8(s[2]), num8(e[2])), Math.max(num8(s[1]), num8(e[1])), Math.max(num8(s[2]), num8(e[2]))];
     }
-    const at2 = kid4(n2, "at"), sz = kid4(n2, "size");
+    const at2 = kid5(n2, "at"), sz = kid5(n2, "size");
     const x = num8(at2[1]), y = num8(at2[2]), w = num8(sz[1]), h = num8(sz[2]);
     return [Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)];
   }
   var rectRadius = (n2) => {
-    const r = kid4(n2, "radius");
+    const r = kid5(n2, "radius");
     return r ? Math.max(0, num8(r[1])) : 0;
   };
   function rectRadiusFor(box, x) {
@@ -71078,7 +73439,7 @@ Link '${target2}' to this file?`)) return null;
     return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
   }
   var kp = (n2, key2) => {
-    const k = kid4(n2, key2);
+    const k = kid5(n2, key2);
     return k ? [num8(k[1]), num8(k[2])] : null;
   };
   function editPoints(doc, item) {
@@ -71091,7 +73452,7 @@ Link '${target2}' to this file?`)) return null;
       return { pts, lines: [], guides: k === "bezier" && pts.length === 4 ? [[0, 1], [3, 2]] : [] };
     }
     if (k === "rule_area") {
-      const pl = kid4(n2, "polyline");
+      const pl = kid5(n2, "polyline");
       const pts = pl ? ptsOf3(pl) : [];
       return pts.length ? { pts, lines: pts.length > 1 ? polyLines(pts.length) : [], guides: [] } : null;
     }
@@ -71128,7 +73489,7 @@ Link '${target2}' to this file?`)) return null;
       return { pts, lines: [], guides: [] };
     }
     if (k === "circle") {
-      const c = kp(n2, "center"), r = num8((kid4(n2, "radius") || [])[1]);
+      const c = kp(n2, "center"), r = num8((kid5(n2, "radius") || [])[1]);
       return c ? { pts: [c, [c[0] + r, c[1]]], lines: [], guides: [] } : null;
     }
     if (k === "arc") {
@@ -71212,7 +73573,7 @@ Link '${target2}' to this file?`)) return null;
   function ellipseOf(n2) {
     const c = kp(n2, "center");
     if (!c) return null;
-    const v = (key2) => num8((kid4(n2, key2) || [])[1], 0);
+    const v = (key2) => num8((kid5(n2, key2) || [])[1], 0);
     return { c, a: v("major_radius"), b: v("minor_radius"), phi: v("rotation_angle"), t0: v("start_angle"), t1: v("end_angle") };
   }
   function ellipseAt(e, deg) {
@@ -71230,9 +73591,9 @@ Link '${target2}' to this file?`)) return null;
     return [v[0] * c + v[1] * s, -v[0] * s + v[1] * c];
   }
   function imageGeom(item) {
-    const n2 = item.node, a = kid4(n2, "at");
+    const n2 = item.node, a = kid5(n2, "at");
     if (!a) return null;
-    const sc = kid4(n2, "scale"), r = kid4(n2, "rotate");
+    const sc = kid5(n2, "scale"), r = kid5(n2, "rotate");
     return { pos: [num8(a[1]), num8(a[2])], w: item.w || 10, h: item.h || 10, rot: r ? num8(r[1], 0) : 0, scale: sc ? num8(sc[1], 1) : 1 };
   }
   function imageBoundingSize(w, h, rot3) {
@@ -71251,7 +73612,7 @@ Link '${target2}' to this file?`)) return null;
   }
   var IMAGE_MIN_SIZE = 50 * 0.0254;
   function setImageToken(n2, key2, v, dflt) {
-    const k = kid4(n2, key2), i = k ? n2.indexOf(k) : -1;
+    const k = kid5(n2, key2), i = k ? n2.indexOf(k) : -1;
     if (Math.abs(v - dflt) < 1e-12) {
       if (i >= 0) n2.splice(i, 1);
       return;
@@ -71260,7 +73621,7 @@ Link '${target2}' to this file?`)) return null;
       k[1] = v;
       return;
     }
-    const after = key2 === "scale" ? kid4(n2, "rotate") || kid4(n2, "at") : kid4(n2, "at");
+    const after = key2 === "scale" ? kid5(n2, "rotate") || kid5(n2, "at") : kid5(n2, "at");
     n2.splice(after ? n2.indexOf(after) + 1 : 1, 0, [key2, v]);
   }
   function editHandles(ep) {
@@ -71338,7 +73699,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function sheetMin(node, box, fromRight, fromBottom) {
     let w = PE_MIN, h = PE_MIN;
-    for (const pin of kids2(node, "pin")) {
+    for (const pin of kids3(node, "pin")) {
       const [x, y, rot3] = atOf3(pin), r = (Math.round(rot3 || 0) % 360 + 360) % 360;
       if (r === 90 || r === 270) w = Math.max(w, fromRight ? x - box[0] : box[2] - x);
       else h = Math.max(h, fromBottom ? y - box[1] : box[3] - y);
@@ -71346,16 +73707,16 @@ Link '${target2}' to this file?`)) return null;
     return [w, h];
   }
   function textBoxMinSize(node) {
-    const text2 = str3(node[1]);
+    const text2 = str4(node[1]);
     if (!text2) return [0, 0];
-    const ef = kid4(node, "effects"), f2 = ef && kid4(ef, "font"), sz = f2 && kid4(f2, "size"), th = f2 && kid4(f2, "thickness"), ls = f2 && kid4(f2, "line_spacing");
-    const size = sz ? num8(sz[2], num8(sz[1], 1.27)) : 1.27, bold2 = !!(f2 && (f2.includes("bold") || kid4(f2, "bold") && str3(kid4(f2, "bold")[1]) !== "no"));
+    const ef = kid5(node, "effects"), f2 = ef && kid5(ef, "font"), sz = f2 && kid5(f2, "size"), th = f2 && kid5(f2, "thickness"), ls = f2 && kid5(f2, "line_spacing");
+    const size = sz ? num8(sz[2], num8(sz[1], 1.27)) : 1.27, bold2 = !!(f2 && (f2.includes("bold") || kid5(f2, "bold") && str4(kid5(f2, "bold")[1]) !== "no"));
     const pen = th && num8(th[1]) > 1e-3 ? num8(th[1]) : Math.min(bold2 ? size / 5 : size / 8, size / 4);
     const lines = text2.split("\n").length, ext = size + 2 * 1.5 * pen;
     let h = ext + 0.17 * ext + (lines - 1) * size * 1.68 * 0.9583 * (ls ? num8(ls[1], 1) : 1);
     if (text2.includes("~{")) h += ext / 6;
-    const mg = kid4(node, "margins"), m = mg ? [num8(mg[1]), num8(mg[2]), num8(mg[3]), num8(mg[4])] : [TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN];
-    const rot3 = Math.round(num8((kid4(node, "at") || [])[3], 0)) % 180;
+    const mg = kid5(node, "margins"), m = mg ? [num8(mg[1]), num8(mg[2]), num8(mg[3]), num8(mg[4])] : [TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN];
+    const rot3 = Math.round(num8((kid5(node, "at") || [])[3], 0)) % 180;
     return rot3 === 90 ? [r45(h + m[0] + m[2]), 0] : [0, r45(h + m[1] + m[3])];
   }
   function applyPointEdit(doc, pe, p) {
@@ -71365,7 +73726,7 @@ Link '${target2}' to this file?`)) return null;
     const touched = [item];
     if ((k === "polyline" || k === "rule_area") && idx >= ep.pts.length) {
       const pts = polygonEdgeDrag(ep.pts, idx - ep.pts.length, p).map((q) => [r45(q[0]), r45(q[1])]);
-      setPts2(k === "rule_area" ? kid4(n2, "polyline") : n2, pts);
+      setPts2(k === "rule_area" ? kid5(n2, "polyline") : n2, pts);
     } else if (k === "wire" || k === "bus" || k === "polyline" || k === "bezier") {
       const pts = ep.pts.map((q) => q.slice());
       pts[idx] = [r45(p[0]), r45(p[1])];
@@ -71377,7 +73738,7 @@ Link '${target2}' to this file?`)) return null;
         touched.push(f2.item);
       }
     } else if (k === "rule_area") {
-      const pl = kid4(n2, "polyline"), pts = ep.pts.map((q) => q.slice());
+      const pl = kid5(n2, "polyline"), pts = ep.pts.map((q) => q.slice());
       pts[idx] = [r45(p[0]), r45(p[1])];
       setPts2(pl, pts);
     } else if (k === "image") {
@@ -71388,7 +73749,7 @@ Link '${target2}' to this file?`)) return null;
       else if (idx === 5) {
         const cv = [p[0] - origin[0], p[1] - origin[1]];
         const target2 = Math.atan2(-cv[1], cv[0]) * 180 / Math.PI - 90, d = target2 - g2.rot;
-        const np = rotDeg([g2.pos[0] - origin[0], g2.pos[1] - origin[1]], d), at2 = kid4(n2, "at");
+        const np = rotDeg([g2.pos[0] - origin[0], g2.pos[1] - origin[1]], d), at2 = kid5(n2, "at");
         at2[1] = r45(origin[0] + np[0]);
         at2[2] = r45(origin[1] + np[1]);
         setImageOriginOffset(item.id, rotDeg(off0, d));
@@ -71404,7 +73765,7 @@ Link '${target2}' to this file?`)) return null;
         let ratio = oldLen > 0 ? Math.hypot(nc[0], nc[1]) / oldLen : 1;
         ratio = Math.min(Math.max(size[0] * ratio, IMAGE_MIN_SIZE) / size[0], Math.max(size[1] * ratio, IMAGE_MIN_SIZE) / size[1]);
         if (ratio > 0 && isFinite(ratio)) {
-          const noff = [off0[0] * ratio, off0[1] * ratio], at2 = kid4(n2, "at");
+          const noff = [off0[0] * ratio, off0[1] * ratio], at2 = kid5(n2, "at");
           at2[1] = r45(origin[0] - noff[0]);
           at2[2] = r45(origin[1] - noff[1]);
           setImageOriginOffset(item.id, noff);
@@ -71414,13 +73775,13 @@ Link '${target2}' to this file?`)) return null;
     } else if (k === "ellipse" || k === "ellipse_arc") {
       const e = ellipseOf(pe.orig);
       const set = (key2, v) => {
-        const kk = kid4(n2, key2);
+        const kk = kid5(n2, key2);
         v = r45(v);
         if (kk) kk[1] = v;
         else n2.push([key2, v]);
       };
       if (idx === 0) {
-        const ck = kid4(n2, "center");
+        const ck = kid5(n2, "center");
         ck[1] = r45(p[0]);
         ck[2] = r45(p[1]);
       } else if (idx === 1) {
@@ -71443,11 +73804,11 @@ Link '${target2}' to this file?`)) return null;
     } else if (k === "circle") {
       const c = ep.pts[0];
       if (idx === 0) {
-        const ck = kid4(n2, "center");
+        const ck = kid5(n2, "center");
         ck[1] = r45(p[0]);
         ck[2] = r45(p[1]);
       } else {
-        const rk = kid4(n2, "radius");
+        const rk = kid5(n2, "radius");
         rk[1] = r45(Math.max(PE_MIN, Math.hypot(p[0] - c[0], p[1] - c[1])));
       }
     } else if (k === "arc") {
@@ -71479,28 +73840,28 @@ Link '${target2}' to this file?`)) return null;
       }
       const nm3 = arcMid(cc, ns, ne, ccw);
       for (const [key2, q] of [["start", ns], ["mid", nm3], ["end", ne]]) {
-        const kk = kid4(n2, key2);
+        const kk = kid5(n2, key2);
         kk[1] = r45(q[0]);
         kk[2] = r45(q[1]);
       }
     } else if (k === "rectangle" && idx === 5 && ep.pts.length === 6) {
       const r = r45(rectRadiusFor(boxOf2({ kind: k, node: pe.orig }), p[0]));
-      const rk = kid4(n2, "radius"), at2 = rk ? n2.indexOf(rk) : -1;
+      const rk = kid5(n2, "radius"), at2 = rk ? n2.indexOf(rk) : -1;
       if (r > 0) {
         if (rk) rk[1] = r;
-        else n2.splice(n2.indexOf(kid4(n2, "end")) + 1, 0, ["radius", r]);
+        else n2.splice(n2.indexOf(kid5(n2, "end")) + 1, 0, ["radius", r]);
       } else if (at2 >= 0) n2.splice(at2, 1);
     } else if (k === "rectangle" || k === "text_box") {
       const mn = k === "text_box" ? textBoxMinSize(pe.orig) : [0, 0];
       const b = editBox(boxOf2({ kind: k, node: pe.orig }), ep, idx, p, Math.max(PE_MIN, mn[0]), Math.max(PE_MIN, mn[1])).map(r45);
       if (k === "rectangle") {
-        const s = kid4(n2, "start"), e = kid4(n2, "end");
+        const s = kid5(n2, "start"), e = kid5(n2, "end");
         s[1] = b[0];
         s[2] = b[1];
         e[1] = b[2];
         e[2] = b[3];
       } else {
-        const at2 = kid4(n2, "at"), sz = kid4(n2, "size");
+        const at2 = kid5(n2, "at"), sz = kid5(n2, "size");
         at2[1] = b[0];
         at2[2] = b[1];
         sz[1] = r45(b[2] - b[0]);
@@ -71511,21 +73872,21 @@ Link '${target2}' to this file?`)) return null;
       const fromRight = idx === 1 || idx === 3 || edge === 1, fromBottom = idx === 2 || idx === 3 || edge === 2;
       const [mw, mh] = sheetMin(pe.orig, ob, fromRight, fromBottom);
       const b = editBox(ob, ep, idx, p, mw, mh).map(r45);
-      const at2 = kid4(n2, "at"), sz = kid4(n2, "size"), dx = r45(b[0] - ob[0]), dy = r45(b[1] - ob[1]);
+      const at2 = kid5(n2, "at"), sz = kid5(n2, "size"), dx = r45(b[0] - ob[0]), dy = r45(b[1] - ob[1]);
       at2[1] = b[0];
       at2[2] = b[1];
       sz[1] = r45(b[2] - b[0]);
       sz[2] = r45(b[3] - b[1]);
-      if (dx || dy) for (const f2 of kids2(n2, "property")) {
-        const fa = kid4(f2, "at");
+      if (dx || dy) for (const f2 of kids3(n2, "property")) {
+        const fa = kid5(f2, "at");
         if (fa) {
           fa[1] = r45(num8(fa[1]) + dx);
           fa[2] = r45(num8(fa[2]) + dy);
         }
       }
       const moved = [];
-      for (const pin of kids2(n2, "pin")) {
-        const pa = kid4(pin, "at"), r = (Math.round(num8(pa[3]) || 0) % 360 + 360) % 360, was = [num8(pa[1]), num8(pa[2])];
+      for (const pin of kids3(n2, "pin")) {
+        const pa = kid5(pin, "at"), r = (Math.round(num8(pa[3]) || 0) % 360 + 360) % 360, was = [num8(pa[1]), num8(pa[2])];
         if (r === 0 || r === 180) {
           pa[1] = r === 180 ? b[0] : b[2];
           pa[2] = r45(Math.min(Math.max(num8(pa[2]), b[1]), b[3]));
@@ -71539,7 +73900,7 @@ Link '${target2}' to this file?`)) return null;
         const mvp = moved.find(([w]) => same(w, f2.at));
         if (!mvp || same(mvp[0], mvp[1])) continue;
         if (f2.item.kind === "no_connect") {
-          const fa = kid4(f2.item.node, "at");
+          const fa = kid5(f2.item.node, "at");
           fa[1] = mvp[1][0];
           fa[2] = mvp[1][1];
         } else {
@@ -71569,7 +73930,7 @@ Link '${target2}' to this file?`)) return null;
         }
       }
     } else if (item.kind === "sheet") {
-      for (const pin of kids2(item.node, "pin")) {
+      for (const pin of kids3(item.node, "pin")) {
         const [x, y] = atOf3(pin);
         for (const o of doc.items.values()) {
           if (o.kind === "wire" || o.kind === "bus") {
@@ -71716,15 +74077,15 @@ Link '${target2}' to this file?`)) return null;
     if (isNetLine(k)) return ptsOf3(n2).map((p) => ({ p: p.map(r45), net: k }));
     if (k === "junction" || k === "netclass_flag" || k === "directive_label") return [{ p: at2(), net: "any" }];
     if (k === "bus_entry") return connPoints(doc, it).map((p) => ({ p, net: "any" }));
-    if (k === "label") return [{ p: at2(), net: "any", key: "local:" + str3(n2[1]) }];
-    if (k === "global_label") return [{ p: at2(), net: "any", key: "global:" + str3(n2[1]) }];
-    if (k === "hierarchical_label") return [{ p: at2(), net: "any", key: "hier:" + str3(n2[1]) }];
+    if (k === "label") return [{ p: at2(), net: "any", key: "local:" + str4(n2[1]) }];
+    if (k === "global_label") return [{ p: at2(), net: "any", key: "global:" + str4(n2[1]) }];
+    if (k === "hierarchical_label") return [{ p: at2(), net: "any", key: "hier:" + str4(n2[1]) }];
     if (k === "symbol") {
-      const libId = str3((kid4(n2, "lib_id") || [])[1]), value = kids2(n2, "property").find((p) => str3(p[1]) === "Value");
-      const key2 = isPowerSymbol(doc, libId) && value && symbolPins(doc, it).some((q) => q.type === "power_in") ? "global:" + str3(value[2]) : void 0;
+      const libId = str4((kid5(n2, "lib_id") || [])[1]), value = kids3(n2, "property").find((p) => str4(p[1]) === "Value");
+      const key2 = isPowerSymbol(doc, libId) && value && symbolPins(doc, it).some((q) => q.type === "power_in") ? "global:" + str4(value[2]) : void 0;
       return K7.pinPoints(doc, it).map((q) => ({ p: [r45(q.x), r45(q.y)], net: "wire", key: key2 }));
     }
-    if (k === "sheet") return kids2(n2, "pin").map((pin) => ({ p: atOf3(pin).slice(0, 2).map(r45), net: "any" }));
+    if (k === "sheet") return kids3(n2, "pin").map((pin) => ({ p: atOf3(pin).slice(0, 2).map(r45), net: "any" }));
     return [];
   }
   var conducts = (it) => isNetLine(it.kind) || it.kind === "junction" || it.kind === "bus_entry";
@@ -71793,12 +74154,12 @@ Link '${target2}' to this file?`)) return null;
     if (hit5 && NET_PICK.has(hit5.kind)) return { item: hit5, at: mm2 };
     const pins = pinsAt(doc, mm2[0], mm2[1], pinTol);
     if (pins.length) return { item: pins[0].item, at: [pins[0].x, pins[0].y] };
-    for (const it of doc.items.values()) if (it.kind === "sheet") for (const pin of kids2(it.node, "pin")) {
+    for (const it of doc.items.values()) if (it.kind === "sheet") for (const pin of kids3(it.node, "pin")) {
       const [x, y] = atOf3(pin);
       if (Math.hypot(x - mm2[0], y - mm2[1]) <= pinTol) return { item: it, at: [x, y] };
     }
     const symId = K7.hitTest(doc, mm2[0], mm2[1], tol), sym = symId ? doc.items.get(symId) : null;
-    if (sym && sym.kind === "symbol" && isPowerSymbol(doc, str3((kid4(sym.node, "lib_id") || [])[1]))) {
+    if (sym && sym.kind === "symbol" && isPowerSymbol(doc, str4((kid5(sym.node, "lib_id") || [])[1]))) {
       const sp = symbolPins(doc, sym);
       if (sp.length === 1) return { item: sym, at: [sp[0].x, sp[0].y], pin: sp[0].number };
     }
@@ -71860,15 +74221,15 @@ Link '${target2}' to this file?`)) return null;
     const terms = [];
     for (const it of doc.items.values()) {
       if (it.kind === "symbol") {
-        const power = symbolIsPower(doc, it), value = kids2(it.node, "property").find((p) => str3(p[1]) === "Value");
+        const power = symbolIsPower(doc, it), value = kids3(it.node, "property").find((p) => str4(p[1]) === "Value");
         for (const pin of symbolPins(doc, it)) {
           let key2;
-          if (power && value && pin.type === "power_in") key2 = "global:" + str3(value[2]);
+          if (power && value && pin.type === "power_in") key2 = "global:" + str4(value[2]);
           else if (pin.hidden && pin.type === "power_in") key2 = "global:" + pin.name;
           terms.push({ item: it, p: [pin.x, pin.y], net: "wire", key: key2, pin, power });
         }
       } else if (it.kind === "sheet") {
-        for (const pin of kids2(it.node, "pin")) terms.push({ item: it, p: atOf3(pin).slice(0, 2).map(r45), net: "any", sheetPin: str3(pin[1]) });
+        for (const pin of kids3(it.node, "pin")) terms.push({ item: it, p: atOf3(pin).slice(0, 2).map(r45), net: "any", sheetPin: str4(pin[1]) });
       } else for (const t of terminalsOf(doc, it)) terms.push(Object.assign({ item: it }, t));
     }
     const parent = terms.map((_, i) => i);
@@ -71942,7 +74303,7 @@ Link '${target2}' to this file?`)) return null;
         mark("unannotated", "error", [x, y], `Symbol ${ref || "(no reference)"} is not annotated`, [it.id]);
         continue;
       }
-      const unit2 = kid4(it.node, "unit") ? num8(kid4(it.node, "unit")[1], 1) : 1, k = ref + "#" + unit2;
+      const unit2 = kid5(it.node, "unit") ? num8(kid5(it.node, "unit")[1], 1) : 1, k = ref + "#" + unit2;
       if (byRef2.has(k)) mark("duplicate_reference", "error", [x, y], `Duplicate reference designators ${ref}`, [it.id, byRef2.get(k).id]);
       else byRef2.set(k, it);
     }
@@ -71981,7 +74342,7 @@ Link '${target2}' to this file?`)) return null;
       }
       for (const t of labels) {
         if (t.item.kind === "netclass_flag" || t.item.kind === "directive_label") continue;
-        const text2 = str3(t.item.node[1]);
+        const text2 = str4(t.item.node[1]);
         if (!text2.trim()) mark("empty_label_name", "error", t.p, "Label has an empty name", [t.item.id]);
         if (!t.attached) mark("label_dangling", "error", t.p, `Label not connected: ${text2}`, [t.item.id]);
         else if (t.item.kind === "label" && pins.length === 1 && labels.length === 1 && !leaves) mark("isolated_pin_label", "warning", t.p, `Label connected to only one pin: ${text2}`, [t.item.id]);
@@ -72015,7 +74376,7 @@ Link '${target2}' to this file?`)) return null;
     }
     const names = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") {
-      const t = str3(it.node[1]);
+      const t = str4(it.node[1]);
       const k = t.toLowerCase();
       if (!names.has(k)) names.set(k, /* @__PURE__ */ new Map());
       names.get(k).set(t, it);
@@ -72029,10 +74390,10 @@ Link '${target2}' to this file?`)) return null;
       if (it.kind !== "sheet") continue;
       const sub = sheetDocs ? subsheetDoc(sheetDocs, it) : null;
       const pinNames = /* @__PURE__ */ new Map();
-      for (const pin of kids2(it.node, "pin")) pinNames.set(str3(pin[1]), pin);
+      for (const pin of kids3(it.node, "pin")) pinNames.set(str4(pin[1]), pin);
       if (sub) {
         const hier = /* @__PURE__ */ new Set();
-        for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str3(o.node[1]));
+        for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str4(o.node[1]));
         for (const [name, pin] of pinNames) if (!hier.has(name)) mark("hier_label_mismatch", "error", atOf3(pin), `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id]);
         const [x, y] = atOf3(it.node);
         for (const name of hier) if (!pinNames.has(name)) mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id]);
@@ -72040,7 +74401,7 @@ Link '${target2}' to this file?`)) return null;
     }
     if (opts.parentPins) {
       const pp = new Set(opts.parentPins);
-      for (const it of doc.items.values()) if (it.kind === "hierarchical_label" && !pp.has(str3(it.node[1]))) mark("hier_label_mismatch", "error", atOf3(it.node), `Hierarchical label ${str3(it.node[1])} has no sheet pin on the parent sheet`, [it.id]);
+      for (const it of doc.items.values()) if (it.kind === "hierarchical_label" && !pp.has(str4(it.node[1]))) mark("hier_label_mismatch", "error", atOf3(it.node), `Hierarchical label ${str4(it.node[1])} has no sheet pin on the parent sheet`, [it.id]);
     }
     markers.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1) || a.y - b.y || a.x - b.x);
     return markers;
@@ -72048,7 +74409,7 @@ Link '${target2}' to this file?`)) return null;
   function subsheetDoc(sheetDocs, sheet) {
     const asMap = sheetDocs, asObj = sheetDocs;
     const get = (k) => typeof asMap.get === "function" ? asMap.get(k) : asObj[k];
-    const file = sheet.file || str3((kids2(sheet.node, "property").find((p) => str3(p[1]) === "Sheetfile") || [])[2]);
+    const file = sheet.file || str4((kids3(sheet.node, "property").find((p) => str4(p[1]) === "Sheetfile") || [])[2]);
     let d = get(file) || get(baseName3(file)) || get(sheet.id);
     if (!d) return null;
     if (typeof d === "string") {
@@ -72082,18 +74443,18 @@ Link '${target2}' to this file?`)) return null;
         ctx.toast("The sheet's file is not loaded");
         continue;
       }
-      const have = new Set(kids2(it.node, "pin").map((p) => str3(p[1])));
+      const have = new Set(kids3(it.node, "pin").map((p) => str4(p[1])));
       const node = deep(it.node);
-      const [x, y] = atOf3(node), s = kid4(node, "size"), h = num8(s && s[2]);
+      const [x, y] = atOf3(node), s = kid5(node, "size"), h = num8(s && s[2]);
       let row2 = 0;
       for (const o of sub.items.values()) {
-        if (o.kind !== "hierarchical_label" || have.has(str3(o.node[1]))) continue;
+        if (o.kind !== "hierarchical_label" || have.has(str4(o.node[1]))) continue;
         const py = Math.min(y + h, r45(y + 1.27 * ++row2));
-        const pin = sheetPinNode(str3(o.node[1]), [x, py], "left");
+        const pin = sheetPinNode(str4(o.node[1]), [x, py], "left");
         const at2 = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
         if (at2 >= 0) node.splice(at2, 0, pin);
         else node.push(pin);
-        have.add(str3(o.node[1]));
+        have.add(str4(o.node[1]));
         added2++;
       }
       if (added2) changes.push(modChange(doc, it, node));
@@ -72113,14 +74474,14 @@ Link '${target2}' to this file?`)) return null;
         continue;
       }
       const hier = /* @__PURE__ */ new Set();
-      for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str3(o.node[1]));
+      for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str4(o.node[1]));
       const node = deep(it.node);
-      const before = kids2(node, "pin").length;
+      const before = kids3(node, "pin").length;
       for (let i = node.length - 1; i > 0; i--) {
         const c = node[i];
-        if (Array.isArray(c) && c[0] === "pin" && !hier.has(str3(c[1]))) node.splice(i, 1);
+        if (Array.isArray(c) && c[0] === "pin" && !hier.has(str4(c[1]))) node.splice(i, 1);
       }
-      if (kids2(node, "pin").length !== before) changes.push(modChange(doc, it, node));
+      if (kids3(node, "pin").length !== before) changes.push(modChange(doc, it, node));
     }
     if (!changes.length) return false;
     ctx.commit(changes, "cleanup sheet pins");
@@ -72133,7 +74494,7 @@ Link '${target2}' to this file?`)) return null;
   var WARNING_CURSOR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" shape-rendering="crispEdges"><path fill="#FFFFFF" d="M0 0h1v1h-1zM0 1h2v1h-2zM0 2h1v1h-1zM2 2h1v1h-1zM0 3h1v1h-1zM3 3h1v1h-1zM0 4h1v1h-1zM4 4h1v1h-1zM0 5h1v1h-1zM5 5h1v1h-1zM0 6h1v1h-1zM6 6h1v1h-1zM0 7h1v1h-1zM7 7h1v1h-1zM0 8h1v1h-1zM8 8h1v1h-1zM0 9h1v1h-1zM9 9h1v1h-1zM0 10h1v1h-1zM10 10h1v1h-1zM0 11h1v1h-1zM7 11h5v1h-5zM0 12h1v1h-1zM7 12h1v1h-1zM0 13h1v1h-1zM3 13h2v1h-2zM7 13h1v1h-1zM0 14h1v1h-1zM2 14h1v1h-1zM4 14h1v1h-1zM8 14h1v1h-1zM0 15h2v1h-2zM5 15h1v1h-1zM8 15h1v1h-1zM0 16h1v1h-1zM5 16h1v1h-1zM9 16h1v1h-1zM6 17h1v1h-1zM8 17h1v1h-1zM21 17h1v1h-1zM6 18h2v1h-2zM20 18h3v1h-3zM19 19h5v1h-5zM9 20h2v1h-2zM21 20h1v1h-1zM8 21h4v1h-4zM17 21h1v1h-1zM21 21h1v1h-1zM25 21h1v1h-1zM8 22h1v1h-1zM11 22h1v1h-1zM16 22h2v1h-2zM21 22h1v1h-1zM25 22h2v1h-2zM7 23h2v1h-2zM11 23h2v1h-2zM15 23h13v1h-13zM7 24h2v1h-2zM11 24h2v1h-2zM16 24h2v1h-2zM21 24h1v1h-1zM25 24h2v1h-2zM6 25h3v1h-3zM11 25h3v1h-3zM17 25h1v1h-1zM21 25h1v1h-1zM25 25h1v1h-1zM5 26h10v1h-10zM21 26h1v1h-1zM5 27h4v1h-4zM11 27h4v1h-4zM19 27h5v1h-5zM4 28h5v1h-5zM11 28h5v1h-5zM20 28h3v1h-3zM4 29h12v1h-12zM21 29h1v1h-1z"/><path fill="#000000" d="M1 2h1v1h-1zM1 3h2v1h-2zM1 4h3v1h-3zM1 5h4v1h-4zM1 6h5v1h-5zM1 7h6v1h-6zM1 8h7v1h-7zM1 9h8v1h-8zM1 10h9v1h-9zM1 11h6v1h-6zM1 12h6v1h-6zM1 13h2v1h-2zM5 13h2v1h-2zM1 14h1v1h-1zM5 14h3v1h-3zM6 15h2v1h-2zM6 16h3v1h-3zM21 16h1v1h-1zM7 17h1v1h-1zM20 17h1v1h-1zM22 17h1v1h-1zM19 18h1v1h-1zM23 18h1v1h-1zM18 19h1v1h-1zM24 19h1v1h-1zM17 20h1v1h-1zM19 20h2v1h-2zM22 20h2v1h-2zM25 20h1v1h-1zM16 21h1v1h-1zM18 21h1v1h-1zM20 21h1v1h-1zM22 21h1v1h-1zM24 21h1v1h-1zM26 21h1v1h-1zM9 22h2v1h-2zM15 22h1v1h-1zM18 22h3v1h-3zM22 22h3v1h-3zM27 22h1v1h-1zM9 23h2v1h-2zM14 23h1v1h-1zM28 23h1v1h-1zM9 24h2v1h-2zM15 24h1v1h-1zM18 24h3v1h-3zM22 24h3v1h-3zM27 24h1v1h-1zM9 25h2v1h-2zM16 25h1v1h-1zM18 25h1v1h-1zM20 25h1v1h-1zM22 25h1v1h-1zM24 25h1v1h-1zM26 25h1v1h-1zM17 26h1v1h-1zM19 26h2v1h-2zM22 26h2v1h-2zM25 26h1v1h-1zM9 27h2v1h-2zM18 27h1v1h-1zM24 27h1v1h-1zM9 28h2v1h-2zM19 28h1v1h-1zM23 28h1v1h-1zM20 29h1v1h-1zM22 29h1v1h-1zM21 30h1v1h-1z"/><path fill="#FF0000" d="M9 18h2v1h-2zM8 19h4v1h-4zM7 20h2v1h-2zM11 20h2v1h-2zM7 21h1v1h-1zM12 21h1v1h-1zM6 22h2v1h-2zM12 22h2v1h-2zM6 23h1v1h-1zM13 23h1v1h-1zM5 24h2v1h-2zM13 24h2v1h-2zM4 25h2v1h-2zM14 25h2v1h-2zM4 26h1v1h-1zM15 26h1v1h-1zM3 27h2v1h-2zM15 27h2v1h-2zM3 28h1v1h-1zM16 28h1v1h-1zM2 29h2v1h-2zM16 29h2v1h-2zM2 30h16v1h-16zM3 31h14v1h-14z"/></svg>') + '") 1 1, auto';
   var keyOf = (id, i) => id + "#" + i;
   var lineWidth = (it) => {
-    const st = kid4(it.node, "stroke"), w = st ? num8((kid4(st, "width") || [])[1], 0) : 0;
+    const st = kid5(it.node, "stroke"), w = st ? num8((kid5(st, "width") || [])[1], 0) : 0;
     return w > 0 ? w : it.kind === "bus" ? 0.3048 : it.kind === "wire" ? 0.1524 : 0;
   };
   function collisionInit(doc, d, fresh) {
@@ -72283,7 +74644,7 @@ Link '${target2}' to this file?`)) return null;
       else if (DANGLE_LABEL_COLOR[k]) {
         add(atOf3(n2), "LABEL_END", it);
         labels.push({ p: atOf3(n2).slice(0, 2), item: it, color: DANGLE_LABEL_COLOR[k] });
-      } else if (k === "sheet") for (const pin of kids2(n2, "pin")) {
+      } else if (k === "sheet") for (const pin of kids3(n2, "pin")) {
         add(atOf3(pin), "SHEET_LABEL_END", it);
         labels.push({ p: atOf3(pin).slice(0, 2), item: it, color: "sheetLabel" });
       }
@@ -72339,7 +74700,7 @@ Link '${target2}' to this file?`)) return null;
     for (const d of danglingList(doc)) if (d.what !== "busEntry" && same(d.p, p)) {
       if (d.what === "label") {
         const n2 = d.item.kind === "sheet" ? null : d.item.node;
-        if (n2 && BUS_TEXT.test(str3(n2[1]))) return "bus";
+        if (n2 && BUS_TEXT.test(str4(n2[1]))) return "bus";
       }
       return "wire";
     }
@@ -72628,8 +74989,100 @@ Link '${target2}' to this file?`)) return null;
       return [];
     }
   }
+  var isList6 = Array.isArray;
+  var str22 = (v) => v === void 0 || v === null ? "" : String(v);
+  var kid22 = (n2, key2) => {
+    if (!n2) return null;
+    for (let i = 1; i < n2.length; i++) {
+      const c = n2[i];
+      if (isList6(c) && c[0] === key2) return c;
+    }
+    return null;
+  };
+  var kids32 = (n2, key2) => n2 ? n2.filter((c) => isList6(c) && c[0] === key2) : [];
+  var clone3 = (n2) => JSON.parse(JSON.stringify(n2));
+  var boolOf3 = (k, dflt) => k ? k.length < 2 || /^(yes|true)$/.test(str22(k[1])) : dflt;
+  var cmpCode2 = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  var lower2 = (s) => s.toLowerCase();
+  var DEFAULT_VARIANT_NAME2 = "< Default >";
+  var isDefaultVariant3 = (v) => !v || lower2(v) === lower2(DEFAULT_VARIANT_NAME2);
+  var SYM_KEYS2 = [["dnp", "dnp", false], ["exclude_from_sim", "excludedFromSim", false], ["in_bom", "excludedFromBOM", true], ["on_board", "excludedFromBoard", true], ["in_pos_files", "excludedFromPosFiles", true]];
+  var VARIANT_IN_BOM_POSITIVE_VERSION2 = 20260306;
+  var variantInBomPositive2 = (ver) => !ver || ver >= VARIANT_IN_BOM_POSITIVE_VERSION2;
+  var variantKeys2 = (ver) => variantInBomPositive2(ver) ? SYM_KEYS2 : SYM_KEYS2.map(([k, f2, inv]) => [k, f2, k === "in_bom" ? false : inv]);
+  function symbolFlags2(sym) {
+    const out = {};
+    for (const [key2, f2, inv] of SYM_KEYS2) {
+      const k = kid22(sym, key2);
+      out[f2] = inv ? !boolOf3(k, true) : boolOf3(k, false);
+    }
+    return out;
+  }
+  function symbolInstancePaths2(sym) {
+    const out = [];
+    for (const proj of kids32(kid22(sym, "instances"), "project")) for (const p of kids32(proj, "path")) out.push(p);
+    return out;
+  }
+  function symbolInstance2(sym, path2) {
+    const all2 = symbolInstancePaths2(sym);
+    return (path2 ? all2.find((p) => str22(p[1]) === path2) : null) || all2[0] || null;
+  }
+  var symVariantIn2 = (inst, name) => kids32(inst, "variant").find((v) => str22((kid22(v, "name") || [])[1]) === name) || null;
+  function symbolVariant2(sym, name, path2, ver) {
+    if (isDefaultVariant3(name)) return null;
+    const v = symVariantIn2(symbolInstance2(sym, path2), name);
+    if (!v) return null;
+    const base = symbolFlags2(sym), flags = { ...base };
+    for (const [key2, f2, inv] of variantKeys2(ver)) {
+      const k = kid22(v, key2);
+      if (k) flags[f2] = inv ? !boolOf3(k, true) : boolOf3(k, false);
+    }
+    const fields = /* @__PURE__ */ new Map();
+    for (const f2 of kids32(v, "field")) {
+      const nm3 = str22((kid22(f2, "name") || [])[1]);
+      if (nm3) fields.set(nm3, str22((kid22(f2, "value") || [])[1]));
+    }
+    return { flags, fields };
+  }
+  function symbolFlagsForVariant2(sym, variant, path2, ver) {
+    const st = variant ? symbolVariant2(sym, variant, path2, ver) : null;
+    return st ? st.flags : symbolFlags2(sym);
+  }
+  function setSymbolVariant(sym, name, patch, path2, ver) {
+    if (isDefaultVariant3(name)) throw new Error("Variant name cannot be empty or default.");
+    const out = clone3(sym), inst = symbolInstance2(out, path2);
+    if (!inst) return out;
+    const keys = out[0] === "sheet" ? variantKeys2(ver).filter(([k]) => k !== "on_board" && k !== "in_pos_files") : variantKeys2(ver);
+    const base = symbolFlags2(out), st = symbolVariant2(out, name, str22(inst[1]), ver) || { flags: { ...base }, fields: /* @__PURE__ */ new Map() };
+    for (const [, f2] of SYM_KEYS2) if (patch.flags && patch.flags[f2] !== void 0) st.flags[f2] = !!patch.flags[f2];
+    const baseField = (k) => {
+      const p = kids32(out, "property").find((q) => str22(q[1]) === k);
+      return p ? str22(p[2]) : "";
+    };
+    if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) {
+      if (v === baseField(k) && kids32(out, "property").some((q) => str22(q[1]) === k)) st.fields.delete(k);
+      else st.fields.set(k, v);
+    }
+    const old = symVariantIn2(inst, name);
+    const node = ["variant", ["name", name]];
+    for (const [key2, f2, inv] of keys) if (st.flags[f2] !== base[f2]) node.push([key2, (inv ? !st.flags[f2] : st.flags[f2]) ? "yes" : "no"]);
+    for (const k of [...st.fields.keys()].sort(cmpCode2)) node.push(["field", ["name", k], ["value", st.fields.get(k)]]);
+    if (old) {
+      for (const c of old.slice(1)) if (isList6(c) && !["name", "dnp", "exclude_from_sim", "in_bom", "on_board", "in_pos_files", "field"].includes(str22(c[0]))) node.push(c);
+    }
+    const differs = node.length > 2 && (keys.some(([, f2]) => st.flags[f2] !== base[f2]) || [...st.fields].some(([k, v]) => baseField(k) !== v) || node.slice(2).some((c) => isList6(c) && !["field"].includes(str22(c[0]))));
+    if (old) {
+      if (differs) inst[inst.indexOf(old)] = node;
+      else inst.splice(inst.indexOf(old), 1);
+    } else if (differs) {
+      const others = kids32(inst, "variant");
+      const after = others.filter((v) => cmpCode2(str22((kid22(v, "name") || [])[1]), name) < 0).pop();
+      inst.splice(after ? inst.indexOf(after) + 1 : others.length ? inst.indexOf(others[0]) : inst.length, 0, node);
+    }
+    return out;
+  }
   function splitRef(ref) {
-    ref = str3(ref);
+    ref = str4(ref);
     if (!ref) return { prefix: "U", num: -1, isNew: true };
     if (/\?$/.test(ref)) return { prefix: ref.slice(0, -1), num: -1, isNew: true };
     const m = ref.match(/^(.*?)(\d+)$/);
@@ -72646,14 +75099,14 @@ Link '${target2}' to this file?`)) return null;
       if (!p) continue;
       const r = splitRef(p[2]);
       const [x, y] = atOf3(it.node);
-      const unitN = kid4(it.node, "unit");
-      refs.push({ item: it, prefix: r.prefix, num: r.num, isNew: (r.isNew || !keep) && (!opts.only || opts.only.has(it.id)), old: str3(p[2]), x, y, unit: unitN ? num8(unitN[1], 1) : 1 });
+      const unitN = kid5(it.node, "unit");
+      refs.push({ item: it, prefix: r.prefix, num: r.num, isNew: (r.isNew || !keep) && (!opts.only || opts.only.has(it.id)), old: str4(p[2]), x, y, unit: unitN ? num8(unitN[1], 1) : 1 });
     }
     refs.sort((a, b) => a.prefix.localeCompare(b.prefix) || (order === "x" ? a.x - b.x || a.y - b.y : a.y - b.y || a.x - b.x) || (a.item.id < b.item.id ? -1 : 1));
     const used = /* @__PURE__ */ new Map();
     const valueOf = (node) => {
-      const p = kids2(node, "property").find((q) => str3(q[1]) === "Value");
-      return p ? str3(p[2]) : "";
+      const p = kids3(node, "property").find((q) => str4(q[1]) === "Value");
+      return p ? str4(p[2]) : "";
     };
     const holder = (r) => ({ lib: symbolLibId(r.item.node), value: valueOf(r.item.node), unit: r.unit });
     const put = (prefix, n2, h) => {
@@ -72703,9 +75156,9 @@ Link '${target2}' to this file?`)) return null;
     for (const it of doc.items.values()) {
       if (it.kind !== "symbol" || only && !only.has(it.id)) continue;
       const p = refField(it.node);
-      if (!p || /\?$/.test(str3(p[2]))) continue;
+      if (!p || /\?$/.test(str4(p[2]))) continue;
       const node = deep(it.node);
-      setReference(node, unannotated(str3(p[2])));
+      setReference(node, unannotated(str4(p[2])));
       changes.push(modChange(doc, it, node));
     }
     return changes;
@@ -72732,15 +75185,15 @@ Link '${target2}' to this file?`)) return null;
     if (!editable(ctx)) return false;
     const it = selectedItems(ctx).find((x) => x.kind === "symbol");
     if (!it) return false;
-    const p = kids2(it.node, "property").find((q) => str3(q[1]) === name);
-    const cur2 = p ? str3(p[2]) : "";
+    const p = kids3(it.node, "property").find((q) => str4(q[1]) === name);
+    const cur2 = p ? str4(p[2]) : "";
     if (p && root4.KDialogs && root4.KDialogs.schFieldDialog && root4.KDialogs.schFieldDialog(ctx, it, name)) return true;
     promptImpl(title, cur2, S2.cursorClient, (text2) => {
       if (text2 === null || text2 === void 0 || text2 === cur2) return;
       const node = deep(it.node);
       if (name === "Reference") setReference(node, text2);
       else {
-        let q = kids2(node, "property").find((z) => str3(z[1]) === name);
+        let q = kids3(node, "property").find((z) => str4(z[1]) === name);
         if (!q) {
           q = ["property", name, "", ["at", ...atOf3(node).slice(0, 2), 0], ["hide", "yes"], ["effects", fontNode(1.27)]];
           insertField2(node, q);
@@ -72756,10 +75209,11 @@ Link '${target2}' to this file?`)) return null;
     if (at2 >= 0) node.splice(at2, 0, p);
     else node.push(p);
   }
+  var VARIANT_FLAG = { dnp: "dnp", in_bom: "excludedFromBOM", exclude_from_sim: "excludedFromSim", on_board: "excludedFromBoard", in_pos_files: "excludedFromPosFiles" };
   var FLAG_KEYS = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"], setExcludeFromPosFiles: ["in_pos_files", "no", "yes"] };
   var FLAG_AFTER = { exclude_from_sim: ["body_style", "convert", "unit", "mirror", "at", "lib_id"], in_bom: ["exclude_from_sim"], on_board: ["in_bom"], in_pos_files: ["on_board"], dnp: ["in_pos_files", "on_board"] };
   function withFlag(node, key2, val) {
-    const n2 = deep(node), k = kid4(n2, key2);
+    const n2 = deep(node), k = kid5(n2, key2);
     if (k) {
       k[1] = val;
       return n2;
@@ -72778,11 +75232,17 @@ Link '${target2}' to this file?`)) return null;
     const kinds = which === "setExcludeFromPosFiles" ? ["symbol"] : ["symbol", "sheet", "rule_area"];
     const items = selectedItems(ctx).filter((it) => kinds.includes(it.kind));
     if (!items.length) return false;
+    const variant = String(root4.CollabEditor && root4.CollabEditor.currentVariant || "");
+    const ed = root4.CollabEditor;
+    const path2 = variant && ed && ed.currentSheetPathOf ? ed.currentSheetPathOf() : null, ver = ctx.doc.version;
+    const vf = VARIANT_FLAG[key2];
+    const viaVariant = (n2) => !!variant && !!vf && (n2[0] === "symbol" || n2[0] === "sheet" && key2 !== "on_board");
     const isOn = (n2) => {
-      const k = kid4(n2, key2);
-      return !!k && str3(k[1]) === onVal;
+      if (viaVariant(n2)) return symbolFlagsForVariant2(n2, variant, path2, ver)[vf];
+      const k = kid5(n2, key2);
+      return !!k && str4(k[1]) === onVal;
     };
-    const set = (n2, on2) => withFlag(n2, key2, on2 ? onVal : offVal);
+    const set = (n2, on2) => viaVariant(n2) ? setSymbolVariant(n2, variant, { flags: { [vf]: on2 } }, path2, ver) : withFlag(n2, key2, on2 ? onVal : offVal);
     const hook = root4.CollabEditor && root4.CollabEditor.toggleAttribute;
     if (hook) return hook(ctx, items, isOn, set);
     let on = false;
@@ -72801,8 +75261,8 @@ Link '${target2}' to this file?`)) return null;
   function libUnits(doc, node) {
     const lib = K7.resolveLib(doc, symbolLibId(node));
     const units = /* @__PURE__ */ new Set(), styles = /* @__PURE__ */ new Set();
-    if (lib) for (const sub of kids2(lib, "symbol")) {
-      const m = str3(sub[1]).match(/_(\d+)_(\d+)$/);
+    if (lib) for (const sub of kids3(lib, "symbol")) {
+      const m = str4(sub[1]).match(/_(\d+)_(\d+)$/);
       if (m) {
         if (+m[1] > 0) units.add(+m[1]);
         styles.add(+m[2]);
@@ -72819,11 +75279,11 @@ Link '${target2}' to this file?`)) return null;
       ctx.toast("Symbol has a single unit");
       return false;
     }
-    const cur2 = kid4(it.node, "unit") ? num8(kid4(it.node, "unit")[1], 1) : 1, next = (cur2 - 1 + dir + units) % units + 1;
+    const cur2 = kid5(it.node, "unit") ? num8(kid5(it.node, "unit")[1], 1) : 1, next = (cur2 - 1 + dir + units) % units + 1;
     const node = deep(it.node);
     replaceKid(node, ["unit", next]);
-    for (const inst of kids2(node, "instances")) for (const pr of kids2(inst, "project")) for (const pa of kids2(pr, "path")) {
-      const u = kid4(pa, "unit");
+    for (const inst of kids3(node, "instances")) for (const pr of kids3(inst, "project")) for (const pa of kids3(pr, "path")) {
+      const u = kid5(pa, "unit");
       if (u) u[1] = next;
     }
     ctx.commit([modChange(ctx.doc, it, node)], "unit");
@@ -72838,7 +75298,7 @@ Link '${target2}' to this file?`)) return null;
       ctx.toast("Symbol has no alternate body style");
       return false;
     }
-    const cur2 = kid4(it.node, "body_style") ? num8(kid4(it.node, "body_style")[1], 1) : 1;
+    const cur2 = kid5(it.node, "body_style") ? num8(kid5(it.node, "body_style")[1], 1) : 1;
     const node = deep(it.node);
     replaceKid(node, ["body_style", cur2 % styles + 1]);
     ctx.commit([modChange(ctx.doc, it, node)], "body style");
@@ -72854,7 +75314,7 @@ Link '${target2}' to this file?`)) return null;
       return false;
     }
     const inUse = /* @__PURE__ */ new Set();
-    for (const o of ctx.doc.items.values()) if (o.kind === "symbol" && o.ref === it.ref) inUse.add(kid4(o.node, "unit") ? num8(kid4(o.node, "unit")[1], 1) : 1);
+    for (const o of ctx.doc.items.values()) if (o.kind === "symbol" && o.ref === it.ref) inUse.add(kid5(o.node, "unit") ? num8(kid5(o.node, "unit")[1], 1) : 1);
     let next = 1;
     while (inUse.has(next) && next <= units) next++;
     if (next > units) {
@@ -72873,8 +75333,8 @@ Link '${target2}' to this file?`)) return null;
   function showDatasheet(ctx) {
     const it = selectedItems(ctx).find((x) => x.kind === "symbol");
     if (!it) return false;
-    const p = kids2(it.node, "property").find((q) => str3(q[1]) === "Datasheet");
-    const url = p ? str3(p[2]).trim() : "";
+    const p = kids3(it.node, "property").find((q) => str4(q[1]) === "Datasheet");
+    const url = p ? str4(p[2]).trim() : "";
     if (!url || url === "~") {
       ctx.toast("No datasheet defined");
       return false;
@@ -73160,7 +75620,7 @@ Link '${target2}' to this file?`)) return null;
     S2.ctx = ctx;
     installDom(ctx);
     if (ctx.viewOnly) return false;
-    const lower = key2.length === 1 ? key2.toLowerCase() : key2;
+    const lower22 = key2.length === 1 ? key2.toLowerCase() : key2;
     const armTool = (id, kind) => {
       const busy = busyMessage();
       if (busy) {
@@ -73282,7 +75742,7 @@ Link '${target2}' to this file?`)) return null;
       case "G":
       case "m":
       case "M": {
-        setDragMode(ctx, lower === "m" ? "move" : "drag");
+        setDragMode(ctx, lower22 === "m" ? "move" : "drag");
         if (S2.drag) return true;
         const it = S2.sel ? ctx.doc.items.get(S2.sel) : null;
         if (!it || !S2.cursor) return false;
@@ -73402,10 +75862,10 @@ Link '${target2}' to this file?`)) return null;
   function isPowerSymbol(doc, name) {
     const lib = K7.resolveLib(doc, name) || doc.lib.get(name);
     if (!lib) return false;
-    if (kid4(lib, "power")) return true;
+    if (kid5(lib, "power")) return true;
     if (/^power:/i.test(name)) return true;
-    const ref = kids2(lib, "property").find((p) => str3(p[1]) === "Reference");
-    const v = ref ? str3(ref[2]) : "";
+    const ref = kids3(lib, "property").find((p) => str4(p[1]) === "Reference");
+    const v = ref ? str4(ref[2]) : "";
     return v === "#PWR" || v === "#FLG";
   }
   function powerSymbols(doc) {
@@ -73780,16 +76240,16 @@ Link '${target2}' to this file?`)) return null;
     let node;
     if (kind === "netclass_flag") {
       node = classLabelNode("", p, rot3);
-      const sh = kid4(node, "shape");
+      const sh = kid5(node, "shape");
       if (sh && S2.lastFlagShape) sh[1] = S2.lastFlagShape;
-      const nc = kids2(node, "property").find((q) => str3(q[1]) === "Netclass");
-      const cc = ["property", "Component Class", "", deep(kid4(nc, "at")), ["effects", ["font", ["size", d.textSize, d.textSize], ["italic", "yes"]], ["justify", "left", "bottom"]]];
+      const nc = kids3(node, "property").find((q) => str4(q[1]) === "Netclass");
+      const cc = ["property", "Component Class", "", deep(kid5(nc, "at")), ["effects", ["font", ["size", d.textSize, d.textSize], ["italic", "yes"]], ["justify", "left", "bottom"]]];
       node.splice(node.indexOf(nc) + 1, 0, cc);
       return node;
     }
     if (kind === "text") {
       node = labelNode("text", "", p, S2.lastTextVertical ? 90 : 0);
-      const e2 = kid4(node, "effects"), f22 = kid4(e2, "font");
+      const e2 = kid5(node, "effects"), f22 = kid5(e2, "font");
       replaceKid(f22, ["size", d.textSize, d.textSize]);
       if (S2.lastTextBold) f22.push(["bold", "yes"]);
       if (S2.lastTextItalic) f22.push(["italic", "yes"]);
@@ -73798,23 +76258,23 @@ Link '${target2}' to this file?`)) return null;
         if (S2.lastTextH && S2.lastTextH !== "center") jv.push(S2.lastTextH);
         if (S2.lastTextV && S2.lastTextV !== "center") jv.push(S2.lastTextV);
         replaceKid(e2, ["justify", ...jv]);
-        if (!jv.length) e2.splice(e2.indexOf(kid4(e2, "justify")), 1);
+        if (!jv.length) e2.splice(e2.indexOf(kid5(e2, "justify")), 1);
       }
       return node;
     }
     node = labelNode(kind, "", p, rot3);
-    const e = kid4(node, "effects"), f2 = kid4(e, "font");
+    const e = kid5(node, "effects"), f2 = kid5(e, "font");
     replaceKid(f2, ["size", d.textSize, d.textSize]);
     if (S2.lastTextBold) f2.push(["bold", "yes"]);
     if (S2.lastTextItalic) f2.push(["italic", "yes"]);
     if ((kind === "global_label" || kind === "hierarchical_label") && S2.lastLabelShape) {
-      const sh = kid4(node, "shape");
+      const sh = kid5(node, "shape");
       if (sh) sh[1] = S2.lastLabelShape;
     }
     if (kind === "global_label") {
-      const isr = kids2(node, "property").find((q) => str3(q[1]) === "Intersheetrefs");
+      const isr = kids3(node, "property").find((q) => str4(q[1]) === "Intersheetrefs");
       if (isr) {
-        const hd = kid4(isr, "hide");
+        const hd = kid5(isr, "hide");
         if (d.intersheetRefsShow && hd) isr.splice(isr.indexOf(hd), 1);
       }
     }
@@ -73834,12 +76294,12 @@ Link '${target2}' to this file?`)) return null;
         }
       }
       KD.openNew(ctx, kind, node, (staged, more) => {
-        if (kind !== "netclass_flag" && !str3(staged[1]).trim()) {
+        if (kind !== "netclass_flag" && !str4(staged[1]).trim()) {
           ctx.toast(kind === "text" ? "Text can not be empty." : "Label can not be empty.");
           return false;
         }
-        const sh = kid4(staged, "shape");
-        if (sh && (kind === "global_label" || kind === "hierarchical_label")) S2.lastLabelShape = str3(sh[1]);
+        const sh = kid5(staged, "shape");
+        if (sh && (kind === "global_label" || kind === "hierarchical_label")) S2.lastLabelShape = str4(sh[1]);
         S2.labelQueue = Array.isArray(more) ? more.slice() : [];
         startCarry(ctx, kind, staged, S2.cursor || p);
       });
@@ -73873,22 +76333,22 @@ Link '${target2}' to this file?`)) return null;
   }
   function symbolPins(doc, item) {
     const n2 = item.node, out = [];
-    const libId = str3((kid4(n2, "lib_name") || kid4(n2, "lib_id") || [])[1]);
-    const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, str3((kid4(n2, "lib_id") || [])[1]));
+    const libId = str4((kid5(n2, "lib_name") || kid5(n2, "lib_id") || [])[1]);
+    const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, str4((kid5(n2, "lib_id") || [])[1]));
     if (!lib) return out;
-    const [ax, ay, rot3] = atOf3(n2), mN = kid4(n2, "mirror"), T = K7.symbolTransform(rot3, mN ? str3(mN[1]) : "");
-    const unit2 = kid4(n2, "unit") ? num8(kid4(n2, "unit")[1], 1) : 1, styleN = kid4(n2, "body_style") || kid4(n2, "convert"), style = styleN ? num8(styleN[1], 1) : 1;
+    const [ax, ay, rot3] = atOf3(n2), mN = kid5(n2, "mirror"), T = K7.symbolTransform(rot3, mN ? str4(mN[1]) : "");
+    const unit2 = kid5(n2, "unit") ? num8(kid5(n2, "unit")[1], 1) : 1, styleN = kid5(n2, "body_style") || kid5(n2, "convert"), style = styleN ? num8(styleN[1], 1) : 1;
     const tf2 = (lx, ly) => [r45(ax + T[0] * lx + T[1] * ly), r45(ay + T[2] * lx + T[3] * ly)];
-    for (const sub of kids2(lib, "symbol")) {
-      const m = str3(sub[1]).match(/_(\d+)_(\d+)$/);
+    for (const sub of kids3(lib, "symbol")) {
+      const m = str4(sub[1]).match(/_(\d+)_(\d+)$/);
       const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
       if (u !== 0 && u !== unit2 || m && s !== 0 && s !== style) continue;
-      for (const g2 of kids2(sub, "pin")) {
-        const [px, py, pr] = atOf3(g2), lenN = kid4(g2, "length"), len2 = lenN ? num8(lenN[1]) : 2.54;
+      for (const g2 of kids3(sub, "pin")) {
+        const [px, py, pr] = atOf3(g2), lenN = kid5(g2, "length"), len2 = lenN ? num8(lenN[1]) : 2.54;
         const dir = (Math.round(pr) % 360 + 360) % 360, d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];
         const pos = tf2(px, py), root22 = tf2(px + d[0] * len2, py + d[1] * len2);
-        const h = kid4(g2, "hide");
-        const hidden2 = h ? str3(h[1]) !== "no" : g2.includes("hide");
+        const h = kid5(g2, "hide");
+        const hidden2 = h ? str4(h[1]) !== "no" : g2.includes("hide");
         let ox = pos[0] - root22[0], oy = pos[1] - root22[1];
         const ol = Math.hypot(ox, oy) || 1;
         ox = Math.round(ox / ol);
@@ -73902,13 +76362,13 @@ Link '${target2}' to this file?`)) return null;
           x: pos[0],
           y: pos[1],
           root: root22,
-          number: str3((kid4(g2, "number") || [])[1]),
-          name: str3((kid4(g2, "name") || [])[1]),
-          type: str3(g2[1]) || "passive",
+          number: str4((kid5(g2, "number") || [])[1]),
+          name: str4((kid5(g2, "name") || [])[1]),
+          type: str4(g2[1]) || "passive",
           hidden: hidden2,
           len: len2,
           side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom",
-          shape: str3(g2[2]) || "line",
+          shape: str4(g2[2]) || "line",
           libRot: dir
         });
       }
@@ -73916,14 +76376,14 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   function symbolLibId(node) {
-    return str3((kid4(node, "lib_id") || [])[1]);
+    return str4((kid5(node, "lib_id") || [])[1]);
   }
   function symbolIsPower(doc, item) {
     return isPowerSymbol(doc, symbolLibId(item.node));
   }
   function globalPowerPin(doc, item, pin) {
     if (pin.type !== "power_in") return false;
-    const lib = K7.resolveLib(doc, symbolLibId(item.node)) || doc.lib.get(symbolLibId(item.node)), pw = lib && kid4(lib, "power");
+    const lib = K7.resolveLib(doc, symbolLibId(item.node)) || doc.lib.get(symbolLibId(item.node)), pw = lib && kid5(lib, "power");
     if (pw && pw.includes("local")) return false;
     if (pw) return true;
     return !!pin.hidden;
@@ -73939,51 +76399,51 @@ Link '${target2}' to this file?`)) return null;
     return r45((up ? Math.ceil(q) : Math.floor(q)) * n2);
   }
   function fieldHidden2(p) {
-    const h = kid4(p, "hide");
-    if (h) return str3(h[1]) !== "no";
-    const ef = kid4(p, "effects");
-    return !!(ef && (ef.includes("hide") || kid4(ef, "hide") && str3(kid4(ef, "hide")[1]) !== "no"));
+    const h = kid5(p, "hide");
+    if (h) return str4(h[1]) !== "no";
+    const ef = kid5(p, "effects");
+    return !!(ef && (ef.includes("hide") || kid5(ef, "hide") && str4(kid5(ef, "hide")[1]) !== "no"));
   }
   function fieldFont(p) {
-    const ef = kid4(p, "effects"), f2 = ef && kid4(ef, "font"), s = f2 && kid4(f2, "size"), th = f2 && kid4(f2, "thickness");
+    const ef = kid5(p, "effects"), f2 = ef && kid5(ef, "font"), s = f2 && kid5(f2, "size"), th = f2 && kid5(f2, "thickness");
     const size = s ? num8(s[2], num8(s[1], 1.27)) : 1.27;
-    const bold2 = !!(f2 && (f2.includes("bold") || kid4(f2, "bold") && str3(kid4(f2, "bold")[1]) !== "no"));
+    const bold2 = !!(f2 && (f2.includes("bold") || kid5(f2, "bold") && str4(kid5(f2, "bold")[1]) !== "no"));
     const thick = th && num8(th[1]) > 1e-3 ? num8(th[1]) : Math.min(bold2 ? size / 5 : size / 8, size / 4);
     return { size, thick, bold: bold2 };
   }
   function fieldExtent(p) {
-    const { size, thick } = fieldFont(p), text2 = str3(p[2]);
+    const { size, thick } = fieldFont(p), text2 = str4(p[2]);
     const lines = text2.split("\n"), w = Math.max(...lines.map((l) => K7.textWidth(l, size, 0))) + 3 * thick;
     return { w: r45(w), h: r45((size + 3 * thick) * 1.17 + (lines.length - 1) * size * 1.61) };
   }
   function bodyBox(doc, item) {
-    const n2 = item.node, libId = str3((kid4(n2, "lib_name") || kid4(n2, "lib_id") || [])[1]);
+    const n2 = item.node, libId = str4((kid5(n2, "lib_name") || kid5(n2, "lib_id") || [])[1]);
     const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, symbolLibId(n2));
-    const [ax, ay, rot3] = atOf3(n2), mN = kid4(n2, "mirror"), T = K7.symbolTransform(rot3, mN ? str3(mN[1]) : "");
+    const [ax, ay, rot3] = atOf3(n2), mN = kid5(n2, "mirror"), T = K7.symbolTransform(rot3, mN ? str4(mN[1]) : "");
     const tf2 = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
     let b = null;
     const take = (p) => {
       b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]];
     };
     if (lib) {
-      const unit2 = kid4(n2, "unit") ? num8(kid4(n2, "unit")[1], 1) : 1, styleN = kid4(n2, "body_style") || kid4(n2, "convert"), style = styleN ? num8(styleN[1], 1) : 1;
-      for (const sub of kids2(lib, "symbol")) {
-        const m = str3(sub[1]).match(/_(\d+)_(\d+)$/);
+      const unit2 = kid5(n2, "unit") ? num8(kid5(n2, "unit")[1], 1) : 1, styleN = kid5(n2, "body_style") || kid5(n2, "convert"), style = styleN ? num8(styleN[1], 1) : 1;
+      for (const sub of kids3(lib, "symbol")) {
+        const m = str4(sub[1]).match(/_(\d+)_(\d+)$/);
         const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
         if (u !== 0 && u !== unit2 || m && s !== 0 && s !== style) continue;
         for (const g2 of sub.slice(2)) {
           if (!Array.isArray(g2)) continue;
           const gk = g2[0];
           if (gk === "rectangle") {
-            const a = kid4(g2, "start"), e = kid4(g2, "end");
+            const a = kid5(g2, "start"), e = kid5(g2, "end");
             take(tf2(num8(a[1]), num8(a[2])));
             take(tf2(num8(e[1]), num8(e[2])));
           } else if (gk === "circle") {
-            const c = kid4(g2, "center"), r = num8((kid4(g2, "radius") || [])[1]);
+            const c = kid5(g2, "center"), r = num8((kid5(g2, "radius") || [])[1]);
             for (const [dx, dy] of [[-r, -r], [r, r], [-r, r], [r, -r]]) take(tf2(num8(c[1]) + dx, num8(c[2]) + dy));
           } else if (gk === "arc") {
             for (const key2 of ["start", "mid", "end"]) {
-              const k = kid4(g2, key2);
+              const k = kid5(g2, key2);
               if (k) take(tf2(num8(k[1]), num8(k[2])));
             }
           } else if (gk === "polyline" || gk === "bezier") {
@@ -73991,7 +76451,7 @@ Link '${target2}' to this file?`)) return null;
           } else if (gk === "text") {
             const [tx, ty] = atOf3(g2), ef = K7.effectsOf(g2);
             if (!ef.hide) {
-              const w = K7.textWidth(str3(g2[1]), ef.size, 0) / 2;
+              const w = K7.textWidth(str4(g2[1]), ef.size, 0) / 2;
               take(tf2(tx - w, ty - ef.size / 2));
               take(tf2(tx + w, ty + ef.size / 2));
             }
@@ -74010,9 +76470,9 @@ Link '${target2}' to this file?`)) return null;
   function autoplaceNode(doc, item, opts) {
     opts = opts || {};
     const node = deep(item.node), power = symbolIsPower(doc, item), pins = symbolPins(doc, item).filter((p) => !p.hidden || power);
-    const fields = kids2(node, "property").filter((p) => !fieldHidden2(p) && !str3(p[1]).startsWith("ki_") && str3(p[2]) !== "");
+    const fields = kids3(node, "property").filter((p) => !fieldHidden2(p) && !str4(p[1]).startsWith("ki_") && str4(p[2]) !== "");
     if (!fields.length) return null;
-    const [, , rot3] = atOf3(node), mN = kid4(node, "mirror"), mirror = mN ? str3(mN[1]) : "", T = K7.symbolTransform(rot3, mirror);
+    const [, , rot3] = atOf3(node), mN = kid5(node, "mirror"), mirror = mN ? str4(mN[1]) : "", T = K7.symbolTransform(rot3, mirror);
     const fieldRot = T[1] !== 0 ? 90 : 0;
     const flipStored = (T[1] !== 0 ? T[1] : T[0]) < 0;
     const body = bodyBox(doc, item), symW = boxW(body), symH = boxH(body);
@@ -74115,11 +76575,11 @@ Link '${target2}' to this file?`)) return null;
       lastY += pad + fh;
       if (sx) x = roundN(x, AP_GRID, sx >= 0);
       if (sy) y = roundN(y, AP_GRID, sy >= 0);
-      const a = kid4(p, "at");
+      const a = kid5(p, "at");
       const keep = a ? a.slice(4) : [];
       replaceKid(p, ["at", r45(x), r45(y), fieldRot, ...keep]);
       const stored = flipStored ? hj === "left" ? "right" : hj === "right" ? "left" : "center" : hj;
-      let ef = kid4(p, "effects");
+      let ef = kid5(p, "effects");
       if (!ef) {
         ef = ["effects", fontNode(1.27)];
         p.push(ef);
@@ -74219,9 +76679,9 @@ Link '${target2}' to this file?`)) return null;
   function connPoints(doc, item) {
     const k = item.kind, n2 = item.node;
     if (k === "symbol") return K7.pinPoints(doc, item).map((p) => [r45(p.x), r45(p.y)]);
-    if (k === "sheet") return kids2(n2, "pin").map((p) => atOf3(p).slice(0, 2).map(r45));
+    if (k === "sheet") return kids3(n2, "pin").map((p) => atOf3(p).slice(0, 2).map(r45));
     if (k === "bus_entry") {
-      const [x, y] = atOf3(n2), s = kid4(n2, "size");
+      const [x, y] = atOf3(n2), s = kid5(n2, "size");
       return [[r45(x), r45(y)], [r45(x + num8(s && s[1], 2.54)), r45(y + num8(s && s[2], 2.54))]];
     }
     if (isNetLine(k)) {
@@ -74239,7 +76699,7 @@ Link '${target2}' to this file?`)) return null;
   function sheetPinsAt(doc, p, skip) {
     const out = [];
     for (const it of doc.items.values()) if (it.kind === "sheet" && it !== skip) {
-      for (const pin of kids2(it.node, "pin")) if (same(atOf3(pin), p)) {
+      for (const pin of kids3(it.node, "pin")) if (same(atOf3(pin), p)) {
         out.push(it);
         break;
       }
@@ -74752,7 +77212,7 @@ Link '${target2}' to this file?`)) return null;
       } else if (o.kind === "label" || o.kind === "global_label" || o.kind === "hierarchical_label") {
         if (same(atOf3(o.node), p)) return false;
       } else if (o.kind === "sheet") {
-        if (kids2(o.node, "pin").some((pin) => same(atOf3(pin), p))) return false;
+        if (kids3(o.node, "pin").some((pin) => same(atOf3(pin), p))) return false;
       }
     }
     return true;
@@ -74789,35 +77249,35 @@ Link '${target2}' to this file?`)) return null;
   var CONVERT_KINDS = /* @__PURE__ */ new Set(["label", "global_label", "hierarchical_label", "text", "text_box", "netclass_flag", "directive_label"]);
   var LABEL_SIZE_RATIO = 0.375;
   function copyFont(from, to) {
-    const ef = kid4(from, "effects"), f2 = ef && kid4(ef, "font");
+    const ef = kid5(from, "effects"), f2 = ef && kid5(ef, "font");
     if (!f2) return;
-    const tef = kid4(to, "effects");
+    const tef = kid5(to, "effects");
     if (!tef) return;
     replaceKid(tef, deep(f2));
   }
   function validNetname(text2) {
-    let t = str3(text2).replace(/[\r\n\t]/g, "_");
+    let t = str4(text2).replace(/[\r\n\t]/g, "_");
     if (!/^[^\s{}]*\{.*\}$/.test(t)) t = t.replace(/ /g, "_");
     return t || "<empty>";
   }
   function convertNode(item, toKind, gridPitch) {
     const n2 = item.node, from = item.kind;
-    let text2 = str3(n2[1]), p = atOf3(n2).slice(0, 2), rot3 = atOf3(n2)[2] || 0;
-    const shapeN = kid4(n2, "shape"), shape3 = shapeN && (from === "global_label" || from === "hierarchical_label") ? str3(shapeN[1]) : null;
+    let text2 = str4(n2[1]), p = atOf3(n2).slice(0, 2), rot3 = atOf3(n2)[2] || 0;
+    const shapeN = kid5(n2, "shape"), shape3 = shapeN && (from === "global_label" || from === "hierarchical_label") ? str4(shapeN[1]) : null;
     if (from === "netclass_flag" || from === "directive_label") {
-      const nc = kids2(n2, "property").find((q) => str3(q[1]) === "Netclass");
-      text2 = nc ? str3(nc[2]) : "<empty>";
+      const nc = kids3(n2, "property").find((q) => str4(q[1]) === "Netclass");
+      text2 = nc ? str4(nc[2]) : "<empty>";
     }
     if (from === "text") rot3 = 0;
     if (from === "text_box") {
-      const s = kid4(n2, "size"), mg = kid4(n2, "margins"), size = fontSize(n2);
+      const s = kid5(n2, "size"), mg = kid5(n2, "margins"), size = fontSize(n2);
       const m = mg ? [num8(mg[1]), num8(mg[2]), num8(mg[3]), num8(mg[4])] : [TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN];
       let box = [p[0] + m[0], p[1] + m[1], p[0] + num8(s && s[1]) - m[2], p[1] + num8(s && s[2]) - m[3]];
       if (toKind === "label" || toKind === "global_label" || toKind === "hierarchical_label") {
         const inf = LABEL_SIZE_RATIO * size;
         box = [box[0] - inf, box[1] - inf, box[2] + inf, box[3] + inf];
       }
-      const ef = kid4(n2, "effects"), j = ef && kid4(ef, "justify"), right = !!(j && j.includes("right")), vertical = rot3 === 90 || rot3 === 270;
+      const ef = kid5(n2, "effects"), j = ef && kid5(ef, "justify"), right = !!(j && j.includes("right")), vertical = rot3 === 90 || rot3 === 270;
       const cx = (box[0] + box[2]) / 2, cy = (box[1] + box[3]) / 2;
       if (vertical) {
         rot3 = right ? 270 : 90;
@@ -74867,18 +77327,18 @@ Link '${target2}' to this file?`)) return null;
     return true;
   }
   var refCmp = (a, b) => {
-    const ma = str3(a).match(/^(.*?)(\d*)$/), mb = str3(b).match(/^(.*?)(\d*)$/);
-    return ma[1].localeCompare(mb[1]) || (+ma[2] || 0) - (+mb[2] || 0) || str3(a).localeCompare(str3(b));
+    const ma = str4(a).match(/^(.*?)(\d*)$/), mb = str4(b).match(/^(.*?)(\d*)$/);
+    return ma[1].localeCompare(mb[1]) || (+ma[2] || 0) - (+mb[2] || 0) || str4(a).localeCompare(str4(b));
   };
   function fieldsTableRows(doc) {
     const fields = ["Reference", "Value", "Footprint", "Datasheet"], rows = [];
     for (const it of doc.items.values()) {
       if (it.kind !== "symbol") continue;
       const values = {};
-      for (const p of kids2(it.node, "property")) {
-        const nm3 = str3(p[1]);
+      for (const p of kids3(it.node, "property")) {
+        const nm3 = str4(p[1]);
         if (nm3.startsWith("ki_")) continue;
-        values[nm3] = str3(p[2]);
+        values[nm3] = str4(p[2]);
         if (!fields.includes(nm3)) fields.push(nm3);
       }
       rows.push({ id: it.id, ref: values.Reference || "", values });
@@ -74894,15 +77354,15 @@ Link '${target2}' to this file?`)) return null;
       const n2 = deep(it.node);
       let changed = false;
       for (const [name, text2] of Object.entries(e.values || {})) {
-        let p = kids2(n2, "property").find((q) => str3(q[1]) === name);
+        let p = kids3(n2, "property").find((q) => str4(q[1]) === name);
         if (!p) {
-          if (str3(text2) === "") continue;
+          if (str4(text2) === "") continue;
           p = ["property", name, "", ["at", ...atOf3(n2).slice(0, 2), 0], ["hide", "yes"], ["effects", fontNode(1.27)]];
           insertField2(n2, p);
         }
-        if (str3(p[2]) === str3(text2)) continue;
-        if (name === "Reference") setReference(n2, str3(text2));
-        else p[2] = str3(text2);
+        if (str4(p[2]) === str4(text2)) continue;
+        if (name === "Reference") setReference(n2, str4(text2));
+        else p[2] = str4(text2);
         changed = true;
       }
       if (changed) out.push(modChange(doc, it, n2));
@@ -74917,7 +77377,7 @@ Link '${target2}' to this file?`)) return null;
       ctx.toast("No symbols on this sheet");
       return false;
     }
-    const escapeHtml = (s) => str3(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const escapeHtml = (s) => str4(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     let fields = table.fields.slice(), body = null;
     const render2 = () => {
       const ro = ctx.viewOnly ? " disabled" : "";
@@ -74955,7 +77415,7 @@ Link '${target2}' to this file?`)) return null;
         for (const r of table.rows) {
           const o = original.get(r.id), values = {};
           let any = false;
-          for (const [k, v] of Object.entries(r.values)) if (str3(o[k] || "") !== str3(v)) {
+          for (const [k, v] of Object.entries(r.values)) if (str4(o[k] || "") !== str4(v)) {
             values[k] = v;
             any = true;
           }
@@ -74998,7 +77458,7 @@ Link '${target2}' to this file?`)) return null;
     return true;
   }
   function busMembers(text2) {
-    text2 = str3(text2).trim();
+    text2 = str4(text2).trim();
     const v = text2.match(/^([^\s\[\]{}]*)\[(\d+)\.\.(\d+)\]([+\-PN]*)$/);
     if (v) {
       let a = +v[2], b = +v[3];
@@ -75349,7 +77809,7 @@ Link '${target2}' to this file?`)) return null;
         node = labelNode(what, text2, p, 0);
         setSpinOfNode(what, node, SIDE_SPIN[side] === void 0 ? 0 : SIDE_SPIN[side]);
         if (what !== "label") {
-          const sh = kid4(node, "shape");
+          const sh = kid5(node, "shape");
           if (sh) sh[1] = labelShapeForPin(alt ? alt.type : h.pin.type);
         }
       }
@@ -75404,32 +77864,32 @@ Link '${target2}' to this file?`)) return null;
     return ids;
   }
   function pinAltFunction(doc, it, number) {
-    const ip = kids2(it.node, "pin").find((x) => str3(x[1]) === number), a = ip && kid4(ip, "alternate");
+    const ip = kids3(it.node, "pin").find((x) => str4(x[1]) === number), a = ip && kid5(ip, "alternate");
     if (!a) return null;
-    const want = str3(a[1]);
+    const want = str4(a[1]);
     if (!want) return null;
-    const libId = str3((kid4(it.node, "lib_name") || kid4(it.node, "lib_id") || [])[1]);
-    const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, str3((kid4(it.node, "lib_id") || [])[1]));
+    const libId = str4((kid5(it.node, "lib_name") || kid5(it.node, "lib_id") || [])[1]);
+    const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, str4((kid5(it.node, "lib_id") || [])[1]));
     if (!lib) return null;
-    for (const sub of kids2(lib, "symbol")) for (const g2 of kids2(sub, "pin")) {
-      if (str3((kid4(g2, "number") || [])[1]) !== number) continue;
-      const alt = kids2(g2, "alternate").find((x) => str3(x[1]) === want);
-      if (alt) return { name: want, type: str3(alt[2]) || "unspecified" };
+    for (const sub of kids3(lib, "symbol")) for (const g2 of kids3(sub, "pin")) {
+      if (str4((kid5(g2, "number") || [])[1]) !== number) continue;
+      const alt = kids3(g2, "alternate").find((x) => str4(x[1]) === want);
+      if (alt) return { name: want, type: str4(alt[2]) || "unspecified" };
     }
     return null;
   }
   function pinAlternates(doc, ref) {
     const it = doc.items.get(ref.id);
     if (!it || it.kind !== "symbol") return null;
-    const libId = str3((kid4(it.node, "lib_name") || kid4(it.node, "lib_id") || [])[1]);
-    const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, str3((kid4(it.node, "lib_id") || [])[1]));
+    const libId = str4((kid5(it.node, "lib_name") || kid5(it.node, "lib_id") || [])[1]);
+    const lib = K7.resolveLib(doc, libId) || K7.resolveLib(doc, str4((kid5(it.node, "lib_id") || [])[1]));
     if (!lib) return null;
-    for (const sub of kids2(lib, "symbol")) for (const g2 of kids2(sub, "pin")) {
-      if (str3((kid4(g2, "number") || [])[1]) !== ref.number) continue;
-      const alts = kids2(g2, "alternate").map((a2) => str3(a2[1]));
+    for (const sub of kids3(lib, "symbol")) for (const g2 of kids3(sub, "pin")) {
+      if (str4((kid5(g2, "number") || [])[1]) !== ref.number) continue;
+      const alts = kids3(g2, "alternate").map((a2) => str4(a2[1]));
       if (!alts.length) return null;
-      const ip = kids2(it.node, "pin").find((x) => str3(x[1]) === ref.number), a = ip && kid4(ip, "alternate");
-      return { base: str3((kid4(g2, "name") || [])[1]), alts, current: a ? str3(a[1]) : "" };
+      const ip = kids3(it.node, "pin").find((x) => str4(x[1]) === ref.number), a = ip && kid5(ip, "alternate");
+      return { base: str4((kid5(g2, "name") || [])[1]), alts, current: a ? str4(a[1]) : "" };
     }
     return null;
   }
@@ -75440,7 +77900,7 @@ Link '${target2}' to this file?`)) return null;
     const want = alt === info.base ? "" : alt;
     if (want === info.current) return false;
     const n2 = deep(it.node);
-    let p = kids2(n2, "pin").find((x) => str3(x[1]) === ref.number);
+    let p = kids3(n2, "pin").find((x) => str4(x[1]) === ref.number);
     if (!p) {
       if (!want) return false;
       p = K7.parse(`(pin ${JSON.stringify(ref.number)} (uuid ${JSON.stringify(K7.newUuid())}))`);
@@ -75467,7 +77927,7 @@ Link '${target2}' to this file?`)) return null;
     for (const it of reached.values()) {
       if (seen.has(it.id)) continue;
       seen.add(it.id);
-      if (!NET_LABELS.has(it.kind) || isBusName(str3(it.node[1]))) continue;
+      if (!NET_LABELS.has(it.kind) || isBusName(str4(it.node[1]))) continue;
       if (label) return null;
       label = it;
     }
@@ -75483,7 +77943,7 @@ Link '${target2}' to this file?`)) return null;
       labels.push(l);
     }
     const text2 = /* @__PURE__ */ new Map();
-    for (const l of labels) text2.set(l.id, str3(l.node[1]));
+    for (const l of labels) text2.set(l.id, str4(l.node[1]));
     for (let i = 0; i < labels.length - 1; i++) {
       const a = labels[i], b = labels[(i + 1) % labels.length];
       const at2 = text2.get(a.id), bt = text2.get(b.id);
@@ -75492,7 +77952,7 @@ Link '${target2}' to this file?`)) return null;
     }
     const changes = [];
     for (const l of new Set(labels)) {
-      if (text2.get(l.id) === str3(l.node[1])) continue;
+      if (text2.get(l.id) === str4(l.node[1])) continue;
       const n2 = deep(l.node);
       n2[1] = text2.get(l.id);
       changes.push(modChange(doc, l, n2));
@@ -75527,29 +77987,29 @@ Link '${target2}' to this file?`)) return null;
     }
     return label ? text2 + UNIT_TEXT2[u] : text2;
   }
-  var yes6 = (n2) => !!n2 && str3(n2[1]) !== "no";
+  var yes6 = (n2) => !!n2 && str4(n2[1]) !== "no";
   var flag2 = (node, key2) => {
-    const k = kid4(node, key2);
-    return k ? str3(k[1] ?? "yes") !== "no" : node.includes(key2);
+    const k = kid5(node, key2);
+    return k ? str4(k[1] ?? "yes") !== "no" : node.includes(key2);
   };
   function unescapeString(s) {
     const MAP = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "	", return: "\n", brace: "{" };
     return s.replace(/\{(\w+)\}/g, (m, k) => k in MAP ? MAP[k] : m);
   }
   function effects(node) {
-    return kid4(node, "effects");
+    return kid5(node, "effects");
   }
   function font(node) {
     const e = effects(node);
-    return e ? kid4(e, "font") : null;
+    return e ? kid5(e, "font") : null;
   }
   function textWidth2(node) {
-    const f2 = font(node), s = f2 ? kid4(f2, "size") : null;
+    const f2 = font(node), s = f2 ? kid5(f2, "size") : null;
     return s ? num8(s[2] ?? s[1], 1.27) : 1.27;
   }
   function fontName(node) {
-    const f2 = font(node), face = f2 ? kid4(f2, "face") : null;
-    return face ? str3(face[1]) : "Default";
+    const f2 = font(node), face = f2 ? kid5(f2, "face") : null;
+    return face ? str4(face[1]) : "Default";
   }
   function bold(node) {
     const f2 = font(node);
@@ -75568,7 +78028,7 @@ Link '${target2}' to this file?`)) return null;
     return b && i ? "Bold+Italic" : b ? "Bold" : i ? "Italic" : "Normal";
   }
   function justify(node) {
-    const e = effects(node), j = e ? kid4(e, "justify") : null;
+    const e = effects(node), j = e ? kid5(e, "justify") : null;
     return j ? j.slice(1).map(String) : [];
   }
   function hJust(node) {
@@ -75581,14 +78041,14 @@ Link '${target2}' to this file?`)) return null;
   }
   function hidden(node) {
     const e = effects(node);
-    return yes6(kid4(node, "hide")) || !!e && flag2(e, "hide");
+    return yes6(kid5(node, "hide")) || !!e && flag2(e, "hide");
   }
   var LINE_STYLES = { solid: "Solid", dash: "Dashed", dot: "Dotted", dash_dot: "Dash-Dot", dash_dot_dot: "Dash-Dot-Dot" };
   function strokeOf2(node) {
-    const s = kid4(node, "stroke");
+    const s = kid5(node, "stroke");
     if (!s) return { width: 0, type: "default" };
-    const w = kid4(s, "width"), t = kid4(s, "type");
-    return { width: w ? num8(w[1], 0) : 0, type: t ? str3(t[1]) : "default" };
+    const w = kid5(s, "width"), t = kid5(s, "type");
+    return { width: w ? num8(w[1], 0) : 0, type: t ? str4(t[1]) : "default" };
   }
   function strokeRows(node, o, style = true, width = true) {
     const s = strokeOf2(node), out = [];
@@ -75608,28 +78068,28 @@ Link '${target2}' to this file?`)) return null;
     if (!c.bus) out.push({ title: "Resolved Netclass", value: unescapeString(c.netclass || "Default") });
     return out;
   }
-  var fieldNode = (node, name) => kids2(node, "property").find((p) => str3(p[1]) === name) || null;
+  var fieldNode = (node, name) => kids3(node, "property").find((p) => str4(p[1]) === name) || null;
   var fieldText2 = (node, name) => {
     const f2 = fieldNode(node, name);
-    return f2 ? str3(f2[2]) : "";
+    return f2 ? str4(f2[2]) : "";
   };
   function libOf(doc, node) {
-    const name = str3((kid4(node, "lib_name") || kid4(node, "lib_id") || [])[1]), id = str3((kid4(node, "lib_id") || [])[1]);
+    const name = str4((kid5(node, "lib_name") || kid5(node, "lib_id") || [])[1]), id = str4((kid5(node, "lib_id") || [])[1]);
     return K7.resolveLib(doc, name) || K7.resolveLib(doc, id) || doc.lib.get(name) || doc.lib.get(id) || null;
   }
   function libUnitInfo(lib) {
     let units = 1, styles = 1;
     const names = /* @__PURE__ */ new Map();
     if (!lib) return { units, styles, names };
-    for (const sub of kids2(lib, "symbol")) {
-      const m = str3(sub[1]).match(/_(\d+)_(\d+)$/);
+    for (const sub of kids3(lib, "symbol")) {
+      const m = str4(sub[1]).match(/_(\d+)_(\d+)$/);
       if (!m) continue;
       units = Math.max(units, +m[1]);
       styles = Math.max(styles, +m[2]);
-      const un = kid4(sub, "unit_name");
-      if (un && +m[1] > 0) names.set(+m[1], str3(un[1]));
+      const un = kid5(sub, "unit_name");
+      if (un && +m[1] > 0) names.set(+m[1], str4(un[1]));
     }
-    if (kid4(lib, "body_styles")) styles = Math.max(styles, kids2(lib, "body_styles")[0].length - 1);
+    if (kid5(lib, "body_styles")) styles = Math.max(styles, kids3(lib, "body_styles")[0].length - 1);
     return { units, styles, names };
   }
   function unitLetter3(unit2) {
@@ -75643,16 +78103,16 @@ Link '${target2}' to this file?`)) return null;
   }
   function symbolRows(doc, it, o) {
     const n2 = it.node, out = [], lib = libOf(doc, n2);
-    const libId = str3((kid4(n2, "lib_id") || [])[1]), colon = libId.indexOf(":");
+    const libId = str4((kid5(n2, "lib_id") || [])[1]), colon = libId.indexOf(":");
     const nick = colon >= 0 ? libId.slice(0, colon) : "", itemName = colon >= 0 ? libId.slice(colon + 1) : libId;
     const ref = it.ref || fieldText2(n2, "Reference"), value = fieldText2(n2, "Value");
     const excludes = () => {
       const m = [];
       if (flag2(n2, "exclude_from_sim")) m.push("Simulation");
-      const bom2 = kid4(n2, "in_bom");
-      if (bom2 && str3(bom2[1]) === "no") m.push("BOM");
-      const brd = kid4(n2, "on_board");
-      if (brd && str3(brd[1]) === "no") m.push("Board");
+      const bom2 = kid5(n2, "in_bom");
+      if (bom2 && str4(bom2[1]) === "no") m.push("BOM");
+      const brd = kid5(n2, "on_board");
+      if (brd && str4(brd[1]) === "no") m.push("Board");
       if (flag2(n2, "dnp")) m.push("DNP");
       if (m.length) out.push({ title: "Exclude from", value: m.join(", ") });
     };
@@ -75663,13 +78123,13 @@ Link '${target2}' to this file?`)) return null;
         excludes();
         out.push({ title: "Name", value: ell(itemName, o) });
       }
-      const ext = kid4(lib, "extends");
-      if (ext) out.push({ title: "Derived from", value: unescapeString(str3(ext[1])) });
+      const ext = kid5(lib, "extends");
+      if (ext) out.push({ title: "Derived from", value: unescapeString(str4(ext[1])) });
       else out.push({ title: "Library", value: nick || "Undefined!!!" });
       const fp = ell(fieldText2(n2, "Footprint"), o);
       out.push({ title: "Footprint", value: fp || "<Unknown>" });
       const kw = fieldNode(lib, "ki_keywords");
-      out.push({ title: `Description: ${fieldText2(n2, "Description") || fieldText2(lib, "Description")}`, value: `Keywords: ${kw ? str3(kw[2]) : ""}` });
+      out.push({ title: `Description: ${fieldText2(n2, "Description") || fieldText2(lib, "Description")}`, value: `Keywords: ${kw ? str4(kw[2]) : ""}` });
     } else {
       out.push({ title: "Reference", value: ref }, { title: "Value", value: ell(value, o) });
       excludes();
@@ -75685,10 +78145,10 @@ Link '${target2}' to this file?`)) return null;
     const pin = symbolPins(doc, it).find((p) => p.number === number);
     if (!pin) return [];
     const n2 = it.node, lib = libOf(doc, n2), info = libUnitInfo(lib), out = [{ title: "Type", value: "Pin" }];
-    const unit2 = kid4(n2, "unit") ? num8(kid4(n2, "unit")[1], 1) : 1;
+    const unit2 = kid5(n2, "unit") ? num8(kid5(n2, "unit")[1], 1) : 1;
     if (info.units > 1) out.push({ title: "Unit", value: info.names.get(unit2) || unitLetter3(unit2) });
     if (info.styles > 1) {
-      const bs = kid4(n2, "body_style") || kid4(n2, "convert");
+      const bs = kid5(n2, "body_style") || kid5(n2, "convert");
       const s = bs ? num8(bs[1], 1) : 1;
       out.push({ title: "Body Style", value: s === 1 ? "Standard" : s === 2 ? "Alternate" : `Body style ${s}` });
     }
@@ -75710,7 +78170,7 @@ Link '${target2}' to this file?`)) return null;
     const h = hJust(f2), v = vJust(f2);
     return [
       { title: "Symbol Field", value: unescapeString(name) },
-      { title: "Text", value: ell(str3(f2[2]), o) },
+      { title: "Text", value: ell(str4(f2[2]), o) },
       { title: "Visible", value: hidden(f2) ? "No" : "Yes" },
       { title: "Font", value: fontName(f2) },
       { title: "Style", value: textStyleName(f2) },
@@ -75723,10 +78183,10 @@ Link '${target2}' to this file?`)) return null;
   var LABEL_SHAPE = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-State", passive: "Passive" };
   var SPIN_JUST = ["Align left", "Align bottom", "Align right", "Align top"];
   function labelRows(it, o) {
-    const n2 = it.node, out = [{ title: LABEL_TITLE[it.kind], value: unescapeString(str3(n2[1])) }];
+    const n2 = it.node, out = [{ title: LABEL_TITLE[it.kind], value: unescapeString(str4(n2[1])) }];
     if (it.kind === "global_label" || it.kind === "hierarchical_label") {
-      const sh = kid4(n2, "shape");
-      out.push({ title: "Type", value: LABEL_SHAPE[sh ? str3(sh[1]) : "input"] || "???" });
+      const sh = kid5(n2, "shape");
+      out.push({ title: "Type", value: LABEL_SHAPE[sh ? str4(sh[1]) : "input"] || "???" });
     }
     out.push(
       { title: "Font", value: fontName(n2) },
@@ -75738,7 +78198,7 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   function textRows(it, o) {
-    const n2 = it.node, out = [{ title: "Text", value: ell(str3(n2[1]), o) }];
+    const n2 = it.node, out = [{ title: "Text", value: ell(str4(n2[1]), o) }];
     if (flag2(n2, "exclude_from_sim")) out.push({ title: "Exclude from", value: "Simulation" });
     const h = hJust(n2);
     out.push(
@@ -75750,7 +78210,7 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   function textBoxRows(it, o) {
-    const n2 = it.node, out = [{ title: "Text Box", value: ell(str3(n2[1]), o) }];
+    const n2 = it.node, out = [{ title: "Text Box", value: ell(str4(n2[1]), o) }];
     if (flag2(n2, "exclude_from_sim")) out.push({ title: "Exclude from", value: "Simulation" });
     const [, , w, h] = boxOf22(n2);
     out.push(
@@ -75764,9 +78224,9 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   function boxOf22(n2) {
-    const s = kid4(n2, "start"), e = kid4(n2, "end");
+    const s = kid5(n2, "start"), e = kid5(n2, "end");
     if (s && e) return [num8(s[1]), num8(s[2]), num8(e[1]) - num8(s[1]), num8(e[2]) - num8(s[2])];
-    const a = atOf3(n2), sz = kid4(n2, "size");
+    const a = atOf3(n2), sz = kid5(n2, "size");
     return [a[0], a[1], sz ? num8(sz[1]) : 0, sz ? num8(sz[2]) : 0];
   }
   function shapeRows(it, o) {
@@ -75774,13 +78234,13 @@ Link '${target2}' to this file?`)) return null;
     const pts = () => ptsOf3(n2);
     switch (it.kind) {
       case "circle": {
-        const c = kid4(n2, "center"), r = kid4(n2, "radius");
+        const c = kid5(n2, "center"), r = kid5(n2, "radius");
         out.push({ title: "Shape", value: "Circle" }, { title: "Radius", value: len(r ? num8(r[1]) : 0, o) });
         void c;
         break;
       }
       case "arc": {
-        const s = kid4(n2, "start"), m = kid4(n2, "mid"), e = kid4(n2, "end");
+        const s = kid5(n2, "start"), m = kid5(n2, "mid"), e = kid5(n2, "end");
         const A = s ? [num8(s[1]), num8(s[2])] : [0, 0], M = m ? [num8(m[1]), num8(m[2])] : A, B = e ? [num8(e[1]), num8(e[2])] : A;
         const c = circumcentre(A, M, B), r = c ? Math.hypot(A[0] - c[0], A[1] - c[1]) : 0;
         let ang = 0;
@@ -75847,10 +78307,10 @@ Link '${target2}' to this file?`)) return null;
     out.push({ title: "File Name", value: ell(file, o) });
     const m = [];
     if (flag2(n2, "exclude_from_sim")) m.push("Simulation");
-    const bom2 = kid4(n2, "in_bom");
-    if (bom2 && str3(bom2[1]) === "no") m.push("BOM");
-    const brd = kid4(n2, "on_board");
-    if (brd && str3(brd[1]) === "no") m.push("Board");
+    const bom2 = kid5(n2, "in_bom");
+    if (bom2 && str4(bom2[1]) === "no") m.push("BOM");
+    const brd = kid5(n2, "on_board");
+    if (brd && str4(brd[1]) === "no") m.push("Board");
     if (flag2(n2, "dnp")) m.push("DNP");
     if (m.length) out.push({ title: "Exclude from", value: m.join(", ") });
     return out;
@@ -75910,13 +78370,13 @@ Link '${target2}' to this file?`)) return null;
       case "sheet":
         return sheetRows(it, o);
       case "junction": {
-        const d = kid4(it.node, "diameter"), dia = d && num8(d[1], 0) > 0 ? num8(d[1]) : doc.schSettings?.junctionDiameter ?? 0.9144;
+        const d = kid5(it.node, "diameter"), dia = d && num8(d[1], 0) > 0 ? num8(d[1]) : doc.schSettings?.junctionDiameter ?? 0.9144;
         return [{ title: "Junction", value: "" }, { title: "Size", value: len(dia, o) }, ...connectionRows(it, o)];
       }
       case "bus_entry":
         return [{ title: "Bus Entry Type", value: "Wire" }, ...connectionRows(it, o)];
       case "image": {
-        const sc = kid4(it.node, "scale"), scale = sc ? num8(sc[1], 1) : 1, info = o.imageInfo ? o.imageInfo(it) : imageInfoOf(it.node);
+        const sc = kid5(it.node, "scale"), scale = sc ? num8(sc[1], 1) : 1, info = o.imageInfo ? o.imageInfo(it) : imageInfoOf(it.node);
         const ppi = info && info.ppi > 0 ? info.ppi : 300, px = info ? info.px : [0, 0];
         return [
           { title: "Bitmap", value: "" },
@@ -75927,11 +78387,11 @@ Link '${target2}' to this file?`)) return null;
         ];
       }
       case "rule_area": {
-        const pl = kid4(it.node, "polyline") || it.node;
+        const pl = kid5(it.node, "polyline") || it.node;
         return [{ title: "Rule Area", value: "" }, { title: "Points", value: String(ptsOf3(pl).length) }, ...strokeRows(pl, o), { title: "Resolved netclass", value: "<None>" }];
       }
       case "table": {
-        const c = kid4(it.node, "column_count");
+        const c = kid5(it.node, "column_count");
         return [{ title: "Table", value: `${c ? num8(c[1], 0) : 0} Columns` }];
       }
       default:
@@ -81229,7 +83689,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -81888,7 +84348,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -84753,7 +87213,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -85369,7 +87829,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function intersectD(subject, clip2, fillRule, precision = 2) {
   return booleanOpD(ClipType.Intersection, subject, clip2, fillRule, precision);
@@ -86141,9 +88601,9 @@ function readPad2(node, fp, copper, nets) {
   };
 }
 var DEFAULT_VARIANT = "< Default >";
-var isDefaultVariant = (v) => !v || v.toLowerCase() === DEFAULT_VARIANT.toLowerCase();
+var isDefaultVariant2 = (v) => !v || v.toLowerCase() === DEFAULT_VARIANT.toLowerCase();
 function applyFootprintVariant(fp, variant) {
-  if (isDefaultVariant(variant)) return;
+  if (isDefaultVariant2(variant)) return;
   const v = kids(fp.node, "variant").find((x) => {
     const nm3 = K(x, "name");
     return !!nm3 && str(nm3[1]) === variant;
@@ -86436,10 +88896,10 @@ function fieldOf(fp, names) {
     const v = fp.props.get(n2);
     if (v && v.trim() && v.trim() !== "~") return v.trim();
   }
-  const lower = /* @__PURE__ */ new Map();
-  for (const [k, v] of fp.props) lower.set(k.toLowerCase(), v);
+  const lower2 = /* @__PURE__ */ new Map();
+  for (const [k, v] of fp.props) lower2.set(k.toLowerCase(), v);
   for (const n2 of names) {
-    const v = lower.get(n2.toLowerCase());
+    const v = lower2.get(n2.toLowerCase());
     if (v && v.trim() && v.trim() !== "~") return v.trim();
   }
   return "";
@@ -91148,8 +93608,8 @@ var r63 = (v) => {
   const r = Math.round(v * 1e6) / 1e6;
   return r === 0 ? 0 : r;
 };
-function filledZoneNode(node, res, copper, clone2) {
-  const out = clone2(node);
+function filledZoneNode(node, res, copper, clone3) {
+  const out = clone3(node);
   for (let i = out.length - 1; i > 0; i--) if (Array.isArray(out[i]) && out[i][0] === "filled_polygon") out.splice(i, 1);
   const fill = K3(out, "fill");
   if (fill) {
@@ -91187,7 +93647,7 @@ function storedFill(node) {
   return m;
 }
 
-// node_modules/three/src/extras/lib/earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/lib/earcut.js
 function earcut(data, holeIndices, dim = 2) {
   const hasHoles = holeIndices && holeIndices.length;
   const outerLen = hasHoles ? holeIndices[0] * dim : data.length;
@@ -91608,7 +94068,7 @@ function signedArea2(data, start, end, dim) {
   return sum;
 }
 
-// node_modules/three/src/extras/Earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/Earcut.js
 var Earcut = class {
   /**
    * Triangulates the given shape definition by returning an array of triangles.
@@ -91860,13 +94320,13 @@ var num6 = (v, d = 0) => {
   const n2 = typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
   return isFinite(n2) ? n2 : d;
 };
-var kid3 = (node, name) => {
+var kid4 = (node, name) => {
   for (const c of node) if (Array.isArray(c) && c[0] === name) return c;
   return null;
 };
 function xyzOf(node, name, d) {
-  const k = kid3(node, name);
-  const v = k ? kid3(k, "xyz") : null;
+  const k = kid4(node, name);
+  const v = k ? kid4(k, "xyz") : null;
   return v ? [num6(v[1], d), num6(v[2], d), num6(v[3], d)] : [d, d, d];
 }
 function fieldOf2(node, name) {
@@ -91887,7 +94347,7 @@ function footprintModels(node) {
   const out = [];
   for (const c of node) {
     if (!Array.isArray(c) || c[0] !== "model") continue;
-    const hide = kid3(c, "hide");
+    const hide = kid4(c, "hide");
     if (hide && String(hide[1]) !== "no") continue;
     const path2 = String(c[1] ?? "");
     const own = projectModel(path2);

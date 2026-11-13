@@ -6201,6 +6201,100 @@ Link '${target}' to this file?`)) return null;
     }
   }
 
+  // web/canvas/variant-model.ts
+  var isList = Array.isArray;
+  var str2 = (v) => v === void 0 || v === null ? "" : String(v);
+  var kid2 = (n, key) => {
+    if (!n) return null;
+    for (let i = 1; i < n.length; i++) {
+      const c = n[i];
+      if (isList(c) && c[0] === key) return c;
+    }
+    return null;
+  };
+  var kids3 = (n, key) => n ? n.filter((c) => isList(c) && c[0] === key) : [];
+  var clone = (n) => JSON.parse(JSON.stringify(n));
+  var boolOf = (k, dflt) => k ? k.length < 2 || /^(yes|true)$/.test(str2(k[1])) : dflt;
+  var cmpCode = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  var lower = (s) => s.toLowerCase();
+  var DEFAULT_VARIANT_NAME = "< Default >";
+  var isDefaultVariant = (v) => !v || lower(v) === lower(DEFAULT_VARIANT_NAME);
+  var SYM_KEYS = [["dnp", "dnp", false], ["exclude_from_sim", "excludedFromSim", false], ["in_bom", "excludedFromBOM", true], ["on_board", "excludedFromBoard", true], ["in_pos_files", "excludedFromPosFiles", true]];
+  var VARIANT_IN_BOM_POSITIVE_VERSION = 20260306;
+  var variantInBomPositive = (ver) => !ver || ver >= VARIANT_IN_BOM_POSITIVE_VERSION;
+  var variantKeys = (ver) => variantInBomPositive(ver) ? SYM_KEYS : SYM_KEYS.map(([k, f, inv]) => [k, f, k === "in_bom" ? false : inv]);
+  function symbolFlags(sym) {
+    const out = {};
+    for (const [key, f, inv] of SYM_KEYS) {
+      const k = kid2(sym, key);
+      out[f] = inv ? !boolOf(k, true) : boolOf(k, false);
+    }
+    return out;
+  }
+  function symbolInstancePaths(sym) {
+    const out = [];
+    for (const proj of kids3(kid2(sym, "instances"), "project")) for (const p of kids3(proj, "path")) out.push(p);
+    return out;
+  }
+  function symbolInstance(sym, path) {
+    const all = symbolInstancePaths(sym);
+    return (path ? all.find((p) => str2(p[1]) === path) : null) || all[0] || null;
+  }
+  var symVariantIn = (inst, name) => kids3(inst, "variant").find((v) => str2((kid2(v, "name") || [])[1]) === name) || null;
+  function symbolVariant(sym, name, path, ver) {
+    if (isDefaultVariant(name)) return null;
+    const v = symVariantIn(symbolInstance(sym, path), name);
+    if (!v) return null;
+    const base = symbolFlags(sym), flags = { ...base };
+    for (const [key, f, inv] of variantKeys(ver)) {
+      const k = kid2(v, key);
+      if (k) flags[f] = inv ? !boolOf(k, true) : boolOf(k, false);
+    }
+    const fields = /* @__PURE__ */ new Map();
+    for (const f of kids3(v, "field")) {
+      const nm = str2((kid2(f, "name") || [])[1]);
+      if (nm) fields.set(nm, str2((kid2(f, "value") || [])[1]));
+    }
+    return { flags, fields };
+  }
+  function symbolFlagsForVariant(sym, variant, path, ver) {
+    const st = variant ? symbolVariant(sym, variant, path, ver) : null;
+    return st ? st.flags : symbolFlags(sym);
+  }
+  function setSymbolVariant(sym, name, patch, path, ver) {
+    if (isDefaultVariant(name)) throw new Error("Variant name cannot be empty or default.");
+    const out = clone(sym), inst = symbolInstance(out, path);
+    if (!inst) return out;
+    const keys = out[0] === "sheet" ? variantKeys(ver).filter(([k]) => k !== "on_board" && k !== "in_pos_files") : variantKeys(ver);
+    const base = symbolFlags(out), st = symbolVariant(out, name, str2(inst[1]), ver) || { flags: { ...base }, fields: /* @__PURE__ */ new Map() };
+    for (const [, f] of SYM_KEYS) if (patch.flags && patch.flags[f] !== void 0) st.flags[f] = !!patch.flags[f];
+    const baseField = (k) => {
+      const p = kids3(out, "property").find((q) => str2(q[1]) === k);
+      return p ? str2(p[2]) : "";
+    };
+    if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) {
+      if (v === baseField(k) && kids3(out, "property").some((q) => str2(q[1]) === k)) st.fields.delete(k);
+      else st.fields.set(k, v);
+    }
+    const old = symVariantIn(inst, name);
+    const node = ["variant", ["name", name]];
+    for (const [key, f, inv] of keys) if (st.flags[f] !== base[f]) node.push([key, (inv ? !st.flags[f] : st.flags[f]) ? "yes" : "no"]);
+    for (const k of [...st.fields.keys()].sort(cmpCode)) node.push(["field", ["name", k], ["value", st.fields.get(k)]]);
+    if (old) {
+      for (const c of old.slice(1)) if (isList(c) && !["name", "dnp", "exclude_from_sim", "in_bom", "on_board", "in_pos_files", "field"].includes(str2(c[0]))) node.push(c);
+    }
+    const differs = node.length > 2 && (keys.some(([, f]) => st.flags[f] !== base[f]) || [...st.fields].some(([k, v]) => baseField(k) !== v) || node.slice(2).some((c) => isList(c) && !["field"].includes(str2(c[0]))));
+    if (old) {
+      if (differs) inst[inst.indexOf(old)] = node;
+      else inst.splice(inst.indexOf(old), 1);
+    } else if (differs) {
+      const others = kids3(inst, "variant");
+      const after = others.filter((v) => cmpCode(str2((kid2(v, "name") || [])[1]), name) < 0).pop();
+      inst.splice(after ? inst.indexOf(after) + 1 : others.length ? inst.indexOf(others[0]) : inst.length, 0, node);
+    }
+    return out;
+  }
+
   // web/tools/sch-tools/annotate.ts
   function splitRef(ref) {
     ref = str(ref);
@@ -6330,6 +6424,7 @@ Link '${target}' to this file?`)) return null;
     if (at >= 0) node.splice(at, 0, p);
     else node.push(p);
   }
+  var VARIANT_FLAG = { dnp: "dnp", in_bom: "excludedFromBOM", exclude_from_sim: "excludedFromSim", on_board: "excludedFromBoard", in_pos_files: "excludedFromPosFiles" };
   var FLAG_KEYS = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"], setExcludeFromPosFiles: ["in_pos_files", "no", "yes"] };
   var FLAG_AFTER = { exclude_from_sim: ["body_style", "convert", "unit", "mirror", "at", "lib_id"], in_bom: ["exclude_from_sim"], on_board: ["in_bom"], in_pos_files: ["on_board"], dnp: ["in_pos_files", "on_board"] };
   function withFlag(node, key, val) {
@@ -6352,11 +6447,17 @@ Link '${target}' to this file?`)) return null;
     const kinds = which === "setExcludeFromPosFiles" ? ["symbol"] : ["symbol", "sheet", "rule_area"];
     const items = selectedItems(ctx).filter((it) => kinds.includes(it.kind));
     if (!items.length) return false;
+    const variant = String(root.CollabEditor && root.CollabEditor.currentVariant || "");
+    const ed = root.CollabEditor;
+    const path = variant && ed && ed.currentSheetPathOf ? ed.currentSheetPathOf() : null, ver = ctx.doc.version;
+    const vf = VARIANT_FLAG[key];
+    const viaVariant = (n) => !!variant && !!vf && (n[0] === "symbol" || n[0] === "sheet" && key !== "on_board");
     const isOn = (n) => {
+      if (viaVariant(n)) return symbolFlagsForVariant(n, variant, path, ver)[vf];
       const k = kid(n, key);
       return !!k && str(k[1]) === onVal;
     };
-    const set = (n, on2) => withFlag(n, key, on2 ? onVal : offVal);
+    const set = (n, on2) => viaVariant(n) ? setSymbolVariant(n, variant, { flags: { [vf]: on2 } }, path, ver) : withFlag(n, key, on2 ? onVal : offVal);
     const hook = root.CollabEditor && root.CollabEditor.toggleAttribute;
     if (hook) return hook(ctx, items, isOn, set);
     let on = false;
@@ -6738,7 +6839,7 @@ Link '${target}' to this file?`)) return null;
     S.ctx = ctx;
     installDom(ctx);
     if (ctx.viewOnly) return false;
-    const lower = key.length === 1 ? key.toLowerCase() : key;
+    const lower2 = key.length === 1 ? key.toLowerCase() : key;
     const armTool = (id, kind) => {
       const busy = busyMessage();
       if (busy) {
@@ -6860,7 +6961,7 @@ Link '${target}' to this file?`)) return null;
       case "G":
       case "m":
       case "M": {
-        setDragMode(ctx, lower === "m" ? "move" : "drag");
+        setDragMode(ctx, lower2 === "m" ? "move" : "drag");
         if (S.drag) return true;
         const it = S.sel ? ctx.doc.items.get(S.sel) : null;
         if (!it || !S.cursor) return false;
