@@ -145,9 +145,15 @@ export async function connect() {
       // it appeared.  Anything else (a resync, a reconnect, an edit made before the join) takes the snapshot.
       const same = E.loadedText !== null && E.loadedText === msg.file && E.loadedOpN === E.opN && !!E.kdoc;
       E.loadedText = null;
-      if (same || setDocFromText(msg.file)) {
-        E.lastSeq = Number(msg.seq) || 0;
-        for (const op of msg.thenOps || []) { applyChanges(op.changes); noteSeq(op.seq); }
+      const then: { seq: number; changes: KChange[] }[] = msg.thenOps || [];
+      const flat = (ops: { changes: KChange[] }[]) => { const out: KChange[] = []; for (const op of ops) for (const c of op.changes || []) out.push(c); return out; };
+      // The edits since the snapshot go in as one change, not one pass (and one repaint's worth of work) each:
+      // a project that only browsers and scripts edit carries its whole history there.
+      let ok = true;
+      if (same) applyChanges(flat(then.filter((op) => !(Number(op.seq) <= E.loadedSeq))));   // the ones openDoc had not fetched yet
+      else ok = setDocFromText(msg.file, flat(then));
+      if (ok) {
+        E.lastSeq = then.length ? Number(then[then.length - 1].seq) || Number(msg.seq) || 0 : Number(msg.seq) || 0;
         // The snapshot is the server's document, which does not have our unacknowledged edits yet (one made
         // before the join landed, or during a dropped connection): they are sent again below, and put back
         // on the fresh document here, or this browser alone would go on showing the sheet without them.

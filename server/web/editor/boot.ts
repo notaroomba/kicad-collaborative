@@ -7,7 +7,7 @@
 // Each answer is used once: later navigation inside the app asks the server as before.
 import { BOARD_HINT, type BootDoc } from "./bootpick";
 
-export interface BootContent { docId: string; text: string; seq: number }
+export interface BootContent { docId: string; text: string; seq: number; head: number }
 export interface Boot {
   me?: Promise<unknown>;
   projectId?: string;
@@ -63,7 +63,7 @@ if (m) {
   if (q.get("fp") || knownBoard(doc || m[1])) loadBoardTools();   // known to open on a board or a footprint: no need to wait for the answer
   boot.content = q.get("fp") ? Promise.resolve(null)
     : fetch(`/api/projects/${m[1]}/first-doc${doc && /^[0-9a-f-]{36}$/i.test(doc) ? `?doc=${doc}` : ""}`).then((r) => (r.ok && r.headers.get("x-doc-id")
-      ? (r.headers.get("x-doc-type") === "kicad_sch" || loadBoardTools(), r).text().then((text) => ({ docId: r.headers.get("x-doc-id")!, text, seq: Number(r.headers.get("x-snapshot-seq")) || 0 })) : null)).catch(() => null);
+      ? (r.headers.get("x-doc-type") === "kicad_sch" || loadBoardTools(), r).text().then((text) => ({ docId: r.headers.get("x-doc-id")!, text, seq: Number(r.headers.get("x-snapshot-seq")) || 0, head: Number(r.headers.get("x-head-seq")) || 0 })) : null)).catch(() => null);
   boot.info.catch(() => {});
 }
 (window as unknown as { __kcBoot?: Boot }).__kcBoot = boot;

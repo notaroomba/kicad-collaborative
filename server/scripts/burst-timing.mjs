@@ -2,7 +2,7 @@
 // autorouter): a second client sends OPS ops over the live session while a browser has the document open, and
 // the browser reports how long its main thread was blocked and when the last edit was on screen.
 //
-//   E2E_PG_URL=… E2E_JWT_SECRET=… [E2E_BASE=http://127.0.0.1:8099] [DEMO=stickhub] [OPS=400] [PER=1] [PACE=0] [BOARD=1] [PROFILE=1] node burst-timing.mjs
+//   E2E_PG_URL=… E2E_JWT_SECRET=… [E2E_BASE=http://127.0.0.1:8099] [DEMO=stickhub] [OPS=400] [PER=1] [PACE=0] [BOARD=1] [PROFILE=1] [REOPEN=1] node burst-timing.mjs
 //
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -105,6 +105,31 @@ console.log(`  all on screen after        ${shown} ms`);
 console.log(`  browser blocked            ${Math.round(blocked)} ms in ${r.long.length} long tasks (longest ${Math.round(Math.max(0, ...r.long))} ms)`);
 console.log(`  frames drawn meanwhile     ${r.frames} (${Math.round(r.frames / ((shown + 1200) / 1000))} a second)`);
 console.log(`  items                      ${before} -> ${r.items}`);
+// REOPEN=1: somebody opens the document afterwards; the edits since the last stored snapshot come with the join
+if (process.env.REOPEN) {
+  const p2 = await ctx.newPage();
+  await p2.addInitScript(() => { window.__long = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__long.push(e.duration); }).observe({ entryTypes: ['longtask'] }); });
+  const t1 = Date.now();
+  await p2.goto(`${BASE}/p/${projectId}/edit${BOARD ? `?doc=${docId}` : ''}`);
+  await p2.waitForFunction(() => window.CollabEditor && window.CollabEditor.kdoc, null, { timeout: 60000 });
+  const first = Date.now() - t1, had = await p2.evaluate(() => window.CollabEditor.kdoc.items.size);
+  await p2.waitForFunction((n) => window.CollabEditor.kdoc && window.CollabEditor.kdoc.items.size >= n, r.items, { timeout: 180000 });
+  const full = Date.now() - t1; await p2.waitForTimeout(500);
+  if (process.env.PROFILE) {
+    const c2 = await ctx.newCDPSession(p2); await c2.send('Profiler.enable'); await c2.send('Profiler.start');
+    await p2.reload(); await p2.waitForFunction((n) => window.CollabEditor && window.CollabEditor.kdoc && window.CollabEditor.kdoc.items.size >= n, r.items, { timeout: 180000 }); await p2.waitForTimeout(500);
+    const { profile } = await c2.send('Profiler.stop');
+    const dt = profile.timeDeltas, self = new Map(), byId = new Map(profile.nodes.map((n) => [n.id, n])), parent = new Map();
+    for (const n of profile.nodes) for (const c of n.children || []) parent.set(c, n.id);
+    profile.samples.forEach((id, i) => { self.set(id, (self.get(id) || 0) + dt[i] / 1000); });
+    const name = (x) => { const f = byId.get(x).callFrame; return `${f.functionName || '(anon)'} ${f.url.split('/').pop().split('?')[0]}:${f.lineNumber + 1}:${f.columnNumber + 1}`; };
+    const total = new Map();
+    for (const [id, ms] of self) { const seen = new Set(); for (let x = id; x !== undefined; x = parent.get(x)) { const k = name(x); if (seen.has(k)) continue; seen.add(k); total.set(k, (total.get(k) || 0) + ms); } }
+    console.log('  reopen, total time, top 30:'); for (const [k, ms] of [...total].sort((a, b) => b[1] - a[1]).slice(0, 30)) console.log(`    ${String(Math.round(ms)).padStart(6)} ms  ${k}`);
+  }
+  const l2 = await p2.evaluate(() => window.__long);
+  console.log(`  opened afterwards          first picture ${first} ms with ${had} items, all ${r.items} at ${full} ms, blocked ${Math.round(l2.reduce((s, d) => s + d, 0))} ms (longest ${Math.round(Math.max(0, ...l2))} ms)`);
+}
 ws.close(); await browser.close();
 await db.query('DELETE FROM projects WHERE id = $1', [projectId]).catch(() => {});
 await db.end();

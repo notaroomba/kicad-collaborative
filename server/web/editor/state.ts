@@ -38,6 +38,8 @@ export const E: any = {
   // first snapshot arrives (net.ts: an identical snapshot is not parsed again)
   loadedText: null,
   loadedOpN: 0,
+  loadedSeq: 0,   // the seq the loaded document stands at: the snapshot's, or the last edit openDoc applied on top
+
   resyncAt: 0,
   applyFailed: false,
   lastLiveMove: 0,

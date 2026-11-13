@@ -131,11 +131,29 @@ export function applySheetContext(d: SheetContextDoc) {
 }
 
 
-export function setDocFromText(text: string) {
+/** The edits made to a document after `seq`, as one list of changes, and the seq of the last of them.  Null when they cannot be read (a guest). */
+async function editsSince(docId: string, seq: number): Promise<{ changes: WireChange[]; head: number } | null> {
+  try {
+    const r = await fetch(`/api/docs/${docId}/ops?since=${seq}`);
+    if (!r.ok) return null;
+    const j = await r.json() as { head: number; ops: { seq: number; changes: WireChange[] }[] };
+    const changes: WireChange[] = []; for (const op of j.ops || []) for (const c of op.changes || []) changes.push(c);
+    return { changes, head: Number(j.head) || seq };
+  } catch (e) { return null; }
+}
+
+/**
+ * Show the document `text` holds.  `then` are edits made after that text was stored (the join's thenOps, or
+ * the ones openDoc fetched): they go into the document before anything is derived from it or drawn, all in
+ * one go, however many there are.
+ */
+export function setDocFromText(text: string, then?: WireChange[] | null) {
   let d: KDoc;
   try { d = KiCadCanvas.parseDoc(text, E.DOC_TYPE); } catch (e) { console.warn("document parse failed", e); return false; }
   applySheetContext(d);
+  cancelRemoteFlush();
   E.kdoc = d; E.vbPerMm = 1; notePreviewDirty();
+  if (then && then.length) { mutateDoc(then); if (!isSch()) KiCadCanvas.computeBBox(E.kdoc); }
   if (isSch()) E.vb = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
   else { const b = E.kdoc.bbox, m = 5; E.vb = [b[0] - m, b[1] - m, (b[2] - b[0]) + 2 * m, (b[3] - b[1]) + 2 * m]; }
   base.replaceChildren(); base.setAttribute("viewBox", E.vb.join(" ")); overlay.setAttribute("viewBox", E.vb.join(" "));
@@ -423,10 +441,22 @@ export async function openDoc(doc: DocEntry) {
       const had = early ? await early : null;
       if (tools) await tools;
       if (state.docId !== docId) return;
-      if (had && had.docId === docId) { performance.mark("kc:doc-text"); ok = setDocFromText(had.text); if (ok) { E.loadedText = had.text; E.loadedOpN = E.opN; } }
-      else {
+      let got: { text: string; seq: number; head: number } | null = had && had.docId === docId ? had : null;
+      if (!got) {
         const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
-        if (r.ok) { const text = await r.text(); if (tools) await tools; if (state.docId !== docId) return; performance.mark("kc:doc-text"); ok = setDocFromText(text); if (ok) { E.loadedText = text; E.loadedOpN = E.opN; } if (ok && doc.docType === "footprint") onFootprintOpened(Number(r.headers.get("x-snapshot-seq")) || 0); }
+        if (r.ok) got = { text: await r.text(), seq: Number(r.headers.get("x-snapshot-seq")) || 0, head: Number(r.headers.get("x-head-seq")) || 0 };
+      }
+      if (got) {
+        // The text is the last stored snapshot, and only a desktop editor stores one: a project edited in the
+        // browser or by a script has all of that as edits on top.  They are fetched with the text and applied
+        // before the first picture, or the sheet would open as it once was (blank, for a project built here).
+        const late = got.head > got.seq ? await editsSince(docId, got.seq) : null;
+        if (tools) await tools;
+        if (state.docId !== docId) return;
+        performance.mark("kc:doc-text");
+        ok = setDocFromText(got.text, late ? late.changes : null);
+        if (ok) { E.loadedText = got.text; E.loadedOpN = E.opN; E.loadedSeq = late ? late.head : got.seq; }
+        if (ok && doc.docType === "footprint") onFootprintOpened(got.seq);
       }
       // DevTools' Performance panel shows these three (text here, parsed, on screen); scripts/load-timing.mjs reads them
       if (ok) { performance.mark("kc:doc-parsed"); requestAnimationFrame(() => { performance.mark("kc:first-paint"); if (isSch()) preloadPcbToolsWhenIdle(); }); }

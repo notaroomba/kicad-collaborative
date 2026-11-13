@@ -1938,6 +1938,12 @@ pub async fn doc_content(
         axum::http::HeaderName::from_static("x-snapshot-seq"),
         axum::http::HeaderValue::from_str(&seq.to_string()).unwrap(),
     );
+    // edits made since that snapshot are not in the text: the editor fetches them when this is ahead (web/editor/doc.ts)
+    let head = persist::head_seq(&state.pool, doc_id).await.unwrap_or(seq);
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-head-seq"),
+        axum::http::HeaderValue::from_str(&head.to_string()).unwrap(),
+    );
     Ok(response)
 }
 
@@ -1973,6 +1979,8 @@ pub async fn first_doc_content(
     let value = |s: String| axum::http::HeaderValue::from_str(&s).unwrap();
     response.headers_mut().insert(axum::http::HeaderName::from_static("x-snapshot-seq"), value(seq.to_string()));
     response.headers_mut().insert(axum::http::HeaderName::from_static("x-doc-id"), value(doc.id.to_string()));
+    let head = persist::head_seq(&state.pool, doc.id).await.unwrap_or(seq);
+    response.headers_mut().insert(axum::http::HeaderName::from_static("x-head-seq"), value(head.to_string()));
     // a board needs the board tools, which the page then starts fetching at once (web/editor/boot.ts)
     response.headers_mut().insert(axum::http::HeaderName::from_static("x-doc-type"), value(doc.doc_type.clone()));
     Ok(response)
