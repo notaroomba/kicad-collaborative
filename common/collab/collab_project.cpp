@@ -62,13 +62,15 @@ std::string COLLAB_PROJECT::ZipProjectFiles( const wxString& aProjectPath )
             wxString   name = fn.GetFullName();
 
             // Design files, project-local libraries (.kicad_sym, .pretty footprints),
-            // 3D models and library tables all travel with the project; the type is
-            // detected from the extension here and again on the server.
+            // 3D models, SPICE / IBIS model files and library tables all travel with the
+            // project; the type is detected from the extension here and again on the server.
             bool wanted = ext == wxS( "kicad_pro" ) || ext == wxS( "kicad_sch" )
                           || ext == wxS( "kicad_pcb" ) || ext == wxS( "kicad_sym" )
                           || ext == wxS( "kicad_mod" ) || ext == wxS( "kicad_dru" )
                           || ext == wxS( "kicad_wks" ) || ext == wxS( "step" )
                           || ext == wxS( "stp" ) || ext == wxS( "wrl" ) || ext == wxS( "wrz" )
+                          || ext == wxS( "lib" ) || ext == wxS( "sub" ) || ext == wxS( "cir" )
+                          || ext == wxS( "mod" ) || ext == wxS( "spice" ) || ext == wxS( "ibs" )
                           || name == wxS( "sym-lib-table" ) || name == wxS( "fp-lib-table" )
                           || name == wxS( "design-block-lib-table" );
 
