@@ -3,6 +3,7 @@
 // Action ("Set to specified values" with every value starting at "-- leave unchanged --", or "Set to layer default
 // values" from the Board Setup defaults shown in the grid).  Apply and Close stores one "Edit Text and Graphics" step.
 import { E } from "../state";
+import { boardSelection } from "./exchange";
 import { checkField, errorMessage, fmtLen, h, openDialog, parseLen, unitName, type Field } from "./ui";
 
 type Tri = boolean | null;
@@ -139,7 +140,7 @@ export function openTextAndGraphics(ctx: ToolCtx): void {
           specified: specified.checked,
           values: { layer: layerCtrl.value || null, visible: visible.get(), lineWidth: lw, kicadFont: fontSel.value === "kicad", textWidth: tw, textHeight: th, thickness: tk, autoThickness: autoOn,
             bold: bold.get(), italic: italic.get(), keepUpright: upright.get(), centerOnFootprint: center.get() },
-          selection: new Set(ctx.selection || []) } };
+          selection: boardSelection(ctx) } };
       };
     },
     ok() {

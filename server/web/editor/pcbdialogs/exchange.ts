@@ -52,20 +52,30 @@ const fieldText = (fp: SNode, name: string): string => {
   return "";
 };
 
+/** The board selection now: the chrome's, the single selected item and the board module's own (PCB_SELECTION_TOOL::GetSelection). */
+export function boardSelection(ctx: ToolCtx): Set<string> {
+  const s = new Set<string>(ctx.selection || []);
+  if (ctx.selected && ctx.selected.id) s.add(ctx.selected.id);
+  const P = (window as unknown as { PcbTools?: { state?: { sel?: Iterable<string> } } }).PcbTools;
+  if (P && P.state && P.state.sel) for (const id of P.state.sel) s.add(id);
+  return s;
+}
+
 export type ExchangeAction = "updateFootprint" | "updateFootprints" | "changeFootprint" | "changeFootprints";
 
 /** GLOBAL_EDIT_TOOL::ExchangeFootprints: which dialog the action opens, for the current selection. */
 export function openExchangeFootprints(ctx: ToolCtx, action: ExchangeAction): void {
   const doc = E.kdoc as KDoc | null;
   if (!doc || doc.type !== "pcb") { ctx.toast("This needs a board"); return; }
-  const selFps = Array.from(ctx.selection || []).map((id) => doc.items.get(id)).filter((it): it is KItem => !!it && it.kind === "footprint");
+  const sel = boardSelection(ctx);
+  const selFps = Array.from(sel).map((id) => doc.items.get(id)).filter((it): it is KItem => !!it && it.kind === "footprint");
   const current = selFps[0] || null;
   const updateMode = action === "updateFootprint" || action === "updateFootprints";
   const selectedMode = action === "updateFootprint" || action === "changeFootprint" ? true : selFps.length > 0;
-  showExchangeDialog(ctx, doc, current, updateMode, selectedMode);
+  showExchangeDialog(ctx, doc, current, updateMode, selectedMode, sel);
 }
 
-function showExchangeDialog(ctx: ToolCtx, doc: KDoc, current: KItem | null, updateMode: boolean, selectedMode: boolean): void {
+function showExchangeDialog(ctx: ToolCtx, doc: KDoc, current: KItem | null, updateMode: boolean, selectedMode: boolean, selection: Set<string>): void {
   const title = updateMode ? "Update Footprints from Library" : "Change Footprints";
   const modeKey = (updateMode ? "update" : "change") + (selectedMode ? "Selected" : "");
   let mode: Mode = matchModes[modeKey];
@@ -113,7 +123,7 @@ function showExchangeDialog(ctx: ToolCtx, doc: KDoc, current: KItem | null, upda
     const X = PT().exchange;
     switch (mode) {
       case "all": return true;
-      case "selected": return (!!current && id === current.id) || (ctx.selection ? ctx.selection.has(id) : false);
+      case "selected": return (!!current && id === current.id) || selection.has(id);
       case "ref": return X.wildCompare(specifiedRef.value, fieldText(fp, "Reference"));
       case "value": return X.wildCompare(specifiedValue.value, fieldText(fp, "Value"));
       case "id": return String(fp[1] ?? "") === specifiedID.value.trim();
