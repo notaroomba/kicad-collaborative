@@ -44,6 +44,12 @@ body.plg-win-drag .plg-frame { pointer-events: none; }
 
 .plg-tb-sep { flex: none; width: 1px; height: 22px; margin: 0 3px; background: var(--line); }
 .plg-tb-btn { flex: none; width: 30px; height: 30px; padding: 2px; border: 1px solid transparent; border-radius: var(--r-2); background: transparent; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.plg-tb-strip { display: flex; flex: 0 1 auto; align-items: center; min-width: 0; max-width: 45%; padding-right: 4px; }
+.plg-tb-scroll { display: flex; flex: 0 1 auto; align-items: center; gap: 1px; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior: contain; }
+.plg-tb-scroll::-webkit-scrollbar { display: none; }
+.plg-tb-arrow { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: var(--r-2); background: transparent; color: var(--ink-2); cursor: pointer; }
+.plg-tb-arrow:hover { background: var(--paper); border-color: var(--line); color: var(--ink); }
+.plg-tb-arrow svg { width: 12px; height: 12px; }
 .plg-tb-btn:hover { background: var(--paper); border-color: var(--line); color: var(--ink); }
 .plg-tb-btn.busy { color: var(--blue); border-color: var(--blue); }
 .plg-tb-btn svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }

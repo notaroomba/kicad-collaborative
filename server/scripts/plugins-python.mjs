@@ -209,6 +209,10 @@ if ${driveSrc ? "True" : "False"}:
         r = kc_drive.modal(dlg) if hasattr(kc_drive, "modal") else None
         return wx.ID_OK if r is None else r
     wx._headless_modal = _kc_modal
+else:
+    import wx, kicad_web
+    # nobody is there to click: a dialog the plugin waits on gets its main button pressed, so its work runs
+    wx._headless_modal = kicad_web.press_modal
 # WATCHDOG=<seconds>: a plugin that never returns is stopped where it stands, so the table says where it waits
 _kc_limit = ${Number(process.env.WATCHDOG || 0)}
 if _kc_limit:

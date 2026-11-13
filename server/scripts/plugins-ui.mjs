@@ -246,6 +246,22 @@ await menu(a, 'tools', 'External Plugins', 'pluginManager'); await a.waitForSele
 await install(a, ID('snap-to-grid'));
 check('consent marks the write permission', /Change your designs/.test(await a.locator('#pluginConsent').innerText()) && (await a.locator('#pluginConsent [data-perm="design:write"].high').count()) === 1);
 await accept(a, ID('snap-to-grid')); await closeManager(a);
+// plugin buttons have their own strip at the end of the top bar; when they do not fit it scrolls sideways
+await a.waitForSelector(`#tbPlugins [data-uiact="plugin:${ID('snap-to-grid')}:snap"]`);
+const stripBtns = await a.locator('#tbTop #tbPlugins .plg-tb-btn').count();
+check('plugin buttons sit together at the end of the top bar', stripBtns >= 2 && (await a.locator('#tbTop .plg-tb-btn').count()) === stripBtns && (await a.locator('#tbPlugins [data-strip-arrow]').count()) === 0, `${stripBtns}`);
+const tight = await a.addStyleTag({ content: '#tbPlugins { max-width: 64px !important; }' });
+await a.waitForSelector('#tbPlugins [data-strip-arrow="right"]', { timeout: 5000 }).catch(() => {});
+const lastBtn = a.locator('#tbPlugins .plg-tb-btn').last();
+const hiddenBefore = await lastBtn.evaluate((b) => { const r = b.getBoundingClientRect(), s = b.parentElement.getBoundingClientRect(); return r.right > s.right + 1; });
+await a.locator('#tbPlugins .plg-tb-scroll').hover(); await a.mouse.wheel(0, 400); await a.waitForTimeout(300);
+const afterWheel = await a.locator('#tbPlugins .plg-tb-scroll').evaluate((el) => [el.scrollLeft, el.scrollWidth - el.clientWidth]);
+check('too many plugin buttons scroll sideways with the wheel', hiddenBefore && afterWheel[0] > 0 && afterWheel[0] >= afterWheel[1] - 1 && (await a.locator('#tbPlugins [data-strip-arrow="left"]').count()) === 1, JSON.stringify([hiddenBefore, afterWheel]));
+await a.click('#tbPlugins [data-strip-arrow="left"]'); await a.waitForTimeout(600);
+check('and with the arrows at the ends of the strip', (await a.locator('#tbPlugins .plg-tb-scroll').evaluate((el) => el.scrollLeft)) === 0 && (await a.locator('#tbPlugins [data-strip-arrow="right"]').count()) === 1);
+await shot(a, '06-toolbar-strip');
+await tight.evaluate((el) => el.remove()); await a.waitForTimeout(200);
+check("KiCad's own tools are not pushed off the bar by the strip", (await a.locator('#tbTop [data-more]').isHidden()) || (await a.locator('#tbTop .ktb-row > *').first().isVisible()));
 await a.evaluate(() => window.CollabEditor.api.toolCtx().setSelection([]));
 const before = await places(a); const depth0 = await undoDepth(a);
 await a.click(`#tbTop [data-uiact="plugin:${ID('snap-to-grid')}:snap"]`);

@@ -1729,30 +1729,52 @@ def _install_fabrication():
     f.plot, f.drill, f.report, f.positions = _fab_plot, _fab_drill, _fab_report, _fab_positions
 
 
+def _main_button(top):
+    """The button a person would press to make a window do its work: its default button, else OK/Apply/Yes, else the
+    first one that is not Cancel, Close or Help."""
+    buttons = []
+
+    def walk(w):
+        for c in getattr(w, "_wx_children", []):
+            if isinstance(c, wx.Button) and c.IsEnabled() and c.IsShown():
+                buttons.append(c)
+            walk(c)
+    walk(top)
+    default = getattr(top, "_wx_default", None)
+    pick = default if default in buttons else next((b for b in buttons if b.GetId() in (wx.ID_OK, wx.ID_APPLY, wx.ID_YES)), None)
+    if pick is None:
+        pick = next((b for b in buttons if b.GetId() not in (wx.ID_CANCEL, wx.ID_CLOSE, wx.ID_NO, wx.ID_HELP)
+                     and str(b.GetLabel()).strip().lower() not in ("cancel", "close", "exit", "quit", "help", "about", "…", "...", "browse")), None)
+    return pick
+
+
+_pressed_in_modal = []
+
+
+def press_modal(dialog):
+    """For the test harness: a dialog the plugin waits on (ShowModal) gets its main button pressed while it is open,
+    so the work behind it runs, as press_default does for windows a plugin leaves open.  Returns the dialog's code."""
+    pick = _main_button(dialog)
+    if pick is None:
+        return wx.ID_OK
+    _pressed_in_modal.append(str(pick.GetLabel()))
+    pick._wx_clicked()
+    return wx.ID_OK
+
+
 def press_default():
     """For the test harness, where nobody is there to click: press the main button of every window a plugin left open
     (its default button, else the first one that is not Cancel or Close), so the work behind the dialog runs too.
-    Returns the labels pressed, as JSON."""
-    pressed = []
+    Returns the labels pressed (those pressed inside modal dialogs first), as JSON."""
+    pressed = list(_pressed_in_modal)
+    del _pressed_in_modal[:]
     error = None
     _running[0] += 1
     try:
         for top in list(wx._top_windows):
             if not getattr(top, "_wx_visible", False):
                 continue
-            buttons = []
-
-            def walk(w):
-                for c in getattr(w, "_wx_children", []):
-                    if isinstance(c, wx.Button) and c.IsEnabled() and c.IsShown():
-                        buttons.append(c)
-                    walk(c)
-            walk(top)
-            default = getattr(top, "_wx_default", None)
-            pick = default if default in buttons else next((b for b in buttons if b.GetId() in (wx.ID_OK, wx.ID_APPLY, wx.ID_YES)), None)
-            if pick is None:
-                pick = next((b for b in buttons if b.GetId() not in (wx.ID_CANCEL, wx.ID_CLOSE, wx.ID_NO, wx.ID_HELP)
-                             and str(b.GetLabel()).strip().lower() not in ("cancel", "close", "exit", "quit", "help", "about", "…", "...", "browse")), None)
+            pick = _main_button(top)
             if pick is not None:
                 pressed.append(str(pick.GetLabel()))
                 pick._wx_clicked()

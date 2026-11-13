@@ -197,7 +197,10 @@ export function TopToolbar() {
   const a = useAvail(); const items = useBar("top");
   const groupCurrent = useApp((s) => s.groupCurrent);
   const plugins = usePluginBarEntries();   // actions of enabled plugins that ask for a button, as KiCad shows them
-  return <OverflowBar id="tbTop" cls="min-h-8.5" a={a} entries={[...barEntries(items, a, groupCurrent), ...plugins]} />;
+  // KiCad's own tools keep wxAuiToolBar's chevron; the plugin buttons after them get a strip of their own that
+  // scrolls sideways when there are more than fit, so every plugin button stays one click away.
+  const buttons = plugins.filter((e) => e.menu);
+  return <OverflowBar id="tbTop" cls="min-h-8.5" a={a} entries={barEntries(items, a, groupCurrent)} strip={buttons.length ? <PluginStrip>{buttons.map((e) => <Fragment key={e.key}>{e.node}</Fragment>)}</PluginStrip> : null} />;
 }
 export function AuxToolbar() {
   const a = useAvail(); const items = useBar("aux");
@@ -259,7 +262,42 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
  * pan among them — were unreachable) and the horizontal bars wrapped into a second row, which
  * wxAuiToolBar never does and which stole 19-30 px of canvas at common laptop widths.
  */
-function OverflowBar({ id, cls, entries, a, tail, vertical, hidden }: { id: string; cls: string; entries: BarEntry[]; a: Avail; tail?: ReactNode; vertical?: boolean; hidden?: boolean }) {
+/** The plugin buttons at the end of the top bar.  It is as wide as its buttons up to 45% of the bar; past that it
+ *  scrolls sideways (wheel, touch, or the arrows that appear at its ends), which KiCad's own toolbar cannot do. */
+function PluginStrip({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [edge, setEdge] = useState({ left: false, right: false });
+  const update = useCallback(() => {
+    const el = ref.current; if (!el) return;
+    const left = el.scrollLeft > 1, right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setEdge((e) => (e.left === left && e.right === right ? e : { left, right }));
+  }, []);
+  useLayoutEffect(() => { update(); });
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null; if (ro) ro.observe(el);
+    // a mouse wheel turns the strip sideways; the page behind it does not move
+    const wheel = (e: WheelEvent) => { if (el.scrollWidth <= el.clientWidth) return; const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY; if (!d) return; e.preventDefault(); el.scrollLeft += d; };
+    el.addEventListener("wheel", wheel, { passive: false });
+    return () => { if (ro) ro.disconnect(); el.removeEventListener("wheel", wheel); };
+  }, [update]);
+  const step = (dir: number) => { const el = ref.current; if (el) el.scrollBy({ left: dir * Math.max(90, el.clientWidth * 0.7), behavior: "smooth" }); };
+  const arrow = (dir: number) => (
+    <button type="button" className="plg-tb-arrow" data-strip-arrow={dir < 0 ? "left" : "right"} title={dir < 0 ? "Earlier plugin buttons" : "More plugin buttons"} aria-label={dir < 0 ? "Scroll plugin buttons left" : "Scroll plugin buttons right"} onClick={() => step(dir)}>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={dir < 0 ? "M10 3L5 8l5 5" : "M6 3l5 5-5 5"} /></svg>
+    </button>
+  );
+  return (
+    <div className="plg-tb-strip" id="tbPlugins" data-strip="">
+      <span className="plg-tb-sep" />
+      {edge.left ? arrow(-1) : null}
+      <div className="plg-tb-scroll" ref={ref} onScroll={update} role="toolbar" aria-label="Plugins">{children}</div>
+      {edge.right ? arrow(1) : null}
+    </div>
+  );
+}
+
+function OverflowBar({ id, cls, entries, a, tail, vertical, hidden, strip }: { id: string; cls: string; entries: BarEntry[]; a: Avail; tail?: ReactNode; vertical?: boolean; hidden?: boolean; strip?: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLDivElement>(null);
   const more = useRef<HTMLButtonElement>(null);
@@ -293,7 +331,9 @@ function OverflowBar({ id, cls, entries, a, tail, vertical, hidden }: { id: stri
       if (moreSize) chevron.current = moreSize;
       const trackRect = el.getBoundingClientRect();
       const start = vertical ? trackRect.top : trackRect.left;
-      const full = vertical ? outer.clientHeight : outer.clientWidth;
+      // the plugin strip beside the track takes its own width (it never depends on what is cut here)
+      const stripEl = outer.querySelector(":scope > [data-strip]") as HTMLElement | null;
+      const full = (vertical ? outer.clientHeight : outer.clientWidth) - (stripEl ? stripEl.offsetWidth : 0);
       const endOf = (k: HTMLElement) => { const r = k.getBoundingClientRect(); return (vertical ? r.bottom : r.right) - start; };
       if (endOf(kids[kids.length - 1]) + pad > full + 0.5) {
         const limit = full - chevron.current - pad;
@@ -327,6 +367,7 @@ function OverflowBar({ id, cls, entries, a, tail, vertical, hidden }: { id: stri
         className={cx(KMORE, vertical ? "mb-1" : "self-center mr-1")} onClick={() => setOpen((o) => !o)}>
         <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4l5 4 5-4M3 9l5 4 5-4" /></svg>
       </button>
+      {strip}
       {open && cut >= 0 && more.current && hiddenEntries.length
         ? <OverflowMenu entries={hiddenEntries} anchor={more.current} onRight={id === "tbRight"} vertical={!!vertical} a={a} onClose={() => setOpen(false)} /> : null}
     </div>

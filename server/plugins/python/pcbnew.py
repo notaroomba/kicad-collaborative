@@ -4871,6 +4871,28 @@ def _net_settings():
     return ns if isinstance(ns, dict) else {}
 
 
+class _NetClassMap(dict):
+    """Net classes by name, as KiCad hands them out: a mapping (KiCad 7 and later), which also answers the calls of the
+    NETCLASSES object of KiCad 5 and 6 (NetClasses(), Find(), GetDefault(), GetCount()) that older plugins still make."""
+
+    def NetClasses(self):
+        return self
+
+    def Find(self, name):
+        return _netclasses().get(str(name))
+
+    def GetDefault(self):
+        return _netclasses()["Default"]
+
+    GetDefaultPtr = GetDefault
+
+    def GetCount(self):
+        return len(self)
+
+    def asdict(self):
+        return dict(self)
+
+
 def _netclasses():
     """The project's net classes by name, Default first (the .kicad_pro file's net_settings)."""
     ns = _net_settings()
@@ -5151,7 +5173,7 @@ class BOARD_DESIGN_SETTINGS:
     GetDefaultNetclass = GetDefault
 
     def GetNetClasses(self):
-        return {k: v for k, v in _netclasses().items() if k != "Default"}
+        return _NetClassMap((k, v) for k, v in _netclasses().items() if k != "Default")
 
     GetNetclasses = GetNetClasses
 
@@ -5500,10 +5522,10 @@ class BOARD(EDA_ITEM):
         pass
 
     def GetAllNetClasses(self):
-        return dict(_netclasses())
+        return _NetClassMap(_netclasses())
 
     def GetNetClasses(self):
-        return {k: v for k, v in _netclasses().items() if k != "Default"}
+        return _NetClassMap((k, v) for k, v in _netclasses().items() if k != "Default")
 
     # -- items
     def _of(self, *classes):
