@@ -40,18 +40,17 @@ Projects are ordinary KiCad files. Everyone in a project should be on 2.0: it is
 <table>
 <tr>
 <td width="50%"><img src="docs/media/together.jpg" alt="Ada and Ben drawing one Raspberry Pi Pico schematic from two browsers, each showing the other person's named cursor" width="100%"><br><b>Live editing.</b> Two people in one schematic or board, on the desktop or in the browser, each with their own view. Cursors, selections, drags in progress and edits arrive as they happen.</td>
-<td width="50%"><img src="docs/media/ai-board.jpg" alt="A routed four-layer ESP32 board in the browser editor, drawn by an AI through MCP" width="100%"><br><b>Design with any AI.</b> An MCP server lets Claude, ChatGPT, Gemini, Cursor or a local model read and edit your projects. Its edits appear in everyone's editor, with a cursor on them.</td>
+<td width="50%"><img src="docs/media/ai-board.jpg" alt="The routed four-layer Raspberry Pi Pico board from the video in the browser editor, laid out by harness scripts through MCP" width="100%"><br><b>Design with any AI.</b> An MCP server lets Claude, ChatGPT, Gemini, Cursor or a local model read and edit your projects. Its edits appear in everyone's editor, with a cursor on them.</td>
 </tr>
 <tr>
 <td width="50%"><img src="docs/media/autoroute.jpg" alt="The Autoroute dialog over a board being routed" width="100%"><br><b>Autorouter.</b> Route → Autoroute lays tracks by the board's own rules, with differential pairs, length matching and ground via fences. One undo takes the whole run back.</td>
-<td width="50%"><img src="docs/media/viewer3d.jpg" alt="The 3D viewer showing the ESP32 board with real part models" width="100%"><br><b>The whole of KiCad in a tab.</b> Schematic and board editors that follow KiCad's tools and dialogs, symbol and footprint editors, DRC and ERC, the 3D viewer with real part models, SPICE simulation.</td>
+<td width="50%"><img src="docs/media/viewer3d.jpg" alt="The 3D viewer showing the Pico board with real part models" width="100%"><br><b>The whole of KiCad in a tab.</b> Schematic and board editors that follow KiCad's tools and dialogs, symbol and footprint editors, DRC and ERC, the 3D viewer with real part models, SPICE simulation.</td>
 </tr>
 </table>
 
-<img src="docs/screenshots/alice-bob-schematic.png" alt="Two desktop schematic editors on the same sheet, each showing the other person's cursor" width="100%">
+<img src="docs/media/two-editors.jpg" alt="Ada's and Ben's editors on the same Pico schematic, each at its own zoom, each showing the other person's cursor" width="100%">
 
-The desktop app: two schematic editors on the same sheet, each at its own zoom, each showing the other person's
-cursor.
+Ada and Ben in the same schematic, each at their own zoom. Ada's window shows Ben's cursor, and Ben's shows Ada's.
 
 - **Version history.** Every edit of the last 30 days can be scrubbed through; named versions and branches are kept
   for good, and two versions can be compared side by side.
