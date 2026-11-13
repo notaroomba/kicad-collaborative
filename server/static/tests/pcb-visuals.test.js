@@ -106,5 +106,45 @@ test("high contrast: a blind via that does not reach the active copper layer is 
   assert(rings(on("F.SilkS")) >= 1, "a front technical layer counts as F.Cu");
 });
 
+test("a footprint field selected on its own: repainted alone, with its umbilical line to the footprint anchor in LAYER_ANCHOR", () => {
+  const fp = K.parseDoc(HEAD + '(footprint "x" (layer "F.Cu") (at 10 10 90) (uuid "fp")'
+    + ' (property "Reference" "R1" (at 0 -3 90) (layer "F.SilkS") (uuid "r") (effects (font (size 1 1) (thickness 0.15))))'
+    + ' (property "Value" "10k" (at 0 3 90) (layer "F.Fab") (uuid "v") (effects (font (size 1 1) (thickness 0.15))))'
+    + ' (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net 1 "A") (uuid "p1"))))');
+  const it = fp.items.get("fp");
+  const ref = it.geom.find((g) => g.t === "text" && g.field === "Reference");
+  assert(ref && ref.textPos, "the field keeps its position");
+  assert(Math.abs(ref.textPos[0] - 7) < 1e-9 && Math.abs(ref.textPos[1] - 10) < 1e-9, "rotated with the footprint: " + JSON.stringify(ref.textPos));
+  assert.deepEqual(K.umbilicalLines(fp, new Set(["fp#field:Reference"])), [[ref.textPos, [10, 10]]]);
+  assert.deepEqual(K.umbilicalLines(fp, new Set(["fp"])), [], "a selected footprint draws none");
+  const ops = draw({ selected: new Set(["fp#field:Reference"]) }, fp);
+  assert(ops.some((o) => o.op === "stroke" && o.stroke === "#FF26E2"), "the umbilical line");
+  const silkSel = K.selectedColor(K.pcbColor("F.SilkS"));
+  const inks = (c) => ops.filter((o) => (o.op === "stroke" && o.stroke === c) || (o.op === "fillText" && o.fill === c)).length;
+  assert(inks(silkSel) > 0, "the reference in the selected colour");
+  assert.strictEqual(inks(K.selectedColor(K.pcbColor("F.Fab"))), 0, "the value is not");
+});
+
+test("Footprint Editor: a selected field's umbilical runs to the origin", () => {
+  const d = K.parseDoc('(footprint "x" (version 20240108) (generator "t") (layer "F.Cu") (property "Reference" "REF**" (at 1 -2 0) (layer "F.SilkS") (uuid "r") (effects (font (size 1 1) (thickness 0.15)))))');
+  if (!d.fpEditor) return;   // the footprint document model is built elsewhere
+  assert.deepEqual(K.umbilicalLines(d, new Set(["r"])), [[[1, -2], [0, 0]]]);
+});
+
+test("via stitching generator: its outline and the inward hairline ticks every 2 mm, 0.5 mm long", () => {
+  const node = K.parse('(generated (uuid "g") (type via_stitch) (name "") (pitch 2) (outline (pts (xy 0 0) (xy 10 0) (xy 10 6) (xy 0 6))) (members))');
+  const pts = K.viaStitchOutline(node); assert.deepEqual(pts, [[0, 0], [10, 0], [10, 6], [0, 6]]);
+  assert.equal(K.viaStitchOutline(K.parse('(generated (type tuning_pattern))')), null);
+  const ticks = K.viaStitchTicks(pts);
+  assert.equal(ticks.length, 4 + 2 + 4 + 2, "t = 2, 4, 6, 8 on the long sides, 2, 4 on the short ones");
+  assert.deepEqual(ticks[0], [[2, 0], [2, 0.5]], "inward, toward the centroid");
+  assert.deepEqual(ticks[4].map((p) => p.map((v) => +v.toFixed(9))), [[10, 2], [9.5, 2]]);
+  const d = K.parseDoc(HEAD + '(generated (uuid "g") (type via_stitch) (name "") (outline (pts (xy 0 0) (xy 10 0) (xy 10 6) (xy 0 6))) (members))'
+    + ' (gr_line (start -1 -1) (end 11 -1) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts") (uuid "e1")))');
+  const objects = { show: new Set(["viaStitching"]), hide: new Set() };
+  assert(draw({ objects }, d).some((o) => o.op === "stroke" && o.stroke === "#4DCCB2"), "drawn in LAYER_VIA_STITCHING");
+  assert(!draw({ objects: { show: new Set(), hide: new Set() } }, d).some((o) => o.op === "stroke" && o.stroke === "#4DCCB2"), "hidden with its row off");
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

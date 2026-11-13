@@ -239,6 +239,21 @@ function revertAppDrag(): void {
   if (d) syncItemsFromDoc();
 }
 
+/**
+ * Move (M) of the selected footprint field: it follows the cursor until a click drops it, Esc puts it back.  KiCad warps
+ * the cursor onto the text's position (GetMoveWarpsCursor); a browser cannot, so the text comes to the cursor instead.
+ */
+export function startFieldMove(mm: Mm): boolean {
+  const d = doc(), sf = E.selField as { id: string; name: string } | null; if (!d || !sf || E.viewOnly) return false;
+  const it = d.items.get(sf.id); if (!it || it.kind !== "footprint") return false;
+  const K = window.KDialogs as (KDialogsApi & { _: { fieldNode?(node: SNode, name: string): SNode | null } }) | undefined;
+  const pn = K && K._.fieldNode ? K._.fieldNode(it.node, sf.name) : null, at = pn && KiCadCanvas.kid(pn, "at"); if (!at) return false;
+  const g = (it.geom as { t: string; field?: string; textPos?: number[] }[]).find((q) => q.t === "text" && q.field === sf.name && q.textPos);
+  const pos = g && g.textPos ? [g.textPos[0], g.textPos[1]] : [mm[0], mm[1]];
+  E.fdrag = { id: it.id, name: sf.name, startMm: [mm[0], mm[1]], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], moved: false, sticky: true, origin: pos };
+  return true;
+}
+
 function revertFieldDrag(): void {
   const fd = E.fdrag; E.fdrag = null; if (!fd) return;
   const d = doc(), it = d && d.items.get(fd.id);
@@ -271,7 +286,7 @@ export function cancelInteraction(): boolean {
 /** A pointer-driven drag is running although no button is down any more: the release was lost. */
 function buttonLost(ev: PointerEvent): boolean {
   if (ev.pointerType !== "mouse" || ev.buttons !== 0) return false;
-  if (E.pan || E.rdown || E.boxSel || E.zoomRect || E.fdrag) return true;
+  if (E.pan || E.rdown || E.boxSel || E.zoomRect || (E.fdrag && !E.fdrag.sticky)) return true;
   if (E.drag && !E.drag.sticky) return true;
   if (isSch()) { const s = schState(); return !!(s && (s.pending || (s.drag && s.drag.byPointer))); }
   const p = pcbState(); return !!(p && (p.pending || (p.move && !p.move.sticky) || (p.drag && p.drag.bySelect)));   // a Move that follows the cursor needs no button
@@ -296,6 +311,8 @@ export function startMove(mode: "move" | "drag"): boolean {
     const items = selectionItems(); if (!items.length) return false;
     try { m.setDragMode(toolCtx(), mode); return !!m.beginDrag(toolCtx(), items.length === 1 ? items[0] : items, mm, false); } catch (e) { console.warn(e); return false; }
   }
+  // board: a footprint field selected on its own moves alone (EDIT_TOOL::Move on a PCB_FIELD), its umbilical line showing
+  if (E.selField && !selectionIds().length && mode === "move") return startFieldMove(mm);
   // board: EDIT_TOOL::Move in the module for everything (footprints too), so Rotate / Flip / Mirror act on the move in
   // flight, the reference point and snapping are KiCad's, and with nothing selected the item under the cursor moves
   if (CollabTools.pcb) return runModuleAction("move");

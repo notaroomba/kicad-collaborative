@@ -183,6 +183,7 @@ stage.addEventListener("pointerdown", (ev) => {
     stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return;
   }
   if (ev.button !== 0) return;
+  if (E.fdrag && E.fdrag.sticky) { commitFieldDrag(); ev.preventDefault(); return; }   // the click that drops a field's Move
   if (E.tool === "zoomtool") { E.zoomRect = { start: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; }
   if (E.tool === "measure") { measureDown(snapMm(worldMm(ev)), ev); return; }
   if (E.tool === "comment") { placeComment(ev); return; }
@@ -323,6 +324,21 @@ function startModuleBox(ev: PointerEvent, x: number, y: number): void {
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 }
 
+/** Drop a field drag or Move: the original goes back first so the commit records the inverse (undo restores it exactly). */
+function commitFieldDrag(): void {
+  const fd = E.fdrag; E.fdrag = null; if (!fd) return;
+  const it = E.kdoc && E.kdoc.items.get(fd.id), pn = it && fieldOf(it, fd.name), at = pn && KiCadCanvas.kid(pn, "at");
+  if (fd.moved && at) {
+    const nx = at[1], ny = at[2];
+    at[1] = fd.orig[0]; at[2] = fd.orig[1]; KiCadCanvas.replaceChange(E.kdoc, it);
+    if (nx !== fd.orig[0] || ny !== fd.orig[1]) {
+      const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2!, "at")!; a2[1] = nx; a2[2] = ny;
+      commitChanges([KiCadCanvas.replaceChange(E.kdoc, Object.assign({}, it, { node, geom: [], bbox: null }))], "move " + fd.name.toLowerCase());
+    }
+    requestRender();
+  }
+}
+
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
   E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY]; store.slice("viewport", { cursor: mm });
@@ -334,11 +350,13 @@ stage.addEventListener("pointermove", (ev) => {
   const modM = activeModule();
   if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } placeCrosshair(mm); sendPresence(mm, liveGhost(modM)); return; }
   if (E.fdrag) {
-    if (!E.fdrag.moved && Math.hypot(mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]) > 0.4) E.fdrag.moved = true;
+    if (!E.fdrag.moved && (E.fdrag.sticky || Math.hypot(mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]) > 0.4)) E.fdrag.moved = true;
     if (E.fdrag.moved) {
       const it = E.kdoc && E.kdoc.items.get(E.fdrag.id), pn = it && fieldOf(it, E.fdrag.name), at = pn && KiCadCanvas.kid(pn, "at");
       if (at) {
-        const w = snapMm([mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]]); const [ldx, ldy] = fieldLocalDelta(it, w[0], w[1]);
+        // a Move (M) brings the text's own position to the snapped cursor; a held-button drag moves it by the snapped delta
+        const sp = E.fdrag.sticky ? snapMm(mm) : null;
+        const w = sp ? [sp[0] - E.fdrag.origin[0], sp[1] - E.fdrag.origin[1]] : snapMm([mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]]); const [ldx, ldy] = fieldLocalDelta(it, w[0], w[1]);
         at[1] = +(E.fdrag.orig[0] + ldx).toFixed(4); at[2] = +(E.fdrag.orig[1] + ldy).toFixed(4);
         KiCadCanvas.replaceChange(E.kdoc, it); requestRender();
       }
@@ -379,20 +397,7 @@ stage.addEventListener("pointermove", (ev) => {
 
 const onPointerUp = (ev: PointerEvent) => {
   if (E.pan) { E.pan = null; return; }
-  if (E.fdrag) {
-    const fd = E.fdrag; E.fdrag = null;
-    const it = E.kdoc && E.kdoc.items.get(fd.id), pn = it && fieldOf(it, fd.name), at = pn && KiCadCanvas.kid(pn, "at");
-    if (fd.moved && at) {
-      const nx = at[1], ny = at[2];
-      at[1] = fd.orig[0]; at[2] = fd.orig[1]; KiCadCanvas.replaceChange(E.kdoc, it);          // original back so commit records the inverse
-      if (nx !== fd.orig[0] || ny !== fd.orig[1]) {
-        const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2!, "at")!; a2[1] = nx; a2[2] = ny;
-        commitChanges([KiCadCanvas.replaceChange(E.kdoc, Object.assign({}, it, { node, geom: [], bbox: null }))], "move " + fd.name.toLowerCase());
-      }
-      requestRender();
-    }
-    return;
-  }
+  if (E.fdrag) { if (!E.fdrag.sticky) commitFieldDrag(); return; }   // a Move (M) drops on the next click instead
   if (E.zoomRect) { finishZoomRect(ev); return; }
   if (E.boxSel) { finishBoxSel(ev); return; }
   if (E.tool === "measure" && ev.button === 0) { measureUp(ev); return; }

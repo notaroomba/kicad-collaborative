@@ -125,12 +125,46 @@ test("PCB_PAINTER::draw( PCB_GROUP ): a selected group's box at 2 px with its na
   assert(c.ops.filter((o) => o.op === "stroke").length > 1, "the title tab and the stroke-font name");
 });
 
-test("clearance outlines (Always show): one px outline at width + 2 × clearance in the layer colour", () => {
-  const doc = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal)) (net 0 "") (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 0) (uuid "s1")) (via (at 20 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 0) (uuid "v1")))');
-  const c = recCtx(); P.drawClearanceOutlines(c, { doc, isSch: false }, 0.05);
-  const strokes = c.ops.filter((o) => o.op === "stroke"); assert.equal(strokes.length, 2);
-  assert(strokes.every((o) => o.lw === 0.05 && o.stroke === K.pcbColor("F.Cu")));
-  const ring = c.ops.find((o) => o.op === "arc" && o.a[0] === 20); assert(ring && ring.a[2] > 0.3 + 0.1, "via ring past its radius: " + (ring && ring.a[2]));
+test("clearance outlines (Always show): one px outline at width + 2 × clearance in the layer colour, active layer only", () => {
+  const doc = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (31 "B.Cu" signal)) (net 0 "") (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 0) (uuid "s1"))'
+    + ' (segment (start 0 5) (end 10 5) (width 0.25) (layer "B.Cu") (net 0) (uuid "s2")) (via (at 20 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 0) (uuid "v1")))');
+  const S = P.state, keep = [S.trackClearance, S.layer, S.padClearance];
+  try {
+    S.trackClearance = 4; S.layer = "F.Cu";
+    const c = recCtx(); P.drawClearanceOutlines(c, { doc, isSch: false }, 0.05);
+    const strokes = c.ops.filter((o) => o.op === "stroke"); assert.equal(strokes.length, 2, "the F.Cu track and the via, not the B.Cu track");
+    assert(strokes.every((o) => o.lw === 0.05 && o.stroke === K.pcbColor("F.Cu")));
+    const ring = c.ops.find((o) => o.op === "arc" && o.a[0] === 20); assert(ring && ring.a[2] > 0.3 + 0.1, "via ring past its radius: " + (ring && ring.a[2]));
+    S.layer = "B.Cu"; const c2 = recCtx(); P.drawClearanceOutlines(c2, { doc, isSch: false }, 0.05);
+    assert(c2.ops.filter((o) => o.op === "stroke").every((o) => o.stroke === K.pcbColor("B.Cu")), "on B.Cu in the B.Cu colour");
+    S.trackClearance = 2; const c3 = recCtx(); P.drawClearanceOutlines(c3, { doc, isSch: false }, 0.05);
+    assert.equal(c3.ops.filter((o) => o.op === "stroke").length, 0, "not in the default mode");
+  } finally { [S.trackClearance, S.layer, S.padClearance] = keep; }
+});
+
+test("pad clearance outlines: the pad grown by its own clearance (pad, footprint, net class); an NPTH's hole", () => {
+  const doc = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (31 "B.Cu" signal)) (net 0 "")'
+    + ' (footprint "x" (layer "F.Cu") (at 10 10) (clearance 0.3) (uuid "fp")'
+    + '  (pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu") (uuid "p1"))'
+    + '  (pad "2" smd oval (at 3 0) (size 2 1) (layers "F.Cu") (clearance 0.5) (uuid "p2"))'
+    + '  (pad "3" smd rect (at 6 0) (size 1 1) (layers "F.Cu") (uuid "p3"))'
+    + '  (pad "4" np_thru_hole circle (at 9 0) (size 1.2 1.2) (drill 1.2) (layers "*.Cu" "*.Mask") (uuid "p4"))'
+    + '  (pad "5" smd circle (at 0 3) (size 1 1) (layers "B.Cu") (uuid "p5"))))');
+  const s = { clearance: 0.2, netclasses: [] };
+  const list = P.clearanceOutlines(doc, s, "F.Cu", { tracks: false, pads: true, netName: () => "" });
+  assert.deepEqual(list.map((o) => o.padIndex), [0, 1, 2, 3], "the B.Cu pad has no outline on F.Cu");
+  assert.equal(list[0].shape.t, "circle"); assert(Math.abs(list[0].shape.r - 0.8) < 1e-9, "footprint override 0.3: " + list[0].shape.r);
+  assert.equal(list[1].shape.t, "capsule"); assert(Math.abs(list[1].shape.r - 1.0) < 1e-9, "pad override 0.5");
+  assert.equal(list[2].shape.t, "poly");
+  const xs = list[2].shape.pts.map((p) => p[0]); assert(Math.abs(Math.max(...xs) - (16 + 0.5 + 0.3)) < 1e-6, "rect grown by 0.3: " + Math.max(...xs));
+  assert(list[3].npth && list[3].shape.t === "circle" && Math.abs(list[3].shape.r - 0.9) < 1e-9, "an NPTH's hole grown by 0.3");
+  assert.equal(P.clearanceOutlines(doc, s, "F.Cu", { tracks: false, pads: true, netName: () => "", objHide: new Set(["pads"]) }).length, 0, "hidden pads draw none");
+  assert.equal(P.clearanceOutlines(doc, s, "F.SilkS", { tracks: true, pads: true, netName: () => "" }).length, 0, "no clearance layer for a technical layer");
+});
+
+test("PREVIEW::GetConstantGlyphHeight: 12 / 10 px, 9 / 8 px on HiDPI", () => {
+  assert.deepEqual(P.statusNoteDims(1), { text: 12, hint: 10, pen: 0.2 });
+  assert.deepEqual(P.statusNoteDims(2), { text: 9, hint: 8, pen: 0.15 });
 });
 
 test("ROUTER_STATUS_VIEW_ITEM: the note in the stroke font (no fillText), framed 2 px, 0.9 fill", () => {

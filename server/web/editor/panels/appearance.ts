@@ -225,7 +225,7 @@ export function applyAppearance(): void {
   const colors = new Map(Object.entries(user.colors));
   ro.layerColors = colors.size ? colors : undefined;
   const hide = new Set(user.objHidden.filter((id) => !["grid", "ratsnest", "anchors", "lockedShadow", "drawingSheet", "drcWarnings", "drcErrors", "drcExclusions", "conflicts", "boardArea", "subgrids", "viaStitching", "constraintShadow"].includes(id)));
-  const show = new Set<string>(); for (const id of ["anchors", "lockedShadow", "boardArea"]) if (!user.objHidden.includes(id)) show.add(id);
+  const show = new Set<string>(); for (const id of ["anchors", "lockedShadow", "boardArea", "viaStitching"]) if (!user.objHidden.includes(id)) show.add(id);
   // every opacity row goes to the renderer: zones and images default to 0.6, which is not the renderer's own default
   const opacity: Record<string, number> = {}; for (const o of OBJECTS) if (o.opacity) opacity[o.id] = objOpacity(o);
   ro.objects = { hide, show, opacity };

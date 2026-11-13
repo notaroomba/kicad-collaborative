@@ -86,8 +86,10 @@ function boardSelected(): Set<string> | null {
     if (keys) for (const k of keys([...out])) out.add(k);
     return out;
   }
-  if (!pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) return base;
-  const out = new Set<string>(base || []); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel);
+  // a footprint field selected on its own (PCB_FIELD): repainted alone, with its umbilical line ("id#field:Name")
+  const field = E.selField ? E.selField.id + "#field:" + E.selField.name : null;
+  if (!pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) { if (!field) return base; const o = new Set<string>(base || []); o.add(field); return o; }
+  const out = new Set<string>(base || []); if (field) out.add(field); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel);
   const more = CollabTools.pcb && CollabTools.pcb.selectedPadKeys ? CollabTools.pcb.selectedPadKeys() : []; for (const k of more) out.add(k);
   return out;
 }

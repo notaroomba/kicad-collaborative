@@ -26,7 +26,9 @@ export interface Prefs {
   /** the inactive layer mode is not here: it is the project's ("board.high_contrast_mode", Appearance panel) */
   pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean;
     /** pcb_display.track_clearance_mode: 0 do not show, 1 while routing, 2 with via while routing (default), 3 while routing and editing, 4 always */
-    trackClearance: number };
+    trackClearance: number;
+    /** pcb_display.pad_clearance: Show pad clearance (on by default) */
+    padClearance?: boolean };
   /** COMMON_SETTINGS appearance.hicontrast_dimming_factor (0.8) */
   common: { hcDimming: number };
   /** PCB Editor > Editing Options (PCBNEW_SETTINGS): m_AutoRefillZones */
@@ -43,7 +45,7 @@ export const DEFAULT_PREFS: Prefs = {
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
   schColors: { theme: "default", followDark: false },
-  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, trackClearance: 2 },
+  pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, trackClearance: 2, padClearance: true },
   common: { hcDimming: 0.8 },
   pcbEditing: { autoRefillZones: false },
   grids: {
@@ -179,7 +181,7 @@ export function applyPrefs(full = true): void {
     } else {
       E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
       (E.renderOpts as { hcDimming?: number }).hcDimming = p.common.hcDimming;
-      const pcbS = CollabTools.pcb && (CollabTools.pcb.state as { trackClearance?: number }); if (pcbS) pcbS.trackClearance = p.pcbDisplay.trackClearance;
+      const pcbS = CollabTools.pcb && (CollabTools.pcb.state as { trackClearance?: number; padClearance?: boolean }); if (pcbS) { pcbS.trackClearance = p.pcbDisplay.trackClearance; pcbS.padClearance = p.pcbDisplay.padClearance !== false; }
       setToggles({ showPadNumbers: p.pcbDisplay.showPadNumbers, showNetNames: p.pcbDisplay.showNetNames });
     }
     if (full) store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) });

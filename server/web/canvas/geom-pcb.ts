@@ -482,7 +482,8 @@ export function buildFootprintGeom(doc: Doc, item: Item): void {
     const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
     const field = p[0] === "property" ? str(p[1]) : p[0] === "fp_text" ? (str(p[1]) === "reference" ? "Reference" : str(p[1]) === "value" ? "Value" : null) : null;
     const dxfText = { bold: !!effectsOf(p).bold };
-    pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field, dxfText } : { upright: !unlocked, dxfText });
+    const first = pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field, dxfText } : { upright: !unlocked, dxfText });
+    if (first) first.textPos = [x, y];
   };
   for (const p of kids(n, "property")) textAt(p, str(p[2]));
   let padIndex = 0;   // index among the footprint's (pad …) children: padAt() reports it and pcb-tools can map it back

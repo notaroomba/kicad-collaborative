@@ -103,13 +103,18 @@ export function routeHiddenIds() {
   return out.size ? out : null;
 }
 /**
+ * PREVIEW::GetConstantGlyphHeight for the status note (relative size -1) and its hint (-2): 12 / 10 px with a pen of
+ * 0.2 of the height, or on a HiDPI canvas (scale factor above 1) 9 / 8 px with a pen of 0.15.
+ */
+export function statusNoteDims(scale: number) { return scale > 1 ? { text: 9, hint: 8, pen: 0.15 } : { text: 12, hint: 10, pen: 0.2 }; }
+/**
  * ROUTER_STATUS_VIEW_ITEM::ViewDraw: the message in the stroke font, its glyphs 12 px high (the hint 10 px,
- * PREVIEW::GetConstantGlyphHeight, pen 0.2 of the height). They sit in a box that fills at 0.9 and has a 2 px frame,
+ * PREVIEW::GetConstantGlyphHeight, pen 0.2 of the height; smaller on HiDPI, statusNoteDims). They sit in a box that fills at 0.9 and has a 2 px frame,
  * above and right of the cursor. The box takes the UI's button face and text colours.
  */
 export function drawStatusNote(c: CanvasRenderingContext2D, at: Pt, cpx: number, msg: string, hint?: string | null) {
   const css = (name: string, dflt: string) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
-  const g = 12 * cpx, gh = 10 * cpx;
+  const d = statusNoteDims(typeof devicePixelRatio === "number" ? devicePixelRatio : 1), g = d.text * cpx, gh = d.hint * cpx;
   const width = (s: string, size: number) => s ? (K.strokeLineWidth as (t: string, italic: boolean) => number)(s, false) * size + size * 0.2 : 0;
   const tw = Math.max(width(msg, g), width(hint || "", gh));
   const mx = g * 0.4, my = g * 0.6;
@@ -121,8 +126,8 @@ export function drawStatusNote(c: CanvasRenderingContext2D, at: Pt, cpx: number,
   c.globalAlpha = 1; c.strokeStyle = ink; c.lineWidth = 2 * cpx; c.strokeRect(ox - mx, oy - my, sx + 2 * mx, sy + 2 * my);
   const m = c.getTransform(), base = [m.a, m.b, m.c, m.d, m.e, m.f];
   const stroke = K.drawStrokeText as (ctx: CanvasRenderingContext2D, base: number[], t: Record<string, unknown>, color: string, minPen: number) => void;
-  const tx = ox + mx, ty = oy + my;
-  stroke(c, base, { x: tx, y: ty, text: msg, size: g, rot: 0, mirror: false, h: "left", v: "center", pen: g * 0.2, italic: false, dy: 0 }, ink, cpx);
-  if (hint) stroke(c, base, { x: tx, y: ty + g * 1.6, text: hint, size: gh, rot: 0, mirror: false, h: "left", v: "center", pen: gh * 0.2, italic: false, dy: 0 }, ink, cpx);
+  const tx = ox + mx, ty = oy + my;   // the hint's line sits 1.6 glyphs below
+  stroke(c, base, { x: tx, y: ty, text: msg, size: g, rot: 0, mirror: false, h: "left", v: "center", pen: g * d.pen, italic: false, dy: 0 }, ink, cpx);
+  if (hint) stroke(c, base, { x: tx, y: ty + g * 1.6, text: hint, size: gh, rot: 0, mirror: false, h: "left", v: "center", pen: gh * d.pen, italic: false, dy: 0 }, ink, cpx);
   c.restore();
 }

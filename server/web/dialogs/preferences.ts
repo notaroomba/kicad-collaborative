@@ -197,7 +197,8 @@ export function openPreferences(page?: string): void {
             // panel_display_options: Clearance Outlines ▸ Tracks (clearanceModeMap: the choice index is the mode)
             const cl = KD().staticBox(pg, "Clearance Outlines");
             cl.append(h("div", { class: "kd-row" }, h("label", { style: "color:var(--ink-2)" }, "Tracks:"),
-              select([["0", "Do not show clearances"], ["1", "Show when routing"], ["2", "Show when routing w/ via clearance at end"], ["3", "Show when routing and editing"], ["4", "Show always"]], String(p.pcbDisplay.trackClearance), (v) => { p.pcbDisplay.trackClearance = +v; }, { id: "kd-pref-trackclearance", style: "width:320px" })));
+              select([["0", "Do not show clearances"], ["1", "Show when routing"], ["2", "Show when routing w/ via clearance at end"], ["3", "Show when routing and editing"], ["4", "Show always"]], String(p.pcbDisplay.trackClearance), (v) => { p.pcbDisplay.trackClearance = +v; }, { id: "kd-pref-trackclearance", style: "width:320px" })),
+              checkbox("Show pad clearance", p.pcbDisplay.padClearance !== false, (on) => { p.pcbDisplay.padClearance = on; }, { id: "kd-pref-padclearance" }));
           } },
           { label: "Grids", build: gridsPage("pcb") },
           { label: "Editing Options", build(pg) {

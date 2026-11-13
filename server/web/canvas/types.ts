@@ -104,6 +104,8 @@ export type TextGeom = GeomFlags & {
   block?: { x: number; y: number; rot: number; text: string };
   /** a board text (PCB_TEXT / PCB_FIELD) a DXF plot may write as a TEXT entity (DXF_PLOTTER::plotOneLineOfText): its bold flag */
   dxfText?: { bold: boolean };
+  /** a footprint text's own position (EDA_TEXT::GetTextPos, board coordinates): where its umbilical line starts */
+  textPos?: Pt;
 };
 export type ImageGeom = GeomFlags & { t: "image"; x: number; y: number; h: number; rot?: number;
   entry: ImageEntry; pxMm: number; scale: number; opacity?: number };

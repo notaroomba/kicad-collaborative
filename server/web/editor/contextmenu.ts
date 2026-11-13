@@ -142,7 +142,7 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "ACTIONS::doDelete": () => (E.selField ? DESKTOP : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
   "SCH_ACTIONS::move": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
   "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),
-  "PCB_ACTIONS::move": () => (selectionItems().length ? () => { startMove("move"); } : NOT_YET),
+  "PCB_ACTIONS::move": () => (selectionItems().length || E.selField ? () => { startMove("move"); } : NOT_YET),
   "PCB_ACTIONS::drag45Degree": () => dragTrack(false), "PCB_ACTIONS::dragFreeAngle": () => dragTrack(true),
   "SCH_ACTIONS::enterSheet": () => { const it = selectionItems()[0]; const file = it && it.file; return file ? () => enterSheet(file) : NOT_YET; },
   "SCH_ACTIONS::leaveSheet": () => () => HANDLERS.navigateUp(),

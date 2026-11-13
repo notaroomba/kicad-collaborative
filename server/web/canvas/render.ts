@@ -1,7 +1,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, SCH_DEFAULT, SCH_Z, parseColor, pcbColor, pcbZ, rgba } from "./colors";
-import { atOf, flipH, kids, pointInPoly, ptsOf, splitLines, str } from "./sexpr";
+import { atOf, flipH, kid, kids, num, pointInPoly, ptsOf, splitLines, str } from "./sexpr";
 import { isBusLabel } from "./busname";
 import { ensureSchTheme } from "./geom";
 import { displayNetName } from "./geom-pcb";
@@ -11,7 +11,7 @@ import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 import { drawStrokeText, setOverbarHeight, strokeLine, strokeOrigin } from "./stroke-font";
 import { hopShapes, strokeHopShape } from "./hop-over";
 import { schFormat } from "./geom-sch";
-import type { AnyCanvas, Box, CircleGeom, Ctx2D, Doc, DrawTextG, Geom, Item, Marker, Mat, ObjectsOpt, PadGeom, PathSink, RatsLine, RectGeom, RenderOpts, TextGeom, View, ViaRingGeom } from "./types";
+import type { AnyCanvas, Box, CircleGeom, Ctx2D, Doc, DrawTextG, Geom, Item, Marker, Mat, ObjectsOpt, PadGeom, PathSink, Pt, RatsLine, RectGeom, RenderOpts, TextGeom, View, ViaRingGeom } from "./types";
 
 /** drawHalo's style: the halo colour (or a function of the geometry's colour), its alpha and the extra stroke width in device px. */
 export interface HaloStyle { color: string | ((c: string) => string); alpha: number; extraPx: number; extraMm?: number; strokesOnly?: boolean }
@@ -547,7 +547,8 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       bucket(lift || (liftParts && liftParts.has(g.pinNo !== undefined ? "pin:" + g.pinNo : g.field ? "field:" + g.field : "")) ? SEL_BUCKETS : BUCKETS, z).push(g);
       if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || (g.pad && g.t !== "text"))) { const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex!]; if (tc) tint!.set(g, tc); }
       if (isHl || (padHl && (isPcb ? g.padIndex !== undefined : true) && subHl(it, g))) hlGeoms!.add(g);
-      if (isSel || (padSel && g.padIndex !== undefined && selPcb!.has(padSel + g.padIndex))) selGeoms!.add(g);
+      // a pad ("footprintId#padIndex") or a footprint field ("footprintId#field:Name") selected on its own: that part alone
+      if (isSel || (padSel && (g.padIndex !== undefined ? selPcb!.has(padSel + g.padIndex) : g.field !== undefined && g.t === "text" && selPcb!.has(padSel + "field:" + g.field)))) selGeoms!.add(g);
       if (brightIds && brightIds.has(it.id)) brightGeoms!.add(g);
       if (outsideGeoms && !isSel && !entered!.has(it.id)) outsideGeoms.add(g);
       if (netNames && g.net! > 0) {
@@ -705,6 +706,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY, previewXf(pg)); }
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
+  if (selPcb) drawUmbilicals(ctx, doc, selPcb, s, dpr);
   // the Footprint Editor's footprint sits at the origin: its anchor is the LAYER_ANCHOR cross there
   if ((doc as { fpEditor?: boolean }).fpEditor && !(obj && obj.hide && obj.hide.has("anchors"))) {
     const a = 5 * Math.max(1, dpr) / s;
@@ -785,6 +787,7 @@ export const ANCHOR_COLOR = "#FF26E2", LOCKED_SHADOW_COLOR = "rgba(255,38,226,0.
 export function drawObjectOverlays(ctx: Ctx2D, doc: Doc, obj: ObjectsOpt, opts: RenderOpts, s: number, dpr: number, hidden: Set<string> | null, vr: number[]): void {
   const show = obj.show!, hide = obj.hide || new Set<string>();   // called only when obj.show is set
   if (show.has("lockedShadow") && opts.lockedIds && opts.lockedIds.size) drawLockedShadow(ctx, doc, opts.lockedIds, opts, hidden, vr);
+  if (show.has("viaStitching")) drawViaStitching(ctx, doc, opts, s, dpr, vr);
   if (show.has("anchors")) {
     const a = 5 * Math.max(1, dpr) / s;
     ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.strokeStyle = ANCHOR_COLOR; ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath();
@@ -796,6 +799,77 @@ export function drawObjectOverlays(ctx: Ctx2D, doc: Doc, obj: ObjectsOpt, opts: 
       ctx.moveTo(it.x - a, it.y!); ctx.lineTo(it.x + a, it.y!); ctx.moveTo(it.x, it.y! - a); ctx.lineTo(it.x, it.y! + a);
     }
     ctx.stroke(); ctx.restore();
+  }
+}
+
+/**
+ * The selected footprint texts as umbilical lines, [text position, footprint anchor] (PCB_PAINTER::draw( PCB_TEXT ):
+ * a selected text whose parent is a footprint).  On a board the keys are "footprintId#field:Name"; in the Footprint
+ * Editor a field or text is an item of its own and its footprint's anchor is the origin.
+ */
+export function umbilicalLines(doc: Doc, selected: Iterable<string>): [Pt, Pt][] {
+  const out: [Pt, Pt][] = []; const fpEd = !!(doc as { fpEditor?: boolean }).fpEditor;
+  for (const k of selected) {
+    if (typeof k !== "string") continue;
+    const i = k.indexOf("#field:");
+    if (i < 0) {
+      if (!fpEd) continue;
+      const it = doc.items.get(k); if (!it || it.kind !== "property" || it.x === undefined || it.y === undefined) continue;
+      out.push([[it.x, it.y], [0, 0]]); continue;
+    }
+    const it = doc.items.get(k.slice(0, i)); if (!it || it.kind !== "footprint" || it.x === undefined || it.y === undefined) continue;
+    const name = k.slice(i + 7); const g = it.geom.find((q) => q.t === "text" && q.field === name && (q as TextGeom).textPos) as TextGeom | undefined;
+    if (g) out.push([g.textPos!, [it.x, it.y]]);
+  }
+  return out;
+}
+/** The umbilical lines in LAYER_ANCHOR at m_outlineWidth (1 IU: the thinnest line, one device pixel). */
+function drawUmbilicals(ctx: Ctx2D, doc: Doc, selected: Set<string>, s: number, dpr: number): void {
+  const lines = umbilicalLines(doc, selected); if (!lines.length) return;
+  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.strokeStyle = ANCHOR_COLOR; ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath();
+  for (const [a, b] of lines) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+  ctx.stroke(); ctx.restore();
+}
+
+/** LAYER_VIA_STITCHING (builtin_color_themes.h: 77, 204, 178). */
+export const VIA_STITCHING_COLOR = "#4DCCB2";
+/** A via stitching generator's zone outline ((generated (type via_stitch) … (outline (pts (xy …) …)))), or null. */
+export function viaStitchOutline(node: readonly unknown[]): Pt[] | null {
+  const t = kid(node, "type"); if (!t || str(t[1]) !== "via_stitch") return null;
+  const o = kid(node, "outline"), pts = o && kid(o, "pts"); if (!pts) return null;
+  const out = kids(pts, "xy").map((q) => [num(q[1]), num(q[2])]);
+  return out.length > 1 ? out : null;
+}
+/**
+ * PCB_VIA_STITCH::ViewDraw's "sewing pattern": a hairline tick every 2 mm along each edge of the outline, 0.5 mm long,
+ * on the side of the vertex centroid.  Edges shorter than 1 IU are skipped.
+ */
+export function viaStitchTicks(pts: Pt[]): [Pt, Pt][] {
+  const n = pts.length, out: [Pt, Pt][] = []; if (n < 2) return out;
+  let cx = 0, cy = 0; for (const p of pts) { cx += p[0]; cy += p[1]; } cx /= n; cy /= n;
+  const SP = 2, LEN = 0.5;
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i], p2 = pts[(i + 1) % n], ex = p2[0] - p1[0], ey = p2[1] - p1[1], L = Math.hypot(ex, ey);
+    if (L < 1e-6) continue;
+    const dx = ex / L, dy = ey / L, mx = (p1[0] + p2[0]) / 2, my = (p1[1] + p2[1]) / 2;
+    let px = -dy, py = dx; if (px * (cx - mx) + py * (cy - my) < 0) { px = -px; py = -py; }
+    for (let t = SP; t < L - 1e-9; t += SP) { const bx = p1[0] + dx * t, by = p1[1] + dy * t; out.push([[bx, by], [bx + px * LEN, by + py * LEN]]); }
+  }
+  return out;
+}
+/** The via stitching generators' outlines: a 0.1 mm closed line and the hairline ticks, selected ones brightened. */
+function drawViaStitching(ctx: Ctx2D, doc: Doc, opts: RenderOpts, s: number, dpr: number, vr: number[]): void {
+  const sel = opts.selected;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "generated") continue;
+    const pts = viaStitchOutline(it.node); if (!pts) continue;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+    if (x1 < vr[0] || x0 > vr[2] || y1 < vr[1] || y0 > vr[3]) continue;
+    const color = sel && sel.has(it.id) ? selectedColor(VIA_STITCHING_COLOR) : VIA_STITCHING_COLOR;
+    ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.strokeStyle = color; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(0.1, Math.max(1, dpr) / s); ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); ctx.stroke();
+    ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath(); for (const [a, b] of viaStitchTicks(pts)) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); } ctx.stroke();
+    ctx.restore();
   }
 }
 

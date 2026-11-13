@@ -1,11 +1,11 @@
 // pcb-tools/overlay.ts — the overlay: what the tools draw over the board.
-import type { BoardDoc, CopperShape, DrawState, GeomPrim, PcbCtx, Pt, RatsnestLine, SnapType } from "./types";
-import { appGlobal, editorState, netNameOf, netlistCached, sizesOf } from "./app-state";
+import type { BoardDoc, CopperShape, DesignSettings, DrawState, GeomPrim, PcbCtx, Pt, RatsnestLine, SnapType } from "./types";
+import { appGlobal, editorState, netlistCached, netNameOf, sizesOf } from "./app-state";
 import { drawArcPreview } from "./arcs";
 import { drawStatusPopup, drawTwoPointAssistant } from "./assistants";
 import { DIM_TYPE, dimensionNode, snap45 } from "./dimensions";
 import type { DimSpec } from "./dimensions";
-import { polysOverlap, rectCore, shapeOffset } from "./distances";
+import { padShape, polysOverlap, rectCore, shapeOffset } from "./distances";
 import { courtyards, netClearance } from "./drc";
 import { settingsOf } from "./dialogs";
 import { POLY_TOOLS, RULE_AREA_LAYERS, drawWidth } from "./draw-modes";
@@ -15,7 +15,8 @@ import { netTable, ratsnest } from "./netlist";
 import { netOf } from "./nets";
 import { tableGrid } from "./nodes";
 import { drawEditPoints } from "./point-editor";
-import { padsOf } from "./route-geom";
+import { padOnLayer, padsOf } from "./route-geom";
+import { padOutline as drcPadOutline } from "./drc-zones";
 import { PAD_TOOLS, masterPad } from "./pad-tool";
 import { drawDragPreview, drawRoute } from "./route-preview";
 import { CLEARANCE_MODE, HALO_COLOR, HL, K, RATSNEST, S, VIA, bind } from "./state";
@@ -48,40 +49,112 @@ export function courtyardConflicts(doc: BoardDoc, moving: Set<string>): Map<stri
   }
   return out;
 }
+/** ADVANCED_CFG m_HoleWallThickness (BOARD_DESIGN_SETTINGS::GetHolePlatingThickness), mm. */
+export const HOLE_PLATING_THICKNESS = 0.02;
+/** LAYER_NON_PLATEDHOLES (builtin_color_themes.h). */
+const NPTH_COLOR = "#1AC4D2";
+/** One clearance outline: a track's capsule or arc band, a via's or round pad's circle, a pad's grown outline. */
+export type ClearanceShape =
+  { t: "capsule"; a: Pt; b: Pt; r: number } | { t: "arcband"; x: number; y: number; r: number; a0: number; a1: number; anticlockwise: boolean; w: number }
+  | { t: "circle"; x: number; y: number; r: number } | { t: "poly"; pts: Pt[] };
+export interface ClearanceOutline { id: string; padIndex?: number; npth?: boolean; shape: ClearanceShape }
 /**
- * PCB_PAINTER's clearance lines (LAYER_CLEARANCE_*), drawn only with track_clearance_mode "Always show": every track
- * as the outline of its width + 2 × its own clearance, and every via as a circle of its radius + clearance. They are
- * one pixel wide in the layer colour, on the visible copper layers.
+ * PCB_PAINTER's clearance lines (LAYER_CLEARANCE_*) for the copper layer being edited: PCB_DRAW_PANEL_GAL shows only
+ * CLEARANCE_LAYER_FOR( active layer ).  Tracks and vias draw theirs with track_clearance_mode "Always show": a track
+ * at width + 2 × its own clearance, a via as a circle of its radius on that layer (its drill radius plus the plating
+ * where it is not flashed) plus its clearance.  Pads draw theirs with "Show pad clearance": the pad's shape grown by
+ * its own clearance (pad, else footprint override, else the net class), or the hole grown by it where the pad has no
+ * copper on the layer (an NPTH, drawn in the non-plated hole colour).  Nothing is drawn for a clearance of 0.
+ */
+export function clearanceOutlines(doc: BoardDoc, s: DesignSettings, layer: string, opt: { tracks: boolean; pads: boolean; netName(n: { code: number; name: string }): string; hidden?: Set<string> | null; objHide?: Set<string> | null }): ClearanceOutline[] {
+  const oh = opt.objHide || null;   // the Appearance object rows: hidden tracks, vias, pads or footprints draw no clearance either
+  const out: ClearanceOutline[] = []; if (!/\.Cu$/.test(layer) || (opt.hidden && opt.hidden.has(layer))) return out;
+  const clrOf = (net: { code: number; name: string }) => netClearance(s, opt.netName(net));
+  for (const it of doc.items.values()) {
+    const n = it.node;
+    if (opt.tracks && (it.kind === "segment" || it.kind === "arc")) {
+      if (oh && oh.has("tracks")) continue;
+      if (K.str((K.kid(n, "layer") || [])[1]) !== layer) continue;
+      const w = K.kid(n, "width"), half = (w ? K.num(w[1]) : 0.25) / 2, clr = clrOf(netOf(n)); if (clr <= 0) continue;
+      const a = pt(n, "start"), b = pt(n, "end"); if (!a || !b) continue;
+      const m = it.kind === "arc" ? pt(n, "mid") : null, arc = m ? K.arcFrom3(a, m, b) : null;
+      out.push({ id: it.id, shape: arc ? { t: "arcband", x: arc.x, y: arc.y, r: arc.r, a0: arc.a0, a1: arc.a1, anticlockwise: !!arc.anticlockwise, w: half + clr } : { t: "capsule", a, b, r: half + clr } });
+    } else if (opt.tracks && it.kind === "via") {
+      if (oh && oh.has("vias")) continue;
+      if (!viaOnLayer(n, layer, doc)) continue;
+      const clr = clrOf(netOf(n)); if (clr <= 0) continue;
+      const at = K.atOf(n), sz = K.kid(n, "size"), r = (sz ? K.num(sz[1]) : 0.8) / 2;   // flashed on every layer it spans
+      out.push({ id: it.id, shape: { t: "circle", x: at[0], y: at[1], r: r + clr } });
+    } else if (opt.pads && it.kind === "footprint") {
+      if (oh && (oh.has("pads") || oh.has(/^B\./.test(K.str((K.kid(n, "layer") || [])[1])) ? "fpBack" : "fpFront"))) continue;
+      const fpClr = K.kid(n, "clearance");
+      for (const p of padsOf(it)) {
+        if (!padOnLayer(p, layer)) continue;
+        const own = K.kid(p.node, "clearance"), clr = own ? K.num(own[1]) : fpClr ? K.num(fpClr[1]) : clrOf(p.net as { code: number; name: string });
+        if (!(clr > 0)) continue;
+        const npth = p.type === "np_thru_hole";
+        // an NPTH whose copper is no bigger than its hole is not flashed: its hole is what keeps the clearance
+        const dr = K.kid(p.node, "drill"), hd = dr ? dr.slice(1).filter((v) => typeof v === "number" || /^[\d.]+$/.test(String(v))).map((v) => K.num(v)) : [];
+        const holeW = hd[0] || 0, holeH = hd[1] || holeW;
+        const flashed = !npth || p.w > holeW + 1e-6 || p.h > holeH + 1e-6;
+        if (flashed) {
+          const sh = padShape(p);
+          if (sh.t === "circle") out.push({ id: it.id, padIndex: p.index, npth, shape: { t: "circle", x: sh.x, y: sh.y, r: sh.r + clr } });
+          else if (sh.t === "seg") out.push({ id: it.id, padIndex: p.index, npth, shape: { t: "capsule", a: sh.a, b: sh.b, r: sh.r + clr } });
+          else out.push({ id: it.id, padIndex: p.index, npth, shape: { t: "poly", pts: drcPadOutline(p, clr) } });
+        } else if (holeW > 0) {
+          if (Math.abs(holeW - holeH) < 1e-9) out.push({ id: it.id, padIndex: p.index, npth, shape: { t: "circle", x: p.x, y: p.y, r: holeW / 2 + clr } });
+          else { const sh = padShape({ shape: "oval", x: p.x, y: p.y, w: holeW, h: holeH, rot: p.rot }); out.push({ id: it.id, padIndex: p.index, npth, shape: sh.t === "seg" ? { t: "capsule", a: sh.a, b: sh.b, r: sh.r + clr } : { t: "circle", x: p.x, y: p.y, r: Math.min(holeW, holeH) / 2 + clr } }); }
+        }
+      }
+    }
+  }
+  return out;
+}
+/** A via spans `layer`: a through via every copper layer, a blind / buried / micro via the layers of its pair. */
+function viaOnLayer(n: SNode, layer: string, doc: BoardDoc): boolean {
+  const ls = K.kid(n, "layers"); if (!ls) return true;
+  const copper = (doc as unknown as { copper?: string[] }).copper || [];
+  const pair = [K.str(ls[1]), K.str(ls[2])];
+  if (!n.includes("blind") && !n.includes("micro") && !n.includes("buried")) return copper.length ? copper.includes(layer) : true;
+  const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]), i = copper.indexOf(layer);
+  return i0 >= 0 && i1 >= 0 && i >= 0 ? i >= Math.min(i0, i1) && i <= Math.max(i0, i1) : pair.includes(layer);
+}
+/**
+ * The outlines on the canvas, one device pixel wide (m_outlineWidth), in the item's colour on the clearance layer:
+ * the layer colour (an NPTH pad's in LAYER_NON_PLATEDHOLES), darkened with a net highlight unless the item is lit,
+ * brightened when lit, and in the selected colour when selected (PCB_RENDER_SETTINGS::GetColor).
  */
 export function drawClearanceOutlines(c: CanvasRenderingContext2D, ctx: PcbCtx, cpx: number) {
-  const doc = ctx.doc, s = settingsOf(ctx);
+  const doc = ctx.doc, s = settingsOf(ctx), layer = S.layer;
   const hidden = appGlobal(() => editorState()!.hiddenLayers as Set<string> | null, null);
-  const nameOf = (code: number | undefined) => code && code > 0 ? netNameOf(ctx, { code } as never) : "";
+  const hl = appGlobal(() => (editorState() as unknown as { highlightIds?: Set<string> | null }).highlightIds || null, null);
+  const sel = new Set<string>(selectionIds(ctx));
+  const objHide = appGlobal(() => ((editorState() as unknown as { renderOpts?: { objects?: { hide?: Set<string> } } }).renderOpts?.objects?.hide) || null, null);
+  const list = clearanceOutlines(doc, s, layer, { tracks: S.trackClearance === CLEARANCE_MODE.ALWAYS, pads: S.padClearance !== false, netName: (net) => netNameOf(ctx, net as never), hidden, objHide });
+  if (!list.length) return;
+  const KC = K as unknown as { selectedColor(c: string): string; highlightColor(c: string, pcb: boolean): string; darkened(c: string, f: number): string; HL_FACTOR: number };
   c.save(); c.globalAlpha = 1; c.setLineDash([]); c.lineWidth = cpx; c.lineCap = "round"; c.lineJoin = "round";
-  const capsule = (a: Pt, b: Pt, r: number) => {
-    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
-    if (L < 1e-9) { c.moveTo(a[0] + r, a[1]); c.arc(a[0], a[1], r, 0, 2 * Math.PI); return; }
-    const nx = -dy / L * r, ny = dx / L * r;
-    c.moveTo(a[0] + nx, a[1] + ny); c.lineTo(b[0] + nx, b[1] + ny); c.arc(b[0], b[1], r, ang + Math.PI / 2, ang - Math.PI / 2, true);
-    c.lineTo(a[0] - nx, a[1] - ny); c.arc(a[0], a[1], r, ang - Math.PI / 2, ang + Math.PI / 2, true); c.closePath();
-  };
-  for (const it of doc.items.values()) {
-    if (it.kind !== "segment" && it.kind !== "via" && it.kind !== "arc") continue;
-    const n = it.node, clr = netClearance(s, nameOf((it as unknown as { net?: number }).net));
-    if (it.kind === "via") {
-      const at = K.atOf(n), sz = K.kid(n, "size"), r = (sz ? K.num(sz[1]) : 0.8) / 2;
-      const ls = K.kid(n, "layers"); const layer = ls ? K.str(ls[1]) : "F.Cu"; if (hidden && hidden.has(layer)) continue;
-      c.strokeStyle = color(layer); c.beginPath(); c.arc(at[0], at[1], r + clr, 0, 2 * Math.PI); c.stroke(); continue;
-    }
-    const layer = K.str((K.kid(n, "layer") || [])[1]); if (!layer || (hidden && hidden.has(layer))) continue;
-    const w = K.kid(n, "width"), r = (w ? K.num(w[1]) : 0.25) / 2 + clr;
-    const a = pt(n, "start"), b = pt(n, "end"); if (!a || !b) continue;
-    c.strokeStyle = color(layer); c.beginPath();
-    if (it.kind === "arc") { const m = pt(n, "mid"); const arc = m ? K.arcFrom3(a, m, b) : null; if (arc) { c.arc(arc.x, arc.y, arc.r + r, arc.a0, arc.a1, !!arc.anticlockwise); c.arc(arc.x, arc.y, Math.max(arc.r - r, 0), arc.a1, arc.a0, !arc.anticlockwise); c.closePath(); } else capsule(a, b, r); }
-    else capsule(a, b, r);
-    c.stroke();
+  const base = color(layer);
+  for (const o of list) {
+    let col = o.npth ? NPTH_COLOR : base;
+    const lit = !!hl && (hl.has(o.id) || (o.padIndex !== undefined && hl.has(o.id + "#" + o.padIndex)));
+    if (sel.has(o.id)) col = KC.selectedColor(col);
+    if (hl) col = lit ? KC.highlightColor(col, true) : KC.darkened(col, 1 - KC.HL_FACTOR);
+    c.strokeStyle = col; c.beginPath(); traceClearance(c, o.shape); c.stroke();
   }
   c.restore();
+}
+/** The path of one clearance outline. */
+export function traceClearance(c: { moveTo(x: number, y: number): void; lineTo(x: number, y: number): void; arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean): void; closePath(): void }, sh: ClearanceShape) {
+  if (sh.t === "circle") { c.moveTo(sh.x + sh.r, sh.y); c.arc(sh.x, sh.y, sh.r, 0, 2 * Math.PI); return; }
+  if (sh.t === "poly") { if (!sh.pts.length) return; c.moveTo(sh.pts[0][0], sh.pts[0][1]); for (let i = 1; i < sh.pts.length; i++) c.lineTo(sh.pts[i][0], sh.pts[i][1]); c.closePath(); return; }
+  if (sh.t === "arcband") { c.arc(sh.x, sh.y, sh.r + sh.w, sh.a0, sh.a1, sh.anticlockwise); c.arc(sh.x, sh.y, Math.max(sh.r - sh.w, 0), sh.a1, sh.a0, !sh.anticlockwise); c.closePath(); return; }
+  const a = sh.a, b = sh.b, r = sh.r, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
+  if (L < 1e-9) { c.moveTo(a[0] + r, a[1]); c.arc(a[0], a[1], r, 0, 2 * Math.PI); return; }
+  const nx = -dy / L * r, ny = dx / L * r;
+  c.moveTo(a[0] + nx, a[1] + ny); c.lineTo(b[0] + nx, b[1] + ny); c.arc(b[0], b[1], r, ang + Math.PI / 2, ang - Math.PI / 2, true);
+  c.lineTo(a[0] - nx, a[1] - ny); c.arc(a[0], a[1], r, ang - Math.PI / 2, ang + Math.PI / 2, true); c.closePath();
 }
 /** The tools whose cursor the router snaps (no snap indicator). */
 export const ROUTER_TOOLS = new Set(["route", "routediff", "tunesingle", "tunediff", "tuneskew", "drag"]);
@@ -330,7 +403,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
     line(c, [S.hover.x + img.w / 2, S.hover.y - img.h / 2], [S.hover.x - img.w / 2, S.hover.y + img.h / 2]);
     }
   }
-  if (S.trackClearance === CLEARANCE_MODE.ALWAYS) drawClearanceOutlines(c, ctx, px * (view.dpr || 1));
+  drawClearanceOutlines(c, ctx, px * (view.dpr || 1));   // the active copper layer's clearance lines (always-show tracks / vias, pads)
   drawGroupFrames(c, ctx, px * (view.dpr || 1));   // PCB_PAINTER::draw( PCB_GROUP ): a selected or entered group's box
   drawStatusPopup(c, px * (view.dpr || 1));
   // delete tool: what the click would remove is brightened by the document pass (brightenedIds), as KiCad does

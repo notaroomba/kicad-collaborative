@@ -37,6 +37,7 @@ export const S = {
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open
   markers: [],                            // the last DRC run's markers [{ x, y, severity, text, ids, code }]
+  padClearance: true,                     // pcb_display.pad_clearance (Show pad clearance), on by default
   trackClearance: 2,                      // pcb_display.track_clearance_mode (Preferences ▸ PCB Editor ▸ Display Options), SHOW_WITH_VIA_WHILE_ROUTING
   showRatsnest: true, localRatsnest: false, hiddenNets: new Set(), rats: null, ratsDirty: true,   // ratsnest display (KiCad shows it by default)
   settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
