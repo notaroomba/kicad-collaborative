@@ -22,7 +22,7 @@ import { fitMenu } from "../menufit";
 import * as D from "./dialogs";
 import * as SP from "./props";
 import { symCanvasMenu, symTreeMenu, type SymMenuCtx } from "./ctxmenu";
-import { ZOOM_LIST } from "../tables";
+import { ZOOM_LIST, LINKS, LOCAL_LABELS } from "../tables";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
@@ -578,12 +578,13 @@ export class SymbolEditor {
     const fromSch = () => !!(this.tab && this.tab.origin);
     const A = this.actions();
     const a = (id: string, enabled?: () => boolean, check?: () => boolean, label?: string): MenuEntry => this.act(id, A[id], { enabled, check, label });
+    const link = (id: string): MenuEntry => { const m = meta(id); return { id, label: m.label !== id ? m.label : (LOCAL_LABELS[id] || id), icon: m.icon, run: () => { window.open(LINKS[id], "_blank", "noopener"); }, enabled: () => !!LINKS[id] }; };
     return [
       ["File", [a("newLibrary", () => !E.viewOnly), a("addLibrary", () => !E.viewOnly), a("saveLibraryAs", () => !!this.currentLib()), a("newSymbol", () => !E.viewOnly), a("editLibSymbolWithLibEdit", fromSch, undefined, "Open Symbol from Library"), S,
         a("save", () => has() || !!this.currentLib()), a("saveSymbolAs", has), a("saveSymbolCopyAs", has), ...(fromSch() ? [] : [a("saveAll", () => this.projectLibs().some((l) => l.doc && l.doc.isModified))]), a("revert", () => !!this.tab && !(this.tab.scratch && !this.tab.origin) && this.isModified(this.tab)), S,
         { label: "Import", sub: [a("importSymbol", () => !E.viewOnly, undefined, "Symbol..."), a("importGraphics", undefined, undefined, "Graphics...")] },
         { label: "Export", sub: [a("exportSymbol", has, undefined, "Symbol..."), a("exportSymbolView", has, undefined, "View as PNG..."), a("exportSymbolAsSVG", has, undefined, "Symbol as SVG...")] }, S,
-        a("compareLibraryWithFile"), S, a("symbolProperties", has), S, { label: "Close", key: "Ctrl+W", run: () => void this.close(), enabled: () => true }]],
+        a("compareLibraryWithFile"), S, a("symbolProperties", has), S, { label: "Close Symbol Editor", key: "Ctrl+W", run: () => void this.close(), enabled: () => true }]],
       ["Edit", [a("undo", () => !!this.tab && this.tab.undo.length > 0 && !this.readOnly()), a("redo", () => !!this.tab && this.tab.redo.length > 0 && !this.readOnly()), S,
         a("cut", () => can() && this.tab!.sel.size > 0), a("copy", () => has() && this.tab!.sel.size > 0), a("copyAsText", () => has() && this.tab!.sel.size > 0), a("paste", () => can() && !!this.clip), a("doDelete", () => can() && this.tab!.sel.size > 0), a("duplicate", () => can() && this.tab!.sel.size > 0), S,
         a("selectAll", has), a("unselectAll", has), S, a("find", has), a("findAndReplace", has), S, a("pinTable", has), a("editSymbolPinMaps", () => can() && !M.isDerived(this.symbol()!)), a("updateSymbolFields", () => can() && M.isDerived(this.symbol()!))]],
@@ -592,9 +593,13 @@ export class SymbolEditor {
         a("showHiddenPins", () => true, () => this.showHiddenPins), a("showHiddenFields", () => true, () => this.showHiddenFields), a("togglePinAltIcons", () => true, () => this.showAltIcons), S,
         a("nextSymbolTab", () => this.tabs.length > 1), a("prevSymbolTab", () => this.tabs.length > 1), a("closeSymbolTab", () => this.tabs.length > 0)]],
       ["Place", ["placeSymbolPin", "placeSymbolText", "drawSymbolTextBox", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawArc", "drawBezier", "drawSymbolLines", "drawSymbolPolygon"].map((id) => a(id, can, () => TOOL_ACTIONS[id] === this.tool))],
+      // Tools > External Plugins (the plugin API runs in the desktop app: its rows stay disabled here)
+      ["Tools", [{ label: "External Plugins", icon: "puzzle_piece", sub: [a("pluginsReload"), a("pluginsShowFolder")] }]],
       ["Inspect", [a("showDatasheet", () => has() && !!M.fieldValue(this.symbol()!, "Datasheet")), S, a("checkSymbol", has)]],
       ["Preferences", [a("configurePaths"), a("showSymbolLibTable", () => !!appState.project), a("openPreferences"), S, { label: "Set Language" }]],
-      ["Help", [{ label: "Getting Started with KiCad", run: () => window.open("https://docs.kicad.org/", "_blank", "noopener") }, a("listHotKeys")]],
+      // EDA_BASE_FRAME::AddStandardHelpMenu, with the app's own entries (HELP_MENU)
+      ["Help", [link("help"), link("gettingStarted"), a("listHotKeys"), link("getInvolved"), link("donate"), link("reportBug"), S, link("downloadDesktop"), link("sourceCode"), S,
+        { id: "about", label: LOCAL_LABELS.about || "About", icon: "about", run: () => { const app = window.CollabApp; if (app) app.dispatch({ type: "action", id: "about", anchor: null }); }, enabled: () => true }]],
     ];
   }
   private renderMenus(): void {
@@ -927,9 +932,18 @@ export class SymbolEditor {
     const sym = this.symbol(); const t = this.tab; if (!sym || !t) return;
     const cell = (k: string, v: string) => el.append(h("div", null, h("b", null, k), h("span", null, v)));
     const sel = [...t.sel]; const n = sel.length === 1 ? nodeOf(sym, sel[0]) : null;
+    // SCH_ITEM::GetMsgPanelInfo: Unit (a multi-unit symbol), Body Style (a multi-body-style one) and Private
+    const root0 = this.rootSym(sym);
+    const itemInfo = (node: M.Node) => {
+      const ref = M.findRef(sym, node); if (!ref) return;
+      if (M.unitCount(root0) > 1) cell("Unit", (SP.unitChoices(root0).find((c) => c[0] === String(ref.unit)) || ["", M.unitLetter(ref.unit)])[1]);
+      if (M.bodyStyles(root0).count > 1) cell("Body Style", (SP.bodyChoices(root0).find((c) => c[0] === String(ref.body)) || ["", String(ref.body)])[1]);
+      if (node[1] === "private") cell("Private", "");
+    };
+    if (n && n[0] !== "pin" && n[0] !== "property") { cell("Type", SP.friendlyName(n)); itemInfo(n); this.renderProps(); return; }
     if (n && n[0] === "pin") {
       const i = M.pinInfo(n);
-      cell("Type", "Pin"); cell("Name", i.name); cell("Number", i.number); cell("Type", D.typeLabel(i.type)); cell("Style", D.shapeLabel(i.shape)); cell("Visible", i.visible ? "Yes" : "No");
+      cell("Type", "Pin"); itemInfo(n); cell("Name", i.name); cell("Number", i.number); cell("Type", D.typeLabel(i.type)); cell("Style", D.shapeLabel(i.shape)); cell("Visible", i.visible ? "Yes" : "No");
       cell("Length", this.fmt(i.length)); cell("Orientation", D.orientLabel(i.orient)); cell("Pos X", this.fmt(i.x)); cell("Pos Y", this.fmt(-i.y || 0));
       this.renderProps(); return;
     }

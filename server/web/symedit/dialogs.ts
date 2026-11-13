@@ -431,9 +431,16 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
           fgrid = fieldsGrid(box, rows, { readOnly: ro, doc: se.kdoc(), height: 190, shown: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
             newName: (rs) => { let n = 1; const names = new Set(rs.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; } });
           pg.append(form([["Symbol name:", name], ["Keywords:", keywords], ["Derive from symbol:", inherit]]));
-          if (!derived) pg.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px" },
-            h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Attributes"), power, local, exSim, exBom, exBoard, exPos),
-            h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Pin Text Options"), showNum, showName, inside, form([["Position offset:", offset, unitName(units())]], 3))));
+          // bSizerLowerBasicPanel: the General box (power, local power indented), Pin Text Options, then Attributes
+          // (simulation, a gap, board, bill of materials, position files)
+          if (!derived) {
+            const row = h("div", { id: "sp-lower", style: "display:grid;grid-template-columns:1fr 1.2fr 1.2fr;gap:12px;margin-top:8px" }); pg.append(row);
+            const col = () => { const c = h("div"); row.append(c); return c; };
+            local.style.marginLeft = "20px";
+            KD().staticBox(col(), "General").append(h("div", { style: "display:flex;flex-direction:column;gap:3px" }, power, local));
+            KD().staticBox(col(), "Pin Text Options").append(h("div", { style: "display:flex;flex-direction:column;gap:3px" }, showNum, showName, h("div", { style: "height:8px" }), inside, form([["Position offset:", offset, unitName(units())]], 3)));
+            KD().staticBox(col(), "Attributes").append(h("div", { style: "display:flex;flex-direction:column;gap:3px" }, exSim, h("div", { style: "height:8px" }), exBoard, exBom, exPos));
+          }
         } },
         ...(derived ? [] : [{ label: "Units & Body Styles", build(pg: HTMLElement) {
           const ub = KD().staticBox(pg, "Symbol Units");
@@ -455,8 +462,8 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         } }]),
         { label: "Pin Map", build(pg) { pinMapPage(pg, pinMaps, ro); } },
       ], { selected: opts.pinMaps ? (derived ? 2 : 4) : 0 });
-      // DIALOG_LIB_SYMBOL_PROPERTIES::OnEditSpiceModel: the "Simulation Model..." button at the left of the bottom bar
-      const simBtn = h("button", { type: "button", class: "btn", id: "sp-sim", disabled: ro, style: "margin-right:auto" }, "Simulation Model...") as HTMLButtonElement;
+      // DIALOG_LIB_SYMBOL_PROPERTIES::OnEditSpiceModel: the "Edit Simulation Model..." button at the left of the bottom bar
+      const simBtn = h("button", { type: "button", class: "btn", id: "sp-sim", disabled: ro, style: "margin-right:auto" }, "Edit Simulation Model...") as HTMLButtonElement;
       simBtn.addEventListener("click", () => {
         const flat = M.flatten(se.libMap(se.libs.get(t.lib) || null), sym);
         openSimModel<L.FieldRow>(curRows(), {
