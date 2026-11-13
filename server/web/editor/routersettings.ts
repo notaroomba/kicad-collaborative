@@ -9,6 +9,7 @@
 import { KD, checkbox, h } from "../dialogs/dom";
 import { E } from "./state";
 import { toast } from "./util";
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /** pcb-tools.js's ROUTING_SETTINGS, by the parameter names KiCad stores in pcbnew.json's "tools.pns". */
 export interface RouterSettings {
@@ -229,7 +230,7 @@ export function openTuningSettings(req: { mode: TuneMode; settings: TuneView }, 
       };
       row("minAmp", "Minimum amplitude (A):"); row("maxAmp", "Maximum amplitude (A):");
       row("spacing", "Spacing (s):", "Minimum spacing between adjacent tuning segments. The resulting spacing may be greater based on design rules.");
-      corner = h("select", { "data-k": "corner" }, h("option", { value: "0" }, "Chamfer"), h("option", { value: "1" }, "Fillet"));
+      corner = h("k-select", { "data-k": "corner" }, h("option", { value: "0" }, "Chamfer"), h("option", { value: "1" }, "Fillet"));
       corner.value = form.values.round ? "1" : "0";
       g2.append(h("span", null, "Corner style:"), corner, h("span", null, ""));
       const r = h("input", { type: "text", value: String(form.values.crPct), "data-k": "crPct" }); inputs.crPct = r;

@@ -9,7 +9,7 @@
 .rv-field { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink-2); }
 .rv-field.grow { flex: 1 1 260px; }
 .rv-field > span { flex: none; }
-.rv-field select { flex: 1 1 auto; min-width: 0; max-width: 100%; height: var(--h-sm); padding: 0 6px; font-size: var(--fs-sm); }
+.rv-field k-select { flex: 1 1 auto; min-width: 0; max-width: 100%; height: var(--h-sm); padding: 0 6px; font-size: var(--fs-sm); }
 .rv-swap { flex: none; font-size: var(--fs-md); line-height: 1; }
 .rv-note { padding: 4px 12px; border-bottom: 1px solid var(--line); background: var(--paper); color: var(--ink-2); font-size: var(--fs-sm); }
 .rv-note a { color: var(--blue); }

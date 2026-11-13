@@ -10,7 +10,7 @@
 import { useApp, type Editor } from "../store";
 import { menuMeta } from "../menuspec";
 import { EXTRA_TOOLS, TOOL_MAP } from "../tables";
-import { fmtCoord, unitName } from "../units";
+import { fmtCoord, messageText, unitsMsg } from "../units";
 import { cx } from "../util";
 
 // One field of the bar: a vertically centred cell with a 1px rule on its left (KiCad's status panes).
@@ -72,9 +72,9 @@ export function StatusBar() {
           <span className={cx(cell, "min-w-[calc(9ch+20px)] max-[560px]:hidden")} id="sbZoom">Z {vp.zoom.toFixed(2)}</span>
           <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {fmtCoord(vp.cursor[0], u)}  Y {fmtCoord(vp.cursor[1], u)}</span>
           <span className={cx(cell, "min-w-[calc(42ch+20px)] max-[1180px]:hidden")} id="sbDelta">{delta}</span>
-          <span className={cx(cell, "min-w-[calc(16ch+20px)]")} id="sbGrid">grid {fmtCoord(vp.gridPitch, u)}{vp.gridOn ? "" : " (hidden)"}</span>
-          <button type="button" className={cx(cell, "bg-transparent border-0 border-l text-inherit font-[inherit] hover:text-ink")} id="sbUnits" title="Switch units (Ctrl+U)"
-            onClick={() => window.CollabApp && window.CollabApp.dispatch({ type: "action", id: "toggleUnits" })}>{unitName(u)}</button>
+          {/* EDA_DRAW_FRAME::DisplayGridMsg and DisplayUnitsMsg: plain text; the units change from the left toolbar or Ctrl+U */}
+          <span className={cx(cell, "min-w-[calc(16ch+20px)]")} id="sbGrid">grid {messageText(vp.gridPitch, u, editor === "sch" ? "sch" : "pcb", false)}{vp.gridOn ? "" : " (hidden)"}</span>
+          <span className={cell} id="sbUnits">{unitsMsg(u)}</span>
           <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[640px]:hidden")} id="sbTool">{toolName(editor, tool, moduleTools.find((t) => t.id === tool)?.label)}</span>
           {status.mode ? <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[1024px]:hidden")} id="sbMode">{status.mode}</span> : null}
         </>

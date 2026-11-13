@@ -10,8 +10,8 @@
 //   Help     List Hotkeys, About (help-dialogs.ts)
 import type { ActionHandler } from "./types";
 import { cursorStep, panStep } from "./crosshair";
-import { GRID_CHOICES, navigateDocs, openDoc, rootSchematic, setActiveLayer, setGridPitch } from "./doc";
-import { HANDLERS, gridMenu, toggleRenderOpt } from "./actions";
+import { gridIndex, gridList, navigateDocs, openDoc, rootSchematic, setActiveLayer, setGridIndex } from "./doc";
+import { HANDLERS, toggleRenderOpt } from "./actions";
 import { setToggle, state, store } from "./appstore";
 import { openAbout, openHotkeyList } from "./help-dialogs";
 import { setCrosshair, setUnitsAction } from "./panes";
@@ -166,21 +166,15 @@ function zoomFitSelection(): void {
   E.viewTouched = true; fitBox([x0, y0, Math.max(x1 - x0, 1), Math.max(y1 - y0, 1)], 0.8);
 }
 
+/** COMMON_TOOLS::GridNext / GridPrev (N, Shift+N): the next or previous grid of the list, wrapping round. */
 function stepGrid(dir: number): void {
-  const choices = ((GRID_CHOICES as unknown as Record<string, [number, string][]>)[E.DOC_TYPE] || []).map((c) => c[0]).sort((a, b) => b - a);   // coarse → fine, KiCad's list order
-  if (!choices.length) return;
-  let i = choices.indexOf(E.gridPitch); if (i < 0) i = 0;
-  const next = choices[Math.min(choices.length - 1, Math.max(0, i + dir))];
-  setGridPitch(next);
+  const n = gridList().length; if (!n) return;
+  const i = gridIndex(); setGridIndex(i < 0 ? 0 : (i + dir + n) % n);
 }
 
 const UNIT_ACTION: Record<string, string> = { mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" };
-function setUnits(u: "mm" | "in" | "mil"): void {
-  if (u !== "mm") E.lastImperial = u;
-  setUnitsAction(u, UNIT_ACTION[u]);
-  try { localStorage.setItem("kui.units", u); } catch (e) { /* no storage */ }
-}
-/** Ctrl+U: between millimetres and the imperial unit last used (EDA_BASE_FRAME::ToggleUserUnits). */
+function setUnits(u: "mm" | "in" | "mil"): void { setUnitsAction(u, UNIT_ACTION[u]); }
+/** Ctrl+U (ACTIONS::toggleUnits, COMMON_TOOLS::ToggleUnits): between millimetres and the imperial unit last used. */
 function toggleUnits(): void { setUnits(E.units === "mm" ? (E.lastImperial || "mil") : "mm"); }
 try { const u = localStorage.getItem("kui.units"); if (u === "in" || u === "mil" || u === "mm") { E.units = u; if (u !== "mm") E.lastImperial = u; } } catch (e) { /* no storage */ }
 
@@ -209,7 +203,7 @@ export const MENU_HANDLERS: Record<string, ActionHandler> = {
   panUp: () => panStep(0, 1), panDown: () => panStep(0, -1), panLeft: () => panStep(1, 0), panRight: () => panStep(-1, 0),
   cursorUp: () => cursorStep(0, -1, 1), cursorDown: () => cursorStep(0, 1, 1), cursorLeft: () => cursorStep(-1, 0, 1), cursorRight: () => cursorStep(1, 0, 1),
   cursorUpFast: () => cursorStep(0, -1, 10), cursorDownFast: () => cursorStep(0, 1, 10), cursorLeftFast: () => cursorStep(-1, 0, 10), cursorRightFast: () => cursorStep(1, 0, 10),
-  gridNext: () => stepGrid(1), gridPrev: () => stepGrid(-1), gridProperties: (a) => gridMenu(a),
+  gridNext: () => stepGrid(1), gridPrev: () => stepGrid(-1),
   millimetersUnits: () => setUnits("mm"), inchesUnits: () => setUnits("in"), milsUnits: () => setUnits("mil"), toggleUnits,
   resetLocalCoords,
   // the menu entry is a checkbox: a second click goes back to the small crosshairs

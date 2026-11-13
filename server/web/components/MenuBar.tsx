@@ -361,7 +361,7 @@ export function MenuBar() {
   useEffect(() => {
     const away = (ev: PointerEvent) => { altAlone = false; /* Alt+click (Clarify Selection) is not a menu-bar Alt */ if ((stRef.current || focusRef.current !== null) && barRef.current && !barRef.current.contains(ev.target as Node)) close(); };
     let altAlone = false;
-    const typing = (ev: KeyboardEvent) => { const t = ev.target as HTMLElement | null; return !!t && !!t.tagName && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || !!(t.closest && t.closest(".kd-overlay"))); };
+    const typing = (ev: KeyboardEvent) => { const t = ev.target as HTMLElement | null; return !!t && !!t.tagName && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable || !!(t.closest && t.closest(".kd-overlay"))); };
     const key = (ev: KeyboardEvent) => {
       const s = stRef.current, f = focusRef.current, ms = menusRef.current, k = ev.key;
       if (k === "Alt") { altAlone = !ev.repeat && !ev.ctrlKey && !ev.shiftKey && !ev.metaKey; return; }

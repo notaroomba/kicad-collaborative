@@ -7,20 +7,17 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from "react-dom";
 import { dispatch, useApp } from "../store";
 import { cx } from "../util";
+import { Select, type SelectOption } from "./Select";
 
-const SEL = "ksel bg-panel border border-line rounded-sm px-1 py-0.5 h-6 text-sm text-ink max-w-[250px]";
+const SEL = "ksel h-6 text-sm max-w-[320px]";
 const EDIT = "Edit Pre-defined Sizes...";
 
 /** A size choice: the entries, a "---" rule and "Edit Pre-defined Sizes...", exactly as the wxChoice is filled. */
 function SizeSelect({ id, title, labels, index, onPick }: { id: string; title: string; labels: string[]; index: number; onPick: (v: number | "edit") => void }) {
-  return (
-    <select id={id} className={SEL} title={title} value={String(Math.min(index, Math.max(0, labels.length - 1)))}
-      onChange={(ev) => { const v = ev.target.value; ev.target.blur(); onPick(v === "edit" ? "edit" : Number(v)); }}>
-      {labels.map((l, i) => <option key={i} value={String(i)}>{l}</option>)}
-      <option disabled value="sep">---</option>
-      <option value="edit">{EDIT}</option>
-    </select>
-  );
+  const options: SelectOption[] = labels.map((l, i) => ({ value: String(i), label: l }));
+  options.push({ value: "sep", label: "---", sep: true }, { value: "edit", label: EDIT });
+  return <Select id={id} className={SEL} title={title} options={options} value={String(Math.min(index, Math.max(0, labels.length - 1)))} blurOnPick
+    onChange={(v) => { if (v === "edit") onPick("edit"); else if (v !== "sep") onPick(Number(v)); }} />;
 }
 export function TrackWidthSelect() {
   const labels = useApp((s) => s.routing.trackLabels);

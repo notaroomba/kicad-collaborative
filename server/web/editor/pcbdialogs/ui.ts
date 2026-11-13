@@ -3,6 +3,7 @@
 // boxes, unit fields (UNIT_BINDER: a number in the editor's units followed by the unit name), editable
 // grids with KiCad's add / delete row buttons (WX_GRID), and a report list (WX_HTML_REPORT_PANEL).
 import { E } from "../state";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- elements
 type Child = Node | string | null | undefined | false;
@@ -54,8 +55,8 @@ const CSS = `
 .pd-grid td.ro { color: var(--ink-2); }
 .pd-grid tr.sel td { background: var(--sel); }
 .pd-grid tr.hd td { background: var(--panel-2); font-weight: 600; padding: 3px 6px; }
-.pd-grid td input[type=text], .pd-grid td select { border: none !important; border-radius: 0 !important; background: transparent !important; width: 100%; height: 23px; padding: 2px 6px !important; font-family: inherit !important; }
-.pd-grid td input[type=text]:focus, .pd-grid td select:focus { outline: 2px solid var(--blue); outline-offset: -2px; }
+.pd-grid td input[type=text], .pd-grid td k-select { border: none !important; border-radius: 0 !important; background: transparent !important; width: 100%; height: 23px; padding: 2px 6px !important; font-family: inherit !important; }
+.pd-grid td input[type=text]:focus, .pd-grid td k-select:focus-within { outline: 2px solid var(--blue); outline-offset: -2px; }
 .pd-grid td input[type=text] { min-width: 84px; }
 .pd-grid td.chk { text-align: center; }
 .pd-grid td.chk input { width: auto; margin: 0; }
@@ -75,7 +76,7 @@ const CSS = `
 .pd-sev.exclusion { background: var(--ink-3); }
 .pd-sev.ignore { background: var(--ink-3); border-radius: var(--r-1); }
 .pd-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; }
-.pd-row select, .pd-row input[type=text] { width: auto; }
+.pd-row k-select, .pd-row input[type=text] { width: auto; }
 .pd-cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
 .pd-cols3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 20px; }
 .pd-list { border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); overflow: auto; }
@@ -89,7 +90,7 @@ const CSS = `
 .pd-layertable td { padding: 2px 8px 2px 0; }
 .pd-layertable td.chk input { width: auto; margin: 0 4px; }
 .pd-layertable input[type=text] { width: 190px; }
-.pd-layertable select { width: 190px; }
+.pd-layertable k-select { width: 190px; }
 .pd-layertable tr.cu input[type=text] { font-weight: 600; }
 .pd-layertable .desc { color: var(--ink-2); }
 .pd-colhead { font-weight: 600; margin: 0 0 4px; }
@@ -266,7 +267,7 @@ export function textField(v: string, opts?: { ro?: boolean; key?: string; placeh
   return { el: input, input, get: () => input.value, set(x) { input.value = x; } };
 }
 export function selectField<T extends string | number>(v: T, options: [T, string][], opts?: { ro?: boolean; key?: string; onChange?(v: T): void }): Field<T> {
-  const input = h("select", { disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
+  const input = h("k-select", { disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
   options.forEach(([val, label]) => { const o = h("option", { value: String(val) }, label); if (String(val) === String(v)) o.selected = true; input.append(o); });
   if (!options.some(([val]) => String(val) === String(v)) && options.length) input.selectedIndex = 0;
   const get = (): T => (options[input.selectedIndex] || options[0])[0];
@@ -383,7 +384,7 @@ export function grid(columns: GridColumn[], rows: Record<string, CellValue>[], o
           const cb = h("input", { type: "checkbox", checked: !!v, disabled: ro }); cb.addEventListener("change", () => { row[c.key] = cb.checked; changed(); });
           tr.append(h("td", { class: "chk" }, cb));
         } else if (c.type === "select" && !ro) {
-          const s = h("select"); for (const [val, label] of c.options || []) { const o = h("option", { value: String(val) }, label); if (String(val) === String(v)) o.selected = true; s.append(o); }
+          const s = h("k-select"); for (const [val, label] of c.options || []) { const o = h("option", { value: String(val) }, label); if (String(val) === String(v)) o.selected = true; s.append(o); }
           s.addEventListener("change", () => { const o = (c.options || [])[s.selectedIndex]; if (o) { row[c.key] = o[0]; changed(); } });
           tr.append(h("td", null, s));
         } else if (ro) {

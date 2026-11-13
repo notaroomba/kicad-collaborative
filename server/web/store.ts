@@ -6,6 +6,7 @@
 // every user intent goes back through dispatch(action) and app.js updates the
 // store, which re-renders whichever components selected the changed slice.
 import { useSyncExternalStore } from "react";
+import type { GridDef } from "./units";
 
 // ---------------------------------------------------------------- state slices
 export type Editor = "sch" | "pcb";
@@ -129,7 +130,7 @@ export interface RoutingState {
   layers: RoutingLayer[]; layerPair: [string, string];
 }
 
-export type PopoverKind = "desktop" | "about" | "share" | "kicad" | "find" | "grid";
+export type PopoverKind = "desktop" | "about" | "share" | "kicad" | "find";
 export interface Anchor { left: number; top: number; right: number; bottom: number }
 export interface PopoverState {
   kind: PopoverKind; anchor?: Anchor | null;
@@ -185,7 +186,12 @@ export interface AppState {
   connection: { status: ConnStatus; text: string; edits: number };
   viewport: {
     zoom: number; cursor: [number, number]; origin: [number, number]; polar: boolean; units: Units;
-    gridOn: boolean; gridPitch: number; gridChoices: [number, string][]; snapOn: boolean;
+    /** the imperial unit last used (COMMON_TOOLS::m_imperialUnit): Ctrl+U goes back to it, and metric lists show it second */
+    lastImperial: Units;
+    /** the view's zoom as KiCad states it (GAL::GetZoomFactor), for the aux toolbar's zoom choice */
+    kzoom: number;
+    /** the grids of Preferences > Grids in their order (GRID_SETTINGS::grids), shown with gridChoiceText in the user units */
+    gridOn: boolean; gridPitch: number; gridChoices: GridDef[]; snapOn: boolean;
     crosshair: "small" | "full" | "45"; selMode: "rect" | "lasso";
     lineMode: "free" | "90" | "45" | null; dragMode: "drag" | "move" | null;
     renderOpts: RenderOpts; activeLayer: string;
@@ -240,6 +246,7 @@ export type AppAction =
   | { type: "setTrackWidth"; index: number | "edit" }
   | { type: "setViaSize"; index: number | "edit" }
   | { type: "setGrid"; pitch: number }
+  /** the aux toolbar's zoom choice: "auto" fits the screen, a number is a KiCad zoom factor (zoom_defines.h) */
   | { type: "setZoom"; zoom: number | "auto" }
   | { type: "setFilter"; key: string; on: boolean }
   | { type: "follow"; cid: string | null }
@@ -275,7 +282,7 @@ declare global {
 const EMPTY: AppState = {
   view: "home", me: null, project: null, role: null, canJoin: false, viewOnly: true, canComment: false, guest: false, can: null,
   connection: { status: "offline", text: "offline", edits: 0 },
-  viewport: { zoom: 1, cursor: [0, 0], origin: [0, 0], polar: false, units: "mm", gridOn: true, gridPitch: 1.27, gridChoices: [], snapOn: true,
+  viewport: { zoom: 1, cursor: [0, 0], origin: [0, 0], polar: false, units: "mm", lastImperial: "mil", kzoom: 1, gridOn: true, gridPitch: 1.27, gridChoices: [], snapOn: true,
     crosshair: "small", selMode: "rect", lineMode: null, dragMode: null, renderOpts: {}, activeLayer: "" },
   document: { editor: null, docType: null, docId: null, doc: null, docs: [], rootDocId: null, sheets: [], layers: [], hiddenLayers: [], copperLayers: [], items: [], hasDoc: false, notice: null, version: 0 },
   selection: { ids: [], primary: null, field: null, version: 0 },

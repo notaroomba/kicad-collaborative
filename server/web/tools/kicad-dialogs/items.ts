@@ -6,6 +6,7 @@ import { type FieldFx, fieldAt, fieldEffects, fieldHidden, fieldLayer, fieldNode
 import { root } from "../root";
 import { K, PROPS, clone, esc, kids, num, str } from "./sexpr";
 import { close, el, open } from "./shell";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /** An item the dialogs edit: a doc item, or (openNew) one that is not on the sheet yet. */
 export type DialogItem = Pick<KItem, "id" | "kind" | "node" | "geom" | "bbox"> & Partial<KItem>;
@@ -79,7 +80,7 @@ export function openField(ctx: DialogCtx, item: DialogItem, name: string): DlgAp
   const fx = fieldEffects(p0), [x, y, rot] = fieldAt(p0), hidden = fieldHidden(p0), text = fieldText(p0);
   const layers = isPcb && PROPS() && PROPS()!.helpers.boardLayers ? PROPS()!.helpers.boardLayers!(doc!, false) : [];
   const ro = ctx.viewOnly ? " disabled" : "";
-  const sel = (id: string, value: unknown, opts: Opt[]) => `<select id="${id}"${ro}>${opts.map((o) => `<option value="${esc(o[0])}"${String(o[0]) === String(value) ? " selected" : ""}>${esc(o[1])}</option>`).join("")}</select>`;
+  const sel = (id: string, value: unknown, opts: Opt[]) => `<k-select id="${id}"${ro}>${opts.map((o) => `<option value="${esc(o[0])}"${String(o[0]) === String(value) ? " selected" : ""}>${esc(o[1])}</option>`).join("")}</k-select>`;
   const numIn = (id: string, v: unknown, step?: number) => `<input id="${id}" type="number" step="${step || 0.01}" value="${(+(v as number) || 0).toFixed(4).replace(/\.?0+$/, "") || 0}"${ro}>`;
   const cb = (id: string, on: boolean, label: string) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${ro}>${esc(label)}</label>`;
   const orient = isPcb ? numIn("kd-rot", rot, 1) : sel("kd-rot", ((Math.round(rot) % 360) + 360) % 360 === 90 || ((Math.round(rot) % 360) + 360) % 360 === 270 ? 90 : 0, [[0, "Horizontal"], [90, "Vertical"]]);

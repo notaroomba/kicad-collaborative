@@ -6,6 +6,8 @@
 // Plain DOM on purpose: the page is small, has no canvas, and must not depend on the
 // editor bundles (it is reachable from the desktop app's browser hand-off too).
 
+import "../components/kselect";   // <k-select>, the themed drop-down the page uses in place of <select>
+
 // ---------------------------------------------------------------- what the server sends (src/github.rs)
 interface Connection { configured: boolean; connected: boolean; login: string; privateRepos?: boolean }
 interface Repo { fullName: string; private: boolean; pushedAt?: string; defaultBranch?: string }
@@ -198,7 +200,7 @@ async function scan(full: string, branch: string | null): Promise<void> {
   catch (e) { el.innerHTML = `<div class="callout err">${esc(message(e))}</div>`; return; }
   const branches = s.branches.includes(s.branch) ? s.branches : [s.branch].concat(s.branches);
   el.innerHTML = `<div class="row" style="margin-bottom:8px">
-      <label class="f">Branch <select id="scanBranch">${branches.map((b) => `<option${b === s.branch ? " selected" : ""}>${esc(b)}</option>`).join("")}</select></label>
+      <label class="f">Branch <k-select id="scanBranch">${branches.map((b) => `<option${b === s.branch ? " selected" : ""}>${esc(b)}</option>`).join("")}</k-select></label>
       <div class="grow muted">${s.projects.length ? `${plural(s.projects.length, "KiCad project")} in <b>${esc(s.repo)}</b>` : ""}</div></div>
     ${s.truncated ? `<div class="callout warn">This repository is too large for GitHub to list completely; some folders may be missing.</div>` : ""}
     <div class="list">${s.projects.length ? s.projects.map((p, i) => `<div class="it" style="cursor:default">
@@ -360,9 +362,9 @@ function render(): void {
       <td class="path">${esc(f.path)}</td>
       <td class="st"><span class="pill ${f.state}">${STATE_LABEL[f.state]}</span></td>
       <td class="detail">${esc(f.detail)}${f.unsavedOps > 0 ? ` · ${plural(f.unsavedOps, "unsaved edit")}` : ""} <span class="muted">· ${kb(f.size)}</span></td>
-      <td class="act">${f.state === "conflict" && canWrite ? `<select data-resolve="${esc(f.path)}" aria-label="How to resolve ${esc(f.path)}">
+      <td class="act">${f.state === "conflict" && canWrite ? `<k-select data-resolve="${esc(f.path)}" aria-label="How to resolve ${esc(f.path)}">
           ${f.mergeable ? `<option value="merge">Merge both</option>` : `<option value="">Choose…</option>`}
-          <option value="github">Use GitHub's</option><option value="online">Keep online</option></select>` : ""}${
+          <option value="github">Use GitHub's</option><option value="online">Keep online</option></k-select>` : ""}${
           f.state !== "synced" ? `<button class="btn small" data-diff="${esc(f.path)}" aria-expanded="${openDiffs.has(f.path)}">Changes</button>` : ""}</td></tr>
       ${f.state !== "synced" && openDiffs.has(f.path) ? `<tr class="diffrow"><td colspan="4" data-diffbody="${esc(f.path)}">${diffHtml(f.path)}</td></tr>` : ""}`).join("")
       || `<tr><td colspan="4" class="muted">No KiCad files on either side yet.</td></tr>`}
@@ -461,7 +463,7 @@ function linkForm(p: ProjectInfo): string {
     <div id="existing"><div id="picker"></div></div>
     <div id="new" class="hide"><div class="row">
       <label class="f grow">Repository name <input type="text" id="newName" value="${esc(p.name.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "") || "kicad-project")}" autocapitalize="off" spellcheck="false"></label>
-      <label class="f">Visibility <select id="newPrivate"><option value="1">Private</option><option value="0">Public</option></select></label></div></div>
+      <label class="f">Visibility <k-select id="newPrivate"><option value="1">Private</option><option value="0">Public</option></k-select></label></div></div>
     <div class="row" style="margin-top:12px">
       <label class="f grow">Branch <input type="text" id="lBranch" placeholder="the repository's default branch" autocapitalize="off" spellcheck="false"></label>
       <label class="f grow">Folder in the repository <input type="text" id="lPath" placeholder="/ (the repository root)" autocapitalize="off" spellcheck="false"></label>

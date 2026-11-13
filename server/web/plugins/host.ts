@@ -816,7 +816,7 @@ export function initPlugins(): void {
 
   document.addEventListener("keydown", (ev) => {
     const t = ev.target as HTMLElement | null;
-    if (!S.editor || app.getState().view !== "editor" || S.manager.open || S.prompt || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) || (W.KDialogs && W.KDialogs.isOpen && W.KDialogs.isOpen())) return;
+    if (!S.editor || app.getState().view !== "editor" || S.manager.open || S.prompt || (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable)) || (W.KDialogs && W.KDialogs.isOpen && W.KDialogs.isOpen())) return;
     for (const a of actionsFor(S, S.editor)) if (a.action.key && hotkeyMatches(ev, a.action.key)) { ev.preventDefault(); ev.stopPropagation(); void runAction(a.plugin, a.id); return; }
   }, true);
 

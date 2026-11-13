@@ -4,6 +4,7 @@
 // every control here goes through CollabPanels.dispatch.  The schematic has no such pane in KiCad;
 // its minimal version lists the layers and the items.  `#layers` keeps its id: pcb-tools.js
 // watches it to know when a document's layer list was rebuilt.
+import { Select } from "../Select";
 import { useState } from "react";
 import type { LayerInfo, LayerMenuCmd, NetClassRow, NetCmd, NetRow } from "../../panels-api";
 import { dispatch, useApp, type ItemSummary } from "../../store";
@@ -224,7 +225,7 @@ function NetsTab({ pickColor }: { pickColor: (c: ColorAt) => void }) {
   );
 }
 
-const SELECT = "w-full bg-panel border border-line rounded-xs py-0.5 px-1 text-ink text-sm";
+const SELECT = "w-full text-sm";
 function PresetsAndViewports() {
   const presets = usePanels((s) => s.appearance.presets);
   const builtin = usePanels((s) => s.appearance.builtinPresets);
@@ -235,24 +236,15 @@ function PresetsAndViewports() {
   return (
     <div className="flex-none px-1.5 py-1.5 border-t border-line bg-bench">
       <div className="mb-0.5">Presets (Ctrl+Tab):</div>
-      <select id="presetSel" className={SELECT} value={preset || ""} title="Layer presets"
-        onChange={(ev) => { const v = ev.target.value; if (v === "\u0001save") pdispatch({ t: "presetSave" }); else if (v === "\u0001delete") pdispatch({ t: "presetDelete" }); else if (v) pdispatch({ t: "preset", name: v }); }}>
-        {preset ? null : <option value="">(unsaved)</option>}
-        {builtin.map((p) => <option key={p} value={p}>{p}</option>)}
-        {user.map((p) => <option key={p} value={p}>{p}</option>)}
-        <option disabled>──────────</option>
-        <option value={"\u0001save"}>Save preset...</option>
-        <option value={"\u0001delete"} disabled={!user.length}>Delete preset...</option>
-      </select>
+      <Select id="presetSel" className={SELECT} title="Layer presets" value={preset || ""}
+        options={[...(preset ? [] : [{ value: "", label: "(unsaved)" }]), ...builtin.map((p) => ({ value: p, label: p })), ...user.map((p) => ({ value: p, label: p })),
+          { value: "\u0001sep", label: "---", sep: true }, { value: "\u0001save", label: "Save preset..." }, { value: "\u0001delete", label: "Delete preset...", disabled: !user.length }]}
+        onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "presetSave" }); else if (v === "\u0001delete") pdispatch({ t: "presetDelete" }); else if (v) pdispatch({ t: "preset", name: v }); }} />
       <div className="mt-1.5 mb-0.5">Viewports (Alt+Tab):</div>
-      <select id="viewportSel" className={SELECT} value={viewport && viewports.includes(viewport) ? viewport : ""} title="Viewports"
-        onChange={(ev) => { const v = ev.target.value; if (v === "\u0001save") pdispatch({ t: "viewportSave" }); else if (v === "\u0001delete") pdispatch({ t: "viewportDelete" }); else if (v) pdispatch({ t: "viewport", name: v }); }}>
-        <option value="">(unsaved)</option>
-        {viewports.map((p) => <option key={p} value={p}>{p}</option>)}
-        <option disabled>──────────</option>
-        <option value={"\u0001save"}>Save viewport...</option>
-        <option value={"\u0001delete"} disabled={!viewports.length}>Delete viewport...</option>
-      </select>
+      <Select id="viewportSel" className={SELECT} title="Viewports" value={viewport && viewports.includes(viewport) ? viewport : ""}
+        options={[{ value: "", label: "(unsaved)" }, ...viewports.map((p) => ({ value: p, label: p })),
+          { value: "\u0001sep", label: "---", sep: true }, { value: "\u0001save", label: "Save viewport..." }, { value: "\u0001delete", label: "Delete viewport...", disabled: !viewports.length }]}
+        onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "viewportSave" }); else if (v === "\u0001delete") pdispatch({ t: "viewportDelete" }); else if (v) pdispatch({ t: "viewport", name: v }); }} />
     </div>
   );
 }

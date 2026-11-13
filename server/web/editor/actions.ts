@@ -7,13 +7,13 @@ import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
 import { chooseTrackWidth, chooseViaSize } from "./pcbrouting";
 import { setCrosshair, setTheme, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
-import { contextMenuAction, openArcEditModeMenu, openRouterModeMenu } from "./contextmenu";
+import { contextMenuAction, openArcEditModeMenu, openGridButtonMenu, openRouterModeMenu } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
 import { drawSelection, renderProps, setFilter } from "./selection";
 import { E } from "./state";
 import { activeModule, deleteAction, orientSelected, redoLast, runModuleAction, selectAll, setTool, toolCtx, undoLast } from "./tools";
 import { api, esc, setRadio, showPopover, toast } from "./util";
-import { applyView, fitView, isSch, requestRender, zoomBy } from "./view";
+import { applyView, fitView, isSch, kicadZoom, requestRender, zoomBy } from "./view";
 import { show3DViewer } from "./viewer3d-loader";
 import { openFabOutputs } from "./fab-outputs";
 import { openPlotDialog } from "./pcbdialogs/plot";
@@ -84,7 +84,6 @@ export function findAction(query: string) {
   const p = store.get().popover; if (p && p.kind === "find") store.set({ popover: Object.assign({}, p, { hits: v ? m.length : null, query: String(query || "") }) });
 }
 
-export function gridMenu(el: ActionAnchor) { showPopover("grid", null, el); }
 
 // Every chrome action the web editor handles, by KiCad action id (or one of ours).  An id missing here
 // that maps to a tool (server/web/tables.ts TOOL_MAP) activates the tool; anything else is dimmed and
@@ -100,7 +99,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   rotateCCW: () => orientSelected("ccw"), rotateCW: () => orientSelected("cw"), rotateCcw: () => orientSelected("ccw"), rotateCw: () => orientSelected("cw"),
   mirrorV: () => orientSelected("mv"), mirrorH: () => orientSelected("mh"),
   showPcbNew: () => switchEditor(), showEeschema: () => switchEditor(),
-  toggleGrid: () => { E.gridOn = !E.gridOn; updateGridStatus(); requestRender(); }, "toggleGrid:menu": (a) => gridMenu(a),
+  toggleGrid: () => { E.gridOn = !E.gridOn; updateGridStatus(); requestRender(); }, "toggleGrid:menu": (a) => openGridButtonMenu(a),
   "routeSingleTrack:menu": (a) => openRouterModeMenu(a), "routeDiffPair:menu": (a) => openRouterModeMenu(a),
   // the Arc group's menu, whichever drawing mode its button shows
   "drawArcCenter:menu": (a) => openArcEditModeMenu(a), "drawArcStartEndMid:menu": (a) => openArcEditModeMenu(a), "drawArcStartEndCenter:menu": (a) => openArcEditModeMenu(a),
@@ -177,7 +176,8 @@ export function dispatchAction(a: AppAction) {
       case "setTrackWidth": chooseTrackWidth(a.index); return;
       case "setViaSize": chooseViaSize(a.index); return;
       case "setGrid": setGridPitch(a.pitch); return;
-      case "setZoom": if (a.zoom === "auto") fitView(); else { E.viewTouched = true; E.zoom = Math.min(400, Math.max(0.2, Number(a.zoom) / 100)); applyView(); } return;
+      // EDA_DRAW_FRAME::OnSelectZoom: Zoom Auto is ACTIONS::zoomFitScreen, a preset is ACTIONS::zoomPreset (a KiCad zoom factor)
+      case "setZoom": if (a.zoom === "auto") fitView(); else { const cur = kicadZoom(); if (cur > 0 && Number(a.zoom) > 0) zoomBy(Number(a.zoom) / cur); } return;
       case "setFilter": setFilter(a.key, a.on); return;
       case "follow": followAction(a.cid); return;
       case "openThread": if (a.docId) openThreadOnDoc(a.docId, a.id); else openThreadAction(a.id); return;

@@ -11,6 +11,7 @@ import { SCREEN_OP, anchorOf, mirrorNode, orientSymbol, setTextRot, shiftAt, shi
 import { mmPerPx } from "./snap";
 import { K, LINE_KINDS, POINT_KINDS, S, TEXT_KINDS, atOf, kid, kids, num, ptsOf, setAt, setPts, str } from "./state";
 import { addNode, deep, dropKid, modChange, r4, removeChange, replaceKid, same } from "./util";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- group transforms: rotate / mirror about the selection centre, swap, align, move exactly
 export const HALF_GRID = 0.635;
@@ -171,7 +172,7 @@ export function moveExactly(ctx: SchCtx, opts?: { dx?: number; dy?: number; rot?
   if (opts && (opts.dx !== undefined || opts.dy !== undefined || opts.rot !== undefined)) return apply(num(opts.dx), num(opts.dy), num(opts.rot));
   const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null; if (!KD) return false;
   KD.open({ title: "Move Exactly", width: 360,
-    build(body) { body.innerHTML = '<div class="kv"><label>Move X (mm)</label><input id="kd-mx" type="number" step="0.01" value="0"><label>Move Y (mm)</label><input id="kd-my" type="number" step="0.01" value="0"><label>Rotate (°)</label><select id="kd-mr"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></select></div><p class="kd-note">Rotation is about the centre of the selection, counterclockwise.</p>'; },
+    build(body) { body.innerHTML = '<div class="kv"><label>Move X (mm)</label><input id="kd-mx" type="number" step="0.01" value="0"><label>Move Y (mm)</label><input id="kd-my" type="number" step="0.01" value="0"><label>Rotate (°)</label><k-select id="kd-mr"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></k-select></div><p class="kd-note">Rotation is about the centre of the selection, counterclockwise.</p>'; },
     ok() { const g = (id: string) => document.getElementById(id) as HTMLInputElement; apply(num(g("kd-mx").value), num(g("kd-my").value), num(g("kd-mr").value)); } });
   return true;
 }

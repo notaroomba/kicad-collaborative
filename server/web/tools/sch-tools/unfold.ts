@@ -10,6 +10,7 @@ import { S, str } from "./state";
 import { closestOnSeg } from "./transforms";
 import { addNode, r4, segs } from "./util";
 import { startWire } from "./wire";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- unfold bus (SCH_LINE_WIRE_BUS_TOOL::UnfoldBus)
 // NET_SETTINGS::ParseBusVector / ParseBusGroup: "DATA[0..3]" -> DATA0..DATA3 (a +-PN suffix rides along),
@@ -63,7 +64,7 @@ export function unfoldAction(ctx: SchCtx, opts?: { bus?: string | KItem; member?
   const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
   if (!KD) { go(members[0]); return true; }
   KD.open({ title: "Unfold from Bus", width: 320,
-    build(body) { body.innerHTML = `<div class="kv"><label>Net</label><select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</select></div>`; },
+    build(body) { body.innerHTML = `<div class="kv"><label>Net</label><k-select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</k-select></div>`; },
     ok() { go((document.getElementById("kd-member") as HTMLSelectElement).value); } });
   return true;
 }

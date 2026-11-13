@@ -7,7 +7,9 @@ import { usePluginBarEntries } from "../plugins/PluginUi";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { actionMeta, isControl, isGroup, isSep, SPEC, type ActionItem, type ControlItem, type GroupItem, type ToolbarItem, type ToolbarLoc } from "../spec";
-import { EXTRA_TOOLS, READ_ONLY_OK, ZOOM_PRESETS, toolFor } from "../tables";
+import { EXTRA_TOOLS, READ_ONLY_OK, ZOOM_LIST, toolFor } from "../tables";
+import { gridChoiceText } from "../units";
+import { Select, type SelectOption } from "./Select";
 import { appState, dispatch, useApp, type Editor } from "../store";
 import { isOn, keyFor, runUiAction, titleFor, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
@@ -35,7 +37,7 @@ const KTB_V_INNER = "ktb-col flex flex-col flex-nowrap items-center justify-star
 /* the overflow chevron: KB's look without KB's `relative`, so it stays a plain flex item at the end of the bar */
 const KMORE = "kb kmore flex-none w-7.5 h-7.5 p-0.5 border border-transparent rounded-sm bg-transparent text-ink-2 inline-flex items-center justify-center"
   + " hover:bg-paper hover:border-line hover:text-ink [&[hidden]]:hidden";
-const KSEL = "ksel bg-panel border border-line rounded-sm px-1 py-0.5 h-6 text-sm text-ink max-w-[170px]";
+const KSEL = "ksel h-6 text-sm max-w-[260px]";
 
 // ---------------------------------------------------------------- view-only access
 /* A viewer (or a signed-out visitor of a public project) may look, select, measure and inspect, but every tool and
@@ -141,32 +143,46 @@ function GroupButton({ group, a }: { group: GroupItem; a: Avail }) {
 }
 
 // ---------------------------------------------------------------- the aux bar's controls
+/** EDA_DRAW_FRAME::UpdateGridSelectBox: GRID_MENU::BuildChoiceList in the user units, "---", "Edit Grids...". */
+function GridSelect() {
+  const gridPitch = useApp((s) => s.viewport.gridPitch);
+  const grids = useApp((s) => s.viewport.gridChoices);
+  const units = useApp((s) => s.viewport.units);
+  const lastImperial = useApp((s) => s.viewport.lastImperial);
+  const sch = useApp((s) => s.document.editor === "sch");
+  const at = grids.findIndex((g) => Math.abs(g.mm - gridPitch) < 1e-9);
+  const options: SelectOption[] = grids.map((g, i) => ({ value: String(i), label: gridChoiceText(g, units, lastImperial, sch ? "sch" : "pcb") }));
+  options.push({ value: "sep", label: "---", sep: true }, { value: "edit", label: "Edit Grids..." });
+  // EDA_DRAW_FRAME::OnSelectGrid: the last entry runs ACTIONS::gridProperties, the others ACTIONS::gridPreset
+  return <Select id="gridSel" className={KSEL} title="Grid" options={options} value={at < 0 ? "" : String(at)} blurOnPick
+    onChange={(v) => { if (v === "edit") dispatch({ type: "action", id: "gridProperties" }); else if (v !== "sep" && grids[Number(v)]) dispatch({ type: "setGrid", pitch: grids[Number(v)].mm }); }} />;
+}
+/** EDA_DRAW_FRAME::UpdateZoomSelectBox / SyncZoomSelectBox: "Zoom Auto", then "Zoom %.2f" for each of the window's zoom
+ *  factors; an off-preset zoom shows as its own entry just below Zoom Auto. */
+function ZoomSelect() {
+  const kzoom = useApp((s) => s.viewport.kzoom);
+  const editor = useApp((s) => s.document.editor);
+  const list = ZOOM_LIST[editor === "sch" ? "sch" : "pcb"];
+  const preset = list.findIndex((f) => Math.abs(f - kzoom) <= f * 1e-3);
+  const options: SelectOption[] = [{ value: "auto", label: "Zoom Auto" }];
+  if (preset < 0) options.push({ value: "custom", label: `Zoom ${kzoom.toFixed(2)}` });
+  for (const f of list) options.push({ value: String(f), label: `Zoom ${f.toFixed(2)}` });
+  return <Select id="zoomSel" className={KSEL} title="Zoom" options={options} value={preset < 0 ? "custom" : String(list[preset])} blurOnPick
+    onChange={(v) => { if (v === "auto") dispatch({ type: "setZoom", zoom: "auto" }); else if (v !== "custom") dispatch({ type: "setZoom", zoom: Number(v) }); }} />;
+}
+
 function Control({ item }: { item: ControlItem }) {
   const c = item.control;
-  const gridPitch = useApp((s) => s.viewport.gridPitch);
-  const gridChoices = useApp((s) => s.viewport.gridChoices);
-  const zoom = useApp((s) => s.viewport.zoom);
   if (c === "ipcScripting") return null;
   let inner: ReactElement | null = null;
-  if (c === "currentVariant") inner = <select className={KSEL} title="Select the current variant to display and edit." defaultValue="default"><option value="default">&lt; Default &gt;</option></select>;
+  if (c === "currentVariant") inner = <Select className={KSEL} title="Select the current variant to display and edit." options={[{ value: "default", label: "< Default >" }]} value="default" blurOnPick />;
   else if (c === "overrideLocks") inner = <label className="kcheck inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Allow editing locked items"><input type="checkbox" onChange={(ev) => { const ed = (window as unknown as { CollabEditor?: { overrideLocks?: boolean } }).CollabEditor; if (ed) ed.overrideLocks = ev.currentTarget.checked; }} /> Override locks</label>;
   else if (c === "trackWidth") inner = <TrackWidthSelect />;
   else if (c === "viaDiameter") inner = <ViaSizeSelect />;
-  else if (c === "viaStack") inner = <select className={KSEL} title="Via stack" defaultValue="Through"><option>Through</option></select>;
+  else if (c === "viaStack") inner = <Select className={KSEL} title="Select the microvia stack preset placed by the microvia stack tool." options={[{ value: "none", label: "Microvia stack: none defined" }]} value="none" blurOnPick />;
   else if (c === "layerSelector") inner = <LayerSelect />;
-  else if (c === "gridSelect") inner = (
-    <select id="gridSel" className={KSEL} title="Grid" value={String(gridPitch)} onChange={(ev) => dispatch({ type: "setGrid", pitch: Number(ev.target.value) })}>
-      {gridChoices.map(([v, label]) => <option key={v} value={String(v)}>{label}</option>)}
-      {gridChoices.some(([v]) => v === gridPitch) ? null : <option value={String(gridPitch)}>{gridPitch} mm</option>}
-    </select>);
-  else if (c === "zoomSelect") {
-    const preset = ZOOM_PRESETS.find((z) => Math.abs(z / 100 - zoom) < 1e-6);
-    inner = (
-      <select id="zoomSel" className={KSEL} title="Zoom" value={preset ? String(preset) : "auto"} onChange={(ev) => dispatch({ type: "setZoom", zoom: ev.target.value === "auto" ? "auto" : Number(ev.target.value) })}>
-        <option value="auto">Auto</option>
-        {ZOOM_PRESETS.map((z) => <option key={z} value={String(z)}>{z}%</option>)}
-      </select>);
-  }
+  else if (c === "gridSelect") inner = <GridSelect />;
+  else if (c === "zoomSelect") inner = <ZoomSelect />;
   return <span className="kctl inline-flex items-center gap-1 mx-[3px] flex-none" data-control={c}>{inner}</span>;
 }
 

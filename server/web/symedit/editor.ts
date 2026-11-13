@@ -14,7 +14,7 @@ import { h, confirmBox, download } from "../dialogs/dom";
 import { messageBox } from "../dialogs/sch-items";
 import { E, appState, api } from "../dialogs/editor";
 import { comboOf } from "../editor/hotkeys";
-import { fmtCoord, unitName } from "../units";
+import { fmtCoord, unitName, messageText, unitsMsg } from "../units";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
 import * as D from "./dialogs";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
@@ -594,7 +594,7 @@ export class SymbolEditor {
     const sym = this.symbol(); const t = this.tab;
     if (name === "unitSelector") {
       const n = sym ? M.unitCount(this.rootSym(sym)) : 1;
-      const s = h("select", { id: "se-unit", "aria-label": "Unit", disabled: !sym || n < 2 }) as HTMLSelectElement;
+      const s = h("k-select", { id: "se-unit", "aria-label": "Unit", disabled: !sym || n < 2 }) as HTMLSelectElement;
       const names = sym && n > 1 ? M.unitChoices(this.rootSym(sym)) : [""];   // one unit: an empty entry, as KiCad
       names.forEach((label, i) => s.append(h("option", { value: String(i + 1) }, label)));
       if (t) s.value = String(t.unit); s.addEventListener("change", () => this.setUnit(Number(s.value)));
@@ -602,7 +602,7 @@ export class SymbolEditor {
     }
     if (name === "bodyStyleSelector") {
       const b = sym ? M.bodyStyles(this.rootSym(sym)) : { count: 1, demorgan: false, names: [] as string[] };
-      const s = h("select", { id: "se-body", "aria-label": "Body style", disabled: !sym || b.count < 2 }) as HTMLSelectElement;
+      const s = h("k-select", { id: "se-body", "aria-label": "Body style", disabled: !sym || b.count < 2 }) as HTMLSelectElement;
       for (let i = 1; i <= Math.max(1, b.count); i++) s.append(h("option", { value: String(i) }, sym && b.count > 1 ? M.bodyStyleDescription(this.rootSym(sym), i) : ""));
       if (t) s.value = String(t.body); s.addEventListener("change", () => this.setBody(Number(s.value)));
       return s;
@@ -755,19 +755,17 @@ export class SymbolEditor {
     const [fx, fy] = this.snapFile(this.mouse.x, this.mouse.y);
     const v = this.tab && this.tab.view ? this.tab.view.s : 12;
     if (!el.firstChild) {
-      const grid = h("select", { id: "se-grid", "aria-label": "Grid" }) as HTMLSelectElement;
-      for (const g of GRIDS_MIL) grid.append(h("option", { value: String(g) }, `Grid: ${g} mils (${M.fmt(g * M.MIL)} mm)`));
-      grid.addEventListener("change", () => { this.gridMil = Number(grid.value); this.paint(); });
-      el.append(h("span", { id: "se-zoom" }), h("span", { id: "se-xy" }), h("span", { id: "se-dxy" }), grid, h("span", { id: "se-units" }), h("span", { id: "se-tool" }));
+      // EDA_DRAW_FRAME::DisplayGridMsg / DisplayUnitsMsg: plain text, the grid is changed from the menus and hotkeys
+      el.append(h("span", { id: "se-zoom" }), h("span", { id: "se-xy" }), h("span", { id: "se-dxy" }), h("span", { id: "se-grid" }), h("span", { id: "se-units" }), h("span", { id: "se-tool" }));
     }
-    (el.querySelector("#se-grid") as HTMLSelectElement).value = String(this.gridMil);
+    el.querySelector("#se-grid")!.textContent = `grid ${messageText(this.gridMm, this.units, "sch", false)}`;
     el.querySelector("#se-zoom")!.textContent = `Z ${(v / 12).toFixed(2)}`;
     // eeschema shows internal coordinates: Y grows downward (the file's library Y is up)
     el.querySelector("#se-xy")!.textContent = `X ${fmtCoord(fx, this.units)}  Y ${fmtCoord(-fy || 0, this.units)}`;
     // dx / dy / dist from the local origin (Space: resetLocalCoords)
     const dx = fx - this.localOrigin[0], dy = -(fy - this.localOrigin[1]) || 0;
     el.querySelector("#se-dxy")!.textContent = `dx ${fmtCoord(dx, this.units)}  dy ${fmtCoord(dy, this.units)}  dist ${fmtCoord(Math.hypot(dx, dy), this.units)}`;
-    el.querySelector("#se-units")!.textContent = unitName(this.units);
+    el.querySelector("#se-units")!.textContent = unitsMsg(this.units);
     el.querySelector("#se-tool")!.textContent = meta(Object.keys(TOOL_ACTIONS).find((k) => TOOL_ACTIONS[k] === this.tool) || "selectionTool").label;
   }
 
@@ -808,7 +806,7 @@ export class SymbolEditor {
       addSymbolToSchematic: () => void D.addToSchematic(this),
       toggleGrid: () => { /* the grid is always shown in the symbol editor canvas */ },
       millimetersUnits: () => this.setUnits("mm"), milsUnits: () => this.setUnits("mil"), inchesUnits: () => this.setUnits("in"),
-      toggleUnits: () => this.setUnits(this.units === "mm" ? "mil" : "mm"),
+      toggleUnits: () => this.setUnits(this.units === "mm" ? (E.lastImperial === "in" ? "in" : "mil") : "mm"),
       properties: () => this.editSelected(), repeatDrawItem: () => this.repeat(),
       pushPinLength: () => this.pushPin("length"), pushPinNameSize: () => this.pushPin("nameSize"), pushPinNumSize: () => this.pushPin("numSize"),
       move: () => this.startCarry("Move"), drag: () => this.startCarry("Move"),
@@ -858,7 +856,7 @@ export class SymbolEditor {
     await this.close(); if (this.isOpen) return;
     await L.placeSymbol({ libId: r.libId || r.item.id, symbol: r.symbol || "", fields: r.fields, unit: r.unit, keep: r.keep, allUnits: r.allUnits }).catch((e: Error) => messageBox(e.message));
   }
-  setUnits(u: Units): void { E.units = u; try { localStorage.setItem("kui.units", u); } catch (e) { /* no storage */ } this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
+  setUnits(u: Units): void { E.units = u; if (u !== "mm") E.lastImperial = u; try { localStorage.setItem("kui.units", u); } catch (e) { /* no storage */ } this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
   setTool(t: ToolId): void {
     if ((t !== "select") && this.readOnly()) { this.readOnlyNotice(); return; }
     const sym = this.symbol();
@@ -1255,7 +1253,7 @@ export class SymbolEditor {
   private onKey(ev: KeyboardEvent): void {
     if (!this.isOpen) return;
     const t = ev.target as HTMLElement | null;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) {
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable)) {
       // the library filter keeps its typing; Find / Find and Replace still open from it, as from any frame control
       const findKey = (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.key.toLowerCase() === "f";
       if (!this.root!.contains(t) || (ev.key !== "Escape" && !findKey)) return;

@@ -4,24 +4,60 @@
 // PCB Editor > Display Options, Grids.  Everything is kept in localStorage (prefs.ts) and applied on OK.
 import { E, toast } from "./editor";
 import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
-import { KD, checkbox, h, promptText, select, textInput } from "./dom";
+import { KD, checkbox, h, select, textInput } from "./dom";
+import { messageBox } from "../editor/pcbdialogs/ui";
+import { messageText } from "../units";
 import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, gridLabel, savePrefs, type EditorId, type Prefs, type SchThemeId } from "./prefs";
+import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
 import { getInactiveMode, setInactiveMode } from "../editor/panels/appearance";
 
 interface ActionMeta { id: string; label: string; key: string | null }
 const MIL = 0.0254;
-/** "50 mil", "0.5 mm", "1.27" (mm) -> mm; null when it is not a size. */
-export function parseGrid(text: string): number | null {
-  const m = /^\s*([0-9]*\.?[0-9]+)\s*(mm|mil|mils|in|")?\s*$/i.exec(text); if (!m) return null;
-  const v = parseFloat(m[1]), u = (m[2] || "mm").toLowerCase(); const mm = u === "mm" ? v : u === "in" || u === '"' ? v * 25.4 : v * MIL;
-  return mm > 0 ? +mm.toFixed(6) : null;
+
+const units = (): Units => (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units;
+/** A length typed in a grid field: a number in the user units, or with its own unit ("25 mil", "0.5mm", "0.1 in"). */
+function parseUserLen(text: string): number | null {
+  const m = /^\s*([0-9]*[.,]?[0-9]+)\s*(mm|mils?|in|"|th)?\s*$/i.exec(text); if (!m) return null;
+  const v = parseFloat(m[1].replace(",", ".")), u = (m[2] || units()).toLowerCase();
+  return u === "mm" ? v : u === "in" || u === '"' ? v * 25.4 : v * MIL;
+}
+/**
+ * DIALOG_GRID_SETTINGS ("Grid Settings"): Name (optional), X and Y in the user units, Linked.  It opens over the
+ * Preferences dialog; OK checks the range (0.001 to 1000 mm).  The web editor's grids are square, so Y follows X.
+ */
+export function gridSettingsDialog(grid: { mm: number; name: string } | null, ed: EditorId): Promise<{ mm: number; name: string } | null> {
+  return new Promise((resolve) => {
+    const u = units(), show = (mm: number): string => messageText(mm, u, ed, false).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+    const name = h("input", { type: "text", id: "kd-grid-name", value: grid ? grid.name : "" });
+    const x = h("input", { type: "text", id: "kd-grid-x", value: grid ? show(grid.mm) : "" }), y = h("input", { type: "text", id: "kd-grid-y", value: grid ? show(grid.mm) : "", disabled: true });
+    const linked = h("input", { type: "checkbox", id: "kd-grid-linked", checked: true, disabled: true });
+    x.addEventListener("input", () => { y.value = x.value; });
+    const unit = (): HTMLElement => h("span", { class: "ro" }, u === "mil" ? "mils" : u);
+    const body = h("div", { class: "kd-body" }, h("div", { class: "kv", style: "grid-template-columns:max-content 1fr max-content;align-items:center" },
+      h("label", { for: "kd-grid-name" }, "Name:"), name, h("span", { class: "ro" }, "(optional)"),
+      h("label", { for: "kd-grid-x" }, "X:"), x, unit(),
+      h("span"), h("label", { class: "kd-chk", title: "The web editor's grids are square: Y is always X" }, linked, "Linked"), h("span"),
+      h("label", { for: "kd-grid-y" }, "Y:"), y, unit()));
+    const done = (ok: boolean): void => {
+      if (!ok) { ov.remove(); resolve(null); return; }
+      const mm = parseUserLen(x.value);
+      if (mm === null || mm < 0.001 || mm > 1000) { messageBox("Error", "Grid size X out of range."); x.focus(); return; }
+      ov.remove(); resolve({ mm: +mm.toFixed(6), name: name.value.trim() });
+    };
+    const okB = h("button", { class: "btn primary", type: "button", onclick: () => done(true) }, "OK"), cancel = h("button", { class: "btn", type: "button", onclick: () => done(false) }, "Cancel");
+    const dlg = h("div", { class: "kd-dialog", role: "dialog", "aria-label": "Grid Settings", style: "width:360px;min-width:0" }, h("div", { class: "kd-title" }, h("span", null, "Grid Settings")), body, h("div", { class: "kd-foot" }, cancel, okB));
+    const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
+    ov.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(true); } else if (ev.key === "Escape") { ev.preventDefault(); done(false); } });
+    document.body.append(ov); name.focus();
+  });
 }
 
 /** pcb-tools.js's arc editing mode (APP_SETTINGS m_ArcEditMode, also switched from the Arc toolbar group and Ctrl+Space). */
 type ArcEditTools = { arcEditMode(): number; setArcEditMode(m: number): void };
 const pcbTools = (): ArcEditTools | null => { const t = (window as unknown as { PcbTools?: Partial<ArcEditTools> }).PcbTools; return t && t.arcEditMode && t.setArcEditMode ? (t as ArcEditTools) : null; };
 
+/** Preferences…; `page` is a page label or "Section/Page" ("PCB Editor/Grids"). */
 export function openPreferences(page?: string): void {
   const p: Prefs = clonePrefs();
   let uiMode: ThemeMode = getThemeMode();
@@ -29,30 +65,50 @@ export function openPreferences(page?: string): void {
   // the inactive layer mode is the open board's project setting (.kicad_prl "board.high_contrast_mode"), not a user preference
   let contrast = getInactiveMode();
   const here: EditorId = E.DOC_TYPE === "kicad_sch" ? "sch" : "pcb";
+  // PANEL_GRID_SETTINGS: the grid list (its selection is the current grid, grid.last_size), Add / Edit / Move / Remove
+  // through DIALOG_GRID_SETTINGS, the fast grids, the overrides and the axes.  Every list shows the grids as
+  // GRID_MENU::BuildChoiceList does, in the user units with the other system in brackets.
   const gridsPage = (ed: EditorId) => (pg: HTMLElement) => {
     const g = p.grids[ed], o = g.overrides, pre = `kd-pref-${ed}`;
-    const cols = h("div", { style: "display:grid;grid-template-columns:220px 1fr;gap:20px" }), L = h("div"), R = h("div"); cols.append(L, R); pg.append(cols);
-    const list = h("select", { size: 12, id: `${pre}-gridlist`, style: "width:100%;height:230px" });
-    const choices = () => g.sizes.map((mm, i) => [String(i), gridLabel(mm)] as [string, string]);
+    g.names = g.sizes.map((_, i) => (g.names && g.names[i]) || "");
+    if (ed === here) { const at = g.sizes.findIndex((mm) => Math.abs(mm - E.gridPitch) < 1e-9); if (at >= 0) g.last = at; }
+    const cols = h("div", { style: "display:grid;grid-template-columns:260px 1fr;gap:20px" }), L = h("div"), R = h("div"); cols.append(L, R); pg.append(cols);
+    const list = h("k-select", { size: 12, id: `${pre}-gridlist`, style: "width:100%;height:230px" });
+    const text = (i: number): string => gridLabel({ mm: g.sizes[i], name: g.names![i] }, ed);
+    const choices = () => g.sizes.map((_, i) => [String(i), text(i)] as [string, string]);
     const fast1 = select(choices(), String(g.fast1), (v) => { g.fast1 = +v; }, { id: `${pre}-fast1` }), fast2 = select(choices(), String(g.fast2), (v) => { g.fast2 = +v; }, { id: `${pre}-fast2` });
     const ovSel: Record<string, HTMLSelectElement> = {};
-    const fill = () => {
-      list.replaceChildren(...g.sizes.map((mm, i) => h("option", { value: String(i) }, gridLabel(mm))));
-      for (const [sel, idx] of [[fast1, g.fast1], [fast2, g.fast2]] as [HTMLSelectElement, number][]) { sel.replaceChildren(...choices().map(([v, l]) => h("option", { value: v }, l))); sel.value = String(Math.min(idx, g.sizes.length - 1)); }
-      for (const [k, s] of Object.entries(ovSel)) { const mm = (o as unknown as Record<string, number>)[k + "Mm"]; const opts = g.sizes.some((x) => Math.abs(x - mm) < 1e-6) ? g.sizes : [...g.sizes, mm]; s.replaceChildren(...opts.map((x) => h("option", { value: String(x) }, gridLabel(x)))); s.value = String(opts.find((x) => Math.abs(x - mm) < 1e-6)); }
+    const fill = (sel?: number) => {
+      const cur = sel ?? Math.max(0, Math.min(g.sizes.length - 1, g.last ?? 0));
+      list.replaceChildren(...g.sizes.map((_, i) => h("option", { value: String(i) }, text(i)))); list.selectedIndex = cur; g.last = cur;
+      for (const [sel2, idx] of [[fast1, g.fast1], [fast2, g.fast2]] as [HTMLSelectElement, number][]) { sel2.replaceChildren(...choices().map(([v, l]) => h("option", { value: v }, l))); sel2.value = String(Math.max(0, Math.min(idx, g.sizes.length - 1))); }
+      for (const [k, s2] of Object.entries(ovSel)) { const mm = (o as unknown as Record<string, number>)[k + "Mm"]; const at = g.sizes.findIndex((x) => Math.abs(x - mm) < 1e-6); s2.replaceChildren(...g.sizes.map((x, i) => h("option", { value: String(x) }, text(i)))); s2.value = String(g.sizes[at >= 0 ? at : 0]); (o as unknown as Record<string, number>)[k + "Mm"] = g.sizes[at >= 0 ? at : 0]; }
     };
-    const btn = (txt: string, title: string, id: string, fn: () => void) => h("button", { class: "btn", type: "button", title, id, onclick: fn }, txt);
+    list.addEventListener("change", () => { g.last = list.selectedIndex; });
+    const exists = (mm: number, skip: number): boolean => g.sizes.some((x, i) => i !== skip && Math.abs(x - mm) < 1e-6);
+    const dup = (mm: number): void => { messageBox("Error", `Grid size '${messageText(mm, units(), ed)}' already exists.`); };
+    const add = (): void => { void gridSettingsDialog(null, ed).then((r) => { if (!r) return; if (exists(r.mm, -1)) { dup(r.mm); return; }
+      const row = list.selectedIndex < 0 ? g.sizes.length : list.selectedIndex; g.sizes.splice(row, 0, r.mm); g.names!.splice(row, 0, r.name);
+      if (g.fast1 >= row) g.fast1++; if (g.fast2 >= row) g.fast2++; fill(row); }); };
+    const edit = (): void => { const row = list.selectedIndex; if (row < 0) return;
+      void gridSettingsDialog({ mm: g.sizes[row], name: g.names![row] }, ed).then((r) => { if (!r) return; if (exists(r.mm, row)) { dup(r.mm); return; } g.sizes[row] = r.mm; g.names![row] = r.name; fill(row); }); };
+    const swap = (i: number, j: number): void => { [g.sizes[i], g.sizes[j]] = [g.sizes[j], g.sizes[i]]; [g.names![i], g.names![j]] = [g.names![j], g.names![i]]; };
+    list.addEventListener("dblclick", edit);
+    const btn = (icon: string, title: string, id: string, fn: () => void) => h("button", { class: "btn kd-bmp", type: "button", title, "aria-label": title, id, onclick: fn }, icon);
     L.append(h("div", { style: "font-weight:600;margin-bottom:6px" }, "Grids"), list, h("div", { class: "kd-grid-btns" },
-      btn("+", "Add", `${pre}-gridadd`, () => { void promptText("Add Grid", "Grid size (for example 0.5 mm or 25 mil):").then((t) => { if (t === null) return; const mm = parseGrid(t); if (!mm) { toast("Grid size must be a positive length"); return; } if (g.sizes.some((x) => Math.abs(x - mm) < 1e-6)) { toast("Grid size already exists"); return; } g.sizes.push(mm); fill(); }); }),
-      btn("↑", "Move up", `${pre}-gridup`, () => { const i = list.selectedIndex; if (i > 0) { [g.sizes[i - 1], g.sizes[i]] = [g.sizes[i], g.sizes[i - 1]]; fill(); list.selectedIndex = i - 1; } }),
-      btn("↓", "Move down", `${pre}-griddown`, () => { const i = list.selectedIndex; if (i >= 0 && i < g.sizes.length - 1) { [g.sizes[i + 1], g.sizes[i]] = [g.sizes[i], g.sizes[i + 1]]; fill(); list.selectedIndex = i + 1; } }),
-      btn("🗑", "Delete", `${pre}-griddel`, () => { const i = list.selectedIndex; if (i < 0) return; if (g.sizes.length <= 1) { toast("At least one grid size is required"); return; } g.sizes.splice(i, 1); g.fast1 = Math.min(g.fast1, g.sizes.length - 1); g.fast2 = Math.min(g.fast2, g.sizes.length - 1); fill(); })));
+      btn("+", "Add", `${pre}-gridadd`, add),
+      btn("✎", "Edit", `${pre}-gridedit`, edit),
+      btn("↑", "Move up", `${pre}-gridup`, () => { const i = list.selectedIndex; if (i > 0) { swap(i - 1, i); fill(i - 1); } }),
+      btn("↓", "Move down", `${pre}-griddown`, () => { const i = list.selectedIndex; if (i >= 0 && i < g.sizes.length - 1) { swap(i + 1, i); fill(i + 1); } }),
+      btn("🗑", "Remove", `${pre}-griddel`, () => { const i = list.selectedIndex; if (i < 0 || g.sizes.length <= 1) return; g.sizes.splice(i, 1); g.names!.splice(i, 1);
+        g.fast1 = Math.min(g.fast1 > i ? g.fast1 - 1 : g.fast1, g.sizes.length - 1); g.fast2 = Math.min(g.fast2 > i ? g.fast2 - 1 : g.fast2, g.sizes.length - 1); fill(i !== 0 ? i - 1 : 0); })));
     const fb = KD().staticBox(R, "Fast Grid Switching");
-    fb.append(h("div", { style: "display:grid;grid-template-columns:max-content 160px max-content;gap:6px 10px;align-items:center" }, h("label", null, "Grid 1:"), fast1, h("span", { class: "ro" }, "(Alt+1)"), h("label", null, "Grid 2:"), fast2, h("span", { class: "ro" }, "(Alt+2)")));
-    const ob = KD().staticBox(R, "Grid Overrides"), og = h("div", { style: "display:grid;grid-template-columns:max-content 160px;gap:6px 10px;align-items:center" });
-    const ov = (key: "connected" | "wires" | "vias" | "text" | "graphics", label: string) => { const s = h("select", { id: `${pre}-ov-${key}` }); s.addEventListener("change", () => { (o as unknown as Record<string, number>)[key + "Mm"] = +s.value; }); ovSel[key] = s;
-      og.append(checkbox(label, o[key], (on) => { o[key] = on; }, { id: `${pre}-ovon-${key}` }), s); };
-    ov("connected", "Connected items:"); ov("wires", "Wires:"); if (ed === "pcb") ov("vias", "Vias:"); ov("text", "Text:"); ov("graphics", "Graphics:");
+    fb.append(h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,240px) max-content;gap:6px 10px;align-items:center" }, h("label", null, "Grid 1:"), fast1, h("span", { class: "ro" }, "(Alt+1)"), h("label", null, "Grid 2:"), fast2, h("span", { class: "ro" }, "(Alt+2)")));
+    const ob = KD().staticBox(R, "Grid Overrides"), og = h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,240px);gap:6px 10px;align-items:center" });
+    const ov = (key: "connected" | "wires" | "vias" | "text" | "graphics", label: string) => { const s2 = select([], "", (v) => { (o as unknown as Record<string, number>)[key + "Mm"] = +v; }, { id: `${pre}-ov-${key}` }); ovSel[key] = s2;
+      og.append(checkbox(label, o[key], (on) => { o[key] = on; }, { id: `${pre}-ovon-${key}` }), s2); };
+    // PANEL_GRID_SETTINGS relabels the first two overrides for the board editor
+    ov("connected", ed === "pcb" ? "Footprints/pads:" : "Connected items:"); ov("wires", ed === "pcb" ? "Tracks:" : "Wires:"); if (ed === "pcb") ov("vias", "Vias:"); ov("text", "Text:"); ov("graphics", "Graphics:");
     ob.append(og); KD().staticBox(R, "Grid Display").append(checkbox("Show grid axes", !!g.axes, (on) => { g.axes = on; }, { id: `${pre}-gridaxes` })); fill();
   };
   KD().open({ title: "Preferences", width: 900, cls: "kd-wide kd-flush",

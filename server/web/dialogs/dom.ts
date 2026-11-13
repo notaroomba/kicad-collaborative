@@ -1,5 +1,6 @@
 // dialogs/dom.ts — small typed DOM helpers shared by the dialogs, and the typed face of kicad-dialogs.js's
 // shell and widgets (window.KDialogs: open, notebook, treebook, grid, staticBox).
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 export interface DlgButton { label: string; fn?: () => void; primary?: boolean; isDefault?: boolean; close?: boolean; id?: string }
 export interface DlgSpec {
@@ -48,7 +49,7 @@ export function checkbox(label: string, checked: boolean, onchange?: (on: boolea
   return h("label", { class: "kd-chk", title: opts?.title }, cb, label);
 }
 export function select(options: (string | [string, string])[], value: string, onchange?: (v: string) => void, opts?: { disabled?: boolean; id?: string; style?: string }): HTMLSelectElement {
-  const s = h("select", { disabled: opts?.disabled, id: opts?.id, style: opts?.style });
+  const s = h("k-select", { disabled: opts?.disabled, id: opts?.id, style: opts?.style });
   for (const o of options) s.append(h("option", { value: Array.isArray(o) ? o[0] : o }, Array.isArray(o) ? o[1] : o));
   s.value = value; if (onchange) s.addEventListener("change", () => onchange(s.value));
   return s;

@@ -260,3 +260,7 @@ interface Window {
 // The DOM converts an attribute value with ToString (WebIDL DOMString), and the editor passes
 // numbers for SVG coordinates throughout; this overload says so instead of wrapping each in String().
 interface Element { setAttribute(qualifiedName: string, value: string | number): void }
+
+// <k-select> (components/kselect.ts) is the themed drop-down the chrome uses in place of <select>; it keeps the
+// <select> API (value, selectedIndex, options, disabled, size, change events), so it is typed as one.
+interface HTMLElementTagNameMap { "k-select": HTMLSelectElement }

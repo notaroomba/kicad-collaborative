@@ -24,6 +24,7 @@ import { clearPreview, renderFootprintPreview } from "../library/preview";
 import { INVALID_VALUE, boolValue, buildMessage, pageValues, paramCategories, paramDisplay, paramKind, paramParse, wizardMsgPanel, wizardState, type WizardParam, type WizardState } from "./fpwizard-model";
 import { E } from "./state";
 import { icon } from "../symedit/ui";
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /** The plugin host (web/plugins/host.ts, in the app's bundle) as it offers its footprint wizards. */
 interface WizardHost { list(): WizardContribution[]; call(plugin: string, id: string, req: unknown): Promise<unknown> }
@@ -109,7 +110,7 @@ export async function footprintWizardDialog(): Promise<string | null> {
         cb.addEventListener("change", () => { q.value = cb.checked ? "1" : "0"; rebuild(); });
         ctrl = h("span", { class: "fw-pg-chk" }, cb);
       } else if (kind === "enum") {
-        const sel = h("select") as HTMLSelectElement;
+        const sel = h("k-select") as HTMLSelectElement;
         for (const c of q.units.split(",")) { const o = h("option", { value: c.trim() }, c.trim()); if (c.trim() === q.value) o.selected = true; sel.append(o); }
         sel.addEventListener("change", () => { q.value = sel.value; rebuild(); });
         ctrl = sel;
@@ -209,8 +210,8 @@ const FW_CSS = `
 .fw-pg-name { padding: 0 4px 0 18px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-right: 1px solid var(--line-soft, var(--line)); }
 .fw-pg-row.err .fw-pg-name { color: var(--err); }
 .fw-pg-val { position: relative; min-width: 0; display: flex; align-items: center; }
-.fw-pg-val input[type=text], .fw-pg-val select { width: 100%; height: 20px; border: 0; background: transparent; color: var(--ink); padding: 0 4px; font: inherit; border-radius: 0; }
-.fw-pg-val input[type=text]:focus, .fw-pg-val select:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent, var(--line)); background: var(--panel); }
+.fw-pg-val input[type=text], .fw-pg-val k-select { width: 100%; height: 20px; border: 0; background: transparent; color: var(--ink); padding: 0 4px; font: inherit; border-radius: 0; }
+.fw-pg-val input[type=text]:focus, .fw-pg-val k-select:focus-within { outline: none; box-shadow: inset 0 0 0 1px var(--accent, var(--line)); background: var(--panel); }
 .fw-pg-val input.bad { box-shadow: inset 0 0 0 1px var(--err); }
 .fw-pg-chk { padding: 0 4px; display: flex; align-items: center; }
 .fw-msg { width: 100%; resize: vertical; font-family: var(--mono); font-size: 12px; min-height: 80px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: var(--paper); color: var(--ink); }

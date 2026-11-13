@@ -67,7 +67,7 @@ export function HistoryBar() {
     if (!view || dialogOpen) return;
     const key = (ev: KeyboardEvent): void => {
       const t = ev.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" && (t as HTMLInputElement).type !== "range" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+      if (t && (t.tagName === "INPUT" && (t as HTMLInputElement).type !== "range" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT")) return;
       if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); run({ cmd: "exit" }); }
       else if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") { ev.preventDefault(); ev.stopPropagation(); run({ cmd: "step", by: (ev.key === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 10 : 1) }); }
     };

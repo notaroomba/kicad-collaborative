@@ -2,6 +2,7 @@
 // through the editor's ordinary commit: one undo step, sent to everyone in the session as normal edits.
 import { place, placementChanges, PlaceOptions, PlaceResult } from "./place";
 import { refOf } from "./route";
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const root = globalThis as any;
@@ -41,7 +42,7 @@ export function openPlace(ctx: any): boolean {
   KD.open({
     title: "Auto Place Footprints", width: 470, okLabel: "Place",
     build(body: HTMLElement) {
-      scope = document.createElement("select"); scope.dataset.k = "scope"; scope.style.cssText = FIELD;
+      scope = document.createElement("k-select"); scope.dataset.k = "scope"; scope.style.cssText = FIELD;
       scope.add(new Option(`All unlocked footprints (${all.length})`, "all"));
       if (sel.length) { scope.add(new Option(`Selected footprints (${sel.length})`, "sel")); scope.value = "sel"; }
       row(body, "Place", scope);

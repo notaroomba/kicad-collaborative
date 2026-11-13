@@ -7,6 +7,7 @@ import * as state from "../editor/state";
 import * as tools from "../editor/tools";
 import * as util from "../editor/util";
 import * as view from "../editor/view";
+import type { GridDef } from "../units";
 
 export interface DialogCtx extends ToolCtx { setSelection(ids: Iterable<string>): void; setMarkers?(list: unknown[]): void }
 export interface UndoEntry { label: string; changes: unknown[]; inverse: unknown[]; undoOthers?: () => void; redoOthers?: () => void }
@@ -15,7 +16,7 @@ export interface EditorState {
   kdoc: (KDoc & { schSettings?: { junctionDiameter: number }; paper?: string; portrait?: boolean; titleBlock?: Record<string, string>; sheetCount?: number; pageNumber?: string }) | null;
   viewOnly: boolean; DOC_TYPE: string; units: string; tool: string; zoom: number; viewTouched: boolean; gridPitch: number; proSettings: string | null; druText: string | null;
   selection: Set<string>; selected: { id: string } | null; drag: { fp?: { id: string } } | null; fdrag: unknown; renderOpts: Record<string, unknown>;
-  zoomStep?: number; middleDragPan?: boolean; rightDragPan?: boolean; gridFor?: () => number; gridDefault?: () => number; dialogs?: unknown;
+  zoomStep?: number; middleDragPan?: boolean; rightDragPan?: boolean; gridFor?: () => number; gridDefault?: () => number; gridPicked?: (mm: number) => void; lastImperial?: string; dialogs?: unknown;
 }
 export const E = state.E as EditorState;
 export const toolCtx = tools.toolCtx as unknown as (extra?: Record<string, unknown>) => DialogCtx;
@@ -36,7 +37,7 @@ export const openDocId = doc.openDocId as (id: string) => void;
 export const rootSchematic = doc.rootSchematic as unknown as () => DocEntry | undefined;
 export const updateGridStatus = doc.updateGridStatus as () => void;
 export const applySheetContext = doc.applySheetContext as unknown as (d: KDoc) => void;
-export const GRID_CHOICES = doc.GRID_CHOICES as unknown as Record<string, [number, string][]>;
+export const GRID_CHOICES = doc.GRID_CHOICES as unknown as Record<string, GridDef[]>;
 export const setToggle = appstore.setToggle as unknown as (id: string, on: boolean) => void;
 export const setToggles = appstore.setToggles as unknown as (map: Record<string, boolean>) => void;
 export const setStatusBar = appstore.setStatusBar as unknown as (f: { message?: string; mode?: string }) => void;

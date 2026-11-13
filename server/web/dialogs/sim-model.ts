@@ -72,7 +72,7 @@ function stacked(title: string, width: number): { ov: HTMLElement; dlg: HTMLElem
 function browseModels(files: SimFile[], current: string): Promise<SimFile | null> {
   return new Promise((resolve) => {
     const d = stacked("Browse Models", 460); d.ov.style.zIndex = "70";
-    const list = h("select", { size: 12, id: "kd-sim-browse-list", style: "width:100%;font-family:var(--mono);font-size:12px" }) as HTMLSelectElement;
+    const list = h("k-select", { size: 12, id: "kd-sim-browse-list", style: "width:100%;font-family:var(--mono);font-size:12px" }) as HTMLSelectElement;
     const sorted = files.slice().sort((a, b) => S.strNumCmp(a.path, b.path));
     for (const f of sorted) { const o = h("option", { value: f.path }, f.label || f.path) as HTMLOptionElement; if (f.path === current) o.selected = true; list.append(o); }
     if (!sorted.length) d.body.append(h("p", { class: "kd-note", style: "margin:2px 0 6px" }, "This project has no SPICE model files (*.lib, *.sub, *.cir, *.mod, *.spice or *.ibs). Add one to the project, then browse again."));
@@ -121,15 +121,15 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   const pathText = h("input", { type: "text", id: "kd-sim-file", style: "flex:1", disabled: ro }) as HTMLInputElement;
   const browseBtn = h("button", { type: "button", class: "btn", id: "kd-sim-browse", title: "Browse", style: "padding:2px 6px;display:inline-flex;align-items:center", disabled: ro }, folderIcon());
   const filter = h("input", { type: "text", id: "kd-sim-filter", placeholder: "Filter", style: "width:100%", disabled: ro }) as HTMLInputElement;
-  const modelList = h("select", { size: 6, id: "kd-sim-models", style: "width:100%;font-size:12px", disabled: ro }) as HTMLSelectElement;
+  const modelList = h("k-select", { size: 6, id: "kd-sim-models", style: "width:100%;font-size:12px", disabled: ro }) as HTMLSelectElement;
   // the IBIS rows (shown only when the library is an IBIS file)
-  const ibisPinSel = h("select", { id: "kd-sim-ibis-pin", style: "width:100%", disabled: ro }) as HTMLSelectElement;
+  const ibisPinSel = h("k-select", { id: "kd-sim-ibis-pin", style: "width:100%", disabled: ro }) as HTMLSelectElement;
   const ibisDiffCb = h("input", { type: "checkbox", id: "kd-sim-ibis-diff", style: "width:auto;margin:0", disabled: ro }) as HTMLInputElement;
   const ibisDiffRow = h("label", { style: "display:flex;gap:6px;align-items:center" }, ibisDiffCb, "Differential");
-  const ibisModelSel = h("select", { id: "kd-sim-ibis-model", style: "width:100%", disabled: ro }) as HTMLSelectElement;
-  const waveformSel = h("select", { id: "kd-sim-waveform", style: "width:100%", disabled: ro }) as HTMLSelectElement;
-  const deviceSel = h("select", { id: "kd-sim-device", disabled: ro }) as HTMLSelectElement;
-  const typeSel = h("select", { id: "kd-sim-type", disabled: ro }) as HTMLSelectElement;
+  const ibisModelSel = h("k-select", { id: "kd-sim-ibis-model", style: "width:100%", disabled: ro }) as HTMLSelectElement;
+  const waveformSel = h("k-select", { id: "kd-sim-waveform", style: "width:100%", disabled: ro }) as HTMLSelectElement;
+  const deviceSel = h("k-select", { id: "kd-sim-device", disabled: ro }) as HTMLSelectElement;
+  const typeSel = h("k-select", { id: "kd-sim-type", disabled: ro }) as HTMLSelectElement;
   const typeLabel = h("label", null, "Device type:");
   const saveCb = h("input", { type: "checkbox", id: "kd-sim-save-in-value", style: "width:auto;margin:0", disabled: ro }) as HTMLInputElement;
   const saveLabel = h("span", null, "");
@@ -140,7 +140,7 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   const lbl = (t: string, list: HTMLElement[]) => { const l = h("label", null, t); list.push(l); return l; };
 
   // ---- Pin Assignments page widgets
-  const decompSel = h("select", { id: "kd-sim-decomposition", disabled: ro }, h("option", { value: "0" }, "Whole device"), h("option", { value: "1" }, "Repeat per unit")) as HTMLSelectElement;
+  const decompSel = h("k-select", { id: "kd-sim-decomposition", disabled: ro }, h("option", { value: "0" }, "Whole device"), h("option", { value: "1" }, "Repeat per unit")) as HTMLSelectElement;
   const sharedText = h("input", { type: "text", id: "kd-sim-shared", disabled: ro }) as HTMLInputElement;
   const pinWrap = h("div", { class: "kd-grid-wrap", style: "height:260px;overflow:auto" });
   const pinTable = h("table", { class: "kd-grid", id: "kd-sim-pins", style: "width:100%;table-layout:fixed" }); pinWrap.append(pinTable);
@@ -227,7 +227,7 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
     if (info.type === "BOOL") { input = h("input", { type: "checkbox", style: "width:auto;margin:0", disabled: ro }) as HTMLInputElement; (input as HTMLInputElement).checked = p.value === "1"; input.addEventListener("change", () => { m.setParamValue(i, (input as HTMLInputElement).checked ? "1" : "0"); afterEdit(m); }); }
     else if (info.type === "STRING" && (kInductors || info.enumValues.length)) {
       const vals = kInductors ? (ctx.inductors || []).slice().sort((a, b) => S.strNumCmp(a, b)) : info.enumValues;
-      input = h("select", { disabled: ro, style: "width:100%" }) as HTMLSelectElement;
+      input = h("k-select", { disabled: ro, style: "width:100%" }) as HTMLSelectElement;
       for (const v of vals) input.append(h("option", { value: v }, v));
       (input as HTMLSelectElement).value = p.value; if (!vals.includes(p.value)) (input as HTMLSelectElement).selectedIndex = -1;
       input.addEventListener("change", () => { m.setParamValue(i, input.value); afterEdit(m); });
@@ -270,7 +270,7 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
     pinTable.append(h("thead", null, h("tr", null, h("th", null, "Symbol Pin"), h("th", null, "Model Pin"))));
     const tb = h("tbody");
     ses.pinRows().forEach((r, i) => {
-      const sel = h("select", { disabled: ro, style: "width:100%", "data-row": i }) as HTMLSelectElement;
+      const sel = h("k-select", { disabled: ro, style: "width:100%", "data-row": i }) as HTMLSelectElement;
       for (const c of r.choices) sel.append(h("option", { value: c }, c));
       sel.value = r.model;
       sel.addEventListener("change", () => { ses.setPinAssignment(i, sel.value); updatePins(ses.curModel()); updateCode(ses.curModel()); });

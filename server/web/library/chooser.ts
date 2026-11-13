@@ -9,6 +9,7 @@ import { isPowerRow, parseLibId, searchScore, symbolInfo, unitName } from "./cor
 import { clearPreview, renderFootprintPreview, renderSymbolPreview } from "./preview";
 import { fetchItem, libraryIndex, officialLibraries, onSourcesChanged, placedItems, projectLibraries, recentItems, registeredSources } from "./sources";
 import type { FetchedItem, LibItem, LibKind, LibraryEntry, LibrarySource, SourceContext } from "./sources";
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 export interface ChooserOptions {
   /** The power tool's chooser: only power symbols. */
@@ -91,7 +92,7 @@ const CSS = `
 .klib-pane canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .klib-pane .klib-msg { position: absolute; left: 0; right: 0; bottom: 6px; text-align: center; color: var(--ink-3); font-size: 11px; pointer-events: none; }
 .klib-fpsel { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
-.klib-fpsel select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2); padding: 3px 6px; color: var(--ink); font: 12px var(--font); }
+.klib-fpsel k-select { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2); padding: 3px 6px; color: var(--ink); font: 12px var(--font); }
 .klib-foot { align-items: center; }
 .klib-foot label { display: flex; gap: 6px; align-items: center; margin-right: 14px; white-space: nowrap; }
 .klib-foot label.off { color: var(--ink-3); }
@@ -136,7 +137,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         <div class="klib-split"></div>
         <div class="klib-right">
           <div class="klib-pane klib-pane-main"><canvas></canvas><div class="klib-msg"></div></div>
-          ${isSym ? `<div class="klib-fpsel"><span>Footprint:</span><select disabled><option>No default footprint</option></select></div>
+          ${isSym ? `<div class="klib-fpsel"><span>Footprint:</span><k-select disabled><option>No default footprint</option></k-select></div>
           <div class="klib-pane klib-pane-fp"><canvas></canvas><div class="klib-msg"></div></div>` : ""}
         </div>
       </div>
@@ -151,7 +152,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     const tree = $<HTMLElement>(".klib-tree"), rowsEl = $<HTMLElement>(".klib-rows"), details = $<HTMLElement>(".klib-details"), status = $<HTMLElement>(".klib-status");
     const mainCanvas = $<HTMLCanvasElement>(".klib-pane-main canvas"), mainMsg = $<HTMLElement>(".klib-pane-main .klib-msg");
     const fpCanvas = isSym ? $<HTMLCanvasElement>(".klib-pane-fp canvas") : null, fpMsg = isSym ? $<HTMLElement>(".klib-pane-fp .klib-msg") : null;
-    const fpSelect = isSym ? $<HTMLSelectElement>(".klib-fpsel select") : null;
+    const fpSelect = isSym ? $<HTMLSelectElement>(".klib-fpsel k-select") : null;
     const okBtn = $<HTMLButtonElement>(".klib-ok"), keepBox = dlg.querySelector<HTMLInputElement>(".klib-keep"), unitsBox = dlg.querySelector<HTMLInputElement>(".klib-units");
     if (keepBox) keepBox.checked = CHOOSER_DEFAULTS.keep;
     if (unitsBox) unitsBox.checked = CHOOSER_DEFAULTS.allUnits;

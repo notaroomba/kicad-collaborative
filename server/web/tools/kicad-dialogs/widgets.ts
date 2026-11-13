@@ -4,6 +4,7 @@
 import type { GridApi, GridColumn, GridOpts, NotebookApi, NotebookTab, TreebookApi, TreeSection } from "../../dialogs/dom";
 import { esc, isList, str } from "./sexpr";
 import { el } from "./shell";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 const WIDGET_CSS = `
 .kd-overlay.kd-modeless { background: transparent; pointer-events: none; align-items: flex-start; justify-content: flex-end; padding: 96px 60px 0 0; }
@@ -30,8 +31,8 @@ const WIDGET_CSS = `
 .kd-grid tr.sel td { background: color-mix(in srgb, var(--blue) 18%, transparent); }
 .kd-grid td.ro { padding: 2px 6px; color: var(--ink-2); }
 .kd-grid td.c { text-align: center; }
-.kd-body .kd-grid td input[type=text], .kd-body .kd-grid td input[type=number], .kd-body .kd-grid td select { border: none; background: transparent; border-radius: 0; padding: 2px 6px; font-family: inherit; }
-.kd-body .kd-grid td input[type=text]:focus, .kd-body .kd-grid td select:focus { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--panel); }
+.kd-body .kd-grid td input[type=text], .kd-body .kd-grid td input[type=number], .kd-body .kd-grid td k-select { border: none; background: transparent; border-radius: 0; padding: 2px 6px; font-family: inherit; }
+.kd-body .kd-grid td input[type=text]:focus, .kd-body .kd-grid td k-select:focus-within { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--panel); }
 .kd-grid td input[type=checkbox] { margin: 0; }
 .kd-grid-btns { display: flex; gap: 4px; margin-top: 4px; }
 .kd-grid-btns .btn { padding: 1px 7px; min-width: 26px; font-size: 13px; line-height: 18px; }
@@ -61,19 +62,23 @@ export function notebook(host: HTMLElement, tabs: NotebookTab[], opts?: { select
 /** PAGED_DIALOG's treebook: sections = [{ label, pages: [{ label, build(page) }] }].  -> { el, select(label), current() } */
 export function treebook(host: HTMLElement, sections: TreeSection[], opts?: { selected?: string; onSelect?(label: string): void }): TreebookApi {
   ensureCss();
+  // pages are keyed "Section/Page": two sections may each have a page of the same name (Preferences: "Grids" under both editors)
   const tb = el("div", "kd-tb"), tree = el("div", "kd-tb-tree"), pane = el("div", "kd-tb-page"), built = new Map<string, HTMLElement>(), nodes = new Map<string, HTMLElement>(); let cur: string | null = null;
-  const select = (label: string): void => { let pg: NotebookTab | null = null; for (const s of sections) for (const p of s.pages) if (p.label === label) pg = p; if (!pg) return; cur = label;
-    for (const [l, n] of nodes) n.classList.toggle("on", l === label);
-    for (const [l, d] of built) d.style.display = l === label ? "" : "none";
-    if (!built.has(label)) { const d = el("div"); built.set(label, d); pane.appendChild(d); pg.build(d); }
-    if (opts && opts.onSelect) opts.onSelect(label); };
+  const pages = new Map<string, NotebookTab>(); for (const s of sections) for (const p of s.pages) pages.set(s.label + "/" + p.label, p);
+  /** a "Section/Page" key, or a page label (the first page of that name) */
+  const keyOf = (label: string): string | null => (pages.has(label) ? label : [...pages.entries()].find(([, p]) => p.label === label)?.[0] || null);
+  const select = (label: string): void => { const key = keyOf(label); if (!key) return; const pg = pages.get(key)!; cur = pg.label;
+    for (const [l, n] of nodes) n.classList.toggle("on", l === key);
+    for (const [l, d] of built) d.style.display = l === key ? "" : "none";
+    if (!built.has(key)) { const d = el("div"); built.set(key, d); pane.appendChild(d); pg.build(d); }
+    if (opts && opts.onSelect) opts.onSelect(pg.label); };
   for (const s of sections) {
     const pn = el("div", "kd-tb-node parent", esc(s.label)); tree.appendChild(pn);
-    pn.addEventListener("click", () => { if (s.pages[0]) select(s.pages[0].label); });
-    for (const p of s.pages) { const n = el("div", "kd-tb-node child", esc(p.label)); n.addEventListener("click", () => select(p.label)); nodes.set(p.label, n); tree.appendChild(n); }
+    pn.addEventListener("click", () => { if (s.pages[0]) select(s.label + "/" + s.pages[0].label); });
+    for (const p of s.pages) { const key = s.label + "/" + p.label; const n = el("div", "kd-tb-node child", esc(p.label)); n.dataset.page = key; n.addEventListener("click", () => select(key)); nodes.set(key, n); tree.appendChild(n); }
   }
   tb.append(tree, pane); host.appendChild(tb);
-  const first = (opts && opts.selected) || (sections[0] && sections[0].pages[0] && sections[0].pages[0].label); if (first) select(first);
+  const first = (opts && opts.selected) || (sections[0] && sections[0].pages[0] && sections[0].label + "/" + sections[0].pages[0].label); if (first) select(first);
   return { el: tb, select, current: () => cur };
 }
 
@@ -97,7 +102,7 @@ export function grid<R>(host: HTMLElement, columns: GridColumn<R>[], rows: R[], 
         const td = el("td"), ro = opts.readOnly || c.type === "ro" || (c.ro && c.ro(r)), v = (r as Record<string, unknown>)[c.key];   // a row is a plain record keyed by its columns
         if (c.type === "bool") { td.className = "c"; const cb = el("input") as HTMLInputElement; cb.type = "checkbox"; cb.checked = !!v; cb.disabled = !!ro; cb.dataset.col = c.key; cb.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = cb.checked; if (opts.onChange) opts.onChange(r, c.key, cb.checked, i); }); td.appendChild(cb); }
         else if (ro) { td.className = "ro"; td.textContent = c.format ? c.format(v, r) : str(v); if (c.title) td.title = c.title(r); }
-        else if (c.type === "choice") { const s = el("select") as HTMLSelectElement; s.dataset.col = c.key; for (const o of (typeof c.options === "function" ? c.options(r) : c.options!)) { const op = el("option") as HTMLOptionElement; op.value = isList(o) ? o[0] : o; op.textContent = isList(o) ? o[1] : o; s.appendChild(op); } s.value = str(v); s.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = s.value; if (opts.onChange) opts.onChange(r, c.key, s.value, i); }); td.appendChild(s); }
+        else if (c.type === "choice") { const s = el("k-select") as HTMLSelectElement; s.dataset.col = c.key; for (const o of (typeof c.options === "function" ? c.options(r) : c.options!)) { const op = el("option") as HTMLOptionElement; op.value = isList(o) ? o[0] : o; op.textContent = isList(o) ? o[1] : o; s.appendChild(op); } s.value = str(v); s.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = s.value; if (opts.onChange) opts.onChange(r, c.key, s.value, i); }); td.appendChild(s); }
         else { const inp = el("input") as HTMLInputElement; inp.type = "text"; inp.value = str(v); inp.dataset.col = c.key; if (c.list) inp.setAttribute("list", c.list); inp.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = inp.value; if (opts.onChange) opts.onChange(r, c.key, inp.value, i); }); td.appendChild(inp); }
         tr.appendChild(td);
       }

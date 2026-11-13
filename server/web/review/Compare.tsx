@@ -6,6 +6,7 @@
 // with the changes outlined in the diff colours, and the Property / Before / After list of the picked
 // change.  The versions on offer are the document as it is now, the project's checkpoints (and the
 // version history once the server has one), the commits of the linked GitHub repository, and a file.
+import { Select } from "../components/Select";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as RPointerEvent, type ReactNode, type RefObject } from "react";
 import { dispatch, useApp } from "../store";
 import { ago, cx } from "../util";
@@ -271,16 +272,11 @@ function CompareDialog({ request }: { request: CompareRequest }) {
     const groups: Choice["group"][] = ["Now", "Checkpoints", "Versions", "GitHub commits", "File"];
     const value = ref ? choices.findIndex((c) => sameRef(c.ref, ref)) : -1;
     return (
-      <select className="input rv-pick" data-side={side} value={value < 0 ? "" : String(value)} disabled={!listing} onChange={(ev) => setRef(side, ev.target.value)} aria-label={side === "a" ? "Reference version" : "Comparison version"}>
-        {value < 0 ? <option value="">…</option> : null}
-        {groups.map((g) => {
-          const list = choices.map((c, i) => [c, i] as const).filter(([c]) => c.group === g);
-          if (!list.length) return null;
-          if (g === "Now") return list.map(([c, i]) => <option key={i} value={i}>{c.label}</option>);
-          return <optgroup key={g} label={g}>{list.map(([c, i]) => <option key={i} value={i}>{c.label}{c.when ? ` · ${ago(c.when)}` : ""}</option>)}</optgroup>;
-        })}
-        <option value="file">Choose a file…</option>
-      </select>
+      <Select className="input rv-pick" data={{ side }} value={value < 0 ? "" : String(value)} disabled={!listing} onChange={(v) => setRef(side, v)} label={side === "a" ? "Reference version" : "Comparison version"}
+        options={[...(value < 0 ? [{ value: "", label: "…" }] : []),
+          ...groups.flatMap((g) => choices.map((c, i) => [c, i] as const).filter(([c]) => c.group === g)
+            .map(([c, i]) => (g === "Now" ? { value: String(i), label: c.label } : { value: String(i), label: c.label + (c.when ? ` · ${ago(c.when)}` : ""), group: g }))),
+          { value: "file", label: "Choose a file…" }]} />
     );
   };
 
@@ -338,9 +334,7 @@ function CompareDialog({ request }: { request: CompareRequest }) {
         <div className="rv-head">
           {docs.length > 1 ? (
             <label className="rv-field"><span>Document:</span>
-              <select className="input" id="rvDoc" value={entryId} onChange={(ev) => setEntryId(ev.target.value)}>
-                {docs.map((d) => <option key={d.docId} value={d.docId}>{d.path}</option>)}
-              </select>
+              <Select className="input" id="rvDoc" value={entryId} onChange={(v) => setEntryId(v)} options={docs.map((d) => ({ value: d.docId, label: d.path }))} />
             </label>
           ) : null}
           <label className="rv-field grow"><span>Reference:</span>{picker("a", refA)}

@@ -23,8 +23,6 @@ import { installRouterDialogs } from "./routersettings";
 const PS = () => KiCadCanvas.pcbSizes;
 const R = (): PcbSizes => KiCadCanvas.pcbSizes.state;
 
-/** The imperial unit shown second in the size choices while the editor is metric (COMMON_TOOLS::GetLastImperialUnits). */
-let lastImperial: SizeUnits = "mil";
 let seenDoc: unknown = null;
 let seenProject: string | null = null;
 let published = "";
@@ -44,7 +42,8 @@ const layerColor = (l: string): string => (KiCadCanvas as unknown as { pcbColor(
 // ---------------------------------------------------------------- store
 function publish(): void {
   const st = R(), u = units(); const pcb = typeof CollabTools !== "undefined" ? CollabTools.pcb : undefined;
-  if (u !== "mm") lastImperial = u;
+  // the imperial unit shown second while the editor is metric (COMMON_TOOLS::GetLastImperialUnits)
+  const lastImperial: SizeUnits = E.lastImperial === "in" ? "in" : "mil";
   const board = isBoard();
   const slice: RoutingState = {
     trackLabels: board ? PS().trackWidthLabels(st.sizes, u, lastImperial) : [], trackIndex: st.trackIndex,

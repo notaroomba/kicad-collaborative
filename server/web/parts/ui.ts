@@ -8,6 +8,7 @@ import { api, ApiError, type Library, type LibraryItem, type LibrarySummary, typ
 import { drawFootprint, drawSymbol } from "./preview";
 import { canPlace, placePart } from "./place";
 import { assignChanges, collect, fullCsv, jlcCsv, priceAt, totals, type BomLine } from "./bom";
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 type Child = Node | string | null | undefined | false;
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs?: Record<string, unknown> | null, ...kids: (Child | Child[])[]): HTMLElementTagNameMap[K] {
@@ -38,8 +39,8 @@ const CSS = `
 .kp-body{flex:1;min-height:0;display:flex;background:var(--paper)}
 .kp-main{flex:1;min-width:0;display:flex;flex-direction:column}
 .kp-bar{display:flex;gap:6px;padding:8px 10px;align-items:center;border-bottom:1px solid var(--line);flex-wrap:wrap}
-.kp input[type=text],.kp input[type=password],.kp select{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-2);padding:5px 8px;color:var(--ink);font:inherit;min-width:0}
-.kp input:focus,.kp select:focus{outline:0;border-color:var(--blue);box-shadow:0 0 0 1px var(--blue)}
+.kp input[type=text],.kp input[type=password],.kp k-select{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-2);padding:5px 8px;color:var(--ink);font:inherit;min-width:0}
+.kp input:focus,.kp k-select:focus-within{outline:0;border-color:var(--blue);box-shadow:0 0 0 1px var(--blue)}
 .kp-btn{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-2);min-height:var(--h-md);padding:4px 12px;font-weight:500;cursor:pointer;color:var(--ink);font:inherit;white-space:nowrap;text-decoration:none;display:inline-block}
 .kp-btn:hover{border-color:var(--line-2);background:var(--paper);text-decoration:none}
 .kp-btn:disabled{opacity:.45;cursor:default}
@@ -227,7 +228,7 @@ class PartsDialog {
     const input = h("input", { type: "text", id: "kp-q", placeholder: "Part number, value or keywords — e.g. STM32F103C8T6, 10k 0603, C8734", value: this.q, style: "flex:1", spellcheck: "false", autocomplete: "off",
       oninput: (ev: Event) => { this.q = (ev.target as HTMLInputElement).value; },
       onkeydown: (ev: KeyboardEvent) => { if (ev.key === "Enter") void this.search(); else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); this.step(ev.key === "ArrowDown" ? 1 : -1); } } });
-    const sel = h("select", { id: "kp-vendor", title: "Where to search", onchange: (ev: Event) => { this.vendor = (ev.target as HTMLSelectElement).value; if (this.q.trim().length >= 2) void this.search(); } },
+    const sel = h("k-select", { id: "kp-vendor", title: "Where to search", onchange: (ev: Event) => { this.vendor = (ev.target as HTMLSelectElement).value; if (this.q.trim().length >= 2) void this.search(); } },
       h("option", { value: "all" }, "All vendors"),
       ...this.vendors.map((v) => h("option", { value: v.id, disabled: !v.configured }, v.configured ? v.name : `${v.name} — needs a key`)));
     sel.value = this.vendor;
@@ -310,7 +311,7 @@ class PartsDialog {
     const why = canPlace(this.ctx, p);
     const kind = this.ctx && this.ctx.doc ? (this.ctx.isSch ? "Place Symbol" : "Place Footprint") : "Place";
     const editable = this.libs.filter((l) => l.can_edit);
-    const addSel = h("select", { id: "kp-add", title: "Save this part to one of your libraries", onchange: (ev: Event) => { const v = (ev.target as HTMLSelectElement).value; (ev.target as HTMLSelectElement).value = ""; if (v) void this.addTo(v); } },
+    const addSel = h("k-select", { id: "kp-add", title: "Save this part to one of your libraries", onchange: (ev: Event) => { const v = (ev.target as HTMLSelectElement).value; (ev.target as HTMLSelectElement).value = ""; if (v) void this.addTo(v); } },
       h("option", { value: "" }, "Add to library…"), ...editable.map((l) => h("option", { value: l.id }, l.name)), h("option", { value: "+" }, "New library…"));
     const canAssign = this.assign && this.ctx && this.ctx.doc && !this.ctx.viewOnly;
     const actions = h("div", { class: "kp-actions" },

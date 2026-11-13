@@ -134,7 +134,7 @@
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 :where(p) a:not([class]) { text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select, textarea, k-select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
@@ -177,6 +177,28 @@ button:disabled { cursor: default; }
 .input.bad { border-color: var(--err); box-shadow: 0 0 0 1px var(--err); }
 textarea.input { resize: vertical; line-height: 1.45; }
 input[type="checkbox"], input[type="radio"], input[type="range"], progress { accent-color: var(--accent); }
+/* ---- drop-downs: <k-select> (web/components/kselect.ts) in place of the browser's <select> ----
+   The closed control is the element itself (a field like .input, dense by default); its list is a .ksel-pop
+   on <body>, so no pane or dialog clips it.  size > 1 draws the list in place (a wxListBox). */
+k-select { display: inline-flex; align-items: center; box-sizing: border-box; min-width: 0; max-width: 100%;
+           height: var(--h-sm); padding: 0 5px 0 6px; vertical-align: middle; background: var(--panel);
+           border: 1px solid var(--line); border-radius: var(--r-2); color: var(--ink); cursor: default;
+           user-select: none; -webkit-user-select: none; }
+k-select:hover { border-color: var(--line-2); }
+k-select:focus-within { outline: 0; border-color: var(--blue); }
+k-select[disabled] { opacity: .55; pointer-events: none; }
+k-select[size]:not([size="0"]):not([size="1"]) { display: flex; flex-direction: column; align-items: stretch; height: auto; padding: 0; }
+k-select.input { min-height: var(--h-md); height: auto; }
+.ksel-pop { position: fixed; z-index: 20000; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; padding: 3px 0;
+            background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-3);
+            box-shadow: var(--shadow); user-select: none; -webkit-user-select: none; }
+.ksel-opt { padding: 3px 10px; white-space: nowrap; cursor: default; line-height: 1.35; }
+.ksel-opt.on { background: var(--sel); }
+.ksel-opt.hi { background: var(--accent); color: var(--on-accent); }
+.ksel-opt.dis { color: var(--ink-3); }
+.ksel-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+.ksel-head { padding: 4px 10px 2px; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.ksel-opt.ind { padding-left: 20px; }
 
 /* ---- badges: .pill, coloured by role or state ---- */
 .pill { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: var(--r-1);
@@ -226,10 +248,10 @@ input[type="checkbox"], input[type="radio"], input[type="range"], progress { acc
 .kd-body h3:first-child { margin-top: 0; }
 .kd-body .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; }
 .kd-body .kv label { color: var(--ink-2); white-space: nowrap; }
-.kd-body input[type=text], .kd-body input[type=number], .kd-body select, .kd-body textarea {
+.kd-body input[type=text], .kd-body input[type=number], .kd-body select, .kd-body k-select, .kd-body textarea {
   width: 100%; padding: 4px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2);
   color: var(--ink); font-family: var(--mono); }
-.kd-body input[type=text]:focus, .kd-body input[type=number]:focus, .kd-body select:focus, .kd-body textarea:focus {
+.kd-body input[type=text]:focus, .kd-body input[type=number]:focus, .kd-body select:focus, .kd-body k-select:focus-within, .kd-body textarea:focus {
   outline: 0; border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
 .kd-body .ro { color: var(--ink-2); font-family: var(--mono); }
 .kd-body .actions { display: flex; gap: 6px; grid-column: 1 / -1; }

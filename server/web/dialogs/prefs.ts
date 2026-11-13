@@ -4,10 +4,16 @@ import { E, GRID_CHOICES, isSch, requestRender, setToggle, setToggles, store, to
 import { syncSchModes } from "../editor/panes";
 import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
+import { gridChoiceText, type GridDef } from "../units";
+import type { Units } from "../store";
 
 export type EditorId = "sch" | "pcb";
 export type SchThemeId = "default" | "classic" | "dark";
-export interface GridPrefs { sizes: number[]; fast1: number; fast2: number; overrides: GridOverrides; axes?: boolean }   // axes: window.grid.axes_enabled
+/**
+ * WINDOW_SETTINGS::grid: the grid list in KiCad's order (sizes in mm, square grids; names[i] is GRID::name, "" when
+ * unnamed), last = grid.last_size (the grid the editor opens on), fast1 / fast2 = Alt+1 / Alt+2, axes = axes_enabled.
+ */
+export interface GridPrefs { sizes: number[]; names?: string[]; last?: number; fast1: number; fast2: number; overrides: GridOverrides; axes?: boolean }
 export interface Prefs {
   mouse: { autoZoomSpeed: boolean; zoomSpeed: number; middleDrag: "pan" | "none"; rightDrag: "pan" | "none"; centerOnZoom: boolean };
   schDisplay: { showHiddenPins: boolean; showHiddenFields: boolean; showPageLimits: boolean };
@@ -29,9 +35,11 @@ export const DEFAULT_PREFS: Prefs = {
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true },
   pcbEditing: { autoRefillZones: false },
   grids: {
-    // EESCHEMA_SETTINGS::DefaultGridSizeList is 100 / 50 / 25 / 10 mil; the web editor has always opened on 50 mil
-    sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES, axes: false },
-    pcb: { sizes: [0.25, 0.5, 1, 0.1, 0.05, 1.27, 0.635], fast1: 0, fast2: 1, overrides: PCB_GRID_OVERRIDES, axes: false },
+    // APP_SETTINGS_BASE::DefaultGridSizeList and addParamsForWindow's defaultGridIdx (common/settings/app_settings.cpp):
+    // eeschema / symbol_editor 100, 50, 25, 10 mil on 50 mil (index 1); pcbnew / footprint editor the 22 grids from
+    // 1000 mil down to 0.01 mm on index 15 (0.5 mm), fast grids on that index and the next
+    sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], names: ["", "", "", ""], last: 1, fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES, axes: false },
+    pcb: { sizes: [1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 2, 1].map((m) => m * MIL).concat([5, 2.5, 1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.025, 0.01]), names: Array(22).fill(""), last: 15, fast1: 15, fast2: 16, overrides: PCB_GRID_OVERRIDES, axes: false },
   },
 };
 const KEY = "kui.prefs";
@@ -41,21 +49,36 @@ function merge<T>(def: T, got: unknown): T {
   return (typeof got === typeof def ? got : def) as T;
 }
 let cache: Prefs | null = null;
+/** names[] runs beside sizes[] (settings saved before grids had names have none) */
+function normalize(p: Prefs): Prefs { for (const g of Object.values(p.grids)) { const n = g.names || []; g.names = g.sizes.map((_, i) => (typeof n[i] === "string" ? n[i] : "")); } return p; }
 export function prefs(): Prefs {
   if (cache) return cache;
   let raw: unknown = null; try { raw = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { raw = null; }
-  cache = merge(DEFAULT_PREFS, raw); return cache;
+  cache = normalize(merge(DEFAULT_PREFS, raw)); return cache;
 }
 export function savePrefs(p: Prefs): void {
-  cache = merge(DEFAULT_PREFS, p); try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { /* no storage */ }
+  cache = normalize(merge(DEFAULT_PREFS, p)); try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { /* no storage */ }
   applyPrefs(true);
-  const g = cache.grids[editorId()]; if (E.kdoc && !g.sizes.some((mm) => Math.abs(mm - E.gridPitch) < 1e-6)) { E.gridPitch = g.sizes[0]; updateGridStatus(); }
+  // the Grids page's list selection is the current grid (PANEL_GRID_SETTINGS::TransferDataFromWindow sets grid.last_size)
+  if (E.kdoc) { const mm = defaultGrid(); if (Math.abs(mm - E.gridPitch) > 1e-9) { E.gridPitch = mm; updateGridStatus(); requestRender(); } }
 }
 export function clonePrefs(): Prefs { return JSON.parse(JSON.stringify(prefs())) as Prefs; }
 
-/** "50 mil" for whole mils, "0.25 mm" otherwise (GRID::MessageText in the editor's units). */
-export function gridLabel(mm: number): string { const mils = mm / MIL; return Math.abs(mils - Math.round(mils)) < 1e-6 ? `${Math.round(mils)} mil` : `${+mm.toFixed(4)} mm`; }
+/** The grids of one editor as KiCad's GRID list: size and name, in the list's order. */
+export function gridDefs(g: GridPrefs): GridDef[] { return g.sizes.map((mm, i) => ({ mm, name: (g.names && g.names[i]) || "" })); }
+/** GRID_MENU::BuildChoiceList's text for one grid, in the editor's current units ("1.2700 mm (50.00 mils)"). */
+export function gridLabel(g: GridDef | number, ed: EditorId = editorId()): string {
+  const units = (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units;
+  return gridChoiceText(typeof g === "number" ? { mm: g } : g, units, (E.lastImperial === "in" ? "in" : "mil") as Units, ed);
+}
 export function editorId(): EditorId { return isSch() ? "sch" : "pcb"; }
+/** The grid the editor opens on (grid.last_size). */
+export function defaultGrid(ed: EditorId = editorId()): number { const g = prefs().grids[ed]; return g.sizes[Math.max(0, Math.min(g.sizes.length - 1, g.last ?? 0))]; }
+/** Remember the grid picked (KiCad saves grid.last_size with the window settings); nothing else is re-applied. */
+export function rememberGrid(mm: number, ed: EditorId = editorId()): void {
+  const p = prefs(), g = p.grids[ed], i = g.sizes.findIndex((x) => Math.abs(x - mm) < 1e-9); if (i < 0 || g.last === i) return;
+  g.last = i; try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e) { /* no storage */ }
+}
 
 // ---- colour themes: the palettes and the switch live in web/canvas/colors.ts (KiCadCanvas.setSchTheme); the painters
 // rebuild geometry built under another theme.  Exports and plots keep KiCad Default unless they are told otherwise.
@@ -99,9 +122,9 @@ export function applyPrefs(full = true): void {
   applyColorTheme(p);
   const ed = editorId(), g = p.grids[ed];
   if (E.kdoc) {
-    const choices = g.sizes.map((mm) => [mm, gridLabel(mm)] as [number, string]);
+    const choices = gridDefs(g);
     GRID_CHOICES[isSch() ? "kicad_sch" : "kicad_pcb"] = choices;
-    store.slice("viewport", { gridChoices: choices.map((c) => c.slice()) });
+    store.slice("viewport", { gridChoices: choices.map((c) => ({ ...c })) });
     E.renderOpts.gridAxes = !!g.axes;
     if (!full) { /* grids and colours only */ }
     else if (isSch()) {
@@ -124,5 +147,5 @@ export function toggleGridOverrides(): boolean {
 /** Alt+1 / Alt+2: KiCad's fast grid switching. */
 export function fastGrid(n: 1 | 2): number | null {
   const g = prefs().grids[editorId()], mm = g.sizes[n === 1 ? g.fast1 : g.fast2]; if (!mm) return null;
-  E.gridPitch = mm; updateGridStatus(); requestRender(); return mm;
+  E.gridPitch = mm; rememberGrid(mm); updateGridStatus(); requestRender(); return mm;
 }

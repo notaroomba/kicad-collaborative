@@ -5,6 +5,7 @@ import type { AppearanceState, PanelsState } from "../../panels-api";
 import { state } from "../appstore";
 import { E } from "../state";
 import { toolCtx } from "../tools";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 const EMPTY_APPEARANCE: AppearanceState = {
   layers: [], active: "", objects: [], nets: [], netClasses: [], inactive: "normal", flip: false, netColorMode: "ratsnest", ratsnestMode: "all",
@@ -83,8 +84,8 @@ export function listPick(title: string, label: string, header: string, items: st
     let done = false; const finish = (v: string | null) => { if (!done) { done = true; resolve(v); } };
     D.open({ title, width: 360,
       build(body: HTMLElement) {
-        body.innerHTML = `<p style="margin:0 0 8px">${esc(label)}</p><select id="kd-list" size="${Math.max(4, Math.min(10, items.length + 1))}" style="width:100%">
-          <optgroup label="${esc(header)}">${items.map((n, i) => `<option${i === 0 ? " selected" : ""}>${esc(n)}</option>`).join("")}</optgroup></select>`;
+        body.innerHTML = `<p style="margin:0 0 8px">${esc(label)}</p><k-select id="kd-list" size="${Math.max(4, Math.min(10, items.length + 1))}" style="width:100%">
+          <optgroup label="${esc(header)}">${items.map((n, i) => `<option${i === 0 ? " selected" : ""}>${esc(n)}</option>`).join("")}</optgroup></k-select>`;
       },
       ok() { const sel = document.querySelector<HTMLSelectElement>("#kd-list"); finish(sel && sel.value ? sel.value : null); },
       cancel() { finish(null); } });

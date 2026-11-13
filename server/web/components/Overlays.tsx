@@ -35,8 +35,6 @@ const H4 = "m-0 mb-2 text-base";                                                
 const INPUT = "w-full bg-paper border border-line rounded-sm py-1.5 px-2 text-ink font-mono text-sm";     // was #popover input
 
 function PopoverBody({ p }: { p: PopoverState }) {
-  const gridPitch = useApp((s) => s.viewport.gridPitch);
-  const gridChoices = useApp((s) => s.viewport.gridChoices);
   const close = () => dispatch({ type: "popover", popover: null });
   switch (p.kind) {
     case "desktop":
@@ -65,18 +63,6 @@ function PopoverBody({ p }: { p: PopoverState }) {
       );
     case "find":
       return <FindBody p={p} close={close} />;
-    case "grid":
-      return (
-        <>
-          <h4 className={H4}>Grid</h4>
-          {gridChoices.map(([v, label]) => (
-            <button type="button" key={v} data-grid={v}
-              className={cx("kbtn block w-full text-left my-0.5 bg-panel border rounded-sm py-[3px] px-2.5 text-ink text-sm disabled:opacity-45",
-                v === gridPitch ? "border-blue hover:border-blue" : "border-line hover:border-ink-3")}
-              onClick={() => { dispatch({ type: "setGrid", pitch: v }); close(); }}>{label}</button>
-          ))}
-        </>
-      );
   }
 }
 

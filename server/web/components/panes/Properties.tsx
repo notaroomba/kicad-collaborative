@@ -3,6 +3,7 @@
 // editor's property model (CollabPanels.propGrid()); a commit goes back through CollabPanels.setProp(), which
 // writes every selected item in one op.  Enter commits, Esc reverts, Tab moves to the next row; a value that
 // differs across the selection shows "<...>".
+import { Select } from "../Select";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PropGrid, PropRow } from "../../panels-api";
 import { useApp } from "../../store";
@@ -33,11 +34,10 @@ function Editor({ row, onDone }: { row: PropRow; onDone: () => void }) {
   }
   if (row.type === "enum" && row.choices) {
     return (
-      <select className={cx(CELL, "appearance-auto")} data-prop={row.id} disabled={row.readOnly} value={row.mixed ? "\u0001" : row.value} onChange={(ev) => { const el = ev.currentTarget; if (commit(el.value)) releaseKeyboard(el); }}>
-        {row.mixed ? <option value={"\u0001"} disabled>{MIXED}</option> : null}
-        {row.choices.some(([v]) => v === row.value) || row.mixed ? null : <option value={row.value}>{row.value}</option>}
-        {row.choices.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-      </select>
+      <Select className={cx(CELL, "rounded-none")} data={{ prop: row.id }} disabled={row.readOnly} value={row.mixed ? "\u0001" : row.value}
+        options={[...(row.mixed ? [{ value: "\u0001", label: MIXED, disabled: true }] : []), ...(row.choices.some(([v]) => v === row.value) || row.mixed ? [] : [{ value: row.value, label: row.value }]),
+          ...row.choices.map(([v, l]) => ({ value: v, label: l }))]}
+        onChange={(v, el) => { if (commit(v)) releaseKeyboard(el); }} />
     );
   }
   const shown = draft !== null ? draft : row.value;

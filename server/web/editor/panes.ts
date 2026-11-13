@@ -68,7 +68,7 @@ export function setupEditorChrome() {
     padDisplayMode: !!E.renderOpts.outlinePads, viaDisplayMode: !!E.renderOpts.outlineVias, trackDisplayMode: !!E.renderOpts.outlineTracks,
     zoneDisplayFilled: !E.renderOpts.zoneOutline, zoneDisplayOutline: !!E.renderOpts.zoneOutline });
   syncSchModes();
-  store.slice("viewport", { units: E.units, selMode: E.selMode, crosshair: E.crosshairMode, polar: E.polarCoords, renderOpts: Object.assign({}, E.renderOpts), gridPitch: E.gridPitch, zoom: E.zoom, cursor: [0, 0], origin: E.localOrigin.slice() });
+  store.slice("viewport", { units: E.units, lastImperial: E.lastImperial || "mil", selMode: E.selMode, crosshair: E.crosshairMode, polar: E.polarCoords, renderOpts: Object.assign({}, E.renderOpts), gridPitch: E.gridPitch, zoom: E.zoom, cursor: [0, 0], origin: E.localOrigin.slice() });
   store.slice("tool", { current: E.tool });
 }
 
@@ -88,6 +88,16 @@ export function syncSchModes() {
 
 if (typeof window !== "undefined") window.addEventListener("kc:pcb-linemode", () => syncSchModes());
 
-export function setUnitsAction(u: string, id: string) { if (UNITS[u]) E.units = u; setRadio("Units", id); store.slice("viewport", { units: E.units }); }
+/**
+ * EDA_DRAW_FRAME::ChangeUserUnits: every way of switching (the left toolbar's Units group, Ctrl+U) ends here.  It
+ * remembers the imperial unit (COMMON_TOOLS::SetLastUnits) for Ctrl+U and the metric lists' second column, keeps the
+ * choice for the next visit, and the toolbars, status bar and dialogs re-format from the store.
+ */
+export function setUnitsAction(u: string, id: string) {
+  if (UNITS[u]) E.units = u;
+  if (E.units === "in" || E.units === "mil") E.lastImperial = E.units;
+  try { localStorage.setItem("kui.units", E.units); } catch (e) { /* no storage */ }
+  setRadio("Units", id); store.slice("viewport", { units: E.units, lastImperial: E.lastImperial || "mil" });
+}
 
 export function setCrosshair(mode: "small" | "full" | "45", id: string) { E.crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); refreshCrosshair(); }

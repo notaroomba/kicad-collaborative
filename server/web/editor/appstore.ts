@@ -47,7 +47,7 @@ export const store = (() => {
   let S: AppState = {
     view: "home", homeTab: "projects", homeTick: 0, me: null, project: null, role: null, canJoin: false, viewOnly: true, canComment: false, guest: false, can: null,
     connection: { status: "offline", text: "offline", edits: 0 },
-    viewport: { zoom: 1, cursor: [0, 0], origin: [0, 0], polar: false, units: "mm", gridOn: true, gridPitch: 1.27, gridChoices: [], snapOn: true,
+    viewport: { zoom: 1, cursor: [0, 0], origin: [0, 0], polar: false, units: "mm", lastImperial: "mil", kzoom: 1, gridOn: true, gridPitch: 1.27, gridChoices: [], snapOn: true,
       crosshair: "small", selMode: "rect", lineMode: null, dragMode: null, renderOpts: {}, activeLayer: "" },
     document: { editor: null, docType: null, docId: null, doc: null, docs: [], rootDocId: null, sheets: [], layers: [], hiddenLayers: [], copperLayers: [], items: [], hasDoc: false, notice: null, version: 0 },
     selection: { ids: [], primary: null, field: null, version: 0 },

@@ -136,7 +136,7 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
         h("hr", { class: "pp-hr" }),
         h("div", { class: "pp-row" }, dieOn.el, die.el, unitLabel()));
       // layers (the middle column)
-      const copperSel = h("select", { disabled: ro, "data-k": "copperLayers" }) as HTMLSelectElement;
+      const copperSel = h("k-select", { disabled: ro, "data-k": "copperLayers" }) as HTMLSelectElement;
       const fillCopper = (): void => { copperSel.replaceChildren(...PM().copperChoices(m.type).map((l, i) => h("option", { value: String(i) }, l))); if (m.copper >= copperSel.options.length) m.copper = 0; copperSel.selectedIndex = m.copper; copperSel.disabled = ro || m.type === "aperture"; };
       copperSel.addEventListener("change", () => { m.copper = copperSel.selectedIndex; redraw(); });
       const techChecks = PM().TECH.map(([label, l]) => checkField(!!m.tech[l], label, { ro, key: "layer-" + l, onChange: (v) => { m.tech[l] = v; redraw(); } }));

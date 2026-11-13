@@ -7,6 +7,7 @@ import { padsOf } from "./route-geom";
 import { K, S, bind, lastCtx } from "./state";
 import { setCustomRules } from "./tuning-patterns";
 import { clone, isList, norm180, r6 } from "./util";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- dialogs (KDialogs at runtime, a swappable form for the tests)
 // A form spec: { title, width, fields: [{ k, label, type: num | text | select | check | note | table, value, options,
@@ -46,7 +47,7 @@ export let formImpl = function (spec: FormSpec): boolean {
         const row = document.createElement("label"); row.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0"; if (f.tip) row.title = f.tip;
         const span = document.createElement("span"); span.textContent = f.label!; row.appendChild(span);
         let inp: HTMLInputElement | HTMLSelectElement;
-        if (f.type === "select") { inp = document.createElement("select"); for (const o of f.options!) { const op = document.createElement("option"); op.value = (isList(o) ? o[0] : o) as string; op.textContent = (isList(o) ? o[1] : o) as string; inp.appendChild(op); } inp.value = f.value as string; }
+        if (f.type === "select") { inp = document.createElement("k-select"); for (const o of f.options!) { const op = document.createElement("option"); op.value = (isList(o) ? o[0] : o) as string; op.textContent = (isList(o) ? o[1] : o) as string; inp.appendChild(op); } inp.value = f.value as string; }
         else if (f.type === "check") { inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!f.value; inp.style.width = "auto"; inp.style.justifySelf = "start"; }
         else { inp = document.createElement("input"); inp.type = f.type === "num" ? "number" : "text"; if (f.type === "num") inp.step = f.step || "any"; inp.value = (f.value === undefined || f.value === null ? "" : f.value) as string; }
         inp.dataset.k = f.k; inp.style.cssText += ";font:inherit;background:var(--panel,#0A1421);color:inherit;border:1px solid var(--line,#24374E);border-radius:3px;padding:3px 5px";

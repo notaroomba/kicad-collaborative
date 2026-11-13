@@ -94,7 +94,7 @@ export async function openBoardSetup(ctx: ToolCtx, startPage?: string): Promise<
         let type: HTMLElement;
         if (r.copper || r.userDefined) {
           const opts = r.copper ? BS().COPPER_TYPES : BS().USER_TYPES;
-          const s = h("select", { disabled: roBoard, title: r.copper ? "Copper layer type for Freerouter and other external routers.\nPower plane layers are removed from Freerouter's layer menus." : "Layer type" });
+          const s = h("k-select", { disabled: roBoard, title: r.copper ? "Copper layer type for Freerouter and other external routers.\nPower plane layers are removed from Freerouter's layer menus." : "Layer type" });
           for (const [v, label] of opts) { const o = h("option", { value: v }, label); if (v === r.type) o.selected = true; s.append(o); }
           s.addEventListener("change", () => { r.type = s.value; layersTouched = true; });
           type = s;

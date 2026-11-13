@@ -80,5 +80,6 @@ export const E: any = {
   connectGen: 0,
   panes: {},
   units: "mm",
+  lastImperial: "mil",   // COMMON_TOOLS::m_imperialUnit: Ctrl+U returns to it, metric lists show it second
 };
 ((typeof window !== "undefined" ? window : globalThis) as unknown as { CollabEditor: unknown })["CollabEditor"] = E;

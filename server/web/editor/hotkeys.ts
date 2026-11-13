@@ -52,7 +52,7 @@ export function typingTarget(ev: KeyboardEvent): boolean {
   if (t && t.tagName) {
     // a ticked checkbox / radio / button (Selection Filter, panel toggles) keeps only Space and Enter for itself
     if (t.tagName === "INPUT" && NON_TEXT_INPUT.has((t as HTMLInputElement).type)) { if (ev.key === " " || ev.key === "Enter") return true; }
-    else if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable) return true;
+    else if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable) return true;
     if (typeof t.closest === "function" && t.closest(".kd-overlay, [role='dialog'], [role='menu'], #popover")) return true;
   }
   const w = window as unknown as { KDialogs?: { isOpen?: () => boolean } };

@@ -174,7 +174,7 @@ export class ViewerWindow {
 
     root.addEventListener("keydown", (ev) => this.onKey(ev));
     // keep the keyboard on the viewer while the pointer works in it (the board editor's keys must not fire)
-    root.addEventListener("pointerdown", (ev) => { const t = ev.target as HTMLElement; if (!t.closest("input,select,textarea")) setTimeout(() => { if (!this.closed && !root.contains(document.activeElement)) root.focus({ preventScroll: true }); }, 0); }, true);
+    root.addEventListener("pointerdown", (ev) => { const t = ev.target as HTMLElement; if (!t.closest("input,select,k-select,textarea")) setTimeout(() => { if (!this.closed && !root.contains(document.activeElement)) root.focus({ preventScroll: true }); }, 0); }, true);
     document.addEventListener("pointerdown", this.onDocPointer, true);
     window.addEventListener("resize", this.onWinResize);
     document.body.appendChild(root);

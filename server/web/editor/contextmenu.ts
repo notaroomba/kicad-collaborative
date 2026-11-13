@@ -8,7 +8,8 @@ import { netLabel } from "../review/names";
 import { actions as CTX_ACTIONS } from "../generated/kicad-context-spec.json";
 import { menuMeta } from "../menuspec";
 import type { AppAction, CtxItem, Editor } from "../store";
-import { toolFor } from "../tables";
+import { ZOOM_LIST, toolFor } from "../tables";
+import { gridChoiceText } from "../units";
 import { HANDLERS } from "./actions";
 import { canComment, commentOnItem, commentOnNet, netOfItem, showThread, startThread, threadsOnItem } from "./comments";
 import { APP_TOOLS, state, store } from "./appstore";
@@ -30,11 +31,6 @@ const META = CTX_ACTIONS as unknown as Record<string, Meta>;
 /** The context spec holds what the generator saw in context menus; entries added by hand (PCB_POINT_EDITOR) fall back to the action table. */
 const metaOf = (act: string): Meta | null => META[act] || (menuMeta(act.startsWith("SCH_") ? "sch" : act.startsWith("PCB_") ? "pcb" : null, act.split("::").pop() as string) as Meta | null);
 
-// KiCad's zoom presets (include/zoom_defines.h ZOOM_LIST_EESCHEMA / ZOOM_LIST_PCBNEW)
-const ZOOM_LIST: Record<Editor, number[]> = {
-  sch: [0.05, 0.07, 0.1, 0.15, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, 4.5, 6.5, 10, 15, 20, 30, 45, 65, 100],
-  pcb: [0.13, 0.22, 0.35, 0.6, 1.0, 1.5, 2.2, 3.5, 5.0, 8.0, 13.0, 20.0, 35.0, 50.0, 80.0, 130.0, 220.0, 300.0],
-};
 
 const DESKTOP = "runs in the desktop app";
 const NOT_YET = "not available in the web editor yet";
@@ -200,10 +196,10 @@ function zoomRows(): CtxItem[] {
 }
 function gridRows(c: MenuCtx): CtxItem[] {
   const rows: CtxItem[] = [row(GRID_ORIGIN, false, c), { sep: true }];
-  const choices = store.get().viewport.gridChoices as [number, string][];
-  for (const [pitch] of choices) {
-    const mm = `${pitch.toFixed(4)} mm`, mils = `${(pitch / 0.0254).toFixed(2)} mils`;
-    rows.push({ label: isSch() ? `${mils} (${mm})` : `${mm} (${mils})`, check: true, checked: Math.abs(pitch - E.gridPitch) < 1e-9, run: runRow(() => setGridPitch(pitch)) });
+  // GRID_MENU::update: every grid of the list in the user units, the current one checked
+  const vp = store.get().viewport;
+  for (const g of vp.gridChoices) {
+    rows.push({ label: gridChoiceText(g, vp.units, vp.lastImperial, isSch() ? "sch" : "pcb"), check: true, checked: Math.abs(g.mm - E.gridPitch) < 1e-9, run: runRow(() => setGridPitch(g.mm)) });
   }
   return rows;
 }
@@ -459,6 +455,16 @@ export function openRouterModeMenu(at?: { left: number; bottom: number } | null)
   E.contextMenuOpen = true; anchor = null;
   store.set({ contextMenu: { id: ++menuId, x, y, items } });
   requestRender();
+}
+
+/** The left toolbar's grid button menu (toolbars_pcb_editor.cpp, toolbars_sch_editor.cpp): Edit Grids... and Grid Origin... */
+export function openGridButtonMenu(at?: { left: number; bottom: number } | null): void {
+  if (!E.kdoc || state.view !== "editor") return;
+  const c = menuCtx();
+  const items: CtxItem[] = [row("ACTIONS::gridProperties", false, c), row(GRID_ORIGIN, false, c)];
+  const x = at ? at.left : stage.getBoundingClientRect().left + 40, y = at ? at.bottom : stage.getBoundingClientRect().top + 40;
+  E.contextMenuOpen = true; anchor = null;
+  store.set({ contextMenu: { id: ++menuId, x, y, items } });
 }
 
 /** The Arc toolbar group's menu (toolbars_pcb_editor.cpp): the three arc editing modes as check items. */

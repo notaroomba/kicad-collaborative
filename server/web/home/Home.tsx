@@ -1,6 +1,7 @@
 // Home.tsx — the projects window: everything stored online that you own or were given, with
 // search, sort, upload, rename, share, visibility, download, leave and delete; plus Explore
 // (public projects) and joining by link.  One layout from a phone to a wide desktop.
+import { Select } from "../components/Select";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as RKeyboardEvent, type CSSProperties, type MouseEvent as RMouseEvent } from "react";
 import { flushSync } from "react-dom";
 import { useApp, type User } from "../store";
@@ -499,9 +500,8 @@ function Projects({ me, tick, onUpload, onGuided, onJoin, onShare }: { me: User;
             ))}
           </div>
           <div className="hp-tools-end">
-            <select className="hp-select" aria-label="Sort by" value={sort} onChange={(ev) => { const v = ev.target.value as Sort; smooth(() => setSort(v)); savePref("kc.home.sort", ev.target.value); }}>
-              <option value="updated">Last edited</option><option value="name">Name</option><option value="created">Date created</option>
-            </select>
+            <Select className="hp-select" label="Sort by" value={sort} onChange={(v) => { smooth(() => setSort(v as Sort)); savePref("kc.home.sort", v); }}
+              options={[{ value: "updated", label: "Last edited" }, { value: "name", label: "Name" }, { value: "created", label: "Date created" }]} />
             <button type="button" className={"btn hp-selbtn" + (sel ? " on" : "")} aria-pressed={!!sel} title="Select several projects (Space on a project)" onClick={() => { anchor.current = null; setSel(sel ? null : new Set()); }}><Ic name="check" />Select</button>
             {!phone ? (
               <div className="hp-seg icons" role="group" aria-label="Layout">

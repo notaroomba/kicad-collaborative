@@ -177,7 +177,7 @@ function endFootprintCarry(): void {
   stage.style.cursor = "";
   c.resolve();
 }
-const onStage = (ev: Event): boolean => ev.target instanceof Node && stage.contains(ev.target) && !(ev.target instanceof Element && ev.target.closest("input, select, textarea, button, .kd-overlay"));
+const onStage = (ev: Event): boolean => ev.target instanceof Node && stage.contains(ev.target) && !(ev.target instanceof Element && ev.target.closest("input, select, k-select, textarea, button, .kd-overlay"));
 function onCarryMove(ev: PointerEvent): void {
   const c = fpCarry; if (!c || !onStage(ev)) return;
   const p = snapMm(worldMm(ev)) as Pt; c.pos = [p[0], p[1]];
@@ -198,7 +198,7 @@ function onCarryDown(ev: PointerEvent): void {
 }
 function onCarryKey(ev: KeyboardEvent): void {
   const c = fpCarry; if (!c) return;
-  const t = ev.target as HTMLElement | null; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+  const t = ev.target as HTMLElement | null; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT")) return;
   const P = pcbHelpers(); let took = true;
   if (ev.key === "Escape") endFootprintCarry();
   else if ((ev.key === "r" || ev.key === "R") && !ev.ctrlKey && !ev.metaKey && P) { P.rotateFootprintNode(c.node, ev.shiftKey ? -90 : 90); c.ghost = ghostBoard(c.node, c.doc); c.drawn = ""; }

@@ -56,7 +56,7 @@ export function open(spec: DlgSpec): DlgApi {
   ensureCss();
   const api: DlgApi = { body, close, dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector<HTMLInputElement>(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
   spec.build(body, api);
-  const first = body.querySelector<HTMLInputElement>("input:not([type=checkbox]), select, textarea, input"); if (first && !spec.readOnly && !first.disabled) { first.focus(); if (first.select && first.type === "text") first.select(); }
+  const first = body.querySelector<HTMLInputElement>("input:not([type=checkbox]), k-select, textarea, input"); if (first && !spec.readOnly && !first.disabled) { first.focus(); if (first.select && first.type === "text") first.select(); }
   if (!dlg.contains(document.activeElement)) dlg.focus();
   return api;
 }

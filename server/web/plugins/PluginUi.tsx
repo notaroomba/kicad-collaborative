@@ -1,6 +1,7 @@
 // PluginUi.tsx — the chrome plugins get: the dock their panels sit in, the toolbar buttons of
 // their actions, the dialogs the host draws on their behalf, and the manager (KiCad's Plugin and
 // Content Manager, for the web): what is installed, what it may do, a catalog, and a developer tab.
+import { Select } from "../components/Select";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useApp } from "../store";
@@ -159,7 +160,7 @@ function Field({ f, value, set }: { f: PromptField; value: unknown; set: (v: unk
   const [picked, setPicked] = useState("");
   if (f.type === "checkbox") return <><label /><label className="plg-check"><input type="checkbox" checked={!!value} onChange={(e) => set(e.target.checked)} /> {f.label}</label></>;
   let input;
-  if (f.type === "select") input = <select value={String(value ?? "")} onChange={(e) => set(e.target.value)}>{(f.options || []).map((o) => { const v = typeof o === "string" ? o : o.value, l = typeof o === "string" ? o : o.label; return <option key={v} value={v}>{l}</option>; })}</select>;
+  if (f.type === "select") input = <Select value={String(value ?? "")} onChange={(v) => set(v)} options={(f.options || []).map((o) => (typeof o === "string" ? { value: o, label: o } : { value: o.value, label: o.label }))} />;
   else if (f.type === "textarea") input = <textarea rows={5} value={String(value ?? "")} placeholder={f.placeholder} onChange={(e) => set(e.target.value)} />;
   else if (f.type === "number") input = <input type="number" value={value === undefined || value === null ? "" : String(value)} min={f.min} max={f.max} step={f.step ?? "any"} onChange={(e) => set(e.target.value === "" ? null : Number(e.target.value))} />;
   else if (f.type === "file") input = (

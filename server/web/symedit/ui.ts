@@ -24,7 +24,7 @@ export const CSS = `
 .se-btn:disabled,.se-btn.dim{opacity:.38;cursor:default}
 .se-sep{width:1px;height:22px;background:var(--line);margin:0 4px;flex:none}
 .se-tbv .se-sep{width:22px;height:1px;margin:4px 0}
-.se-tb select{height:24px;max-width:170px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-1,3px);font:inherit}
+.se-tb k-select{height:24px;max-width:170px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-1,3px);font:inherit}
 .se-ic{width:22px;height:22px;display:block}
 .se-ic .dk{display:none}
 :root[data-theme="dark"] .se-ic .lt{display:none} :root[data-theme="dark"] .se-ic .dk{display:inline}
@@ -62,7 +62,7 @@ export const CSS = `
 .se-msg div{display:flex;flex-direction:column;white-space:nowrap}
 .se-msg b{font-weight:400;color:var(--ink-2)}
 .se-status{flex:none;display:flex;gap:16px;align-items:center;padding:2px 10px;height:24px;background:var(--panel);border-top:1px solid var(--line);color:var(--ink-2);white-space:nowrap;overflow:hidden}
-.se-status select{height:20px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font:inherit}
+.se-status k-select{height:20px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font:inherit}
 .se-menu{position:fixed;z-index:56;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:3px 0}.kd-overlay~.se-menu{z-index:80}
 .se-mi{display:flex;align-items:center;gap:8px;padding:3px 12px 3px 6px;cursor:default;white-space:nowrap}
 .se-mi:hover{background:var(--accent);color:var(--on-accent)}

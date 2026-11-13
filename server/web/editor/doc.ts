@@ -16,12 +16,16 @@ import { api, toast } from "./util";
 import { notePreviewDirty } from "./thumbpush";
 import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
 import type { DocEntry, ProjectInfo } from "../store";
+import type { GridDef } from "../units";
 import type { ItemSummary, SheetEntry, SvgLayer, WireChange } from "./types";
 import { applyView, base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
 export const docNav = { list: [] as string[], idx: -1, lock: false };
 
 
-export const GRID_CHOICES: Record<string, [number, string][]> = { kicad_sch: [[1.27, "50 mil"], [2.54, "100 mil"], [0.635, "25 mil"]], kicad_pcb: [[0.25, "0.25 mm"], [0.5, "0.5 mm"], [1, "1 mm"], [0.1, "0.1 mm"], [0.05, "0.05 mm"], [1.27, "50 mil"], [0.635, "25 mil"]] };
+/** Each editor's grids in KiCad's list order (Preferences > Grids, dialogs/prefs.ts fills them in from the saved settings). */
+export const GRID_CHOICES: Record<string, GridDef[]> = { kicad_sch: [2.54, 1.27, 0.635, 0.254].map((mm) => ({ mm, name: "" })), kicad_pcb: [1.27, 0.635, 0.5, 0.25, 0.1].map((mm) => ({ mm, name: "" })) };
+/** The grids of the open document (the board's for the Footprint Editor too). */
+export function gridList(): GridDef[] { return GRID_CHOICES[isSch() ? "kicad_sch" : "kicad_pcb"] || []; }
 
 export function syncItemsFromDoc() {
   if (!E.kdoc) return;
@@ -194,15 +198,19 @@ export function noteDroppedChange(change: WireChange) {
 }
 
 export function setupGridControls() {
-  const choices = GRID_CHOICES[E.DOC_TYPE] || GRID_CHOICES.kicad_pcb;   // the board's aux toolbar has KiCad's grid dropdown; the schematic uses the grid button's menu
-  E.gridPitch = (E.gridDefault && E.gridDefault()) || choices[0][0];   // Preferences > Grids keeps KiCad's list order; its default is not always the first
-  store.slice("viewport", { gridChoices: choices.map((c) => c.slice() as [number, string]) });
+  const choices = gridList();   // the board's aux toolbar has KiCad's grid dropdown; the schematic uses the grid button's menu
+  E.gridPitch = (E.gridDefault && E.gridDefault()) || choices[0].mm;   // grid.last_size: not always the first of the list
+  store.slice("viewport", { gridChoices: choices.map((c) => ({ ...c })) });
   updateGridStatus();
 }
 
 export function updateGridStatus() { setToggle("toggleGrid", E.gridOn); store.slice("viewport", { gridOn: E.gridOn, gridPitch: E.gridPitch, snapOn: E.snapOn }); }
 
-export function setGridPitch(v: unknown) { E.gridPitch = Number(v) || E.gridPitch; updateGridStatus(); requestRender(); }
+export function setGridPitch(v: unknown) { E.gridPitch = Number(v) || E.gridPitch; if (E.gridPicked) E.gridPicked(E.gridPitch); updateGridStatus(); requestRender(); }
+/** COMMON_TOOLS::GridPreset: the grid at a position of the list. */
+export function setGridIndex(i: number) { const l = gridList(); if (!l.length) return; setGridPitch(l[Math.max(0, Math.min(l.length - 1, i))].mm); }
+/** grid.last_size: where the current grid is in the list (-1 when it is not one of them). */
+export function gridIndex(): number { return gridList().findIndex((g) => Math.abs(g.mm - E.gridPitch) < 1e-9); }
 
 export function snapMm(mm: [number, number]): [number, number];
 export function snapMm(mm: number[]): number[];

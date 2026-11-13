@@ -124,9 +124,14 @@ export function drawCanvas() {
 
 
 // ---- view transform ----
+/** GAL::GetZoomFactor: the zoom as KiCad states it (1.0 is a millimetre at KiCad's screen scale), for the zoom choices. */
+export function kicadZoom(): number {
+  const w = stage.clientWidth, mm = mmW();
+  return w > 0 && mm > 0 ? (KiCadCanvas.zoomFactor as (v: { ppm: number; zoom: number; panX: number; panY: number; x0: number; y0: number }) => number)({ ppm: w / mm, zoom: E.zoom, panX: 0, panY: 0, x0: 0, y0: 0 }) : 1;
+}
 export function applyView() {
   world.style.transform = `translate(${E.panX}px, ${E.panY}px) scale(${E.zoom})`;
-  store.slice("viewport", { zoom: E.zoom });
+  store.slice("viewport", { zoom: E.zoom, kzoom: kicadZoom() });
   // Everything on the overlay is sized in screen pixels, so a zoom or fit
   // must redraw peers too (they otherwise keep the previous scale until the
   // next presence message).

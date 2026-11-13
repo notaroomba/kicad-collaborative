@@ -425,7 +425,7 @@ registerPointerUp(onPointerUp);
 // dialog, prompt or popover closes with nothing focused, the focus goes back to it (not to the page).
 stage.addEventListener("pointerdown", (ev) => {
   const t = ev.target as Element | null;
-  if (t && t.closest && t.closest("input, textarea, select, button, a, [contenteditable], #cmtPanel")) return;
+  if (t && t.closest && t.closest("input, textarea, select, k-select, button, a, [contenteditable], #cmtPanel")) return;
   if (document.activeElement !== stage) stage.focus({ preventScroll: true });
 }, true);
 const refocusCanvas = new MutationObserver((recs) => {

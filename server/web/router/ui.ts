@@ -3,6 +3,7 @@
 // the editor's ordinary commit: one undo step, sent to everyone in the session as normal edits.
 import { Router, RouteOptions, RouteResult } from "./route";
 import { PROVENANCE } from "./weights";
+import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const root = globalThis as any;
@@ -97,7 +98,7 @@ function openDialog(ctx: any): boolean {
   KD.open({
     title: "Autoroute", width: 470, okLabel: "Route",
     build(body: HTMLElement) {
-      scope = document.createElement("select"); scope.dataset.k = "scope"; scope.style.cssText = FIELD;
+      scope = document.createElement("k-select"); scope.dataset.k = "scope"; scope.style.cssText = FIELD;
       scope.add(new Option(`All unrouted nets (${plural(rats.length, "connection")})`, "all"));
       if (selCount) { scope.add(new Option(`Nets of the selection (${plural(selCount, "connection")})`, "sel")); scope.value = "sel"; }
       row(body, "Route", scope);
@@ -110,7 +111,7 @@ function openDialog(ctx: any): boolean {
       vias = check(copper.length > 1, "vias"); row(body, "Place vias", vias);
       rip = check(true, "rip"); row(body, "Rip up and retry", rip);
       zones = check(true, "zones"); row(body, "Connect to zones", zones);
-      effort = document.createElement("select"); effort.dataset.k = "effort"; effort.style.cssText = FIELD;
+      effort = document.createElement("k-select"); effort.dataset.k = "effort"; effort.style.cssText = FIELD;
       for (const [k, e] of Object.entries(EFFORT)) effort.add(new Option(e.label, k)); effort.value = "normal";
       row(body, "Effort", effort);
       note(body, `Track width, clearance and via size come from each net's class in Board Setup (Default: ${dflt.track_width} mm tracks, ${dflt.clearance} mm clearance, ${dflt.via_diameter}/${dflt.via_drill} mm vias). Existing tracks are kept and never moved.`);

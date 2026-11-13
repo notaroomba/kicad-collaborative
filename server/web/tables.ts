@@ -48,8 +48,9 @@ export type MenuEntry = string | [string, MenuEntry[]];
 // the commands KiCad only offers from its context menus follow KiCad's own entries of Edit / Inspect / Route in the
 // sub-menus the context menus use (Select, Align/Distribute, Positioning Tools, Grouping, Locking, Zones, …).
 const COLLAB_FILE: MenuEntry[] = ["share", "collabCopyLink", "collabComments", "collabFollow", "collabHistory", "collabLeave", "-", "archive", "clone", "github", "openInKicad"];
-const UNITS_MENU: MenuEntry = ["&Units", ["inchesUnits", "milsUnits", "millimetersUnits", "-", "toggleUnits"]];
-const VIEW_WEB: MenuEntry[] = ["toggleGrid", "gridProperties", "gridNext", "gridPrev", UNITS_MENU, "cursorFullCrosshairs", "togglePolarCoords", "resetLocalCoords"];
+// KiCad's eeschema and pcbnew View menus have no grid or units entries: the units switch from the left toolbar's
+// Units group and Ctrl+U, the grid from the aux toolbar's choice, the grid button's menu, N / Shift+N and Preferences.
+const VIEW_WEB: MenuEntry[] = ["cursorFullCrosshairs", "togglePolarCoords", "resetLocalCoords"];
 const HELP_MENU: MenuEntry[] = ["help", "gettingStarted", "listHotKeys", "getInvolved", "donate", "reportBug", "-", "downloadDesktop", "sourceCode", "-", "about"];
 const LANG_MENU: MenuEntry = ["Set Language", ["languageEnglish"]];
 // the UI theme (web/theme.ts): KiCad's Preferences > Common > "Appearance" choice, as a sub-menu
@@ -304,4 +305,8 @@ export const FILTERS: Record<Editor, [string, string][]> = {
   pcb: [["footprints", "Footprints"], ["text", "Text"], ["tracks", "Tracks"], ["vias", "Vias"], ["pads", "Pads"], ["graphics", "Graphics"], ["zones", "Zones"], ["keepouts", "Rule Areas"], ["dimensions", "Dimensions"], ["gridItems", "Grid Items"], ["points", "Points"], ["other", "Other items"]],
 };
 
-export const ZOOM_PRESETS = [10, 25, 50, 75, 100, 150, 200, 300, 500, 1000];
+/** KiCad's zoom presets (include/zoom_defines.h ZOOM_LIST_EESCHEMA / ZOOM_LIST_PCBNEW): APP_SETTINGS window.zoom_factors */
+export const ZOOM_LIST: Record<Editor, number[]> = {
+  sch: [0.05, 0.07, 0.1, 0.15, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, 4.5, 6.5, 10, 15, 20, 30, 45, 65, 100],
+  pcb: [0.13, 0.22, 0.35, 0.6, 1.0, 1.5, 2.2, 3.5, 5.0, 8.0, 13.0, 20.0, 35.0, 50.0, 80.0, 130.0, 220.0, 300.0],
+};

@@ -7,6 +7,7 @@ import { boardLayers, setDiameter, setLayer, setRotation, setShape, setStrokeWid
 import { PAD_LAYER_PRESETS, type PadPatch, type PadRow, boardNetNames, padInfo, padList, padNode, setPad } from "./pads";
 import { atOf, clone, deg360, isList, kid, layerOf, normDeg, num, str, yes } from "./sexpr";
 import { libUnitCount, mirrorOf, setSymbolFlag, setSymbolMirror, setSymbolPosition, setSymbolRotation, setSymbolUnit } from "./symbol";
+import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 /** The editor context the panel works in (the chrome's toolCtx(), or a dialog's staging copy of it). */
 export interface PropsCtx {
@@ -132,7 +133,7 @@ function panel(el: HTMLElement, ctx: PanelCtx, item: PanelItem, appSelected: boo
     select(label, value, options, on) {   // options: [value, text] pairs or plain strings
       const opts = options.map((o): [string | number, string] => isList(o) ? o as [string | number, string] : [o, o as string]);
       if (ro) { const hit = opts.find((o) => String(o[0]) === String(value)); return P.ro(label, hit ? hit[1] : value); }
-      P.row(label, `<select data-k="${key(on)}" style="${CTRL}">${opts.map((o) => `<option value="${esc(o[0])}"${String(o[0]) === String(value) ? " selected" : ""}>${esc(o[1])}</option>`).join("")}</select>`);
+      P.row(label, `<k-select data-k="${key(on)}" style="${CTRL}">${opts.map((o) => `<option value="${esc(o[0])}"${String(o[0]) === String(value) ? " selected" : ""}>${esc(o[1])}</option>`).join("")}</k-select>`);
     },
     check(label, checked, on) {   // box then text across the row, as in KiCad's dialogs
       if (ro) return P.ro(label, checked ? "yes" : "no");

@@ -18,7 +18,7 @@ import { installGroups } from "./groups";
 import * as logic from "./logic";
 import { openPageSettings } from "./page-settings";
 import { openPreferences } from "./preferences";
-import { applyPrefs, fastGrid, gridLabel, prefs, toggleGridOverrides } from "./prefs";
+import { applyPrefs, defaultGrid, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
 import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp } from "./project";
 import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { openSyncSheetPins } from "./sync-pins";
@@ -49,7 +49,7 @@ function wrapErc(): void {
   };
 }
 
-function typing(ev: KeyboardEvent): boolean { const t = ev.target as HTMLElement | null; return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable); }
+function typing(ev: KeyboardEvent): boolean { const t = ev.target as HTMLElement | null; return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable); }
 
 /** Register everything; called once from editor/index.ts before the handled ids are published. */
 export function installDialogs(HANDLERS: Record<string, Handler>): void {
@@ -72,6 +72,8 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     updateSymbols: needDoc(() => openChangeSymbols("update"), true), updateSymbol: needDoc(() => openChangeSymbols("update"), true),
     toggleGridOverrides: (() => { const on = toggleGridOverrides(); toast(on ? "Grid overrides on" : "Grid overrides off"); }) as Handler,
     openPreferences: (() => openPreferences()) as Handler,
+    // ACTIONS::gridProperties ("Edit Grids..."): COMMON_TOOLS::GridProperties opens Preferences on the editor's Grids page
+    gridProperties: (() => openPreferences(isSch() ? "Schematic Editor/Grids" : "PCB Editor/Grids")) as Handler,
   });
   installGroups(); wrapErc(); installSchItemDialogs(); installSimModel();
   // the old one-sheet fields table action now opens the full dialog
@@ -102,7 +104,8 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     else if (E.kdoc && E.proSettings !== lastPro) { lastPro = E.proSettings; applyProjectSettings(); }   // the .kicad_pro arrives after the first sheet
   });
   onProjectChanged(applyProjectSettings);
-  E.gridDefault = () => { const g = prefs().grids[isSch() ? "sch" : "pcb"]; return g.sizes[isSch() ? Math.min(1, g.sizes.length - 1) : 0]; };
+  E.gridDefault = () => defaultGrid();
+  E.gridPicked = (mm: number) => rememberGrid(mm);
   applyPrefs(true);
   setToggle("toggleGridOverrides", prefs().grids[isSch() ? "sch" : "pcb"].overrides.enabled);
   // for tests and other modules

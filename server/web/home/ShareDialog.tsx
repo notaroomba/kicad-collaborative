@@ -7,18 +7,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as API from "./api";
 import type { FoundUser, Invite, Member, Members, Permissions, Role, ShareLink } from "./api";
 import { ago, Avatar, Confirm, copyText, Ic, Modal, toast, toastError } from "./ui";
+import { Select } from "../components/Select";
 
 export interface ShareTarget { projectId: string; name: string; isPublic?: boolean }
 
 function RoleSelect({ value, onChange, disabled, label, onMakeOwner }: { value: Role; onChange: (r: Role) => void; disabled?: boolean; label: string; onMakeOwner?: () => void }) {
   return (
-    <select className="hp-select" aria-label={label} value={value} disabled={disabled}
-      onChange={(ev) => { if (ev.target.value === "owner") { ev.target.value = value; onMakeOwner?.(); } else onChange(ev.target.value as Role); }}>
-      <option value="editor">Can edit</option>
-      <option value="commenter">Can comment</option>
-      <option value="viewer">Can view</option>
-      {onMakeOwner ? <option value="owner">Make owner…</option> : null}
-    </select>
+    <Select className="hp-select" label={label} value={value} disabled={disabled}
+      options={[{ value: "editor", label: "Can edit" }, { value: "commenter", label: "Can comment" }, { value: "viewer", label: "Can view" }, ...(onMakeOwner ? [{ value: "owner", label: "Make owner…" }] : [])]}
+      onChange={(v) => { if (v === "owner") onMakeOwner?.(); else onChange(v as Role); }} />
   );
 }
 
@@ -239,9 +236,8 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
                 : "Anyone with this link can view without an account. They cannot comment or change the design."} Links also open in Junction (File → Join Session from URL…).</p>
               <div className="hp-linknew">
                 <RoleSelect value={linkRole} onChange={setLinkRole} label="Role the link grants" />
-                <select className="hp-select" aria-label="Link expiry" value={linkDays} onChange={(ev) => setLinkDays(Number(ev.target.value))}>
-                  <option value={0}>Never expires</option><option value={1}>Expires in 1 day</option><option value={7}>Expires in 7 days</option><option value={30}>Expires in 30 days</option>
-                </select>
+                <Select className="hp-select" label="Link expiry" value={String(linkDays)} onChange={(v) => setLinkDays(Number(v))}
+                  options={[{ value: "0", label: "Never expires" }, { value: "1", label: "Expires in 1 day" }, { value: "7", label: "Expires in 7 days" }, { value: "30", label: "Expires in 30 days" }]} />
                 <input className="hp-input" aria-label="Name for the link (optional)" placeholder="Name (optional)" maxLength={80} value={linkLabel}
                   onChange={(ev) => setLinkLabel(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Enter") { ev.preventDefault(); newLink(); } }} />
                 <button type="button" className="btn" onClick={newLink} disabled={linkBusy}><Ic name="link" />{linkBusy ? "Creating…" : "Create and copy link"}</button>
@@ -271,19 +267,17 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
                   <Ic name={isPublic ? "globe" : "lock"} size={18} />
                   <span className="hp-person"><b>{isPublic ? "Public" : "Private"}</b>
                     <small>{isPublic ? "Listed in Explore. Anyone can view it." : "Only the people above, and people with a link, can open it."}</small></span>
-                  <select className="hp-select" aria-label="General access" value={isPublic ? "public" : "private"} onChange={(ev) => togglePublic(ev.target.value === "public")}>
-                    <option value="private">Private</option><option value="public">Public</option>
-                  </select>
+                  <Select className="hp-select" label="General access" value={isPublic ? "public" : "private"} onChange={(v) => togglePublic(v === "public")}
+                    options={[{ value: "private", label: "Private" }, { value: "public", label: "Public" }]} />
                 </label>
                 {perms ? (
                   <>
                     {isPublic ? (
                       <label className="hp-access sub">
                         <span className="hp-person"><b>Signed-in visitors</b><small>What someone who finds the project in Explore may do.</small></span>
-                        <select className="hp-select" aria-label="What signed-in visitors can do" value={perms.publicRole}
-                          onChange={(ev) => setPerm({ publicRole: ev.target.value as "viewer" | "commenter" }, ev.target.value === "commenter" ? "Visitors can now comment" : "Visitors can now only view")}>
-                          <option value="viewer">Can view</option><option value="commenter">Can comment</option>
-                        </select>
+                        <Select className="hp-select" label="What signed-in visitors can do" value={perms.publicRole}
+                          onChange={(v) => setPerm({ publicRole: v as "viewer" | "commenter" }, v === "commenter" ? "Visitors can now comment" : "Visitors can now only view")}
+                          options={[{ value: "viewer", label: "Can view" }, { value: "commenter", label: "Can comment" }]} />
                       </label>
                     ) : null}
                     <label className="hp-access">
