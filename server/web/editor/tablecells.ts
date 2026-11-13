@@ -432,6 +432,15 @@ function cancelResize(): boolean {
 export function drawCellHandles(ctx: CanvasRenderingContext2D): void {
   const h = handles(); if (!h) return;
   const s = HANDLE_PX / Math.max(1e-6, pxPerMm());
+  // the schematic: SCH_POINT_EDITOR's EDIT_POINTS::ViewDraw, as every other schematic edit point (the 8 px point filled
+  // in LAYER_AUX_ITEMS, then its border shade at BORDER_SIZE)
+  const sch = !isPcb() && CollabTools.sch ? (CollabTools.sch as unknown as { _?: { editPointColors?: (aux: string, bg: string) => { fill: string; border: string }; EDIT_BORDER_PX?: number } })._ : null;
+  if (sch && sch.editPointColors) {
+    const { fill, border } = sch.editPointColors(KiCadCanvas.SCH.aux || "#000000", KiCadCanvas.SCH.bg || "#F5F4EF"), px = 1 / Math.max(1e-6, pxPerMm());
+    ctx.save(); ctx.fillStyle = fill; ctx.strokeStyle = border; ctx.lineWidth = (sch.EDIT_BORDER_PX || 2) * px;
+    for (const p of [h.col, h.row]) { ctx.beginPath(); ctx.rect(p[0] - s, p[1] - s, 2 * s, 2 * s); ctx.fill(); ctx.stroke(); }
+    ctx.restore(); return;
+  }
   ctx.save(); ctx.fillStyle = isPcb() ? "#cc4cff" : "#d6a800"; ctx.strokeStyle = isPcb() ? "#ffffff" : "#000000"; ctx.lineWidth = 1 / Math.max(1e-6, pxPerMm());
   for (const p of [h.col, h.row]) { ctx.fillRect(p[0] - s, p[1] - s, 2 * s, 2 * s); ctx.strokeRect(p[0] - s, p[1] - s, 2 * s, 2 * s); }
   ctx.restore();

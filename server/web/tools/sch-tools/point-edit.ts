@@ -37,9 +37,11 @@ export function editPoints(doc: KDoc, item: KItem): EditPoints | null {
   const k = item.kind, n = item.node;
   if (k === "wire" || k === "bus" || k === "polyline" || k === "bezier") {
     const pts = ptsOf(n); if (pts.length < 2) return null;
+    // a graphic polyline of more than two points is a SHAPE_T::POLY: EDA_POLYGON_POINT_EDIT_BEHAVIOR gives it edge handles
+    if (k === "polyline" && pts.length > 2) return { pts, lines: polyLines(pts.length), guides: [] };
     return { pts, lines: [], guides: k === "bezier" && pts.length === 4 ? [[0, 1], [3, 2]] : [] };
   }
-  if (k === "rule_area") { const pl = kid(n, "polyline"); const pts = pl ? ptsOf(pl) : []; return pts.length ? { pts, lines: [], guides: [] } : null; }
+  if (k === "rule_area") { const pl = kid(n, "polyline"); const pts = pl ? ptsOf(pl) : []; return pts.length ? { pts, lines: pts.length > 1 ? polyLines(pts.length) : [], guides: [] } : null; }
   if (k === "rectangle" || k === "text_box" || k === "sheet") {
     const [x0, y0, x1, y1] = boxOf(item);
     const pts = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
@@ -49,6 +51,24 @@ export function editPoints(doc: KDoc, item: KItem): EditPoints | null {
     if (k === "rectangle") { pts.push([x1 - rectRadius(n), y0]); return { pts, lines: RECT_LINES, guides: [], circles: [5] }; }
     return { pts, lines: RECT_LINES, guides: [] };
   }
+  if (k === "image") {
+    // REFERENCE_IMAGE_POINT_EDIT_BEHAVIOR: the bounding box's corners, the transform origin and the rotation handle,
+    // with the box outline and the origin-to-handle line as indicator lines
+    const g = imageGeom(item); if (!g) return null;
+    const [bw, bh] = imageBoundingSize(g.w, g.h, g.rot), [x, y] = g.pos, off = imageOriginOffset(item.id);
+    const origin: Pt = [x + off[0], y + off[1]];
+    const local = rotDeg(off, -g.rot), len = local[1] + g.h * 0.7, toRot = rotDeg([0, -len], g.rot);
+    return { pts: [[x - bw / 2, y - bh / 2], [x + bw / 2, y - bh / 2], [x + bw / 2, y + bh / 2], [x - bw / 2, y + bh / 2], origin, [origin[0] + toRot[0], origin[1] + toRot[1]]],
+      lines: [], guides: [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5]] };
+  }
+  if (k === "ellipse" || k === "ellipse_arc") {
+    // EDA_ELLIPSE_POINT_EDIT_BEHAVIOR::MakePoints: centre, major end ( t = 0 ), minor end ( t = 90 ), and for an arc its
+    // start and end with indicator lines from the centre
+    const e = ellipseOf(n); if (!e) return null;
+    const pts = [e.c, ellipseAt(e, 0), ellipseAt(e, 90)];
+    if (k === "ellipse_arc") { pts.push(ellipseAt(e, e.t0), ellipseAt(e, e.t1)); return { pts, lines: [], guides: [[0, 3], [0, 4]] }; }
+    return { pts, lines: [], guides: [] };
+  }
   if (k === "circle") { const c = kp(n, "center"), r = num((kid(n, "radius") || [])[1]); return c ? { pts: [c, [c[0] + r, c[1]]], lines: [], guides: [] } : null; }
   if (k === "arc") {
     const s = kp(n, "start"), m = kp(n, "mid"), e = kp(n, "end"); if (!s || !m || !e) return null;
@@ -57,6 +77,104 @@ export function editPoints(doc: KDoc, item: KItem): EditPoints | null {
   }
   return null;
 }
+/**
+ * POLYGON_POINT_EDIT_BEHAVIOR::BuildForPolyOutline: an edge from each corner to the next, and the closing one from
+ * the last corner back to the first (one contour; schematic shapes have no holes).
+ */
+export function polyLines(n: number): number[][] { const out: number[][] = []; for (let i = 0; i < n; i++) out.push([i, (i + 1) % n]); return out; }
+const sub2 = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]], add2 = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]], dot2 = (a: Pt, b: Pt) => a[0] * b[0] + a[1] * b[1];
+/** SEG::IntersectLines: the two infinite lines a1-a2 and b1-b2 meet here, or null when parallel. */
+export function lineX(a1: Pt, a2: Pt, b1: Pt, b2: Pt): Pt | null {
+  const r = sub2(a2, a1), s = sub2(b2, b1), den = r[0] * s[1] - r[1] * s[0]; if (Math.abs(den) < 1e-12) return null;
+  const t = ((b1[0] - a1[0]) * s[1] - (b1[1] - a1[1]) * s[0]) / den; return [a1[0] + t * r[0], a1[1] + t * r[1]];
+}
+/** SEG::Intersect: the two segments cross (ends included), or null. */
+export function segX(a1: Pt, a2: Pt, b1: Pt, b2: Pt): Pt | null {
+  const r = sub2(a2, a1), s = sub2(b2, b1), den = r[0] * s[1] - r[1] * s[0]; if (Math.abs(den) < 1e-12) return null;
+  const t = ((b1[0] - a1[0]) * s[1] - (b1[1] - a1[1]) * s[0]) / den, u = ((b1[0] - a1[0]) * r[1] - (b1[1] - a1[1]) * r[0]) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [a1[0] + t * r[0], a1[1] + t * r[1]] : null;
+}
+/** SEG::Angle: the angle between two segments' directions, degrees in [0, 180]. */
+function segAngle(a1: Pt, a2: Pt, b1: Pt, b2: Pt): number {
+  const n180 = (d: number) => { while (d <= -180) d += 360; while (d > 180) d -= 360; return d; };
+  const ta = n180(Math.atan2(a1[1] - a2[1], a1[0] - a2[0]) * 180 / Math.PI), tb = n180(Math.atan2(b1[1] - b2[1], b1[0] - b2[0]) * 180 / Math.PI);
+  return Math.abs(n180(ta - tb));
+}
+/**
+ * POLYGON_EDGE_DRAG_POLICY (CONVERGING, the schematic's mode): the dragged edge `line` of the closed outline `pts`
+ * moves parallel to itself through the handle; its corners slide along the neighbouring sides, the centre stops at
+ * the sides' convergence point, and two collinear neighbours keep the corners on that line.  Returns the new corners.
+ */
+export function polygonEdgeDrag(pts: Pt[], line: number, handle: Pt): Pt[] {
+  const n = pts.length, out = pts.map((q) => q.slice());
+  const oi = line, ei = (line + 1) % n, pi = (oi - 1 + n) % n, ni = (ei + 1) % n;
+  const O = pts[oi], Eo = pts[ei], prev = pts[pi], next = pts[ni];
+  const originSideDir = sub2(O, prev), endSideDir = sub2(Eo, next), dragged = sub2(Eo, O);
+  const center: Pt = [(O[0] + Eo[0]) / 2, (O[1] + Eo[1]) / 2], perp: Pt = [-dragged[1], dragged[0]];
+  const triangle = pi === ni;
+  const originCollinear = segAngle(O, Eo, O, prev) < 10, endCollinear = segAngle(O, Eo, Eo, next) < 10;
+  const conv = lineX(O, prev, Eo, next) || center;
+  // Apply: the new centre is where the line through the handle (parallel to the edge) crosses the edge's perpendicular
+  let nc = lineX(center, add2(center, perp), handle, add2(handle, dragged)) || handle;
+  if (!triangle) { const den = dot2(sub2(conv, center), perp); if (den !== 0 && dot2(sub2(nc, center), perp) / den > 1) nc = conv; }
+  // applyConverging
+  let o: Pt = out[oi], e: Pt = out[ei];
+  if (originCollinear && endCollinear) {
+    const proj = (q: Pt) => { const d = originSideDir, l2 = dot2(d, d); if (!l2) return q; const t = dot2(sub2(q, prev), d) / l2; return [prev[0] + t * d[0], prev[1] + t * d[1]] as Pt; };
+    out[oi] = proj(add2(nc, [-dragged[0] / 2, -dragged[1] / 2])); out[ei] = proj(add2(nc, [dragged[0] / 2, dragged[1] / 2]));
+    return out;
+  }
+  const d0 = add2(nc, [-dragged[0] / 2, -dragged[1] / 2]), d1 = add2(nc, [dragged[0] / 2, dragged[1] / 2]);
+  o = lineX(d0, d1, prev, add2(prev, originSideDir)) || O; e = lineX(d0, d1, next, add2(next, endSideDir)) || Eo;
+  if (!triangle) { const x = segX(e, next, o, prev); if (x) { o = x; e = x; } }
+  out[oi] = o; out[ei] = e;
+  return out;
+}
+/** An ellipse's ELLIPSE<int> fields from its node (mm, degrees). */
+export function ellipseOf(n: SNode): { c: Pt; a: number; b: number; phi: number; t0: number; t1: number } | null {
+  const c = kp(n, "center"); if (!c) return null;
+  const v = (key: string) => num((kid(n, key) || [])[1], 0);
+  return { c, a: v("major_radius"), b: v("minor_radius"), phi: v("rotation_angle"), t0: v("start_angle"), t1: v("end_angle") };
+}
+/** ELLIPSE::GetPointAtAngle (degrees). */
+export function ellipseAt(e: { c: Pt; a: number; b: number; phi: number }, deg: number): Pt {
+  const t = deg * Math.PI / 180, r = e.phi * Math.PI / 180, ex = e.a * Math.cos(t), ey = e.b * Math.sin(t);
+  return [e.c[0] + ex * Math.cos(r) - ey * Math.sin(r), e.c[1] + ex * Math.sin(r) + ey * Math.cos(r)];
+}
+/** ELLIPSE::GetAngleAtPoint (degrees): the parametric angle of a point, radii floored at 1 IU. */
+export function ellipseAngleAt(e: { c: Pt; a: number; b: number; phi: number }, p: Pt): number {
+  const a = Math.max(PE_IU, e.a), b = Math.max(PE_IU, e.b), r = e.phi * Math.PI / 180, dx = p[0] - e.c[0], dy = p[1] - e.c[1];
+  const lx = dx * Math.cos(r) + dy * Math.sin(r), ly = -dx * Math.sin(r) + dy * Math.cos(r);
+  return Math.atan2(ly / b, lx / a) * 180 / Math.PI;
+}
+const PE_IU = 1e-4;
+/** RotatePoint( v, angle ): positive degrees turn counter-clockwise on the Y-down screen. */
+export function rotDeg(v: Pt, deg: number): Pt { const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); return [v[0] * c + v[1] * s, -v[0] * s + v[1] * c]; }
+/** An image's position, unrotated size (mm, from the canvas's decoded bitmap), orientation and scale. */
+export function imageGeom(item: KItem): { pos: Pt; w: number; h: number; rot: number; scale: number } | null {
+  const n = item.node, a = kid(n, "at"); if (!a) return null;
+  const sc = kid(n, "scale"), r = kid(n, "rotate");
+  return { pos: [num(a[1]), num(a[2])], w: item.w || 10, h: item.h || 10, rot: r ? num(r[1], 0) : 0, scale: sc ? num(sc[1], 1) : 1 };
+}
+/** REFERENCE_IMAGE::boundingSize: the axis-aligned extent of the turned raster. */
+export function imageBoundingSize(w: number, h: number, rot: number): Pt {
+  const a = ((rot % 360) + 360) % 360;
+  if (a === 0 || a === 180) return [w, h];
+  if (a === 90 || a === 270) return [h, w];
+  const c = Math.abs(Math.cos(a * Math.PI / 180)), s = Math.abs(Math.sin(a * Math.PI / 180));
+  return [w * c + h * s, w * s + h * c];
+}
+export function imageOriginOffset(id: string): Pt { const o = S.imgOrigin && S.imgOrigin.get(id); return o ? o.slice() : [0, 0]; }
+function setImageOriginOffset(id: string, o: Pt) { (S.imgOrigin || (S.imgOrigin = new Map())).set(id, o); }
+export const IMAGE_MIN_SIZE = 50 * 0.0254;                       // schIUScale.MilsToIU( 50 )
+/** Set or drop a token right after (at …): (rotate a) / (scale s), written only when not the default. */
+function setImageToken(n: SNode, key: string, v: number, dflt: number) {
+  const k = kid(n, key), i = k ? n.indexOf(k) : -1;
+  if (Math.abs(v - dflt) < 1e-12) { if (i >= 0) n.splice(i, 1); return; }
+  if (k) { k[1] = v; return; }
+  const after = key === "scale" ? (kid(n, "rotate") || kid(n, "at")) : kid(n, "at");
+  n.splice(after ? n.indexOf(after) + 1 : 1, 0, [key, v]);
+}                                              // one schematic IU (100 nm)
 // Handles in pick order: the points, then each edge's midpoint (index pts.length + line).
 export function editHandles(ep: EditPoints): Pt[] { return ep.pts.concat(ep.lines.map(([a, b]) => [(ep.pts[a][0] + ep.pts[b][0]) / 2, (ep.pts[a][1] + ep.pts[b][1]) / 2])); }
 export const normA = (a: number) => { a %= 2 * Math.PI; return a < 0 ? a + 2 * Math.PI : a; };
@@ -122,11 +240,56 @@ export function applyPointEdit(doc: KDoc, pe: PointEdit, p: Pt) {
   const item = pe.item, n = item.node, k = item.kind, ep = pe.ep, idx = pe.idx;
   restoreNode(n, pe.orig); for (const f of pe.followers) restoreNode(f.item.node, f.orig);
   const touched = [item];
-  if (k === "wire" || k === "bus" || k === "polyline" || k === "bezier") {
+  if ((k === "polyline" || k === "rule_area") && idx >= ep.pts.length) {
+    const pts = polygonEdgeDrag(ep.pts, idx - ep.pts.length, p).map((q) => [r4(q[0]), r4(q[1])]);
+    setPts(k === "rule_area" ? kid(n, "polyline")! : n, pts);
+  } else if (k === "wire" || k === "bus" || k === "polyline" || k === "bezier") {
     const pts = ep.pts.map((q: Pt) => q.slice()); pts[idx] = [r4(p[0]), r4(p[1])]; setPts(n, pts);
     for (const f of pe.followers) if (f.end === idx) { const q: Pt[] = ptsOf(f.item.node); q[f.index!] = pts[idx].slice(); setPts(f.item.node, q); touched.push(f.item); }
   } else if (k === "rule_area") {
     const pl = kid(n, "polyline")!, pts = ep.pts.map((q: Pt) => q.slice()); pts[idx] = [r4(p[0]), r4(p[1])]; setPts(pl, pts);
+  } else if (k === "image") {
+    // REFERENCE_IMAGE_POINT_EDIT_BEHAVIOR::UpdateItem
+    const g = imageGeom({ ...item, node: pe.orig, w: pe.imgSize0 ? pe.imgSize0[0] : item.w, h: pe.imgSize0 ? pe.imgSize0[1] : item.h } as KItem)!, off0 = pe.imgOrigin0 || [0, 0];
+    setImageOriginOffset(item.id, off0.slice());
+    const origin: Pt = [g.pos[0] + off0[0], g.pos[1] + off0[1]];
+    if (idx === 4) setImageOriginOffset(item.id, [p[0] - g.pos[0], p[1] - g.pos[1]]);
+    else if (idx === 5) {
+      // Rotate( origin, target - orientation ): the handle points the image's up direction at the cursor
+      const cv = [p[0] - origin[0], p[1] - origin[1]];
+      const target = Math.atan2(-cv[1], cv[0]) * 180 / Math.PI - 90, d = target - g.rot;
+      const np = rotDeg([g.pos[0] - origin[0], g.pos[1] - origin[1]], d), at = kid(n, "at")!;
+      at[1] = r4(origin[0] + np[0]); at[2] = r4(origin[1] + np[1]);
+      setImageOriginOffset(item.id, rotDeg(off0, d));
+      let a = (g.rot + d) % 360; if (a < 0) a += 360; setImageToken(n, "rotate", +a.toFixed(4), 0);
+    } else if (idx < 4) {
+      const size = imageBoundingSize(g.w, g.h, g.rot), sx = [-1, 1, 1, -1][idx], sy = [-1, -1, 1, 1][idx];
+      const oldCorner: Pt = [g.pos[0] + sx * size[0] / 2 - origin[0], g.pos[1] + sy * size[1] / 2 - origin[1]];
+      let nc: Pt = [p[0] - origin[0], p[1] - origin[1]];
+      if (Math.sign(nc[0]) !== Math.sign(oldCorner[0]) || Math.sign(nc[1]) !== Math.sign(oldCorner[1])) nc = [0, 0];   // never across the origin
+      const oldLen = Math.hypot(oldCorner[0], oldCorner[1]);
+      let ratio = oldLen > 0 ? Math.hypot(nc[0], nc[1]) / oldLen : 1;
+      ratio = Math.min(Math.max(size[0] * ratio, IMAGE_MIN_SIZE) / size[0], Math.max(size[1] * ratio, IMAGE_MIN_SIZE) / size[1]);
+      if (ratio > 0 && isFinite(ratio)) {
+        // scaleBy: the transform origin stays put, the centre and the offset scale about it
+        const noff: Pt = [off0[0] * ratio, off0[1] * ratio], at = kid(n, "at")!;
+        at[1] = r4(origin[0] - noff[0]); at[2] = r4(origin[1] - noff[1]);
+        setImageOriginOffset(item.id, noff);
+        setImageToken(n, "scale", +(g.scale * ratio).toPrecision(6), 1);
+      }
+    }
+  } else if (k === "ellipse" || k === "ellipse_arc") {
+    // EDA_ELLIPSE_POINT_EDIT_BEHAVIOR::UpdateItem
+    const e = ellipseOf(pe.orig)!;
+    const set = (key: string, v: number) => { const kk = kid(n, key); v = r4(v); if (kk) kk[1] = v; else n.push([key, v]); };
+    if (idx === 0) { const ck = kid(n, "center")!; ck[1] = r4(p[0]); ck[2] = r4(p[1]); }
+    else if (idx === 1) { const v = [p[0] - e.c[0], p[1] - e.c[1]]; set("major_radius", Math.max(PE_IU, Math.hypot(v[0], v[1]))); set("rotation_angle", Math.atan2(v[1], v[0]) * 180 / Math.PI); }
+    else if (idx === 2) { const r = e.phi * Math.PI / 180, v = [p[0] - e.c[0], p[1] - e.c[1]]; set("minor_radius", Math.max(PE_IU, Math.abs(-v[0] * Math.sin(r) + v[1] * Math.cos(r)))); }
+    else if (k === "ellipse_arc") {
+      const prev = idx === 3 ? e.t0 : e.t1; let raw = ellipseAngleAt(e, p);
+      while (raw - prev > 180) raw -= 360; while (prev - raw > 180) raw += 360;
+      if (idx === 3) { set("start_angle", raw); set("end_angle", raw + (e.t1 - e.t0)); } else set("end_angle", raw);
+    }
   } else if (k === "circle") {
     const c = ep.pts[0];
     if (idx === 0) { const ck = kid(n, "center")!; ck[1] = r4(p[0]); ck[2] = r4(p[1]); }
@@ -220,6 +383,7 @@ export function pointEditStart(ctx: SchCtx, mm: Pt, ev?: PtrEvent | null) {
   hs.forEach((h, i) => { const d = Math.max(Math.abs(h[0] - mm[0]), Math.abs(h[1] - mm[1])); if (d <= tol && d < bd) { bd = d; best = i; } });
   if (best < 0) return false;
   S.pedit = { item: t.item, ep: t.ep, idx: best, orig: deep(t.item.node), followers: editFollowers(ctx.doc, t.item, t.ep), start: hs[best], moved: false, last: hs[best] };
+  if (t.item.kind === "image") { S.pedit.imgOrigin0 = imageOriginOffset(t.item.id); S.pedit.imgSize0 = [t.item.w || 10, t.item.h || 10]; }
   try { if (ev && ev.pointerId !== undefined) ctx.stage.setPointerCapture(ev.pointerId); } catch (e) { /* not a real pointer */ }
   ctx.requestRender();
   return true;
@@ -243,6 +407,7 @@ export function pointEditEnd(ctx: SchCtx, commit: boolean) {
   let nodes: { it: KItem; node: SNode }[] | null = null;
   if (commit && pe.moved) { const touched = applyPointEdit(doc, pe, pe.last); nodes = touched.map((it) => ({ it, node: deep(it.node) })); }
   restoreNode(pe.item.node, pe.orig); for (const f of pe.followers) restoreNode(f.item.node, f.orig);   // originals back, so commit() records a true inverse
+  if (pe.imgOrigin0 && !(commit && pe.moved)) setImageOriginOffset(pe.item.id, pe.imgOrigin0);
   K.replaceChange(doc, pe.item); for (const f of pe.followers) K.replaceChange(doc, f.item);
   let changes: KChange[] = [];
   if (nodes) {

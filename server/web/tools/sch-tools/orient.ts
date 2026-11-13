@@ -49,7 +49,7 @@ export function mirrorNode(kind: string, node: SNode, axis: string) {
   }
   return false;
 }
-export const SHAPE_POINTS: Record<string, string[]> = { rectangle: ["start", "end"], circle: ["center"], arc: ["start", "mid", "end"] };
+export const SHAPE_POINTS: Record<string, string[]> = { rectangle: ["start", "end"], circle: ["center"], arc: ["start", "mid", "end"], ellipse: ["center"], ellipse_arc: ["center"] };
 export function anchorOf(kind: string, node: SNode): Pt {
   if (LINE_KINDS.has(kind) || kind === "bezier") { const p = ptsOf(node); return p[0] || [0, 0]; }
   if (SHAPE_KINDS.has(kind)) { const k = kid(node, SHAPE_POINTS[kind][0]); return k ? [num(k[1]), num(k[2])] : [0, 0]; }

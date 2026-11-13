@@ -9,7 +9,7 @@ export const CLR = { wire: "#009600", bus: "#0000C2", sel: "#FFB43A", hover: "#4
 export const LINE_KINDS = new Set(["wire", "bus", "polyline"]);
 export const TEXT_KINDS = new Set(["label", "global_label", "hierarchical_label", "text"]);
 export const POINT_KINDS = new Set(["junction", "no_connect", "bus_entry"]);
-export const SHAPE_KINDS = new Set(["rectangle", "circle", "arc"]);          // sheet-level SCH_SHAPEs (polyline is a LINE_KIND)
+export const SHAPE_KINDS = new Set(["rectangle", "circle", "arc", "ellipse", "ellipse_arc"]);          // sheet-level SCH_SHAPEs (polyline is a LINE_KIND)
 export const DRAW_TOOLS = new Set(["rect", "circle", "arc", "textbox", "sheet", "table", "bezier", "polygon", "rulearea"]);
 // Kinds the canvas has no SCH_TYPE_NAMES entry for: the desktop's GetClass() names.
 export const TYPE_NAMES: Record<string, string> = { bezier: "SCH_SHAPE", image: "SCH_BITMAP", table: "SCH_TABLE", rule_area: "SCH_RULE_AREA" };

@@ -105,7 +105,11 @@ export interface EditPoints { pts: Pt[]; lines: number[][]; guides: number[][]; 
 /** An item that follows a point edit: a connected line end, a label or a no-connect on the edited point. */
 export interface EditFollower { item: KItem; orig: SNode; end?: number; at?: Pt; index?: number }
 /** S.pedit: a point-editor drag in flight. */
-export interface PointEdit { item: KItem; ep: EditPoints; idx: number; orig: SNode; followers: EditFollower[]; start: Pt; moved: boolean; last: Pt }
+export interface PointEdit { item: KItem; ep: EditPoints; idx: number; orig: SNode; followers: EditFollower[]; start: Pt; moved: boolean; last: Pt;
+  /** a reference image's transform origin offset when the edit began (REFERENCE_IMAGE::m_transformOriginOffset) */
+  imgOrigin0?: Pt;
+  /** the image's unrotated size (mm) when the edit began */
+  imgSize0?: Pt }
 /** S.sheetJob: a sheet file being created on the server. */
 export interface SheetJob { doc: KDoc; promise: Promise<KItem | null> | null }
 /** S.unfold: the label and entry a bus unfold placed while its wire is drawn. */
@@ -128,6 +132,8 @@ export type SchState = {
   showDangling?: boolean; docGen: number;
   /** the lines selected by one end only (STARTPOINT / ENDPOINT): id -> that end's index, 0 start, 1 end */
   selEnds?: Map<string, number> | null;
+  /** each reference image's transform origin offset from its centre (mm): REFERENCE_IMAGE keeps it in memory only */
+  imgOrigin?: Map<string, Pt>;
   /** the modifier keys of the last pointer move (Shift turns the magnetic snap and its indicator off) */
   mods?: Mods | null;
   /** the stage cursor the drag-collision WARNING cursor replaced */

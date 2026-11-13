@@ -268,9 +268,10 @@ export function buildImageGeom(doc: Doc, item: Item, n: SNode): void {
   const pxMm = 25.4 / (e.ppi || 300);
   const w = (e.w * pxMm * scale) || 10, h = (e.h * pxMm * scale) || 10;   // unknown pixel size: a 10 mm placeholder
   const layer = isPcb ? layerOf(n, "Dwgs.User") : "Images";
-  // PCB_REFERENCE_IMAGE: (rotate a) turns the bitmap about its centre (counter-clockwise, as EDA_ANGLE), (opacity o) 0..1
-  const rN = isPcb ? kid(n, "rotate") : null, rot = rN ? num(rN[1], 0) : 0;
-  const oN = isPcb ? kid(n, "opacity") : null; let opacity = oN ? num(oN[1], 1) : 1; if (!isFinite(opacity)) opacity = 1; opacity = Math.min(1, Math.max(0, opacity));
+  // REFERENCE_IMAGE (PCB_REFERENCE_IMAGE and SCH_BITMAP alike): (rotate a) turns the bitmap about its centre
+  // (counter-clockwise, as EDA_ANGLE), (opacity o) 0..1
+  const rN = kid(n, "rotate"), rot = rN ? num(rN[1], 0) : 0;
+  const oN = kid(n, "opacity"); let opacity = oN ? num(oN[1], 1) : 1; if (!isFinite(opacity)) opacity = 1; opacity = Math.min(1, Math.max(0, opacity));
   G(item, { t: "image", x: x - w / 2, y: y - h / 2, w, h, entry: e, pxMm, scale, rot, opacity, color: isPcb ? pcbColor(layer) : SCH.notes, layer, z: isPcb ? Z_BITMAP : SCH_Z.bitmap });
   if (rot) {   // the bounding box of the turned bitmap
     const c = Math.cos(rot * Math.PI / 180), sn = Math.sin(rot * Math.PI / 180);

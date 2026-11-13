@@ -27,7 +27,7 @@ export const LINE_MODE_LABEL: Record<string, string> = { "90": "90°", "45": "45
 export const LABEL_KINDS = new Set(["label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
 export const RIDER_KINDS = new Set(["junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
 export const DRAG_KINDS = new Set(["symbol", "sheet", "wire", "bus", "polyline", "junction", "no_connect", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "text",
-  "text_box", "rectangle", "circle", "arc", "bezier", "rule_area", "table", "image"]);
+  "text_box", "rectangle", "circle", "arc", "ellipse", "ellipse_arc", "bezier", "rule_area", "table", "image"]);
 export const isNetLine = (k: string) => k === "wire" || k === "bus";
 
 export function modeText() { return `${S.dragMode === "drag" ? "drag keeps connections (G)" : "move leaves connections (M)"} · wires ${LINE_MODE_LABEL[S.lineMode]} (Shift+Space)`; }

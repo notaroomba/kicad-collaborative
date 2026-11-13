@@ -40,7 +40,7 @@ import { SHEET_FILE_OFF, SHEET_NAME_OFF, arcNode, base64ToBytes, bezierNode, bus
 import { MX, MY, RCCW, anchorOf, cloneNode, mirrorNode, mul, orientOf, orientSymbol, rotateNode, shiftNode, tFrom } from "./orient";
 import { ghostSegs } from "./overlay";
 import { collisionInit, collisionMarkers } from "./collision";
-import { applyPointEdit, editFollowers, editHandles, editPointColors, editPoints, rectRadiusFor, pointEditEnd, pointEditMove, pointEditStart, textBoxMinSize } from "./point-edit";
+import { EDIT_BORDER_PX, applyPointEdit, editFollowers, editHandles, editPointColors, editPoints, ellipseAngleAt, imageBoundingSize, imageOriginOffset, polygonEdgeDrag, rectRadiusFor, pointEditEnd, pointEditMove, pointEditStart, textBoxMinSize } from "./point-edit";
 import { incrementSelection, incrementText, rememberPlaced, repeatLast } from "./repeat";
 import { deleteAt, deleteChanges, deleteSelected, duplicateSelected, orientSelected } from "./selection-edits";
 import { cancelDraw, drawClick, finishDraw } from "./shapes";
@@ -77,7 +77,7 @@ const sch = {
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,
     selectConnection, selectNode, stepNetItem, incrementSelection, editFieldPrompt, toggleSymbolFlag, stepUnit, cycleBodyStyle, placeNextUnit, libUnits, showDatasheet, CLIP, clipWrite, clipRead,
     lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
-    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, collisionInit, collisionMarkers, editPoints, editHandles, editPointColors, rectRadiusFor, applyPointEdit, editFollowers, pointEditStart, pointEditMove, pointEditEnd, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
+    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, collisionInit, collisionMarkers, editPoints, editHandles, editPointColors, EDIT_BORDER_PX, polygonEdgeDrag, ellipseAngleAt, imageBoundingSize, imageOriginOffset, rectRadiusFor, applyPointEdit, editFollowers, pointEditStart, pointEditMove, pointEditEnd, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
     analyzePoint, autostartKind, autostartAt, explicitJunctionNeeded, explicitJunctionAllowed, previewJunctions, editTxn, txnCleanUp, txnTrimWire, singleClickPlace, busyMessage, vetoTool, startWire, cancelWire, hitNonSymbol, textRect, pickNonSymbol,
     beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
     // graphic shapes, directive labels, power symbols and the delete tool

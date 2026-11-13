@@ -68,6 +68,19 @@ export function transformNode(kind: string, node: SNode, op: string, C: Pt, lone
   case "rule_area": for (const pl of kids(node, "polyline")) mapPts(pl); return true;
   case "rectangle": { const a = kid(node, "start")!, b = kid(node, "end")!; const [x0, y0, x1, y1] = corners(mapPoint(op, C, [num(a[1]), num(a[2])]), mapPoint(op, C, [num(b[1]), num(b[2])])); a[1] = x0; a[2] = y0; b[1] = x1; b[2] = y1; return true; }
   case "circle": { const c = kid(node, "center")!; const p = mapPoint(op, C, [num(c[1]), num(c[2])]); c[1] = p[0]; c[2] = p[1]; return true; }
+  case "ellipse": case "ellipse_arc": {
+    // EDA_SHAPE::rotate: the centre turns and Rotation -= angle (a quarter turn on screen); ELLIPSE::Mirror: the centre
+    // mirrors, Rotation = -Rotation, and the arc's parametric angles go to [pi - e, pi - s] (left-right) or [-e, -s]
+    const c = kid(node, "center")!; const p = mapPoint(op, C, [num(c[1]), num(c[2])]); c[1] = p[0]; c[2] = p[1];
+    const ra = kid(node, "rotation_angle"), phi = ra ? num(ra[1]) : 0;
+    const set = (key: string, v: number) => { const k = kid(node, key); v = r4(v); if (k) k[1] = v; else node.push([key, v]); };
+    if (rot) set("rotation_angle", phi + (op === "ccw" ? -90 : 90));
+    else {
+      set("rotation_angle", -phi);
+      if (kind === "ellipse_arc") { const s = num((kid(node, "start_angle") || [])[1], 0), e = num((kid(node, "end_angle") || [])[1], 0); if (op === "y") { set("start_angle", 180 - e); set("end_angle", 180 - s); } else { set("start_angle", -e); set("end_angle", -s); } }
+    }
+    return true;
+  }
   case "arc": { for (const key of ["start", "mid", "end"]) { const k = kid(node, key); if (k) { const p = mapPoint(op, C, [num(k[1]), num(k[2])]); k[1] = p[0]; k[2] = p[1]; } } return true; }
   case "text_box": {
     const [x, y, a] = atOf(node), s = kid(node, "size"); if (!s) return false;
