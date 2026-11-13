@@ -7,6 +7,9 @@ import { E, appState, toast, toolCtx, cloneNode } from "./editor";
 import { KD, checkbox, download, h, promptText, select, textInput, type GridApi, type GridColumn } from "./dom";
 import { ATTR_FIELDS, BOM_FMT_PRESETS, BOM_PRESETS, ITEM_NO, QTY, bomExport, bomRows, fieldNames, str, symbolRows, withAllFields, type BomField, type BomFmt, type BomPreset, type BomRow, type SymRow } from "./logic";
 import { loadProject, obj, projectDocs, projectName, readDoc, saveProject, sub, submitDocOp, type Json, type JsonObj } from "./project";
+import { variantDocView, variantEditNode } from "./variant-edits";
+import { setCurrentVariant, variantNamesForUI } from "../editor/variant";
+import { addVariant, copyVariant, editVariantDescription, removeVariant, renameVariant } from "../editor/variant-ops";
 
 interface Member { docId: string; id: string }
 interface Row extends SymRow { members: Member[] }
@@ -48,8 +51,11 @@ export function openFieldsTable(exportTab = false): void {
   let preset: BomPreset = clone(BOM_PRESETS[0]), presetName = BOM_PRESETS[0].name, userPresets: BomPreset[] = [];
   let fmt: BomFmt = clone(BOM_FMT_PRESETS[0]), fmtName = BOM_FMT_PRESETS[0].name, userFmts: BomFmt[] = [], outFile = "${PROJECTNAME}.csv";
   let dirtySettings = false;
-  const edits = new Map<string, { m: Member; values: Record<string, string>; flags: Record<string, boolean> }>();
-  const editOf = (m: Member) => { const k = m.docId + "\u0000" + m.id; let e = edits.get(k); if (!e) { e = { m, values: {}, flags: {} }; edits.set(k, e); } return e; };
+  // the table's variant follows the schematic's current one; edits are staged per variant and Apply writes them all
+  let variant = String((E as { currentVariant?: string }).currentVariant || "");
+  const edits = new Map<string, { m: Member; variant: string; values: Record<string, string>; flags: Record<string, boolean> }>();
+  const editKey = (m: Member, v = variant): string => v + "\u0001" + m.docId + "\u0000" + m.id;
+  const editOf = (m: Member) => { const k = editKey(m); let e = edits.get(k); if (!e) { e = { m, variant, values: {}, flags: {} }; edits.set(k, e); } return e; };
   let fieldGrid: GridApi<BomField> | null = null, grid: GridApi<GRow> | null = null, gridHost: HTMLElement | null = null, previewEl: HTMLTextAreaElement | null = null, presetSel: HTMLSelectElement | null = null, fmtSel: HTMLSelectElement | null = null, countEl: HTMLElement | null = null;
   const fmtInputs: Record<string, HTMLInputElement> = {}; let syncBar: () => void = () => {};
 
@@ -58,7 +64,7 @@ export function openFieldsTable(exportTab = false): void {
     const byRef = new Map<string, Row>(), out: Row[] = [];
     for (const [docId, d] of docs) {
       if (!use.has(docId)) continue;
-      for (const r of symbolRows(d, docId, !ro)) {
+      for (const r of symbolRows(variantDocView(d, variant), docId, !ro)) {
         if (scope === "Selection" && !r.ids.some((id) => selection.has(id))) continue;
         const prev = r.ref && !/\?$/.test(r.ref) ? byRef.get(r.ref) : undefined; const members = r.ids.map((id) => ({ docId, id }));
         if (prev) { prev.members.push(...members); continue; }
@@ -66,7 +72,7 @@ export function openFieldsTable(exportTab = false): void {
       }
     }
     // edits made before a rescope / reload stay on screen
-    for (const r of out) for (const m of r.members) { const e = edits.get(m.docId + "\u0000" + m.id); if (!e) continue; Object.assign(r.values, e.values); for (const [f, v] of Object.entries(e.flags)) (r as unknown as Record<string, boolean>)[f] = v; if (e.values.Reference !== undefined) r.ref = e.values.Reference; }
+    for (const r of out) for (const m of r.members) { const e = edits.get(editKey(m)); if (!e) continue; Object.assign(r.values, e.values); for (const [f, v] of Object.entries(e.flags)) (r as unknown as Record<string, boolean>)[f] = v; if (e.values.Reference !== undefined) r.ref = e.values.Reference; }
     rows = out; preset = withAllFields(preset, fieldNames(rows));
   };
   const markUnsaved = () => { dirtySettings = true; if (presetName !== UNSAVED) { presetName = UNSAVED; fillPresetSel(); } };
@@ -106,10 +112,22 @@ export function openFieldsTable(exportTab = false): void {
   const changesByDoc = (): Map<string, KChange[]> => {
     const sch = CollabTools.sch as SchToolModule & { fieldsTableChanges(doc: KDoc, edits: { id: string; values: Record<string, string> }[]): KChange[] };
     const out = new Map<string, KChange[]>(), byDoc = new Map<string, { id: string; values: Record<string, string>; flags: Record<string, boolean> }[]>();
-    for (const e of edits.values()) { const l = byDoc.get(e.m.docId) || []; l.push({ id: e.m.id, values: e.values, flags: e.flags }); byDoc.set(e.m.docId, l); }
+    const variantEdits = new Map<string, { id: string; variant: string; values: Record<string, string>; flags: Record<string, boolean> }[]>();
+    for (const e of edits.values()) {
+      // with a variant, the Reference is still the symbol's own; the rest goes to the variant below
+      const base = e.variant ? { id: e.m.id, values: e.values.Reference !== undefined ? { Reference: e.values.Reference } : {}, flags: {} } : { id: e.m.id, values: e.values, flags: e.flags };
+      const l = byDoc.get(e.m.docId) || []; l.push(base); byDoc.set(e.m.docId, l);
+      if (e.variant) { const v = variantEdits.get(e.m.docId) || []; v.push({ id: e.m.id, variant: e.variant, values: e.values, flags: e.flags }); variantEdits.set(e.m.docId, v); }
+    }
     for (const [docId, list] of byDoc) {
       const d = docs.get(docId); if (!d) continue;
-      const ch = new Map<string, KChange>(); for (const c of sch.fieldsTableChanges(d, list.map((x) => ({ id: x.id, values: x.values })))) ch.set(c.id, c);
+      const ch = new Map<string, KChange>(); for (const c of sch.fieldsTableChanges(d, list.filter((x) => Object.keys(x.values).length).map((x) => ({ id: x.id, values: x.values })))) ch.set(c.id, c);
+      for (const x of variantEdits.get(docId) || []) {
+        const it = d.items.get(x.id); if (!it) continue;
+        const prior = ch.get(x.id); const node = (prior && prior.sexpr ? KiCadCanvas.parse(prior.sexpr) : cloneNode(it.node)) as SNode;
+        const nn = variantEditNode(node, x.variant, x.values, x.flags);
+        if (nn) ch.set(x.id, KiCadCanvas.replaceChange(d, Object.assign({}, it, { node: nn, geom: [], bbox: null })));
+      }
       for (const x of list) {
         if (!Object.keys(x.flags).length) continue; const it = d.items.get(x.id); if (!it) continue;
         const prior = ch.get(x.id); const node = (prior && prior.sexpr ? KiCadCanvas.parse(prior.sexpr) : cloneNode(it.node)) as SNode; let any = false;
@@ -159,6 +177,16 @@ export function openFieldsTable(exportTab = false): void {
         const p = BOM_PRESETS.find((x) => x.name === v) || userPresets.find((x) => x.name === v); if (!p) return;
         preset = withAllFields(clone(p), fieldNames(rows)); presetName = v; dirtySettings = true; fillPresetSel(); refreshFields(); syncEditBar(); refreshGrid(); refreshPreview(); }, { id: "kd-sft-preset" });
       left.append(h("div", { class: "kd-row", style: "margin-top:10px" }, h("label", { style: "white-space:nowrap;color:var(--ink-2)" }, "View presets:"), presetSel)); fillPresetSel();
+      // Schematic variants: the list (GetVariantNamesForUI), choosing one shows (and stages edits for) its values
+      // and makes it the schematic's current variant (onVariantSelectionChange); add / rename / copy / describe / delete
+      const vlist = h("select", { id: "kd-sft-variants", size: 5, style: "width:100%;margin-top:3px" }) as HTMLSelectElement;
+      const fillVariants = () => { const names = variantNamesForUI(); vlist.replaceChildren(...names.map((n, i) => h("option", { value: i === 0 ? "" : n }, n))); vlist.value = variant; if (vlist.selectedIndex < 0) vlist.selectedIndex = 0; };
+      vlist.addEventListener("change", () => { variant = vlist.value; setCurrentVariant(variant); refreshAll(); });
+      const vbtn = (txt: string, title: string, id: string, fn: () => unknown) => h("button", { class: "btn sm", type: "button", title, id, disabled: ro, onclick: () => { void Promise.resolve(fn()).then(() => setTimeout(() => { variant = String((E as { currentVariant?: string }).currentVariant || ""); fillVariants(); refreshAll(); }, 300)); } }, txt);
+      left.append(h("div", { style: "margin-top:10px" }, h("label", { style: "color:var(--ink-2)" }, "Schematic variants:"), vlist,
+        h("div", { class: "kd-row", style: "gap:4px;margin-top:3px" }, vbtn("+", "Add a new variant", "kd-sft-addvariant", addVariant), vbtn("✎", "Rename a variant", "kd-sft-renamevariant", renameVariant),
+          vbtn("⧉", "Copy a variant", "kd-sft-copyvariant", copyVariant), vbtn("¶", "Edit a variant's description", "kd-sft-descvariant", editVariantDescription), h("span", { style: "flex:1" }), vbtn("🗑", "Delete a variant", "kd-sft-deletevariant", removeVariant))));
+      fillVariants();
 
       // ---- right: Edit / Export
       const right = h("div", { style: "flex:1;min-width:0" });

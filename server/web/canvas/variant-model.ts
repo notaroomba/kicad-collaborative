@@ -194,11 +194,12 @@ export function setSymbolVariant(sym: N, name: string, patch: SymVariantPatch, p
   if (!inst) return out;
   const base = symbolFlags(out), st = symbolVariant(out, name, str(inst[1])) || { flags: { ...base }, fields: new Map<string, string>() };
   for (const [, f] of SYM_KEYS) if (patch.flags && patch.flags[f] !== undefined) st.flags[f] = !!patch.flags[f];
-  if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) st.fields.set(k, v);
+  const baseField = (k: string): string => { const p = kids(out, "property").find((q) => str(q[1]) === k); return p ? str(p[2]) : ""; };
+  // SCH_SYMBOL::SetFieldText( …, variant ): a text equal to the symbol's own is no override (erased)
+  if (patch.fields) for (const [k, v] of Object.entries(patch.fields)) { if (v === baseField(k) && kids(out, "property").some((q) => str(q[1]) === k)) st.fields.delete(k); else st.fields.set(k, v); }
   const old = symVariantIn(inst, name);
   const node: N = ["variant", ["name", name]];
   for (const [key, f, inv] of SYM_KEYS) if (st.flags[f] !== base[f]) node.push([key, (inv ? !st.flags[f] : st.flags[f]) ? "yes" : "no"]);
-  const baseField = (k: string): string => { const p = kids(out, "property").find((q) => str(q[1]) === k); return p ? str(p[2]) : ""; };
   for (const k of [...st.fields.keys()].sort(cmpCode)) node.push(["field", ["name", k], ["value", st.fields.get(k) as string]]);
   if (old) for (const c of old.slice(1)) if (isList(c) && !["name", "dnp", "exclude_from_sim", "in_bom", "on_board", "in_pos_files", "field"].includes(str(c[0]))) node.push(c);
   // HasDifferentials: a flag differs, a field differs from the symbol's, or an override is held

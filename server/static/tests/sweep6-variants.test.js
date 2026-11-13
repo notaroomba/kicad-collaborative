@@ -144,5 +144,29 @@ test("GetVariantNamesForUI and the drawing sheet's ${VARIANT} / ${VARIANT_DESC}"
   assert.equal(K.sheetTextVars({}).VARIANT, "");
 });
 
+
+// ---------------------------------------------------------------- Symbol Properties / the fields table with a variant
+const VE = load("dialogs/variant-edits.ts");
+test("Symbol Properties with a current variant: field texts (not the Reference) and flags go to the variant, the symbol keeps its own", () => {
+  const base = K.parse(SYM);
+  // what the dialog wrote: Value edited, Reference edited, DNP ticked, a new field added
+  const edited = K.parse(SYM.replace('"Value" "10k"', '"Value" "22k"').replace('"Reference" "R1"', '"Reference" "R9"').replace("(dnp no)", "(dnp yes)").replace('(property "Value" "22k" (at 0 0 0))', '(property "Value" "22k" (at 0 0 0)) (property "MPN" "X1" (at 0 0 0))'));
+  const out = VE.writeSymbolVariant(edited, base, "Lite", "/root-uuid");
+  const txt = K.serialize(out);
+  assert.ok(txt.includes('(property "Value" "10k"') && txt.includes('(property "Reference" "R9"') && txt.includes("(dnp no)") && txt.includes('(property "MPN" "X1"'), txt);
+  assert.ok(txt.includes('(variant (name "Lite") (dnp yes) (field (name "Value") (value "22k")))'), txt);
+  // reopening shows the variant; writing the symbol's own text back erases the override (SetFieldText: equal = none)
+  const shown = VM.symbolViewForVariant(out, "Lite", "/root-uuid");
+  const again = VE.writeSymbolVariant(K.parse(K.serialize(shown).replace('"Value" "22k"', '"Value" "10k"').replace("(dnp yes)", "(dnp no)")), out, "Lite", "/root-uuid");
+  assert.ok(!K.serialize(again).includes("(variant"), K.serialize(again));
+});
+test("Symbol Fields Table with a variant: the rows show the variant, an edit writes the variant", () => {
+  const n = VM.setSymbolVariant(K.parse(SYM), "Lite", { fields: { Value: "4k7" } });
+  const view = VE.variantDocView({ items: new Map([["s1", { id: "s1", kind: "symbol", node: n }]]) }, "Lite");
+  assert.equal(K.kids(view.items.get("s1").node, "property")[1][2], "4k7");
+  const e = VE.variantEditNode(n, "Lite", { Value: "1k", Reference: "R5" }, { dnp: true });
+  assert.ok(K.serialize(e).includes('(variant (name "Lite") (dnp yes) (field (name "Value") (value "1k")))') && K.serialize(e).includes('"Reference" "R1"'), K.serialize(e));
+  assert.equal(VE.variantEditNode(n, "Lite", { Value: "4k7" }, {}), null, "no change");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

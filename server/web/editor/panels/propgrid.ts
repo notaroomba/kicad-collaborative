@@ -12,6 +12,8 @@ import { setNet } from "../pcbdialogs/item-props";
 import { layerDisplayName, netClassOf } from "./appearance";
 import { KC, isSchDoc, kdoc, panelStore, pcbTools, tctx } from "./core";
 import { commitWithOtherUnits } from "../../dialogs/sync-units";
+import * as VM from "../../canvas/variant-model";
+import { currentInstance } from "../schnets";
 
 type Raw = string | number | boolean | null;
 interface PropDef {
@@ -153,7 +155,25 @@ function symbolProps(it: KItem, doc: KDoc): PropDef[] {
   const units = h.libUnitCount(doc, it.node);
   const unitChoices: [string, string][] = []; for (let u = 1; u <= Math.max(1, units); u++) unitChoices.push([String(u), u <= 26 ? String.fromCharCode(64 + u) : String(u)]);
   out.push({ group: BASIC, name: "Unit", type: "enum", choices: unitChoices, get: (x) => { const k = h.kid(x.node, "unit"); return String(k ? h.num(k[1], 1) : 1); }, set: (n, v) => { h.setSymbolUnit(n, +(v as string)); } });
-  out.push(...fieldProps(it).map((d) => (SYM_MANDATORY.includes(d.name) ? d : Object.assign(d, { key: "field" as const }))));
+  const fieldDefs = fieldProps(it).map((d) => (SYM_MANDATORY.includes(d.name) ? d : Object.assign(d, { key: "field" as const })));
+  // with a current variant the fields (but the Reference) and the attributes read and write the symbol instance's
+  // variant (SCH_SYMBOL's property getters / setters take Schematic().GetCurrentVariant())
+  const variant = String(E.currentVariant || "");
+  if (variant) {
+    const inst = currentInstance(), path = inst && inst.uuidPath.length ? "/" + inst.uuidPath.join("/") : null;
+    const view = (x: KItem): SNode => VM.symbolViewForVariant(x.node, variant, path);
+    const put = (n: SNode, patch: VM.SymVariantPatch): void => { const c = VM.setSymbolVariant(n, variant, patch, path); n.length = 0; n.push(...c); };
+    for (const d of fieldDefs) {
+      const name = d.name;
+      out.push(name === "Reference" ? d : { ...d, get: (x) => { const f = H().fieldList(view(x)).find((q) => H().str(q[1]) === name); return f ? H().str(f[2]) : null; }, set: (n, v) => { put(n, { fields: { [name]: String(v) } }); } });
+    }
+    out.push({ group: "Fields", name: "Library Link", type: "text", get: (x) => h.str((h.kid(x.node, "lib_id") || [])[1]) });
+    const vflag = (name: string, f: keyof VM.SymFlags): PropDef => ({ group: "Attributes", name, type: "bool", get: (x) => VM.symbolFlagsForVariant(x.node, variant, path)[f], set: (n, v) => { put(n, { flags: { [f]: !!v } }); } });
+    out.push(vflag("Exclude From Simulation", "excludedFromSim"), vflag("Exclude From Bill of Materials", "excludedFromBOM"), vflag("Exclude From Board", "excludedFromBoard"),
+      vflag("Exclude From Position Files", "excludedFromPosFiles"), vflag("Do not Populate", "dnp"));
+    return out;
+  }
+  out.push(...fieldDefs);
   out.push({ group: "Fields", name: "Library Link", type: "text", get: (x) => h.str((h.kid(x.node, "lib_id") || [])[1]) });
   out.push(flag("Attributes", "Exclude From Simulation", "exclude_from_sim", false, false), flag("Attributes", "Exclude From Bill of Materials", "in_bom", true, true),
     flag("Attributes", "Exclude From Board", "on_board", true, true), flag("Attributes", "Exclude From Position Files", "in_pos_files", true, true), flag("Attributes", "Do not Populate", "dnp", false, false));

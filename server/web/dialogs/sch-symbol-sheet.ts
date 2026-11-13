@@ -20,6 +20,8 @@ import { embeddedModelFiles, projectModelFiles, refPrefix, simPinsOfLib } from "
 import { docBase, projectDocs, readDoc, submitDocOp } from "./project";
 import { currentInstance, loadSheets, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
+import * as VM from "../canvas/variant-model";
+import { writeSymbolVariant } from "./variant-edits";
 
 type Ctx = ToolCtx & { doc: KDoc };
 interface PropsHelpers {
@@ -84,8 +86,12 @@ function pathRefSuffix(): string {
 }
 interface PinRow { number: string; name: string; alt: string; type: string; style: string; alts: string[] }
 interface SymPropsOpts { pinMapPage?: boolean }
+/** The schematic's current design variant (the toolbar's; "" for the default). */
+const currentVariantName = (): string => String((E as { currentVariant?: string }).currentVariant || "");
 export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts = {}): void {
-  const doc = ctx.doc, ro = !!ctx.viewOnly, staged = L.clone(item.node), [ax, ay, rot] = L.atOf(staged), origin: [number, number] = [ax, ay];
+  const variant = currentVariantName(), vpath = variant ? sheetPathNow(ctx.doc).path : null;
+  // TransferDataToWindow: the fields show GetFieldText( name, sheet, variant ), the attributes the variant's flags
+  const doc = ctx.doc, ro = !!ctx.viewOnly, staged = L.clone(variant ? VM.symbolViewForVariant(item.node, variant, vpath) : item.node), [ax, ay, rot] = L.atOf(staged), origin: [number, number] = [ax, ay];
   const libIdN = L.kid(staged, "lib_id"), libId = libIdN ? L.str(libIdN[1]) : "", libNameN = L.kid(staged, "lib_name"), libName = libNameN ? L.str(libNameN[1]) : libId;
   const lib = (KiCadCanvas.resolveLib(doc, libName) || KiCadCanvas.resolveLib(doc, libId)) as SNode | null;
   const ownLib = (doc.lib.get(libName) || doc.lib.get(libId) || null) as SNode | null;   // the (lib_symbols) entry itself (not merged with a parent)
@@ -106,7 +112,8 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
   let nb: { select(i: number): void } | null = null;
   const apply = (): boolean => { const a = document.querySelector(".kd-dialog .kd-foot .btn.primary") as HTMLButtonElement | null; if (!a) return false; a.click(); return !(KDialogs as KDialogsApi).isOpen || !(KDialogs as KDialogsApi).isOpen(); };
   KD().open({
-    title: "Symbol Properties", width: 1000, readOnly: ro, cls: "kd-wide",
+    // "Remind user that they are editing the current variant."
+    title: "Symbol Properties" + (variant ? ` - ${variant} Design Variant` : ""), width: 1000, readOnly: ro, cls: "kd-wide",
     build(b, api) {
       const tabs = [
         { label: "General", build(pg: HTMLElement) {
@@ -200,7 +207,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
       setFlag(n, "dnp", (els.dnp as HTMLInputElement).checked);
       P.setPassthrough(n, els.passthrough.value as P.Passthrough);
       if (nBodies < 2) for (const p of pinRows) if ((alt0.get(p.number) || "") !== p.alt) L.setPinAlternate(n, p.number, p.alt);
-      let out = n;
+      let out = variant ? writeSymbolVariant(n, item.node, variant, here.path) : n;
       if (moved) L.drop(out, "fields_autoplaced");
       else if (L.yes(out, "fields_autoplaced")) { const H = SH(); const a = H && H.autoplaceNode(doc, Object.assign({}, item, { node: out }) as KItem); if (a) out = a; }
       // the library copy: the pin maps go onto the shared entry (SyncLibSymbolPinMaps: every symbol using it); pin
