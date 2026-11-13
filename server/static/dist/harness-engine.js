@@ -24534,7 +24534,7 @@ var require_pcb_tools = __commonJS({
         const edgeEl = (i) => ({ id: edges.ids[i], uuid: edges.ids[i], kind: "gr_line", node: (doc.items.get(edges.ids[i]) || { node: ["gr_line", ["layer", "Edge.Cuts"]] }).node, fp: null, layer: "Edge.Cuts", shapes: [edges.shapes[i]], grow: 0, bbox: eb[i], net: null, copper: /* @__PURE__ */ new Set(), mask: /* @__PURE__ */ new Set() });
         const ol = boardOutline(doc);
         for (const e of silk) {
-          let crosses2 = false;
+          let crosses22 = false;
           for (let i = 0; i < edges.shapes.length; i++) {
             const edge = edgeEl(i);
             const c2 = silkConstraint(rules, doc, s, edge, e, null);
@@ -24545,10 +24545,10 @@ var require_pcb_tools = __commonJS({
             if (!collides(gap, clr)) continue;
             const [x, y] = centre(e.bbox, eb[i]);
             out.push(marker("silk_edge_clearance", sev3, x, y, "Silkscreen clipped by board edge" + detail(c2.name, c2.min, gap), Array.from(/* @__PURE__ */ new Set([edge.id, e.id]))));
-            crosses2 = true;
+            crosses22 = true;
             break;
           }
-          if (crosses2 || !ol.outline || e.shapes.length < 2) continue;
+          if (crosses22 || !ol.outline || e.shapes.length < 2) continue;
           const inside22 = (sh) => {
             const b = shapeBBox(sh);
             return pointInPoly4(ol.outline, (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
@@ -34658,7 +34658,7 @@ var require_pcb_tools = __commonJS({
         const d = tangentAtEndpoint(sh, end);
         return d ? { start: end.slice(), dir: d, axis: false } : null;
       }
-      function segDist2(a, b, p) {
+      function segDist3(a, b, p) {
         const v = vsubA(b, a), L = v[0] * v[0] + v[1] * v[1];
         let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
         t = Math.max(0, Math.min(1, t));
@@ -34678,7 +34678,7 @@ var require_pcb_tools = __commonJS({
         }
         let best = null, bestD = tol;
         for (let i = 0; i < (closed ? n2 : n2 - 1); i++) {
-          const a = vs[i], b = vs[(i + 1) % n2], r = segDist2(a, b, p);
+          const a = vs[i], b = vs[(i + 1) % n2], r = segDist3(a, b, p);
           if (r.d <= bestD) {
             best = { a, b, q: r.q };
             bestD = r.d;
@@ -40541,11 +40541,11 @@ Please remove the objects that use these layers first.`, page: 1 };
         if (closed && pts.length > 2) segs.push([pts[pts.length - 1], pts[0]]);
         for (const [a, b] of segs) for (let i = 0; i < outline.length; i++) {
           const c = outline[i], d = outline[(i + 1) % outline.length];
-          if (segDist22(c, a, b) <= sw / 2 + 1e-9 || segDist22(a, c, d) <= sw / 2 + 1e-9 || crosses(a, b, c, d)) return true;
+          if (segDist22(c, a, b) <= sw / 2 + 1e-9 || segDist22(a, c, d) <= sw / 2 + 1e-9 || crosses2(a, b, c, d)) return true;
         }
         return false;
       }
-      function crosses(a, b, c, d) {
+      function crosses2(a, b, c, d) {
         const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
         return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
       }
@@ -40631,7 +40631,7 @@ Please remove the objects that use these layers first.`, page: 1 };
           return s;
         };
         const tol = (wa + wb) / 2 + 1e-9;
-        for (const [a1, a2] of segs(pa, ca)) for (const [b1, b2] of segs(pb, cb)) if (crosses(a1, a2, b1, b2) || segDist22(a1, b1, b2) <= tol || segDist22(a2, b1, b2) <= tol || segDist22(b1, a1, a2) <= tol || segDist22(b2, a1, a2) <= tol) return true;
+        for (const [a1, a2] of segs(pa, ca)) for (const [b1, b2] of segs(pb, cb)) if (crosses2(a1, a2, b1, b2) || segDist22(a1, b1, b2) <= tol || segDist22(a2, b1, b2) <= tol || segDist22(b1, a1, a2) <= tol || segDist22(b2, a1, a2) <= tol) return true;
         return false;
       }
       var PAD_TYPES = [["thru_hole", "Through-hole"], ["smd", "SMD"], ["connect", "Connector"], ["np_thru_hole", "NPTH"], ["non_component", "Non-component"], ["aperture", "Aperture"]];
@@ -69091,14 +69091,14 @@ root.KiCadCanvas = api;
   var r45 = (v) => +(+v).toFixed(4);
   var same = (a, b, tol) => Math.abs(a[0] - b[0]) <= (tol || 1e-3) && Math.abs(a[1] - b[1]) <= (tol || 1e-3);
   var area4 = (b) => b ? Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]) : 0;
-  function segDist2(p, a, b) {
+  function segDist3(p, a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
     let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0;
     t = Math.max(0, Math.min(1, t));
     return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
   }
   function onSegMid(p, a, b) {
-    return !same(p, a) && !same(p, b) && segDist2(p, a, b) <= 1e-3;
+    return !same(p, a) && !same(p, b) && segDist3(p, a, b) <= 1e-3;
   }
   function segs(item) {
     const p = ptsOf3(item.node), out = [];
@@ -70035,7 +70035,7 @@ root.KiCadCanvas = api;
       if (it.kind !== kind) continue;
       const q = ptsOf3(it.node);
       if (kind === "polyline" && q.length !== 2) continue;
-      if (segs(it).some(([a, b]) => segDist2(p, a, b) <= 1e-3)) return it;
+      if (segs(it).some(([a, b]) => segDist3(p, a, b) <= 1e-3)) return it;
     }
     return null;
   }
@@ -70046,7 +70046,7 @@ root.KiCadCanvas = api;
   }
   function isTerminalPoint(doc, p, kind) {
     if (kind === "polyline") {
-      for (const it of doc.items.values()) if (it.kind === "polyline" && segs(it).some(([a, b]) => segDist2(p, a, b) <= 1e-3)) return true;
+      for (const it of doc.items.values()) if (it.kind === "polyline" && segs(it).some(([a, b]) => segDist3(p, a, b) <= 1e-3)) return true;
       return false;
     }
     const lineAt = (k) => lineEndsAt(doc, p[0], p[1], k).length > 0 || lineMidsAt(doc, p[0], p[1], k).length > 0;
@@ -70165,7 +70165,7 @@ root.KiCadCanvas = api;
   function analyzePoint(doc, p, breakCrossings, extra, skip) {
     const info = { isJunction: false, hasDot: false, hasBusEntry: false, hasBusAtPoint: false, multiWires: false, multiBuses: false, allows: false };
     const lines = [], others = [];
-    const onLine = (a, b) => segDist2(p, a, b) <= 1e-3;
+    const onLine = (a, b) => segDist3(p, a, b) <= 1e-3;
     for (const it of doc.items.values()) {
       if (skip && skip.has(it.id)) continue;
       if (it.kind === "wire" || it.kind === "bus") {
@@ -70281,7 +70281,7 @@ root.KiCadCanvas = api;
     for (const l of extra) {
       push(l.a);
       push(l.b);
-      for (const c of conns) if (segDist2(c, l.a, l.b) <= 1e-3) push(c);
+      for (const c of conns) if (segDist3(c, l.a, l.b) <= 1e-3) push(c);
     }
     return pts.filter((p) => analyzePoint(doc, p, false, extra, skip).allows);
   }
@@ -70407,7 +70407,7 @@ root.KiCadCanvas = api;
       if (it.kind !== "wire" || only && !only.has(it.id)) continue;
       const s = segOf(it);
       if (!s) continue;
-      if (segDist2(a, s[0], s[1]) > 1e-3 || segDist2(b, s[0], s[1]) > 1e-3) continue;
+      if (segDist3(a, s[0], s[1]) > 1e-3 || segDist3(b, s[0], s[1]) > 1e-3) continue;
       if (same(s[0], a) && same(s[1], b) || same(s[0], b) && same(s[1], a)) continue;
       const da = Math.hypot(a[0] - s[0][0], a[1] - s[0][1]), db = Math.hypot(b[0] - s[0][0], b[1] - s[0][1]);
       const [near, far] = da <= db ? [a, b] : [b, a];
@@ -70444,7 +70444,7 @@ root.KiCadCanvas = api;
     const conns = w.kind === "polyline" ? [] : screenConnections(doc), newEnds = [], added2 = [];
     for (const s of list) {
       newEnds.push(s[0], s[1]);
-      for (const c of conns) if (segDist2(c, s[0], s[1]) <= 1e-3) newEnds.push(c);
+      for (const c of conns) if (segDist3(c, s[0], s[1]) <= 1e-3) newEnds.push(c);
       added2.push(t.add(wireNode(w, s[0], s[1])).id);
     }
     try {
@@ -70582,12 +70582,12 @@ root.KiCadCanvas = api;
     return g2.anticlockwise ? n2(g2.a0 - t) <= n2(g2.a0 - g2.a1) : n2(t - g2.a0) <= n2(g2.a1 - g2.a0);
   }
   function geomDist(g2, x, y) {
-    if (g2.t === "line") return segDist2([x, y], [g2.x1, g2.y1], [g2.x2, g2.y2]);
+    if (g2.t === "line") return segDist3([x, y], [g2.x1, g2.y1], [g2.x2, g2.y2]);
     if (g2.t === "poly") {
       const n2 = g2.pts.length;
       if (n2 < 2) return Infinity;
       let d = Infinity;
-      for (let i = 0; i < (g2.close ? n2 : n2 - 1); i++) d = Math.min(d, segDist2([x, y], g2.pts[i], g2.pts[(i + 1) % n2]));
+      for (let i = 0; i < (g2.close ? n2 : n2 - 1); i++) d = Math.min(d, segDist3([x, y], g2.pts[i], g2.pts[(i + 1) % n2]));
       return d;
     }
     if (g2.t === "circle") return Math.abs(Math.hypot(x - g2.x, y - g2.y) - g2.r);
@@ -70601,7 +70601,7 @@ root.KiCadCanvas = api;
       let d;
       if (LINE_KINDS.has(it.kind)) {
         d = Infinity;
-        for (const [a, b] of segs(it)) d = Math.min(d, segDist2([x, y], a, b));
+        for (const [a, b] of segs(it)) d = Math.min(d, segDist3([x, y], a, b));
         d += 0.01;
       } else if (SHAPE_KINDS.has(it.kind) || it.kind === "bezier" || it.kind === "rule_area") {
         d = Infinity;
@@ -70610,7 +70610,7 @@ root.KiCadCanvas = api;
       } else if (it.kind === "text_box" || it.kind === "netclass_flag" || it.kind === "directive_label" || it.kind === "table" || it.kind === "image") d = boxDist(it.bbox, x, y);
       else if (it.kind === "bus_entry") {
         const [ax, ay] = atOf3(it.node), s = kid5(it.node, "size");
-        d = segDist2([x, y], [ax, ay], [ax + (s ? num8(s[1]) : 2.54), ay + (s ? num8(s[2]) : 2.54)]);
+        d = segDist3([x, y], [ax, ay], [ax + (s ? num8(s[1]) : 2.54), ay + (s ? num8(s[2]) : 2.54)]);
       } else if (it.kind === "junction" || it.kind === "no_connect") {
         const [ax, ay] = atOf3(it.node);
         d = Math.max(0, Math.hypot(ax - x, ay - y) - 0.6);
@@ -72461,7 +72461,7 @@ ${body}
     for (const it of items) {
       for (const p of connPoints(doc, it)) push(p);
       if (isNetLine(it.kind)) {
-        for (const [a, b] of segs(it)) for (const c of conns) if (segDist2(c, a, b) <= 1e-3) push(c);
+        for (const [a, b] of segs(it)) for (const c of conns) if (segDist3(c, a, b) <= 1e-3) push(c);
       }
     }
     for (const p of pts) if (explicitJunctionNeeded(doc, p)) txnAddJunction(t, doc, p);
@@ -72475,7 +72475,7 @@ ${body}
         if (line.kind !== "wire") continue;
         const s = segOf(line);
         if (!s) continue;
-        const on = pts.filter((p) => segDist2(p, s[0], s[1]) <= 1e-3);
+        const on = pts.filter((p) => segDist3(p, s[0], s[1]) <= 1e-3);
         if (on.length === 2) txnTrimWire(t, doc, on[0], on[1], /* @__PURE__ */ new Set([line.id]));
       }
     }
@@ -73248,7 +73248,7 @@ Link '${target2}' to this file?`)) return null;
       const [x, y] = atOf3(it.node), s = kid5(it.node, "size"), w = num8(s && s[1], 0), h = num8(s && s[2], 0);
       const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
       for (const side of ["top", "right", "bottom", "left"]) {
-        const d = segDist2(p, edges[side][0], edges[side][1]);
+        const d = segDist3(p, edges[side][0], edges[side][1]);
         if (d <= tol && (!best || d < best.d)) best = { item: it, side, d, x, y, w, h };
       }
     }
@@ -75564,8 +75564,8 @@ Link '${target2}' to this file?`)) return null;
       const pa = connPoints(doc, A)[c.ia], pb = connPoints(doc, B)[c.ib];
       if (!pa || !pb) continue;
       if (same(pa, pb, 1e-4)) continue;
-      if (isNetLine(B.kind) && segs(B).some(([a, b]) => segDist2(pa, a, b) <= 1e-4)) continue;
-      if (isNetLine(A.kind) && segs(A).some(([a, b]) => segDist2(pb, a, b) <= 1e-4)) continue;
+      if (isNetLine(B.kind) && segs(B).some(([a, b]) => segDist3(pa, a, b) <= 1e-4)) continue;
+      if (isNetLine(A.kind) && segs(A).some(([a, b]) => segDist3(pb, a, b) <= 1e-4)) continue;
       if (!nc.moved.has(A.id) && !nc.moved.has(B.id)) continue;
       out.breaks.push({ a: pa, b: pb, r: Math.max(MIN_R, lineWidth(A), lineWidth(B)) });
     }
@@ -75659,7 +75659,7 @@ Link '${target2}' to this file?`)) return null;
         if (ln.kind === "wire") {
           const q = ptsOf3(ln.node);
           if (same(q[0], ends[i]) || same(q[q.length - 1], ends[i])) hasWire[i] = true;
-        } else if (segs(ln).some(([a, b]) => segDist2(ends[i], a, b) <= 1e-3)) hasBus[i] = true;
+        } else if (segs(ln).some(([a, b]) => segDist3(ends[i], a, b) <= 1e-3)) hasBus[i] = true;
       }
       let d0 = true, d1 = true;
       if (hasWire[0] && hasBus[1] || hasWire[1] && hasBus[0]) d0 = d1 = false;
@@ -75686,7 +75686,7 @@ Link '${target2}' to this file?`)) return null;
     for (const lb of labels) {
       const l = at2.get(key3(lb.p)) || [];
       if (l.some((x) => x.item !== lb.item && LABEL_OK.has(x.type))) continue;
-      if (lines.some((ln) => segs(ln).some(([a, b]) => segDist2(lb.p, a, b) <= 1e-3))) continue;
+      if (lines.some((ln) => segs(ln).some(([a, b]) => segDist3(lb.p, a, b) <= 1e-3))) continue;
       out.push({ p: lb.p, what: "label", item: lb.item, color: lb.color });
     }
     return out;
@@ -75708,7 +75708,7 @@ Link '${target2}' to this file?`)) return null;
           if (!other) return "bus";
         }
       } else if (it.kind === "bus_entry") {
-        const [a, b] = connPoints(doc, it), onBus = Array.from(doc.items.values()).some((o) => o.kind === "bus" && segs(o).some(([u, v]) => segDist2(a, u, v) <= 1e-3));
+        const [a, b] = connPoints(doc, it), onBus = Array.from(doc.items.values()).some((o) => o.kind === "bus" && segs(o).some(([u, v]) => segDist3(a, u, v) <= 1e-3));
         const endFree = !Array.from(doc.items.values()).some((o) => o !== it && connPoints(doc, o).some((c) => same(c, b)));
         if (same(a, p) && !onBus || same(b, p) && endFree) return onBus ? "wire" : "bus";
       } else if (it.kind === "polyline") {
@@ -77274,7 +77274,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function wireAtPoint(doc, p) {
     for (const it of doc.items.values()) if (it.kind === "wire") {
-      for (const [a, b] of segs(it)) if (segDist2(p, a, b) < 1e-6) return it;
+      for (const [a, b] of segs(it)) if (segDist3(p, a, b) < 1e-6) return it;
     }
     return null;
   }
@@ -77802,7 +77802,7 @@ Link '${target2}' to this file?`)) return null;
     for (const it of doc.items.values()) {
       if (!RIDER_KINDS.has(it.kind) || it === item) continue;
       const cps = it.kind === "bus_entry" ? connPoints(doc, it) : [atOf3(it.node).slice(0, 2)];
-      if (!cps.some((c) => sg.some(([a, b]) => segDist2(c, a, b) <= 1e-3))) continue;
+      if (!cps.some((c) => sg.some(([a, b]) => segDist3(c, a, b) <= 1e-3))) continue;
       if (it.kind === "junction" && endsP.some((e) => same(e, atOf3(it.node)))) continue;
       out.push({ item: it, orig: atOf3(it.node).slice(0, 2) });
     }
@@ -77843,7 +77843,7 @@ Link '${target2}' to this file?`)) return null;
   function lineCovers(doc, kind, a, b) {
     for (const it of doc.items.values()) {
       if (it.kind !== kind) continue;
-      for (const [s, e] of segs(it)) if (segDist2(a, s, e) <= 1e-3 && segDist2(b, s, e) <= 1e-3) return true;
+      for (const [s, e] of segs(it)) if (segDist3(a, s, e) <= 1e-3 && segDist3(b, s, e) <= 1e-3) return true;
     }
     return false;
   }
@@ -78292,7 +78292,7 @@ Link '${target2}' to this file?`)) return null;
       if (o.kind === "bus") {
         const q = ptsOf3(o.node);
         if (q.length > 1 && (same(q[0], p) || same(q[q.length - 1], p))) return false;
-        if (segs(o).some(([a, b]) => segDist2(p, a, b) <= 1e-3)) return false;
+        if (segs(o).some(([a, b]) => segDist3(p, a, b) <= 1e-3)) return false;
       } else if (o.kind === "bus_entry") {
         if (same(connPoints(doc, o)[0], p)) return false;
       } else if (o.kind === "label" || o.kind === "global_label" || o.kind === "hierarchical_label") {
@@ -78809,7 +78809,7 @@ Link '${target2}' to this file?`)) return null;
       return false;
     }
   }
-  function segDist3(p, a, b) {
+  function segDist32(p, a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
     const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
     return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
@@ -78856,7 +78856,7 @@ Link '${target2}' to this file?`)) return null;
         const b = pinBox(it, pin);
         const d = Math.max(b[0] - p[0], p[0] - b[2], b[1] - p[1], p[1] - b[3], 0);
         if (d > acc) continue;
-        const l = segDist3(p, [pin.x, pin.y], pin.root);
+        const l = segDist32(p, [pin.x, pin.y], pin.root);
         if (d < bestD - 1e-9 || Math.abs(d - bestD) <= 1e-9 && l < bestL) {
           best = { item: it, pin };
           bestD = d;
@@ -81555,7 +81555,7 @@ var Router = class _Router {
    * hair is left for review_design to report.
    */
   unsquare() {
-    const live = this.conns.filter((c) => c.nodes && !c.pair && this.kindOf(c.net) !== "rf");
+    const live = this.conns.filter((c) => c.nodes && this.kindOf(c.net) !== "rf");
     if (!live.length) return;
     const P = this.P;
     const kf = (l, net, p) => `${l}
@@ -81615,7 +81615,7 @@ ${p[0].toFixed(3)},${p[1].toFixed(3)}`;
           if (list.length !== 2 || fixedEnds.has(k)) continue;
           const [e1, e2] = list;
           const c = e1.c;
-          if (c.pair || e2.c.pair || this.kindOf(c.net) === "rf" || touched.has(e1.o) || touched.has(e2.o)) continue;
+          if (this.kindOf(c.net) === "rf" || touched.has(e1.o) || touched.has(e2.o)) continue;
           const s1 = e1.o.shape, s2 = e2.o.shape;
           const v = s1[e1.at];
           const o1 = s1[e1.at === "a" ? "b" : "a"], o2 = s2[e2.at === "a" ? "b" : "a"];
@@ -83620,6 +83620,22 @@ function install() {
 }
 
 // web/router/place.ts
+var GROUNDISH = /^\/?(.*\/)?([ADP]?GND\w*|VSS\w*|EARTH)$/i;
+function crosses(a, b, c, d) {
+  const o = (p, q, r) => {
+    const v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    return Math.abs(v) < 1e-9 ? 0 : v > 0 ? 1 : -1;
+  };
+  const same = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 1e-6;
+  if (same(a, c) || same(a, d) || same(b, c) || same(b, d)) return false;
+  return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+}
+function segDist2(px, py, a, b) {
+  const vx = b[0] - a[0], vy = b[1] - a[1];
+  const L = vx * vx + vy * vy;
+  const t = L < 1e-12 ? 0 : Math.max(0, Math.min(1, ((px - a[0]) * vx + (py - a[1]) * vy) / L));
+  return Math.hypot(px - a[0] - t * vx, py - a[1] - t * vy);
+}
 var rotv = (deg, x, y) => {
   const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
   return [x * c + y * s, -x * s + y * c];
@@ -83811,21 +83827,39 @@ function place(K7, P, doc, settings, opts = {}) {
           focus = t.at;
         }
       }
+      const size = Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1]);
+      const core = Math.max(0.15, Math.min(p.padBox[2] - p.padBox[0], p.padBox[3] - p.padBox[1]) * 0.35);
       const cost = (rot3, x, y) => {
         let c = 0;
+        const lines = [];
         for (const a of p.pads) {
           if (!a.net) continue;
-          let dmin = Infinity;
+          let dmin = Infinity, best2 = null;
           const [dx, dy] = rotv(rot3, a.x, a.y);
-          for (const t of targets) if (t.net === a.net) dmin = Math.min(dmin, Math.hypot(t.at[0] - x - dx, t.at[1] - y - dy));
-          if (dmin < Infinity) c += dmin * Math.max(w(a.net), 0.03);
+          const at2 = [x + dx, y + dy];
+          for (const t of targets) if (t.net === a.net) {
+            const d = Math.hypot(t.at[0] - at2[0], t.at[1] - at2[1]);
+            if (d < dmin) {
+              dmin = d;
+              best2 = t.at;
+            }
+          }
+          if (dmin < Infinity) {
+            c += dmin * Math.max(w(a.net), 0.03);
+            if (best2 && !GROUNDISH.test(a.net) && !isSupply(a.net)) lines.push([at2, best2]);
+          }
         }
-        return c + Math.hypot(x - focus[0], y - focus[1]) * (nearPart ? 0.3 : 0.02) + Math.hypot(x, y) * 5e-3;
+        let pen = 0;
+        for (let i = 0; i < lines.length; i++) {
+          for (let j = i + 1; j < lines.length; j++) if (crosses(lines[i][0], lines[i][1], lines[j][0], lines[j][1])) pen += 1;
+          const [a, b] = lines[i];
+          if (Math.hypot(b[0] - x, b[1] - y) > Math.hypot(a[0] - x, a[1] - y) && segDist2(x, y, a, b) < core) pen += 0.6;
+        }
+        return c + pen * Math.max(1, size * 0.8) + Math.hypot(x - focus[0], y - focus[1]) * (nearPart ? 0.3 : 0.02) + Math.hypot(x, y) * 5e-3;
       };
       const step = 0.25;
       let best = null;
       const rots = p.spec && p.spec.rot !== void 0 ? [norm2(p.spec.rot)] : [0, 90, 180, 270];
-      const size = Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1]);
       let found = Infinity;
       for (let ring = 0; ring < 400 && ring * step <= found + size + 1.5; ring++) {
         for (let i = -ring; i <= ring; i++) for (const [ox, oy] of ring === 0 ? [[0, 0]] : [[i, -ring], [i, ring], [-ring, i], [ring, i]]) {

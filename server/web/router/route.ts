@@ -871,7 +871,7 @@ export class Router {
    */
   unsquare(): void {
     type End = { c: Conn; o: Obstacle; at: "a" | "b" };
-    const live = this.conns.filter((c) => c.nodes && !c.pair && this.kindOf(c.net) !== "rf"); if (!live.length) return;
+    const live = this.conns.filter((c) => c.nodes && this.kindOf(c.net) !== "rf"); if (!live.length) return;
     const P = this.P; const kf = (l: number, net: string, p: Pt) => `${l}\n${net}\n${p[0].toFixed(3)},${p[1].toFixed(3)}`;
     // the board's own copper of each net: a bend on a pad or via is hidden under it, and a track already on the board is not ours to move
     const fixedEnds = new Set<string>(); const cover = new Map<string, Shape[]>();
@@ -889,7 +889,7 @@ export class Router {
         const degree = (k: string) => (ends.get(k) || []).length + (fixedEnds.has(k) ? 1 : 0);
         const touched = new Set<Obstacle>(); let cut = 0;
         for (const [k, list] of ends) {
-          if (list.length !== 2 || fixedEnds.has(k)) continue; const [e1, e2] = list; const c = e1.c; if (c.pair || e2.c.pair || this.kindOf(c.net) === "rf" || touched.has(e1.o) || touched.has(e2.o)) continue;
+          if (list.length !== 2 || fixedEnds.has(k)) continue; const [e1, e2] = list; const c = e1.c; if (this.kindOf(c.net) === "rf" || touched.has(e1.o) || touched.has(e2.o)) continue;
           const s1 = e1.o.shape as any, s2 = e2.o.shape as any; const v: Pt = s1[e1.at]; const o1: Pt = s1[e1.at === "a" ? "b" : "a"], o2: Pt = s2[e2.at === "a" ? "b" : "a"];
           if (cornerAngle(v, o1, o2) > SQUARE_MAX) continue; const l = e1.o.layers[0];
           if ((cover.get(l + "\n" + c.net) || []).some((sh) => pointGap(sh, v[0], v[1]) <= 1e-6)) continue;

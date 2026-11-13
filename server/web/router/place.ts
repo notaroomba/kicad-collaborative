@@ -9,7 +9,7 @@
 // Who belongs to which group, the anchors and the edges come from the caller (the assistant's model, or a person);
 // without them, small parts join the larger part they share their most specific net with.
 // Pure: reads the board, returns positions; nothing is written here.
-import { refOf } from "./route";
+import { isSupply, refOf } from "./route";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Pt = [number, number];
@@ -33,6 +33,14 @@ interface Part {
 }
 interface Block { name: string; parts: Part[]; anchor: Part; box: Box; padBox: Box; x: number; y: number; rot: number; placed: boolean; fixed: boolean; edge: string | null }
 
+const GROUNDISH = /^\/?(.*\/)?([ADP]?GND\w*|VSS\w*|EARTH)$/i;
+/** Do segments ab and cd cross (sharing an end is not a crossing)? */
+function crosses(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+  const o = (p: Pt, q: Pt, r: Pt) => { const v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]); return Math.abs(v) < 1e-9 ? 0 : v > 0 ? 1 : -1; };
+  const same = (p: Pt, q: Pt) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 1e-6; if (same(a, c) || same(a, d) || same(b, c) || same(b, d)) return false;
+  return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+}
+function segDist(px: number, py: number, a: Pt, b: Pt): number { const vx = b[0] - a[0], vy = b[1] - a[1]; const L = vx * vx + vy * vy; const t = L < 1e-12 ? 0 : Math.max(0, Math.min(1, ((px - a[0]) * vx + (py - a[1]) * vy) / L)); return Math.hypot(px - a[0] - t * vx, py - a[1] - t * vy); }
 const rotv = (deg: number, x: number, y: number): Pt => { const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r); return [x * c + y * s, -x * s + y * c]; };
 const norm = (d: number) => ((Math.round(d) % 360) + 360) % 360;
 const r3 = (v: number) => { const x = +v.toFixed(3); return x === 0 ? 0 : x; };
@@ -127,12 +135,21 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
       for (const q of nearPart ? [nearPart] : down) for (const b of q.pads) if (b.net && p.pads.some((a) => a.net === b.net)) targets.push({ at: padAt(q, b), wt: w(b.net), net: b.net });
       if (nearPart && !targets.length) targets.push({ at: [nearPart.x, nearPart.y], wt: 1, net: "" });
       let focus: Pt = [0, 0]; { let bw = -1; for (const t of targets) if (t.wt > bw) { bw = t.wt; focus = t.at; } }
+      // the part's own body, for "does a line run back over it": the pads' box shrunk to its middle
+      const size = Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1]);
+      const core = Math.max(0.15, Math.min(p.padBox[2] - p.padBox[0], p.padBox[3] - p.padBox[1]) * 0.35);
       const cost = (rot: number, x: number, y: number) => {
-        let c = 0; for (const a of p.pads) { if (!a.net) continue; let dmin = Infinity; const [dx, dy] = rotv(rot, a.x, a.y); for (const t of targets) if (t.net === a.net) dmin = Math.min(dmin, Math.hypot(t.at[0] - x - dx, t.at[1] - y - dy)); if (dmin < Infinity) c += dmin * Math.max(w(a.net), 0.03); }
-        return c + Math.hypot(x - focus[0], y - focus[1]) * (nearPart ? 0.3 : 0.02) + Math.hypot(x, y) * 0.005;
+        let c = 0; const lines: [Pt, Pt][] = [];
+        for (const a of p.pads) { if (!a.net) continue; let dmin = Infinity, best: Pt | null = null; const [dx, dy] = rotv(rot, a.x, a.y); const at: Pt = [x + dx, y + dy];
+          for (const t of targets) if (t.net === a.net) { const d = Math.hypot(t.at[0] - at[0], t.at[1] - at[1]); if (d < dmin) { dmin = d; best = t.at; } }
+          if (dmin < Infinity) { c += dmin * Math.max(w(a.net), 0.03); if (best && !GROUNDISH.test(a.net) && !isSupply(a.net)) lines.push([at, best]); } }
+        // signal pins facing their nets (ground and supplies drop to a plane or run wide round the part): each crossing of two of its rat lines is a via or a loop, each line back over the part a detour round it
+        let pen = 0; for (let i = 0; i < lines.length; i++) { for (let j = i + 1; j < lines.length; j++) if (crosses(lines[i][0], lines[i][1], lines[j][0], lines[j][1])) pen += 1;
+          const [a, b] = lines[i]; if (Math.hypot(b[0] - x, b[1] - y) > Math.hypot(a[0] - x, a[1] - y) && segDist(x, y, a, b) < core) pen += 0.6; }
+        return c + pen * Math.max(1, size * 0.8) + Math.hypot(x - focus[0], y - focus[1]) * (nearPart ? 0.3 : 0.02) + Math.hypot(x, y) * 0.005;
       };
       const step = 0.25; let best: { c: number; rot: number; x: number; y: number } | null = null; const rots = p.spec && p.spec.rot !== undefined ? [norm(p.spec.rot)] : [0, 90, 180, 270];
-      const size = Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1]); let found = Infinity;
+      let found = Infinity;
       for (let ring = 0; ring < 400 && ring * step <= found + size + 1.5; ring++) {
         for (let i = -ring; i <= ring; i++) for (const [ox, oy] of ring === 0 ? [[0, 0]] : [[i, -ring], [i, ring], [-ring, i], [ring, i]]) {
           if (ring && Math.abs(ox) === ring && Math.abs(oy) === ring && (ox !== i)) continue;

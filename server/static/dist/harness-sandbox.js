@@ -4085,7 +4085,7 @@ def _ground_pads(self, net: str = "GND", size: float | None = None, drill: float
     return out
 
 
-_QUIET_NET = re.compile(r"^/?(.*/)?([ADP]?GND\\w*|VSS\\w*|EARTH)$", re.I)
+_QUIET_NET = re.compile(r"^/?(.*/)?([ADP]?GND\\w*|VSS\\w*|EARTH|[+-]?\\d+V\\d*\\w*|[+-]?\\d+\\.\\d+V\\w*|VCC\\w*|VDD\\w*|VBUS\\w*|VBAT\\w*|VIN\\w*|VSYS\\w*|\\+BATT)$", re.I)
 
 
 def _cross(a, b, c, d) -> bool:
@@ -4104,7 +4104,7 @@ def _compare_parts(self, ref: str, options: dict, rotations=(0, 90, 180, 270), a
     laid where the part is (or at \`at\`), every signal pad gets a straight line to the nearest pad of its net on another
     part, and the option is scored on those lines: how many cross each other (each crossing is a via or a detour),
     how many have to run back across the part's own body, and their total length.  Ground and supply pads are left out
-    of the crossings: they drop to the plane through a via of their own.
+    of the crossings: they drop to a plane or run wide round the part.
 
     options: {name: {"footprint": "Lib:Footprint", "nets": {net: pad}}} with the pad each net lands on in that
     package (read the datasheet's pin table), or {"footprint": ..., "symbol": "Lib:Symbol"} to map by pin name
@@ -4125,7 +4125,7 @@ def _compare_parts(self, ref: str, options: dict, rotations=(0, 90, 180, 270), a
             continue
         for q in p["pads"]:
             if q[3]:
-                others.setdefault(q[3], []).append((q[1], q[2]))
+                others.setdefault(q[3], []).append((q[1], q[2], p["ref"]))
     by_name: dict = {}
     for name, opt in options.items():
         nets = dict(opt.get("nets") or {})
@@ -4160,11 +4160,14 @@ def _compare_parts(self, ref: str, options: dict, rotations=(0, 90, 180, 270), a
                 dx, dy = pads[str(pad)]
                 px, py = cx + dx * c + dy * sn, cy - dx * sn + dy * c
                 dests = sorted(others[full], key=lambda q: math.hypot(q[0] - px, q[1] - py))
-                for q in dests[:2 if len(dests) > 1 and not _QUIET_NET.match(full) else 1]:
+                pick = dests[:1]
+                if not _QUIET_NET.match(full):      # a net that passes through: also the nearest pad on another part
+                    pick += [q for q in dests if q[2] != dests[0][2]][:1]
+                for q in pick:
                     length += math.hypot(q[0] - px, q[1] - py)
                     if _QUIET_NET.match(full):
                         continue
-                    lines.append(((px, py), q))
+                    lines.append(((px, py), (q[0], q[1])))
                     # does the line run back over the part's own body (the pad faces away from where its net goes)?
                     if _seg_dist((cx, cy), (px, py), q) < body and math.hypot(q[0] - cx, q[1] - cy) > math.hypot(px - cx, py - cy):
                         through += 1
@@ -4180,8 +4183,8 @@ def _compare_parts(self, ref: str, options: dict, rotations=(0, 90, 180, 270), a
 
 
 def _seg_dist(p, a, b) -> float:
-    ax, ay = a
-    bx, by = b
+    ax, ay = a[0], a[1]
+    bx, by = b[0], b[1]
     L2 = (bx - ax) ** 2 + (by - ay) ** 2
     t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, ((p[0] - ax) * (bx - ax) + (p[1] - ay) * (by - ay)) / L2))
     return math.hypot(p[0] - (ax + t * (bx - ax)), p[1] - (ay + t * (by - ay)))
