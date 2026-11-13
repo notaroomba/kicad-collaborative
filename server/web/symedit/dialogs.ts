@@ -7,7 +7,7 @@ import { KD, h, checkbox, select, textInput, form, promptText, confirmBox, downl
 import { messageBox } from "../dialogs/sch-items";
 import { E, appState, api } from "../dialogs/editor";
 import { saveTextDocument } from "../editor/projectfile";
-import { UNITS, unitName } from "../units";
+import { UNITS, unitName } from "../units";   // a dialog's unit label (EDA_UNIT_UTILS::GetLabel: "mm", "in", "mils")
 import { hotkeyRows } from "../menuspec";
 import { keyName } from "../keys";
 import type { SymbolEditor, Lib } from "./editor";

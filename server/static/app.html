@@ -48,7 +48,7 @@
   #world { transform-origin: 0 0; position: absolute; left: 0; top: 0; pointer-events: none; }
   #world svg#base { display: block; width: 100%; height: auto; }
   #overlay { position: absolute; inset: 0; pointer-events: none; overflow: visible; }   /* cursors, selection boxes and comments off the sheet are not clipped */
-  #stage.panning, #stage.panning * { cursor: grabbing !important; } #stage.over-sel { cursor: move !important; }
+  /* the canvas cursor is the tool's KICURSOR (web/editor/cursors.ts); panning keeps it, as KiCad does */
   .kinfobar { position: fixed; z-index: 100; box-sizing: border-box; display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 4px 6px 4px 30px; background: color-mix(in srgb, var(--blue) 14%, var(--paper)); border-bottom: 1px solid color-mix(in srgb, var(--blue) 45%, var(--line)); color: var(--ink); font-size: 12px; white-space: pre-line; pointer-events: none; transform: translateY(-100%); opacity: 0; visibility: hidden; transition: transform .16s ease-out, opacity .16s ease-out, visibility 0s linear .16s; }
   .kinfobar::before { content: "i"; position: absolute; left: 8px; top: 50%; width: 15px; height: 15px; margin-top: -8px; border-radius: 50%; background: var(--blue); color: var(--panel); font: 700 11px/15px Georgia, serif; text-align: center; }
   .kinfobar.show { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition: transform .16s ease-out, opacity .16s ease-out; }

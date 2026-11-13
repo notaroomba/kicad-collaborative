@@ -477,7 +477,7 @@ test("module: graphic polygon (Ctrl+Shift+P) closes on the first corner or Enter
 
 test("module: the delete tool removes tracks, graphics and footprints under the click and stays armed", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
-  assert.ok(pcb.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "KiCad's delete cursor");
+  assert.equal(pcb.tools.find((t) => t.id === "delete").cursor, "REMOVE", "KiCad's delete cursor (KICURSOR::REMOVE)");
   ctx.setTool("delete"); assert.equal(P.state.modTool, "delete");
   pcb.onPointerMove(ev(), [112, 50.05], ctx); assert.equal(P.state.hover.del.id, "s-1", "hover shows what the click removes");
   assert.equal(pcb.onPointerDown(ev(), [112, 50.05], ctx), true);

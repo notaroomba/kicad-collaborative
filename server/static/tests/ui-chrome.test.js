@@ -93,5 +93,16 @@ test("SCH_*::GetMsgPanelInfo", () => {
   assert.equal(sch.msgPanelInfo(doc, { id: "w1" }, Object.assign({}, o, { units: "mil" })).length, 4);
 });
 
+test("KICURSOR bitmaps: every cursors_defs entry, 32 px PNGs, cursors.cpp hotspots", () => {
+  const { KICURSOR_IMAGES } = load(["editor", "kicursors.generated.ts"]);
+  const want = { LINE_WIRE: [5, 26], LINE_BUS: [5, 26], LINE_GRAPHIC: [5, 26], PENCIL: [4, 27], MOVING: [1, 1], PLACE: [1, 1], TEXT: [7, 7], LABEL_NET: [7, 7], LABEL_GLOBAL: [7, 7], LABEL_HIER: [7, 7], COMPONENT: [7, 7], REMOVE: [4, 4], MEASURE: [4, 4], ZOOM_IN: [6, 6], ZOOM_OUT: [6, 6], ADD: [7, 7], SUBTRACT: [7, 7], XOR: [7, 7], SELECT_WINDOW: [7, 10], SELECT_LASSO: [7, 7], TUNE: [1, 30], VOLTAGE_PROBE: [1, 31], CURRENT_PROBE: [4, 27], WARNING: [1, 1] };
+  for (const [k, hot] of Object.entries(want)) {
+    const e = KICURSOR_IMAGES[k]; assert.ok(e, k);
+    assert.deepEqual([e[1], e[2]], hot, k);
+    const png = Buffer.from(e[0].split(",")[1], "base64");
+    assert.equal(png.readUInt32BE(16), 32, k); assert.equal(png.readUInt32BE(20), 32, k);
+  }
+});
+
 console.log(`\nui-chrome: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

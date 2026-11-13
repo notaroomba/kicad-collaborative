@@ -164,7 +164,18 @@ export function autostartCursor(ctx: SchCtx, mm: Pt) {
   const p = snapConn(ctx, mm, "wire"); let kind: string | null = null;
   if (Math.hypot(p[0] - mm[0], p[1] - mm[1]) <= Math.max((ctx.gridPitch || 1.27) * 0.5, 6 * mmPerPx(ctx))) kind = autostartKind(ctx.doc, p);
   const want = kind ? AUTOSTART_CURSOR[kind] : "";
-  if (S.autoCursor !== want) { S.autoCursor = want; ctx.stage.style.cursor = want; }
+  S.autoCursor = want || null;   // the editor's cursor (editor/cursors.ts) shows it
+}
+/**
+ * The KICURSOR the running tool switches to (null: its declared one): a symbol, sheet or other item riding on the
+ * cursor shows MOVING (sch_drawing_tools.cpp:213, sch_move_tool.cpp), a label, text or sheet pin about to be
+ * placed PLACE (setCursor at 1938), a drag MOVING.
+ */
+const PLACE_KINDS = new Set(["label", "global_label", "hierarchical_label", "directive_label", "netclass_flag", "text", "text_box", "sheet_pin", "junction", "no_connect", "bus_entry"]);
+export function cursorNow(): string | null {
+  if (S.drag && (S.drag as { moved?: boolean }).moved !== false) return "MOVING";
+  if (S.carry) return PLACE_KINDS.has(S.carry.kind) ? "PLACE" : "MOVING";
+  return null;
 }
 export function onMoveCapture(ev: PointerEvent) {
   const ctx = S.ctx; if (!ctx || !schActive()) return;

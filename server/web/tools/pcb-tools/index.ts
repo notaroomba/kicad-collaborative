@@ -112,6 +112,8 @@ function selectedPadKeys(): string[] {
 
 export const pcb = {
   id: "pcb", tools: TOOLS, state: S, ghostSegs,
+  /** The KICURSOR a running tool switched to (null: its declared one): MOVING while a move, a drag or a placed image rides the cursor. */
+  cursorNow(): string | null { const st = S as unknown as { move?: unknown; drag?: unknown; image?: unknown }; return st.move || st.drag || st.image ? "MOVING" : null; },
   /** Drag (D / G) of the selected footprints and vias with their tracks attached; false when nothing can be dragged. */
   dragSelection(ctx: PcbCtx) { bind(ctx); if (ctx.viewOnly || !ctx.doc) return false; return beginCarryMove(ctx, { drag: true }); },
   /** Drag 45 Degree / Drag Free Angle from a menu: the router's drag of the selected tracks or via. */

@@ -22,6 +22,7 @@ import { preloadPcbToolsWhenIdle } from "./pcbtools-loader";
 import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
 import { closeThread, placeComment } from "./comments";
+import { noteModifiers, refreshCursor } from "./cursors";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
@@ -451,6 +452,8 @@ const onPointerUp = (ev: PointerEvent) => {
   fp.x = nx; fp.y = ny; if (E.kdoc) syncItemsFromDoc(); drawSelection(); renderProps(); requestRender();
 };
 stage.addEventListener("pointerup", onPointerUp);
+// the KICURSOR follows every press, move and release, after the handlers above changed what is going on (cursors.ts)
+for (const t of ["pointerdown", "pointermove", "pointerup"] as const) stage.addEventListener(t, (ev) => { noteModifiers(ev); refreshCursor(); });
 registerPointerUp(onPointerUp);
 
 // The keyboard belongs to the canvas, as in KiCad: a click on it takes the focus from a panel's field, and when a

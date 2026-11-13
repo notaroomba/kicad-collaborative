@@ -16,6 +16,7 @@ import { E, appState, api } from "../dialogs/editor";
 import { comboOf } from "../editor/hotkeys";
 import { keyName } from "../keys";
 import { fmtCoord, unitName, messageText, unitsMsg, gridChoiceText, loadUnits, saveUnits } from "../units";
+import { toolCursor } from "../editor/cursors";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
 import * as D from "./dialogs";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
@@ -775,10 +776,10 @@ export class SymbolEditor {
     el.querySelector("#se-grid")!.textContent = `grid ${messageText(this.gridMm, this.units, "sch", false)}`;
     el.querySelector("#se-zoom")!.textContent = `Z ${(v / 12).toFixed(2)}`;
     // eeschema shows internal coordinates: Y grows downward (the file's library Y is up)
-    el.querySelector("#se-xy")!.textContent = `X ${fmtCoord(fx, this.units)}  Y ${fmtCoord(-fy || 0, this.units)}`;
+    el.querySelector("#se-xy")!.textContent = `X ${fmtCoord(fx, this.units, true)}  Y ${fmtCoord(-fy || 0, this.units, true)}`;   // the short form (SCH_IU_PER_MM)
     // dx / dy / dist from the local origin (Space: resetLocalCoords)
     const dx = fx - this.localOrigin[0], dy = -(fy - this.localOrigin[1]) || 0;
-    el.querySelector("#se-dxy")!.textContent = `dx ${fmtCoord(dx, this.units)}  dy ${fmtCoord(dy, this.units)}  dist ${fmtCoord(Math.hypot(dx, dy), this.units)}`;
+    el.querySelector("#se-dxy")!.textContent = `dx ${fmtCoord(dx, this.units, true)}  dy ${fmtCoord(dy, this.units, true)}  dist ${fmtCoord(Math.hypot(dx, dy), this.units, true)}`;
     el.querySelector("#se-units")!.textContent = unitsMsg(this.units);
     el.querySelector("#se-tool")!.textContent = meta(Object.keys(TOOL_ACTIONS).find((k) => TOOL_ACTIONS[k] === this.tool) || "selectionTool").label;
   }
@@ -889,7 +890,8 @@ export class SymbolEditor {
     const sym = this.symbol();
     if (t !== "select" && t !== "pin" && t !== "anchor" && t !== "delete" && sym && M.isDerived(sym)) { void messageBox(`Symbol ${M.symName(sym)} is a derived symbol. Symbol graphics will not be editable.`); return; }
     this.cancelInteraction(); this.tool = t; this.renderToolbars(); this.renderStatus();
-    if (this.el.cwrap) this.el.cwrap.style.cursor = t === "select" ? "default" : "crosshair";
+    // SYMBOL_EDITOR_DRAWING_TOOLS / PIN_TOOL / SCH_TOOL_BASE: TEXT for text, BULLSEYE for the anchor, REMOVE for delete, PENCIL for shapes
+    if (this.el.cwrap) this.el.cwrap.style.cursor = toolCursor(t === "select" ? "ARROW" : t === "text" ? "TEXT" : t === "anchor" ? "BULLSEYE" : t === "delete" ? "REMOVE" : "PENCIL");
   }
   cancelInteraction(): void {
     if (this.carry) { const c = this.carry; this.carry = null; this.preview = null; if (c.amend) { const t = this.tab; const cur = this.symbol(); if (t && cur && t.undo.length) { const step = t.undo.pop()!; this.applyStep(t, cur, step.after, step.before); } } }

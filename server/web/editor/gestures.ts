@@ -14,6 +14,7 @@
 // The selection lives in three places for historical reasons: E.selected (the primary symbol /
 // footprint), E.selection (box / multi selection) and the tool module's own pick (a wire, a track).
 // selectionItems() / clearAllSelection() / selectAt() treat them as the one selection KiCad has.
+import { refreshCursor } from "./cursors";
 import { state, store } from "./appstore";
 import { placeCrosshair } from "./crosshair";
 import { renderObjects, snapMm, syncItemsFromDoc } from "./doc";
@@ -384,6 +385,7 @@ function computeHover(): void {
   if (id !== E.hoverId) { E.hoverId = id; requestRepaint(); }
   // over something already selected a drag moves it: say so with the cursor (KiCad's "moving" arrow)
   stage.classList.toggle("over-sel", over);
+  refreshCursor();
 }
 function queueHover(ev: PointerEvent): void { hoverEv = { clientX: ev.clientX, clientY: ev.clientY }; if (!hoverRaf) hoverRaf = requestAnimationFrame(computeHover); }
 

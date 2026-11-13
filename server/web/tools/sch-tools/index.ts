@@ -26,7 +26,7 @@ import { CLIP, clipRead, clipWrite, cursorOf, selectedItems, setSelectionIds } f
 import { junctionAt, needsJunction, pinsAt } from "./connect";
 import { convertNode, convertSelection, validNetname } from "./convert";
 import { autostartKind, danglingEnds, danglingLabelIds, dragJunctions, drawOverlay } from "./dangling";
-import { type PromptFn, autostartAt, isPowerSymbol, onDownCapture, onKeyCapture, onUpCapture, pickSymbol, placeClassLabel, powerSymbols, setPromptImpl } from "./dom";
+import { type PromptFn, cursorNow, autostartAt, isPowerSymbol, onDownCapture, onKeyCapture, onUpCapture, pickSymbol, placeClassLabel, powerSymbols, setPromptImpl } from "./dom";
 import { beginDrag, bendPath, cancelDrag, cleanupAt, connPoints, cycleLineMode, endDrag, makeAnchor, mergeAt, modeText, moveDrag, ridersOf, setDragMode, setLineMode } from "./drag";
 import { cleanupSheetPins, ercCheck, ercNets, runERC, subsheetDoc, syncSheetPins } from "./erc";
 import { fieldsTableChanges, fieldsTableRows, openFieldsTable } from "./fields-table";
@@ -68,8 +68,8 @@ const sch = {
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   // REMOVED changes (plus junction cleanup) for one item or a multi-selection; the net of an item on this sheet
   deleteChanges, netItems,
-  // SCH_*::GetMsgPanelInfo of one selected item (the message panel)
-  msgPanelInfo,
+  // SCH_*::GetMsgPanelInfo of one selected item (the message panel); the KICURSOR the running tool switched to
+  msgPanelInfo, cursorNow,
   // KiCad's non-tool commands: { id: { id, label, key, run(ctx, opts) -> handled } }; app.js binds menus and keys to them
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc

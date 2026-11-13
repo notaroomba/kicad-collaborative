@@ -32,6 +32,7 @@
 // The schematic tool module calls toolChooser() where it used to open its own picker and
 // afterPlace() once a carried symbol is dropped; the board has no place tool of its own, so the
 // footprint carry lives here and placeFootprint / the two browsers are published as module actions.
+import { setCursorOverride } from "./cursors";
 import { state } from "./appstore";
 import { snapMm } from "./doc";
 import { E } from "./state";
@@ -174,7 +175,7 @@ function endFootprintCarry(): void {
   const c = fpCarry; if (!c) return; fpCarry = null;
   cancelAnimationFrame(c.raf); c.canvas.remove();
   window.removeEventListener("pointermove", onCarryMove, true); window.removeEventListener("pointerdown", onCarryDown, true); window.removeEventListener("keydown", onCarryKey, true);
-  stage.style.cursor = "";
+  setCursorOverride(null);
   c.resolve();
 }
 const onStage = (ev: Event): boolean => ev.target instanceof Node && stage.contains(ev.target) && !(ev.target instanceof Element && ev.target.closest("input, select, k-select, textarea, button, .kd-overlay"));
@@ -221,7 +222,7 @@ export function placeFootprint(req: PlaceFootprintRequest): Promise<void> {
   if (E.tool !== "select") setTool("select");
   const canvas = document.createElement("canvas");
   canvas.className = "klib-carry"; canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5";
-  stage.appendChild(canvas); stage.style.cursor = "crosshair";
+  stage.appendChild(canvas); setCursorOverride("MOVING");   // PlaceFootprint: MOVING while a footprint rides the cursor
   return new Promise<void>((resolve) => {
     fpCarry = { node, ghost: ghostBoard(node, ctx.doc!), canvas, raf: 0, drawn: "", doc: ctx.doc!, pos, resolve };
     window.addEventListener("pointermove", onCarryMove, true); window.addEventListener("pointerdown", onCarryDown, true); window.addEventListener("keydown", onCarryKey, true);

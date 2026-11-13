@@ -94,7 +94,8 @@ test("module registers tools with KiCad-style hotkeys", () => {
     power: "P", classlabel: "", lines: "I", rect: "", circle: "", arc: "", textbox: "", delete: "",
     sheet: "", sheetpin: "", table: "", bezier: "", polygon: "", rulearea: "", image: "", highlight: "" });
   for (const t of sch.tools) assert.ok(t.icon.includes("<") && t.label && t.id && t.cursor);
-  assert.ok(sch.tools.find((t) => t.id === "delete").cursor.startsWith("url("), "the delete tool carries KiCad's delete cursor");
+  assert.equal(sch.tools.find((t) => t.id === "delete").cursor, "REMOVE", "the delete tool carries KiCad's delete cursor (KICURSOR::REMOVE)");
+  assert.equal(sch.tools.find((t) => t.id === "wire").cursor, "LINE_WIRE"); assert.equal(sch.tools.find((t) => t.id === "place").cursor, "COMPONENT");
 });
 
 test("a click on the start point of a wire in progress is ignored (the segment is still null)", () => {

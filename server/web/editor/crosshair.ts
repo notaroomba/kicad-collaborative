@@ -5,8 +5,7 @@
 //  · small  — an 80 px cross ("cursorSize = 80");
 //  · full   — horizontal and vertical lines across the whole canvas;
 //  · 45     — the two diagonals across the whole canvas (FULLSCREEN_DIAGONAL).
-// The system cursor over the canvas is the tool's KICURSOR (arrow while selecting, pencil while drawing …),
-// see toolCursor().
+// The system cursor over the canvas is the tool's KICURSOR (cursors.ts).
 
 import { snapMm } from "./doc";
 import { $ } from "./dom";
@@ -59,12 +58,6 @@ export function placeCrosshair(mm: number[] | null): void {
 
 /** Redraw at the last cursor position (after a pan / zoom or a mode change), if the cursor is on the canvas. */
 export function refreshCrosshair(): void { if (shown && E.lastCursorMm) placeCrosshair(E.lastCursorMm); }
-
-// KICURSOR::PENCIL — the drawing tools' cursor; hotspot at the tip
-const PENCIL = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M2.5 21.5l1.6-5.4L16.6 3.6a1.9 1.9 0 0 1 2.7 0l1.1 1.1a1.9 1.9 0 0 1 0 2.7L7.9 19.9z" fill="#fff" stroke="#000" stroke-linejoin="round"/><path d="M4.1 16.1l3.8 3.8M14.6 5.6l3.8 3.8" stroke="#000"/><path d="M2.5 21.5l.9-3 2.1 2.1z"/></svg>')}") 2 22, crosshair`;
-
-/** The system cursor for a tool module's declared cursor: KiCad draws with the pencil, not a second crosshair. */
-export function toolCursor(declared: string): string { return declared === "crosshair" ? PENCIL : declared; }
 
 /** The grid pitch the cursor keys step by: the active tool's grid override, else the grid (mm). */
 function gridStep(): number { const g = E.gridFor ? E.gridFor() : E.gridPitch; return g > 0 ? g : 1; }

@@ -106,8 +106,8 @@ export function autostartKind(doc: KDoc, p: Pt) {
   return null;
 }
 // KiCad's LINE_WIRE / LINE_BUS / LINE_GRAPHIC cursors: the crosshair with a pencil and a short line of the kind's colour.
-export const LINE_CURSOR = (color: string, w: number) => 'url("data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M8 1v14M1 8h14" stroke="#fff" stroke-width="3"/><path d="M8 1v14M1 8h14" stroke="#000" stroke-width="1"/><path d="M12 22l10-10" stroke="${color}" stroke-width="${w}"/><path d="M16 8l3-3 2 2-3 3z" fill="#fc0" stroke="#000" stroke-width=".8"/></svg>`) + '") 8 8, crosshair';
-export const AUTOSTART_CURSOR: Record<string, string> = { wire: LINE_CURSOR("#009600", 2), bus: LINE_CURSOR("#0000C2", 4), polyline: LINE_CURSOR("#0000C2", 1.2) };
+// the selection tool's m_nonModifiedCursor over an autostart point (sch_selection_tool.cpp:1566-1577)
+export const AUTOSTART_CURSOR: Record<string, string> = { wire: "LINE_WIRE", bus: "LINE_BUS", polyline: "LINE_GRAPHIC" };
 export const AUTOSTART_TOOL: Record<string, string> = { wire: "wire", bus: "bus", polyline: "lines" };
 S.autoStartWires = true;                   // eeschema drawing.auto_start_wires (default on)
 export const brighten = (hex: string, f: number) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return hex; const v = parseInt(m[1], 16); const c = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((x) => Math.round(x * (1 - f) + 255 * f)); return `rgb(${c[0]},${c[1]},${c[2]})`; };
