@@ -1,4 +1,4 @@
-"""An RP2040 dev board from nothing: USB-C, 3.3 V regulator, QSPI flash, crystal, buttons, LED, Pico-style headers.
+"""An RP2040 dev board (V1) from nothing: USB-C, 3.3 V regulator, QSPI flash, crystal, buttons, LED, Pico-style headers.
 
 The whole design is this one script: a netlist for the schematic, a floorplan and one routing call for the board.
 Run it on files (python rp2040_devboard.py out_folder) or paste the part below the imports into run_python.
@@ -95,6 +95,7 @@ notes = {
 sch = project.schematic()
 built = sch.build(parts, {k: v.split() for k, v in nets.items()}, {k: v.split() for k, v in groups.items()},
                   no_connect="J1.A8 J1.B8 U1.35 U1.36 U1.41 J3.17".split(), notes=notes)
+sch.title("RP2040 dev board (V1)", rev="V1")                                # this demo is version 1 of the design, and its title block says so
 assert sch.overlaps() == [], sch.overlaps()                                 # nothing drawn over anything else, nothing off the page
 print("schematic", built, sch.check())
 

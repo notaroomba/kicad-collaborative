@@ -11,7 +11,7 @@
 import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } from "./design";
 import { projectDocs, resolveDoc } from "./design";
 import { footprintNode, kicadFootprint, kicadSymbol, vendorPart, vendorSymbol } from "./library";
-import { fieldShifts, inlineFieldShifts, itemsWithin } from "./layout";
+import { fieldShifts, inlineFieldShifts, snugFieldShifts, itemsWithin } from "./layout";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -607,7 +607,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           // the look a person takes after Autoplace Fields: a reference or value still drawn over a label, a wire or a part moves to the nearest clear spot
           schOnly(e.op); const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v: unknown) => num(v, "within")) : undefined;
           const by = new Map<string, { field: string; dx: number; dy: number }[]>();
-          for (const f of e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
+          for (const f of e.snug ? snugFieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within }) : e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
           const ids: string[] = [];
           for (const [id, moves] of by) {
             const it = doc.items.get(id); if (!it || touched.has(it.id)) continue; const node = k.cloneNode(it.node); let any = false;
@@ -662,15 +662,18 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           break;
         }
         case "set_page": {
-          schOnly(e.op); const paper = text(e.paper, "paper");
-          if (!["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
-          if (doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
-          const tb = doc.titleBlock || {}; const q = (v: string) => JSON.stringify(String(v)); const parts: string[] = [];
-          for (const [key, word] of [["title", "title"], ["date", "date"], ["rev", "rev"], ["company", "company"]]) if (tb[key]) parts.push(`(${word} ${q(tb[key])})`);
-          for (let n = 1; n <= 9; n++) if (tb["comment" + n]) parts.push(`(comment ${n} ${q(tb["comment" + n])})`);
-          changes.push({ id: "00000000-0000-0000-0000-0000000d0c00", kind: "MODIFIED", typeName: "PAGE_SETTINGS", docProps: { paper: `(paper "${paper}")`, titleBlock: parts.length ? `(title_block ${parts.join(" ")})` : "" },
-            was: { paper: doc.paper === "User" ? `(paper "User" ${r4(doc.page[0])} ${r4(doc.page[1])})` : `(paper "${doc.paper || "A4"}"${doc.portrait ? " portrait" : ""})` } });
-          lines.push({ kind: "modify", text: `Page size ${doc.paper || "A4"} → ${paper}`, ids: [] });
+          // File, Page Settings: the paper and the title block's own lines (title, revision, date, company)
+          schOnly(e.op); const paper = e.paper === undefined ? String(doc.paper || "A4") : text(e.paper, "paper");
+          const lines4 = ["title", "rev", "date", "company"].filter((key) => e[key] !== undefined);
+          if (e.paper === undefined && !lines4.length) throw new ToolError("give paper, or title, rev, date or company for the title block");
+          if (e.paper !== undefined && !["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
+          if (e.paper !== undefined && !lines4.length && doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
+          const old = doc.titleBlock || {}; const tb: Record<string, any> = { ...old }; for (const key of lines4) tb[key] = String(e[key]);
+          const block = (t: Record<string, any>) => { const out: string[] = []; for (const key of ["title", "date", "rev", "company"]) if (t[key]) out.push(`(${key} ${JSON.stringify(String(t[key]))})`); for (let n = 1; n <= 9; n++) if (t["comment" + n]) out.push(`(comment ${n} ${JSON.stringify(String(t["comment" + n]))})`); return out.length ? `(title_block ${out.join(" ")})` : ""; };
+          const wasPaper = doc.paper === "User" ? `(paper "User" ${r4(doc.page[0])} ${r4(doc.page[1])})` : `(paper "${doc.paper || "A4"}"${doc.portrait ? " portrait" : ""})`;
+          changes.push({ id: "00000000-0000-0000-0000-0000000d0c00", kind: "MODIFIED", typeName: "PAGE_SETTINGS", docProps: { paper: e.paper === undefined ? wasPaper : `(paper "${paper}")`, titleBlock: block(tb) },
+            was: { titleBlock: block(old), paper: wasPaper } });
+          lines.push({ kind: "modify", text: (e.paper !== undefined ? `Page size ${doc.paper || "A4"} → ${paper}` : "Title block") + (lines4.length ? `: ${lines4.map((key) => `${key} "${e[key]}"`).join(", ")}` : ""), ids: [] });
           break;
         }
         default: throw new ToolError(`unknown op "${e.op}"`);

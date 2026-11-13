@@ -680,6 +680,14 @@ class Schematic(_Doc):
             if end:
                 self._edit({"op": "add_wire", "points": [list(p.at), list(end)]})
             at = end or p.at
+            if kind == "label" and p["side"] in ("left", "right"):
+                # the wire runs on under the whole name: the label sits on the wire's far end and lies back over it
+                w = math.ceil((self._width(name) + 0.6) / 1.27) * 1.27
+                far = (_r(at[0] + (w if p["side"] == "right" else -w)), at[1])
+                if not self._blocked([at, far], g, (at,)):
+                    self._edit({"op": "add_wire", "points": [list(at), list(far)]})
+                    self._edit({"op": "add_label", "kind": kind, "text": name, "x": far[0], "y": far[1], "rotation": 180 if p["side"] == "right" else 0})
+                    continue
             self._edit({"op": "add_label", "kind": kind, "text": name, "x": at[0], "y": at[1], "rotation": _LABEL_ROT[p["side"]]})
 
     def power(self, pin, name: str) -> None:
@@ -810,6 +818,14 @@ class Schematic(_Doc):
         """Set the page size: "A4", "A3", "A2", "A1", "A0" (or the US sizes)."""
         self._edit({"op": "set_page", "paper": paper})
         self.flush()
+
+    def title(self, title: str | None = None, rev: str | None = None, date: str | None = None, company: str | None = None) -> None:
+        """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as they are."""
+        e = {k: v for k, v in (("title", title), ("rev", rev), ("date", date), ("company", company)) if v is not None}
+        if e:
+            self.flush()
+            self._edit({"op": "set_page", **e})
+            self.flush()
 
     def frame(self, box, title: str | None = None, notes=None, style: str = "dash") -> list:
         """Draw a frame with a heading inside its top left corner and notes along its bottom.  \`box\` is [x0, y0, x1, y1]
@@ -1827,6 +1843,7 @@ G = 2.54
 SCRATCH = (1524.0, 508.0)
 SCRATCH_BOX = [SCRATCH[0] - 600.0, SCRATCH[1] - 400.0, SCRATCH[0] + 600.0, SCRATCH[1] + 400.0]
 ASSEMBLY_X = 2794.0
+STUB = 1.27       # the short wire between a horizontal wire and the supply or ground symbol on it
 
 
 def _up(v: float, g: float = G) -> float:
@@ -1857,6 +1874,7 @@ class Blocks:
         self.problems: list = []
         self._offs: dict = {}
         self._sides: dict = {}
+        self._flat: list = []       # horizontal wires and parts of the cluster being drawn: (x0, x1, y)
 
     # ---- facts
     def lib(self, ref):
@@ -1951,8 +1969,16 @@ class Blocks:
     def sym_rect(self, net, at):
         w = max(self.width(net), 2.6) / 2 + 0.4
         if self.kind(net) == "gnd":
-            return _rect(at[0] - w, at[1], at[0] + w, at[1] + 5.4)
-        return _rect(at[0] - w, at[1] - 6.4, at[0] + w, at[1])
+            return _rect(at[0] - w, at[1], at[0] + w, at[1] + 5.4 + STUB)
+        return _rect(at[0] - w, at[1] - 6.4 - STUB, at[0] + w, at[1])
+
+    def lab(self, net, at, d, gap=1.27):
+        """A net's name at the end of a wire that arrives at \`at\` heading d: the wire runs on under the whole name, which
+        is anchored on the wire's far end and lies back over it (so no wire end is left open).  Returns the ops, the rectangle taken, and where the wire ends."""
+        w = _up(self.width(net) + 0.6, 1.27)
+        a = (at[0] + d * gap, at[1])
+        e = (a[0] + d * w, at[1])
+        return [("wire", [at, e]), ("label", net, e, 180 if d > 0 else 0)], _rect(at[0], at[1] - 1.9, e[0] + d * 0.4, at[1] + 0.3), e
 
     def trunk(self, g, net, x, y, d, label, first=None, lead=G, used=(), wired=()):
         """Plan what hangs on and follows a wire leaving (x, y) in direction d (+1 right, -1 left) on this net."""
@@ -2010,7 +2036,7 @@ class Blocks:
                 a2, b2, m2 = self.other(h[1], m)
                 if self.need_label(m, g, wired=((r, b), (h[1], a2))):
                     mid_label = m
-                    lw = self.width(m) + 3.5
+                    lw = self.width(m) + 4.5
                 rail = m2
             else:
                 rail = m
@@ -2028,8 +2054,7 @@ class Blocks:
             depth = self.span(r)
             if len(h) == 2:
                 if mid_label:
-                    ops.append(("wire", [far, (far[0] - G, far[1])]))
-                    ops.append(("label", m, (far[0] - G, far[1]), 180))
+                    ops += self.lab(m, far, -1)[0]
                     ops.append(("dot", far))
                 far = self.put(ops, h[1], far, a2, (0, -v))
                 depth += self.span(h[1])
@@ -2081,11 +2106,10 @@ class Blocks:
                     for key, mine in (("ops", ops), ("rects", rects), ("refs", refs), ("ends", ends), ("inline", inline)):
                         mine += sub[key]
         elif label:
-            w = self.width(net)
-            E = (cx + d * max(lead, G), y)
+            named, rect, E = self.lab(net, (cx + d * (max(lead, G) - 1.27), y), d)
             pts.append(E)
-            ops.append(("label", net, E, 0 if d > 0 else 180))
-            rects.append(_rect(E[0], y - 1.9, E[0] + d * (w + 1.2), y + 0.3))
+            ops.append(named[1])
+            rects.append(rect)
         if not ops:
             return None
         if len(pts) > 1:
@@ -2100,7 +2124,21 @@ class Blocks:
     def emit(self, ops) -> None:
         s = self.s
         r = lambda v: round(v, 4)
+        # a supply or ground symbol never sits flat on a horizontal wire or on the corner where one ends: it stands a
+        # short step above it (ground: below it), on a stub of its own
         for op in ops:
+            if op[0] == "wire":
+                self._flat += [(min(a[0], b[0]), max(a[0], b[0]), a[1]) for a, b in zip(op[1], op[1][1:]) if abs(a[1] - b[1]) < 1e-6 and abs(a[0] - b[0]) > 1e-6]
+            elif op[0] == "part":
+                o = self.offs(op[1], op[3])
+                (ax, ay), (bx, by) = o.values()
+                if abs(ay - by) < 1e-6:
+                    self._flat.append((op[2][0] + min(ax, bx), op[2][0] + max(ax, bx), op[2][1] + ay))
+        for op in ops:
+            if op[0] == "sym" and any(abs(op[2][1] - y) < 1e-6 and x0 - 1e-6 <= op[2][0] <= x1 + 1e-6 for x0, x1, y in self._flat):
+                end = (op[2][0], op[2][1] + (STUB if self.kind(op[1]) == "gnd" else -STUB))
+                s._edit({"op": "add_wire", "points": [[r(op[2][0]), r(op[2][1])], [r(end[0]), r(end[1])]]})
+                op = ("sym", op[1], end)
             if op[0] == "wire":
                 pts = []
                 for p in op[1]:
@@ -2199,9 +2237,9 @@ class Blocks:
                 busy = bool(self.smalls_on(net, g)) if k == "sig" else k == "sup" and net not in top_nets and 0 < len([r for r in self.smalls_on(net, g) if self.kind(self.other(r, net)[2]) == "gnd"]) <= 3
                 if k == "sig" and not busy:
                     if self.need_label(net, g, wired=wired):
-                        E = (origin[0] + d * G, origin[1])
-                        self.emit([("wire", [origin, E]), ("label", net, E, 0 if d > 0 else 180)] + ([("dot", origin)] if len(run) > 1 else []))
-                        taken.append(_rect(origin[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3))
+                        named, rect, _ = self.lab(net, origin, d)
+                        self.emit(named + ([("dot", origin)] if len(run) > 1 else []))
+                        taken.append(rect)
                     continue
                 later.append((run, net, k, origin, wired, busy, len(run) > 1, blocked))
             lines: list = []
@@ -2262,12 +2300,13 @@ class Blocks:
                     continue
                 if k == "sig":      # no room on this pin: a label here, and its parts are drawn beside the IC from the same label
                     self.force.add(net)
-                    for i in range(1, 30):
+                    for i in range(0, 30):
                         E = (origin[0] + d * i * G, origin[1])
-                        if not clash([_rect(E[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3)]) or i == 29:
+                        named, rect, _ = self.lab(net, E, d)
+                        if not clash([rect]) or i == 29:
                             break
-                    self.emit([("wire", [origin, E]), ("label", net, E, 0 if d > 0 else 180)] + ([("dot", origin)] if barred else []))
-                    taken.append(_rect(origin[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3))
+                    self.emit([("wire", [origin, E])] + named + ([("dot", origin)] if barred else []))
+                    taken.append(_rect(origin[0], origin[1] - 1.9, rect[2] if d > 0 else rect[0], origin[1] + 0.3))
                     continue
                 for i in range(1, 40):   # a supply or ground symbol, upright, clear of the neighbours' text
                     E = (origin[0] + d * i * G, origin[1])
@@ -2370,7 +2409,7 @@ class Blocks:
                 self.force.add(net)
                 E = (p["x"], p["y"] + v * (i + 1) * G)
                 F = (E[0] + G, E[1])
-                self.emit([("wire", [(p["x"], p["y"]), E, F]), ("label", net, F, 0)])
+                self.emit([("wire", [(p["x"], p["y"]), E, F, (F[0] + _up(self.width(net) + 0.6, 1.27), F[1])]), ("label", net, (F[0] + _up(self.width(net) + 0.6, 1.27), F[1]), 180)])
         return inline
 
     def bank(self, refs, sup, gnd) -> None:
@@ -2405,7 +2444,7 @@ class Blocks:
         start = next((n for n in nets if n and self.kind(n) == "sig" and self.need_label(n, g)), None)
         plan, head = None, []
         if start:
-            head = [("label", start, (x, y), 180)]
+            head = self.lab(start, (x, y), -1, gap=0)[0]
             plan = self.trunk(g, start, x, y, 1, False)
             if not plan or ref not in plan["refs"]:
                 plan = self.trunk(g, start, x, y, 1, False, first=ref)
@@ -2428,7 +2467,7 @@ class Blocks:
             if net and self.kind(net) != "sig":
                 ops.append(("sym", net, at))
             elif net:
-                ops.append(("label", net, at, rot))
+                ops += self.lab(net, at, 1 if rot == 0 else -1)[0]
         self.emit(ops)
         return [ref]
 
@@ -2436,8 +2475,11 @@ class Blocks:
     def settle(self, inline, at) -> list | None:
         """Fields into place, then the cluster as drawn is measured and moved so its top left corner is at \`at\`."""
         s = self.s
+        self._flat = []
         s.flush()
         s._edit({"op": "autoplace_fields", "within": SCRATCH_BOX})
+        s.flush()
+        s._edit({"op": "clear_fields", "within": SCRATCH_BOX, "snug": True})     # values close beside upright capacitors and resistors
         s.flush()
         if inline:
             s._edit({"op": "clear_fields", "refs": list(inline), "inline": True})

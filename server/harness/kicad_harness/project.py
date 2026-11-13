@@ -593,6 +593,14 @@ class Schematic(_Doc):
             if end:
                 self._edit({"op": "add_wire", "points": [list(p.at), list(end)]})
             at = end or p.at
+            if kind == "label" and p["side"] in ("left", "right"):
+                # the wire runs on under the whole name: the label sits on the wire's far end and lies back over it
+                w = math.ceil((self._width(name) + 0.6) / 1.27) * 1.27
+                far = (_r(at[0] + (w if p["side"] == "right" else -w)), at[1])
+                if not self._blocked([at, far], g, (at,)):
+                    self._edit({"op": "add_wire", "points": [list(at), list(far)]})
+                    self._edit({"op": "add_label", "kind": kind, "text": name, "x": far[0], "y": far[1], "rotation": 180 if p["side"] == "right" else 0})
+                    continue
             self._edit({"op": "add_label", "kind": kind, "text": name, "x": at[0], "y": at[1], "rotation": _LABEL_ROT[p["side"]]})
 
     def power(self, pin, name: str) -> None:
@@ -723,6 +731,14 @@ class Schematic(_Doc):
         """Set the page size: "A4", "A3", "A2", "A1", "A0" (or the US sizes)."""
         self._edit({"op": "set_page", "paper": paper})
         self.flush()
+
+    def title(self, title: str | None = None, rev: str | None = None, date: str | None = None, company: str | None = None) -> None:
+        """Fill in the sheet's title block (File, Page Settings): title, revision, date, company.  Lines not given stay as they are."""
+        e = {k: v for k, v in (("title", title), ("rev", rev), ("date", date), ("company", company)) if v is not None}
+        if e:
+            self.flush()
+            self._edit({"op": "set_page", **e})
+            self.flush()
 
     def frame(self, box, title: str | None = None, notes=None, style: str = "dash") -> list:
         """Draw a frame with a heading inside its top left corner and notes along its bottom.  `box` is [x0, y0, x1, y1]

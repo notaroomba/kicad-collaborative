@@ -61363,6 +61363,31 @@ function fieldShifts(doc, input = {}) {
   }
   return out;
 }
+function snugFieldShifts(doc, input = {}) {
+  const s = SCH3();
+  const { list } = pieces2(doc);
+  const out = [];
+  const want = input.refs && input.refs.length ? new Set(input.refs.map((r) => r.toLowerCase())) : null;
+  const within = input.within && input.within.length === 4 ? input.within : null;
+  const GAP = 0.6;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol" || /^#/.test(it.ref || "")) continue;
+    if (want && !want.has(String(it.ref || "").toLowerCase())) continue;
+    if (within && !(it.x >= within[0] && it.x <= within[2] && it.y >= within[1] && it.y <= within[3])) continue;
+    const pins = s._.symbolPins(doc, it);
+    if (pins.length !== 2 || Math.abs(pins[0].x - pins[1].x) > 1e-3) continue;
+    const body = list.find((p) => p.id === it.id && p.kind === "body");
+    if (!body) continue;
+    for (const p of list) {
+      if (p.id !== it.id || !p.field) continue;
+      let dx = 0;
+      if (p.box[0] >= body.box[2] - 0.05) dx = body.box[2] + GAP - p.box[0];
+      else if (p.box[2] <= body.box[0] + 0.05) dx = body.box[0] - GAP - p.box[2];
+      if (Math.abs(dx) > 0.05) out.push({ id: it.id, field: p.field, dx: r2(dx), dy: 0 });
+    }
+  }
+  return out;
+}
 function inlineFieldShifts(doc, refs) {
   const s = SCH3();
   const { list } = pieces2(doc);
@@ -62948,7 +62973,7 @@ function build(input) {
           schOnly(e.op);
           const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v) => num5(v, "within")) : void 0;
           const by = /* @__PURE__ */ new Map();
-          for (const f of e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : void 0, within })) {
+          for (const f of e.snug ? snugFieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : void 0, within }) : e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : void 0, within })) {
             if (!by.has(f.id)) by.set(f.id, []);
             by.get(f.id).push(f);
           }
@@ -63049,22 +63074,29 @@ function build(input) {
         }
         case "set_page": {
           schOnly(e.op);
-          const paper = text(e.paper, "paper");
-          if (!["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
-          if (doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
-          const tb = doc.titleBlock || {};
-          const q = (v) => JSON.stringify(String(v));
-          const parts = [];
-          for (const [key, word] of [["title", "title"], ["date", "date"], ["rev", "rev"], ["company", "company"]]) if (tb[key]) parts.push(`(${word} ${q(tb[key])})`);
-          for (let n2 = 1; n2 <= 9; n2++) if (tb["comment" + n2]) parts.push(`(comment ${n2} ${q(tb["comment" + n2])})`);
+          const paper = e.paper === void 0 ? String(doc.paper || "A4") : text(e.paper, "paper");
+          const lines4 = ["title", "rev", "date", "company"].filter((key) => e[key] !== void 0);
+          if (e.paper === void 0 && !lines4.length) throw new ToolError("give paper, or title, rev, date or company for the title block");
+          if (e.paper !== void 0 && !["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
+          if (e.paper !== void 0 && !lines4.length && doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
+          const old = doc.titleBlock || {};
+          const tb = { ...old };
+          for (const key of lines4) tb[key] = String(e[key]);
+          const block = (t) => {
+            const out = [];
+            for (const key of ["title", "date", "rev", "company"]) if (t[key]) out.push(`(${key} ${JSON.stringify(String(t[key]))})`);
+            for (let n2 = 1; n2 <= 9; n2++) if (t["comment" + n2]) out.push(`(comment ${n2} ${JSON.stringify(String(t["comment" + n2]))})`);
+            return out.length ? `(title_block ${out.join(" ")})` : "";
+          };
+          const wasPaper = doc.paper === "User" ? `(paper "User" ${r42(doc.page[0])} ${r42(doc.page[1])})` : `(paper "${doc.paper || "A4"}"${doc.portrait ? " portrait" : ""})`;
           changes.push({
             id: "00000000-0000-0000-0000-0000000d0c00",
             kind: "MODIFIED",
             typeName: "PAGE_SETTINGS",
-            docProps: { paper: `(paper "${paper}")`, titleBlock: parts.length ? `(title_block ${parts.join(" ")})` : "" },
-            was: { paper: doc.paper === "User" ? `(paper "User" ${r42(doc.page[0])} ${r42(doc.page[1])})` : `(paper "${doc.paper || "A4"}"${doc.portrait ? " portrait" : ""})` }
+            docProps: { paper: e.paper === void 0 ? wasPaper : `(paper "${paper}")`, titleBlock: block(tb) },
+            was: { titleBlock: block(old), paper: wasPaper }
           });
-          lines.push({ kind: "modify", text: `Page size ${doc.paper || "A4"} \u2192 ${paper}`, ids: [] });
+          lines.push({ kind: "modify", text: (e.paper !== void 0 ? `Page size ${doc.paper || "A4"} \u2192 ${paper}` : "Title block") + (lines4.length ? `: ${lines4.map((key) => `${key} "${e[key]}"`).join(", ")}` : ""), ids: [] });
           break;
         }
         default:
@@ -63266,7 +63298,12 @@ var Workspace = class {
     const doc = h.kdoc;
     const base = k.parse(h.text);
     const out = [base[0]];
-    for (const n2 of base.slice(1)) if (Array.isArray(n2) && HEADER.includes(n2[0])) out.push(n2[0] === "paper" && h.paper ? k.parse(h.paper) : n2[0] === "layers" && h.layers ? k.parse(h.layers) : n2);
+    for (const n2 of base.slice(1)) {
+      if (!Array.isArray(n2) || !HEADER.includes(n2[0])) continue;
+      if (n2[0] === "title_block" && h.titleBlock !== void 0) continue;
+      out.push(n2[0] === "paper" && h.paper ? k.parse(h.paper) : n2[0] === "layers" && h.layers ? k.parse(h.layers) : n2);
+      if (n2[0] === "paper" && h.titleBlock) out.push(k.parse(h.titleBlock));
+    }
     if (doc.type === "sch") out.push(["lib_symbols", ...doc.lib.values()]);
     else for (const n2 of base.slice(1)) if (Array.isArray(n2) && n2[0] === "net") out.push(n2);
     for (const it of doc.items.values()) out.push(it.node);
@@ -63293,6 +63330,7 @@ var Workspace = class {
       if (c.docProps) {
         k.applyDocProps(doc, c.docProps);
         h.paper = c.docProps.paper;
+        if (typeof c.docProps.titleBlock === "string") h.titleBlock = c.docProps.titleBlock;
         h.dirty = true;
         continue;
       }

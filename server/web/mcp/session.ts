@@ -167,7 +167,7 @@ export class DocSession {
     const k = K(), doc = this.kdoc; const inverse: any[] = [];
     for (const c of changes) {
       // a page size change (set_page) carries what the page was, so it can be put back
-      if (c.docProps) { if (c.was) { inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, docProps: { paper: c.was.paper, titleBlock: c.docProps.titleBlock }, was: { paper: c.docProps.paper } }); } continue; }
+      if (c.docProps) { if (c.was) { inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, docProps: { paper: c.was.paper, titleBlock: typeof c.was.titleBlock === "string" ? c.was.titleBlock : c.docProps.titleBlock }, was: { paper: c.docProps.paper, titleBlock: c.docProps.titleBlock } }); } continue; }
       if (c.typeName === "BOARD_SETUP") { if (c.was && c.was.layers) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, properties: [{ name: "layers", after: { type: "sexpr", v: c.was.layers } }] }); continue; }
       const it = doc.items.get(c.id);
       if (c.kind === "ADDED") inverse.push({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] });

@@ -153,6 +153,13 @@ class Blinker(unittest.TestCase):
         path = os.path.join(self.dir, "blinky.kicad_sch")
         with open(path, encoding="utf-8") as f:
             before = f.read()
+        sch.title("Blinker (V1)", rev="V1")
+        self.project.save()
+        with open(path, encoding="utf-8") as f:
+            before = f.read()
+        self.assertIn('(title "Blinker (V1)")', before)
+        self.assertIn('(rev "V1")', before)
+        self.assertEqual(sch.overlaps(), [])
         self.assertEqual(sch.tidy()["overlaps"], 0)      # nothing is drawn over anything, so tidy moves nothing
         self.project.save()
         with open(path, encoding="utf-8") as f:

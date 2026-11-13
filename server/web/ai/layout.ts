@@ -138,6 +138,29 @@ export function fieldShifts(doc: any, input: { refs?: string[]; within?: number[
  * Fields of a two pin part drawn in line with a wire, the way a person sets them: the reference just before the
  * body and the value just after it, both sitting on the wire, so parts on neighbouring rows can stack.
  */
+/**
+ * Reference and value of an upright two pin part pulled in beside its body: Autoplace Fields leaves them a pin length
+ * away, a person slides them up against the part.
+ */
+export function snugFieldShifts(doc: any, input: { refs?: string[]; within?: number[] } = {}): { id: string; field: string; dx: number; dy: number }[] {
+  const s = SCH(); const { list } = pieces(doc); const out: { id: string; field: string; dx: number; dy: number }[] = [];
+  const want = input.refs && input.refs.length ? new Set(input.refs.map((r) => r.toLowerCase())) : null; const within = input.within && input.within.length === 4 ? input.within : null;
+  const GAP = 0.6;
+  for (const it of doc.items.values() as Iterable<any>) {
+    if (it.kind !== "symbol" || /^#/.test(it.ref || "")) continue;
+    if (want && !want.has(String(it.ref || "").toLowerCase())) continue;
+    if (within && !(it.x >= within[0] && it.x <= within[2] && it.y >= within[1] && it.y <= within[3])) continue;
+    const pins = s._.symbolPins(doc, it); if (pins.length !== 2 || Math.abs(pins[0].x - pins[1].x) > 1e-3) continue;
+    const body = list.find((p) => p.id === it.id && p.kind === "body"); if (!body) continue;
+    for (const p of list) {
+      if (p.id !== it.id || !p.field) continue;
+      let dx = 0;
+      if (p.box[0] >= body.box[2] - 0.05) dx = body.box[2] + GAP - p.box[0]; else if (p.box[2] <= body.box[0] + 0.05) dx = body.box[0] - GAP - p.box[2];
+      if (Math.abs(dx) > 0.05) out.push({ id: it.id, field: p.field, dx: r2(dx), dy: 0 });
+    }
+  }
+  return out;
+}
 export function inlineFieldShifts(doc: any, refs: string[]): { id: string; field: string; dx: number; dy: number }[] {
   const s = SCH(); const { list } = pieces(doc); const out: { id: string; field: string; dx: number; dy: number }[] = [];
   const want = new Set(refs.map((r) => r.toLowerCase()));
