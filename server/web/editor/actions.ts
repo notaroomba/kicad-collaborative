@@ -20,6 +20,7 @@ import { openFabOutputs } from "./fab-outputs";
 import { openPlotDialog } from "./pcbdialogs/plot";
 import { openGendrill } from "./pcbdialogs/gendrill";
 import { openPosFile } from "./pcbdialogs/posfile";
+import { openOdbpp } from "./pcbdialogs/odbpp";
 import { openPlotSchematic } from "../dialogs/plot-schematic";
 import { printDialog } from "./print";
 import type { AppAction } from "../store";
@@ -112,7 +113,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   plot: () => { if (isSch()) void openPlotSchematic(); else void openPlotDialog(); },
   show3DViewer: () => show3DViewer(),
   // DIALOG_PLOT set to Gerber, DIALOG_GENDRILL, DIALOG_GEN_FOOTPRINT_POSITION; the order-form package is the web's own entry
-  generateGerbers: () => { void openPlotDialog({ gerber: true }); }, generateDrillFiles: () => { void openGendrill(); }, generatePosFile: () => { void openPosFile(); },
+  generateGerbers: () => { void openPlotDialog({ gerber: true }); }, generateDrillFiles: () => { void openGendrill(); }, generatePosFile: () => { void openPosFile(); }, generateODBPPFile: () => { void openOdbpp(); },
   fabPackage: () => openFabOutputs("gerber"),
   print: () => printDialog(),
   // Tools > Variants (SCH_EDIT_FRAME::AddVariant … CopyVariant)

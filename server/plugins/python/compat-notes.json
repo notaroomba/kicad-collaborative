@@ -194,8 +194,8 @@
       "note": "Driven end to end: the five archives are opened and their Gerbers and drill files checked against the board. Written for KiCad 6; boards with more than six copper layers are beyond the plugin itself."
     },
     "com.github.aislerhq.PushForKiCad": {
-      "status": "partly",
-      "note": "Gerbers, drill files, the netlist and the component list are made, but the upload must also hold an ODB++ archive, which the web editor cannot write yet, so the push stops there."
+      "status": "works",
+      "note": "Driven end to end against a stand-in for AISLER's service: the uploaded archive is opened and its Gerbers, drill files, netlist, component list and ODB++ job are checked against the board, and the project id is written to the title block."
     },
     "com.github.sparkfun.SparkFunKiCadCAMmer": {
       "status": "works",

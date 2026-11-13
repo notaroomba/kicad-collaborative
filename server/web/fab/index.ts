@@ -17,7 +17,7 @@ import { type FabPreset, PRESETS, presetById, jlcPlacement } from "./presets";
 import { primPolys } from "./poly";
 import { type Prim, type Pt } from "./prims";
 import { outlineText } from "./outline-font";
-import { type ZipEntry, crc32, zip } from "./zip";
+import { type ZipEntry, crc32, gzip, tar, zip } from "./zip";
 import { drillJob, drillReport, markerParts } from "./drilljob";
 import { pnpFileName, pnpGerber } from "./pnp";
 import { plotBoard, pluginPlot, plotFileName, outputPath } from "./plotjob";
@@ -31,6 +31,7 @@ import { boardPage } from "./pageplot";
 import { type FillProgress, type FillRules, type ZoneFillResult, ZoneFiller, filledZoneNode, polyArea, storedFill } from "./zonefill";
 
 import { meshVrml, vrmlModels, writeVrml, type VrmlOptions } from "./vrml";
+import { type OdbResult, legalEntityName, writeOdb } from "./odb";
 export const VERSION_SUFFIX = "-web";
 
 // ---------------------------------------------------------------- layer names
@@ -230,8 +231,13 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
   return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
 }
 
-export const api = { outlineText, vrmlModels: (ctx: FabContext) => vrmlModels(modelOf(ctx)), writeVrml: (ctx: FabContext, o: VrmlOptions, meshOf: Parameters<typeof writeVrml>[2]) => writeVrml(modelOf(ctx), o, meshOf), meshVrml, plotBoard, pluginPlot, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, dxfTextString, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
-  jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
+/** The board as an ODB++ job (PCB_IO_ODBPP): text files by their path under the job folder. */
+export function odb(ctx: FabContext, o: { inch?: boolean; precision?: number; origin?: "absolute" | "aux" | "grid"; productName?: string } = {}): OdbResult {
+  return writeOdb(modelOf(ctx), setupNode(ctx.setup), { inch: !!o.inch, precision: o.precision, origin: o.origin, productModelName: o.productName ? legalEntityName(o.productName) : "", layers: plottableLayers(ctx.doc), nameOf: (l) => layerDisplayName(ctx.doc, l), version: kicadVersion(ctx.doc), date: ctx.date || new Date() });
+}
+
+export const api = { odb, outlineText, vrmlModels: (ctx: FabContext) => vrmlModels(modelOf(ctx)), writeVrml: (ctx: FabContext, o: VrmlOptions, meshOf: Parameters<typeof writeVrml>[2]) => writeVrml(modelOf(ctx), o, meshOf), meshVrml, plotBoard, pluginPlot, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, dxfTextString, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+  jlcPlacement, buildPackage, packageZip, zip, tar, gzip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 // the canvas stores a text's outlines with it when it writes the item (canvas/export.ts ensureRenderCaches)
 { const C = (globalThis as unknown as { KiCadCanvas?: { setRenderCacheWriter?(fn: typeof renderCacheFor): void } }).KiCadCanvas; if (C && C.setRenderCacheWriter) C.setRenderCacheWriter(renderCacheFor); }

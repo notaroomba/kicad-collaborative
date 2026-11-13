@@ -424,3 +424,12 @@ In the headless harness (`scripts/plugins-python.mjs`) `kicad-cli pcb drc` and t
 netlist behind it are answered by the editor's own Design Rules Checker, custom
 rules and schematic parity over the sibling schematics, not by a placeholder.
 `KC_DRC_STANDIN=1` restores the placeholder.
+
+`pcbnew.PCB_IO_MGR.Save(pcbnew.PCB_IO_MGR.ODBPP, folder, board, properties)` writes a
+real ODB++ job (`web/fab/odb.ts`, the same writer as File > Fabrication Outputs >
+ODB++ Output File…): matrix, stackup, profile, layer features, drills, components,
+packages and the netlist, in KiCad's layout, with `units` and `sigfig` read from the
+properties.  `board.GetTitleBlock().SetComment(…)` and the other title block setters
+change the open board through `design.titleBlock` (needs `design:write`), and
+`board.GetProperties()` answers `has_key`.  `window.Connect(id, id, eventType, func)`
+with `event.SetEventType(eventType)` delivers `wx.PostEvent` as `Bind` does.

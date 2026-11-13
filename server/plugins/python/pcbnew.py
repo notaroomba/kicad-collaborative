@@ -5370,8 +5370,9 @@ class NETCLASS:
 
 
 class TITLE_BLOCK:
-    def __init__(self, node=None):
+    def __init__(self, node=None, board=None):
         self._node = node if node is not None else [Sym("title_block")]
+        self._board = board
 
     def _get(self, name):
         k = _kid(self._node, name)
@@ -5395,10 +5396,52 @@ class TITLE_BLOCK:
                 return str(c[2])
         return ""
 
-    def _ro(self, *_):
-        _unsupported("Changing the title block from a plugin")
+    def _set(self, name, value):
+        value = "" if value is None else str(value)
+        k = _kid(self._node, name)
+        if k is not None and not value:
+            self._node.remove(k)
+        elif k is not None:
+            k[1:] = [value]
+        elif value:
+            self._node.append([Sym(name), value])
+        self._changed()
 
-    SetTitle = SetDate = SetRevision = SetCompany = SetComment = _ro
+    def SetTitle(self, value):
+        self._set("title", value)
+
+    def SetDate(self, value):
+        self._set("date", value)
+
+    def SetRevision(self, value):
+        self._set("rev", value)
+
+    def SetCompany(self, value):
+        self._set("company", value)
+
+    def SetComment(self, i, value):
+        n, value = int(i) + 1, "" if value is None else str(value)
+        if not 1 <= n <= 9:
+            return
+        for c in _kids(self._node, "comment"):
+            if len(c) > 1 and int(_f(c[1])) == n:
+                if value:
+                    c[2:] = [value]
+                else:
+                    self._node.remove(c)
+                break
+        else:
+            if value:
+                self._node.append([Sym("comment"), n, value])
+        self._changed()
+
+    def _changed(self):
+        """The open board's title block is the project's: a change is the editor's File > Page Settings, undoable."""
+        b = self._board
+        if b is not None and b is _Host.board:
+            import kicad_web
+            kicad_web._call("design.titleBlock", {"title": self.GetTitle(), "date": self.GetDate(), "rev": self.GetRevision(), "company": self.GetCompany(),
+                                                  "comments": [self.GetComment(i) for i in range(9)], "label": "title block"})
 
 
 class BOARD_STACKUP:
@@ -6208,8 +6251,23 @@ class BOARD(EDA_ITEM):
 
     def SetTitleBlock(self, tb):
         node = getattr(tb, "_node", None)
-        if node is not None and self._title is not None:
-            self._title[:] = _copy.deepcopy(node)
+        if node is not None:
+            self._title_node()[:] = _copy.deepcopy(node)
+            TITLE_BLOCK(self._title, self)._changed()
+
+    def _title_node(self):
+        """The board file's title block, made when the file has none yet."""
+        if self._title is None:
+            n = [Sym("title_block")]
+            at = 0
+            if not getattr(self, "_head", None):
+                self._head = [[Sym("version"), 20241229], [Sym("generator"), "pcbnew"], [Sym("generator_version"), "10.0"]]
+            for i, h in enumerate(self._head):
+                if h and h[0] in ("version", "generator", "generator_version", "general", "paper"):
+                    at = i + 1
+            self._head.insert(at, n)
+            self._title = n
+        return self._title
 
     SetVisibleLayers = lambda self, *_: None
     SetElementVisibility = lambda self, *_: None
@@ -6266,7 +6324,7 @@ class BOARD(EDA_ITEM):
         return n
 
     def GetTitleBlock(self):
-        return TITLE_BLOCK(self._title)
+        return TITLE_BLOCK(self._title_node(), self)
 
     def GetFileName(self):
         return self._filename
@@ -6286,7 +6344,7 @@ class BOARD(EDA_ITEM):
         return self._version
 
     def GetProperties(self):
-        return dict(self._props)
+        return MAP_STRING_STRING(self._props)
 
     def GetProject(self):
         return PROJECT(self)
@@ -7623,8 +7681,45 @@ def WriteDRCReport(*_):
     _unsupported("The DRC report")
 
 
+def _save_odb(path, properties=None):
+    """PCB_IO_ODBPP::SaveBoard: the board as an ODB++ job in the folder `path`, written by the editor (web/fab/odb.ts) in
+    KiCad's own layout.  `properties` may name "units" ("mm" or "inch") and "sigfig" (decimal places), as on the desktop."""
+    import os
+    import kicad_web
+    props = dict(properties or {})
+    args = {"units": "inch" if str(props.get("units", "mm")) == "inch" else "mm"}
+    if "sigfig" in props:
+        args["precision"] = int(str(props["sigfig"]))
+    kicad_web.flush()
+    res = kicad_web._call("fab.odb", args)
+    if not isinstance(res, dict) or not res.get("files"):
+        raise IOError("ODB++ export failed. See the messages above for the cause.")
+    root = os.fspath(path)
+    for d in res.get("dirs") or []:
+        os.makedirs(os.path.join(root, *str(d).split("/")), exist_ok=True)
+    for f in res["files"]:
+        name = os.path.join(root, *str(f.get("path")).split("/"))
+        os.makedirs(os.path.dirname(name), exist_ok=True)
+        with open(name, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(f.get("text") or "")
+    for w in res.get("warnings") or []:
+        _logging.getLogger("pcbnew").warning("ODB++ export: %s", w)
+
+
+class MAP_STRING_STRING(dict):
+    """std::map<wxString, wxString> as SWIG wraps it: a dict that also answers has_key, as Python 2's did."""
+
+    def has_key(self, key):
+        return key in self
+
+
+class str_utf8_Map(MAP_STRING_STRING):
+    """std::map<std::string, UTF8>, the properties of a board reader or writer."""
+
+
 class PCB_IO_MGR:
     KICAD_SEXP, LEGACY, EAGLE = 1, 0, 2
+    IPC2581, ODBPP = 16, 17
 
     @staticmethod
     def PluginFind(kind=1, *_):
@@ -7645,7 +7740,9 @@ class PCB_IO_MGR:
         return LoadBoard(path)
 
     @staticmethod
-    def Save(kind, path, board, *_):
+    def Save(kind, path, board, properties=None, *_):
+        if kind == PCB_IO_MGR.ODBPP:
+            return _save_odb(path, properties)
         if kind != PCB_IO_MGR.KICAD_SEXP:
             _unsupported("Saving boards in other formats")
         return SaveBoard(path, board)

@@ -192,6 +192,15 @@ export const writes: Record<string, (a: any, label: string) => Promise<unknown>>
     commit(ed, p.changes, label);
     return { changes: p.lines.map((l) => ({ kind: l.kind, text: l.text, ids: l.ids })) };
   },
+  /** BOARD.GetTitleBlock().SetTitle / SetComment …: File > Page Settings' title block, committed as that dialog commits it (one undo step). */
+  titleBlock: async (a) => {
+    const { ed, doc } = mayWrite(); const D = ed.dialogs;
+    if (!D || !D.commitPageSettings) throw new ApiError("The title block cannot be changed here.", "unavailable");
+    const next = D.logic.pageSettingsOf(doc); const s = (v: unknown, d: string): string => (typeof v === "string" ? v.slice(0, 2000) : d);
+    next.title = s(a.title, next.title); next.date = s(a.date, next.date); next.rev = s(a.rev, next.rev); next.company = s(a.company, next.company);
+    if (Array.isArray(a.comments)) next.comments = Array.from({ length: 9 }, (_, i) => s(a.comments[i], next.comments[i] || ""));
+    return { changed: !!D.commitPageSettings(next) };
+  },
   /** Raw items: create from s-expressions, replace existing items by id, remove by id — one undo step. */
   commit: async (a, label) => {
     const { ed, doc } = mayWrite(); const k = K();
@@ -446,6 +455,14 @@ Object.assign(fab, {
    * pcbnew.ExportVRML: the board as File → Export → VRML writes it (web/fab/vrml.ts), its parts' models being the meshes
    * the 3D viewer tessellates from their STEP files.  A model that cannot be had is left out and named, as pcbnew does.
    */
+  /**
+   * PCB_IO_MGR.Save(ODBPP, …): the board as an ODB++ job (web/fab/odb.ts), its files by their path under the job folder.
+   */
+  odb: async (a: any) => {
+    const { F, ctx } = await fabContext();
+    const r = F.odb(ctx, { inch: a && (a.units === "inch" || a.units === "in"), precision: a && typeof a.precision === "number" && isFinite(a.precision) ? a.precision : undefined });
+    return { files: r.files, dirs: r.dirs, warnings: r.warnings };
+  },
   vrml: async (a: any) => {
     const { F, ctx } = await fabContext();
     const refs: { url: string }[] = F.vrmlModels(ctx); let meshOf = (_url: string): unknown => null;

@@ -10,6 +10,8 @@
 //! * `/api/libs/symbols/{lib}/{name}`     → `{ library, name, libId, symbol, parents: [..] }`
 //!   — the `(symbol …)` s-expression exactly as the library stores it, plus the chain of
 //!   parents a derived symbol extends (nearest first) so the client can flatten it.
+//! * `/api/libs/symbol-files/{lib}`      → `{ library, text }` — the whole library as one `<lib>.kicad_sym`
+//!   file, as KiCad saves one: root symbols by name, then the symbols derived from them.
 //! * `/api/libs/footprints`               → `{ ref, libraries: [{ name, description }] }`
 //! * `/api/libs/footprints/{lib}`         → `{ library, footprints: [{ n, d, k, p }] }` (`{lib}` may carry `.pretty`)
 //! * `/api/libs/footprints/{lib}/{name}`  → `{ library, name, fpid, footprint }` — the `.kicad_mod` text
@@ -70,6 +72,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/libs/symbols", get(symbol_libraries))
         .route("/api/libs/symbols/{lib}", get(symbol_index))
         .route("/api/libs/symbols/{lib}/{name}", get(symbol))
+        .route("/api/libs/symbol-files/{lib}", get(symbol_file))
         .route("/api/libs/footprints", get(footprint_libraries))
         .route("/api/libs/footprints/{lib}", get(footprint_index))
         .route("/api/libs/footprints/{lib}/{name}", get(footprint))
@@ -298,6 +301,62 @@ fn index_symbols(src: &str, out: &mut Vec<SymbolMeta>, texts: &mut HashMap<Strin
             out.push(m);
         }
     }
+}
+
+/// A library kept as one symbol per file, as the single `.kicad_sym` file KiCad would save of it: the header of
+/// its first file, the root symbols by name and then the derived ones (nearest to a root first), each exactly
+/// as its own file holds it.  A library that already is one file is that file.
+fn symbol_library_text(sources: &[String]) -> String {
+    if sources.len() == 1 {
+        return sources[0].clone();
+    }
+    let mut header = String::new();
+    let mut symbols: Vec<(String, Option<String>, String)> = Vec::new();
+    for src in sources {
+        for top in parse_sexpr(src) {
+            if top.head() != "kicad_symbol_lib" {
+                continue;
+            }
+            if header.is_empty() {
+                for key in ["version", "generator", "generator_version"] {
+                    if let Some(k) = top.list(key) {
+                        let (a, b) = k.span();
+                        header.push_str("\t");
+                        header.push_str(&src[a..b]);
+                        header.push('\n');
+                    }
+                }
+            }
+            for sym in top.lists("symbol") {
+                let Some(name) = sym.arg(1) else { continue };
+                let (a, b) = sym.span();
+                symbols.push((name.to_string(), sym.list("extends").and_then(|e| e.arg(1)).map(str::to_string), src[a..b].to_string()));
+            }
+        }
+    }
+    let parent: HashMap<&str, Option<&str>> = symbols.iter().map(|(n, e, _)| (n.as_str(), e.as_deref())).collect();
+    let depth = |name: &str| -> usize {
+        let (mut d, mut at) = (0, name);
+        while let Some(Some(p)) = parent.get(at) {
+            d += 1;
+            at = p;
+            if d > 16 {
+                break;
+            }
+        }
+        d
+    };
+    let mut order: Vec<(usize, &str, &str)> = symbols.iter().map(|(n, _, t)| (depth(n), n.as_str(), t.as_str())).collect();
+    order.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    let mut out = String::from("(kicad_symbol_lib\n");
+    out.push_str(&header);
+    for (_, _, text) in order {
+        out.push('\t');
+        out.push_str(text);
+        out.push('\n');
+    }
+    out.push_str(")\n");
+    out
 }
 
 fn build_symbol_lib(lib: &str, sources: Vec<String>) -> SymbolLib {
@@ -796,6 +855,22 @@ impl Libs {
             .to_string())
     }
 
+    pub async fn symbol_file_json(&self, lib: &str) -> LibResult<String> {
+        if !valid_name(lib) {
+            return Err(LibError::BadName);
+        }
+        // Only libraries the table lists are read: nothing else of the repository is reachable.
+        if !self.table(Kind::Symbols).await?.iter().any(|(n, _)| n == lib) {
+            return Err(LibError::NotFound);
+        }
+        let sources: Vec<String> = self.library_files(Kind::Symbols, lib).await?.into_iter().map(|(_, text)| text).collect();
+        if sources.is_empty() {
+            return Err(LibError::NotFound);
+        }
+        let text = tokio::task::spawn_blocking(move || symbol_library_text(&sources)).await.map_err(|e| LibError::Upstream(e.to_string()))?;
+        Ok(json!({ "library": lib, "text": text }).to_string())
+    }
+
     pub async fn footprint_index_json(&self, lib: &str) -> LibResult<String> {
         self.index_json(Kind::Footprints, lib).await
     }
@@ -978,6 +1053,11 @@ async fn symbol(_user: AuthUser, Path((lib, name)): Path<(String, String)>) -> R
     json_response(libs().symbol_json(&lib, &name).await)
 }
 
+async fn symbol_file(_user: AuthUser, Path(lib): Path<String>) -> Response {
+    let lib = lib.strip_suffix(".kicad_sym").unwrap_or(&lib).to_string();
+    json_response(libs().symbol_file_json(&lib).await)
+}
+
 async fn footprint_libraries(_user: AuthUser) -> Response {
     json_response(libs().libraries_json(false).await)
 }
@@ -1105,6 +1185,20 @@ mod tests {
         let idx: Value = serde_json::from_str(&libs.symbol_index_json("power").await.unwrap()).unwrap();
         assert_eq!(idx["symbols"][0]["n"], "GND");
         assert_eq!(idx["symbols"][0]["p"], true);
+
+        // a whole library as one file: roots first, the derived symbol after its parent, each as its file has it
+        let file: Value = serde_json::from_str(&libs.symbol_file_json("Amplifier_Operational").await.unwrap()).unwrap();
+        let text = file["text"].as_str().unwrap();
+        assert!(text.starts_with("(kicad_symbol_lib\n\t(version "), "{}", &text[..60]);
+        let (parent, child) = (text.find("(symbol \"LM2904\"").unwrap(), text.find("(symbol \"LM358\"").unwrap());
+        assert!(parent < child && text.trim_end().ends_with(')'));
+        let again = build_symbol_lib("Amplifier_Operational", vec![text.to_string()]);
+        assert_eq!(again.symbols.len(), 2);
+        assert_eq!(again.symbols["LM358"].text, sym["symbol"].as_str().unwrap());
+        let whole: Value = serde_json::from_str(&libs.symbol_file_json("power").await.unwrap()).unwrap();
+        assert_eq!(whole["text"].as_str().unwrap(), GND);
+        assert!(matches!(libs.symbol_file_json("NotInTable").await, Err(LibError::NotFound)));
+        assert!(matches!(libs.symbol_file_json("../sym").await, Err(LibError::BadName)));
 
         assert!(matches!(libs.symbol_json("Device", "Nope").await, Err(LibError::NotFound)));
         assert!(matches!(libs.symbol_index_json("NotInTable").await, Err(LibError::NotFound)));

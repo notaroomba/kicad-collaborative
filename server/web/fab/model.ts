@@ -17,6 +17,7 @@ export interface BoardSettings {
   coverFront: boolean; coverBack: boolean; plugFront: boolean; plugBack: boolean; capVias: boolean; fillVias: boolean;
   /** (aux_axis_origin x y): the drill / place file origin. */
   auxOrigin: Pt;
+  gridOrigin: Pt;
 }
 
 export function boardSettings(setup: Node | null, doc: FabDoc): BoardSettings {
@@ -33,12 +34,12 @@ export function boardSettings(setup: Node | null, doc: FabDoc): BoardSettings {
     const pp = K(setup, "pcbplotparams"); const v = K(pp, "viasonmask");
     if (v) { const open = str(v[1]) === "true" || str(v[1]) === "yes"; tentFront = tentBack = !open; }
   }
-  const ax = K(setup, "aux_axis_origin");
+  const ax = K(setup, "aux_axis_origin"), gx = K(setup, "grid_origin");
   const yn = (k: Node | null): boolean => !!k && /^(yes|true)$/.test(str(k[1]));
   const cov = K(setup, "covering"), plug = K(setup, "plugging");
   return { coverFront: yn(K(cov, "front")), coverBack: yn(K(cov, "back")), plugFront: yn(K(plug, "front")), plugBack: yn(K(plug, "back")),
     capVias: yn(K(setup, "capping")), fillVias: yn(K(setup, "filling")), maskExpansion: n("pad_to_mask_clearance"), maskMinWidth: n("solder_mask_min_width"), pasteClearance: n("pad_to_paste_clearance"), pasteRatio: n("pad_to_paste_clearance_ratio"),
-    tentFront, tentBack, auxOrigin: ax ? [num(ax[1]), num(ax[2])] : doc.auxOrigin ? [doc.auxOrigin[0], doc.auxOrigin[1]] : [0, 0] };
+    tentFront, tentBack, auxOrigin: ax ? [num(ax[1]), num(ax[2])] : doc.auxOrigin ? [doc.auxOrigin[0], doc.auxOrigin[1]] : [0, 0], gridOrigin: gx ? [num(gx[1]), num(gx[2])] : [0, 0] };
 }
 
 // ---------------------------------------------------------------- layers
@@ -254,7 +255,7 @@ export interface Via {
   coverFront: boolean | null; coverBack: boolean | null; plugFront: boolean | null; plugBack: boolean | null;
   capped: boolean | null; filled: boolean | null;
 }
-export interface ZoneFill { layer: string; pts: Pt[]; net?: string }
+export interface ZoneFill { layer: string; pts: Pt[]; net?: string; /** the (zone …) the fill belongs to */ zone?: Node }
 
 export interface BoardModel {
   doc: FabDoc; settings: BoardSettings; copper: string[];
@@ -322,7 +323,7 @@ function readZone(n: Node, copper: string[], tf: ((x: number, y: number) => Pt) 
   if (!fills.length) { if (layers.some(isCopper)) out.unfilledZones++; return; }
   for (const f of fills) {
     const l = K(f, "layer"); const pts = (polyPtsOf(f) as Pt[]); if (pts.length < 3) continue;
-    out.fills.push({ layer: l ? str(l[1]) : layers[0], pts: tf ? pts.map((p) => tf(p[0], p[1])) : pts, net: nets ? netName(n, nets) : undefined });
+    out.fills.push({ layer: l ? str(l[1]) : layers[0], pts: tf ? pts.map((p) => tf(p[0], p[1])) : pts, net: nets ? netName(n, nets) : undefined, zone: n });
   }
 }
 

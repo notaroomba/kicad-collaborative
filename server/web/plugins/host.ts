@@ -438,11 +438,11 @@ async function whenReady(id: string, tries = 100): Promise<Run> {
 const NEEDS: Record<string, string | null> = {
   "design.overview": "design:read", "design.documents": "design:read", "design.components": "design:read", "design.component": "design:read", "design.nets": "design:read",
   "design.items": "design:read", "design.selection": "design:read", "design.runChecks": "design:read", "design.boardInfo": "design:read", "design.board": "design:read",
-  "design.apply": "design:write", "design.commit": "design:write", "design.undo": "design:write", "design.redo": "design:write", "design.copied": "design:read", "design.copy": "design:write",
+  "design.apply": "design:write", "design.commit": "design:write", "design.titleBlock": "design:write", "design.undo": "design:write", "design.redo": "design:write", "design.copied": "design:read", "design.copy": "design:write",
   "view.select": "view", "view.move": "design:write", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
-  "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "fab.vrml": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write", "project.saveRules": "design:write",
+  "fab.svg": "design:read", "fab.plot": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "fab.vrml": "design:read", "fab.odb": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write", "project.rewriteDocument": "design:write", "project.saveRules": "design:write",
   "libs.libraries": null, "libs.footprints": null, "libs.footprint": null, "libs.model": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,

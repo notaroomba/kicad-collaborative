@@ -203,6 +203,7 @@ export function pythonRuntime(): void {
       case "fab.render": out = await kicad.fab.render(a); break;
       case "fab.model": out = await kicad.fab.model(a); break;
       case "fab.vrml": out = await kicad.fab.vrml(a); break;
+      case "fab.odb": out = await kicad.fab.odb(a); break;
       case "project.versions": out = await kicad.project.versions(); break;
       case "libs.libraries": out = await kicad.libs.libraries(); break;
       case "libs.footprints": out = await kicad.libs.footprints(a); break;
@@ -220,6 +221,7 @@ export function pythonRuntime(): void {
       case "design.undo": out = await kicad.design.undo(); break;
       case "design.copied": out = await kicad.design.copied(); break;
       case "design.copy": out = await kicad.design.copy(a); break;
+      case "design.titleBlock": out = await kicad.design.titleBlock(a); break;
       case "design.redo": out = await kicad.design.redo(); break;
       case "view.focus": out = await kicad.view.focus(a); break;
       case "ui.confirm": out = await kicad.ui.confirm(a); break;

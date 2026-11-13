@@ -200,6 +200,8 @@ async function one(dir, boardPath, boardGiven) {
     // After a commit the stand-in editor's board is what the plugin's own copy now says, as the real editor's would be,
     // and what was selected stays selected while it is still on the board.
     if (method === "design.commit") edited = true;
+    // the title block is the editor's File > Page Settings; the stand-in editor takes it as the plugin's own copy has it
+    if (method === "design.titleBlock") { edited = true; return JSON.stringify({ changed: true }); }
     // a plugin selecting its result, or a drive clicking an item, moves the selection
     if (method === "view.select" && Array.isArray(a.ids)) startSelection.splice(0, startSelection.length, ...a.ids);
     // Move (M) started for these items: the stand-in editor selects them and remembers that they follow the cursor.
@@ -295,13 +297,14 @@ _kj.dumps(_ko)
     const stem = path.basename(boardPath).replace(/\.kicad_pcb$/, "");
     // Gerbers, drill files, placements and the BOM are the editor's own writers too (static/dist/fab.js, as web/plugins/api.ts
     // calls them), so a drive can open what a fabrication plugin packs and find the board in it
-    if (/^fab\.(gerbers|drill|positions|bom|layers)$/.test(method) && process.env.KC_FAB_STANDIN !== "1") {
+    if (/^fab\.(gerbers|drill|positions|bom|layers|odb)$/.test(method) && process.env.KC_FAB_STANDIN !== "1") {
       if (!globalThis.KiCadFab || !globalThis.KiCadFab.plotGerbers) { require(path.join(server, "static", "kicad-canvas.js")); require(path.join(server, "static", "dist", "fab.js")); }
       let text = board;
       if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
       const K = globalThis.KiCadCanvas, F = globalThis.KiCadFab, ctx = { doc: K.parseDoc(text, "kicad_pcb"), setup: text, projectName: stem };
       const strs = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 80) : undefined);
       if (method === "fab.layers") return JSON.stringify({ layers: F.plottableLayers(ctx.doc) });
+      if (method === "fab.odb") { const r = F.odb(ctx, { inch: a.units === "inch" || a.units === "in", precision: typeof a.precision === "number" ? a.precision : undefined }); return JSON.stringify({ files: r.files, dirs: r.dirs, warnings: r.warnings }); }
       if (method === "fab.gerbers") {
         const all = F.plottableLayers(ctx.doc), want = strs(a.layers);
         const r = F.plotGerbers(ctx, { layers: want ? want.filter((l) => all.includes(l)) : undefined, useProtelExtensions: !!a.useProtelExtensions, useGerberX2: a.useGerberX2 !== false, useAuxOrigin: !!a.useAuxOrigin,

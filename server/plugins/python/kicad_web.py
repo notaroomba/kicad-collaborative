@@ -1498,7 +1498,7 @@ def load_board():
             continue
         _write(f"{PROJECT_DIR}/{rel}", str(f.get("text") or "").encode("utf-8"))
         _state["given"].add(rel)
-        if rel.endswith((".kicad_sch", ".kicad_pcb")):
+        if rel.endswith((".kicad_sch", ".kicad_pcb")) or rel in ("fp-lib-table", "sym-lib-table"):
             _state["given_text"][rel] = str(f.get("text") or "")
         if rel.endswith(".kicad_pro") and (not project or os.path.splitext(rel)[0] == os.path.splitext(os.path.basename(path))[0]):
             try:
@@ -1952,13 +1952,41 @@ def _offer_libraries(fresh):
     taken = set(out.get("added") or []) | set(out.get("updated") or [])
     if taken:
         log.info("Added to the project's libraries: %s", ", ".join(sorted(taken)))
-    return [p for p in fresh if os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/") not in taken]
+    return [p for p in fresh if os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/") not in taken and not _table_covered(p, taken)]
+
+
+_TABLE_ROW = re.compile(r'\(lib\s*\(name\s*"((?:[^"\\]|\\.)*)"\)\s*\(type\s*"?([^")\s]*)"?\)\s*\(uri\s*"((?:[^"\\]|\\.)*)"\)')
+
+
+def _table_covered(path, taken):
+    """The project's library table (fp-lib-table, sym-lib-table) as a plugin wrote it.  The editor keeps the project's
+    tables itself and has just added a row for every library it took, so a table that only gained rows for those
+    libraries says nothing new and is not handed over as a download.  Any other change to it is."""
+    rel = os.path.relpath(path, PROJECT_DIR).replace(os.sep, "/")
+    if rel not in ("fp-lib-table", "sym-lib-table"):
+        return False
+    try:
+        with open(path, encoding="utf-8") as fh:
+            now = {m.group(1): m.group(3) for m in _TABLE_ROW.finditer(fh.read())}
+    except (OSError, UnicodeDecodeError):
+        return False
+    before = {m.group(1): m.group(3) for m in _TABLE_ROW.finditer(_state["given_text"].get(rel) or "")}
+    if any(now.get(name) != uri for name, uri in before.items()):
+        return False                                 # a row was taken out or pointed elsewhere
+    for name, uri in now.items():
+        if name in before:
+            continue
+        hit = re.match(r"^\$[{(]KIPRJMOD[})][/\\](.+)$", uri)
+        where = hit.group(1).replace("\\", "/").rstrip("/") if hit else None
+        if not where or not any(t == where or t.startswith(where + "/") for t in taken):
+            return False
+    return True
 
 
 def _carry_board_file():
     """A desktop plugin that edits the board outside KiCad (export, change the export elsewhere, import) ends by writing
     the board's own file again, and the person reopens it.  Here the board is the editor's, so what the file says is
-    carried into it as ordinary edits, one undo step: footprints are moved, turned and flipped; tracks, vias and
+    carried into it as ordinary edits, one undo step: footprints are moved, turned and flipped, and take the library name and 3D model files the file gives them; tracks, vias and
     lines drawn on the board are moved, added and removed; zone outlines are redrawn.  Only where things are is taken
     from the file: such plugins write a bare board (no ids, few settings), so every item keeps its own properties and
     new copper is a copy of copper of the same net and layer.  Other drawings (text, arcs, circles, filled shapes) and
@@ -2014,6 +2042,19 @@ def _carry_board_file():
         if fp is None or at is None or len(at) < 3:
             continue
         changed = False
+        # the library the footprint is from, and the files of its 3D models (a plugin that copies a project's
+        # libraries into it points the footprints at the copies)
+        fpid = str(n[1]) if len(n) > 1 and not isinstance(n[1], list) else ""
+        if fpid and fpid != fp.GetFPIDAsString():
+            fp.SetFPIDAsString(fpid)
+            changed = True
+        files = [str(k[1]) for k in n if isinstance(k, list) and len(k) > 1 and str(k[0]) == "model" and not isinstance(k[1], list)]
+        models = list(fp._kids()["models"])
+        if len(files) == len(models):
+            for m, f in zip(models, files):
+                if f != m.m_Filename:
+                    m.m_Filename = f
+                    changed = True
         if word(n, "layer") in ("F.Cu", "B.Cu") and (word(n, "layer") == "B.Cu") != bool(fp.IsFlipped()):
             fp.Flip(fp.GetPosition(), False)
             changed = True
@@ -2164,7 +2205,7 @@ def _carry_board_file():
         z.UnFill()
         done["zones"] += 1
 
-    said = [("%d footprint%s moved" % (done["footprints"], "" if done["footprints"] == 1 else "s")) if done["footprints"] else "",
+    said = [("%d footprint%s changed" % (done["footprints"], "" if done["footprints"] == 1 else "s")) if done["footprints"] else "",
             ("%d track change%s" % (done["tracks"], "" if done["tracks"] == 1 else "s")) if done["tracks"] else "",
             ("%d via change%s" % (done["vias"], "" if done["vias"] == 1 else "s")) if done["vias"] else "",
             ("%d outline line%s changed" % (done["lines"], "" if done["lines"] == 1 else "s")) if done["lines"] else "",
@@ -2395,6 +2436,12 @@ def _save_state():
                 is_hidden = lambda rel: any(part.startswith(".") for part in rel.split("/"))
                 files, lost = _state_pack(PROJECT_DIR, sorted(order(hidden), key=lambda rel: not is_hidden(rel)))
                 lost = [rel for rel in lost if is_hidden(rel)]          # outputs too large to keep were handed over anyway
+                # a hidden folder is a plugin's notes about one piece of work (a backup and the list of what is in
+                # it): kept whole or not at all, so the plugin never finds half of it the next day
+                for top in {rel.split("/")[0] for rel in lost if "/" in rel and rel.split("/")[0].startswith(".")}:
+                    for rel in [r for r in files if r.split("/")[0] == top]:
+                        del files[rel]
+                        lost.append(rel)
                 dropped += lost
                 _call("storage.set", {"key": _state["project"], "value": {"files": files}})
                 _state["saved"]["project"] = hidden

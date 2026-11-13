@@ -16,7 +16,7 @@ import { openFieldsTable } from "./fields-table";
 import { openFind } from "./find";
 import { installGroups } from "./groups";
 import * as logic from "./logic";
-import { openPageSettings } from "./page-settings";
+import { commitPageSettings, openPageSettings } from "./page-settings";
 import { openPreferences } from "./preferences";
 import { GRID_PAGE, applyPrefs, defaultGrid, editorId, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
 import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp } from "./project";
@@ -121,5 +121,5 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   applyPrefs(true);
   setToggle("toggleGridOverrides", prefs().grids[editorId()].overrides.enabled);
   // for tests and other modules
-  E.dialogs = { logic, openPageSettings, openFind, openFieldsTable, openAssignFootprints, openSchematicSetup, openSyncSheetPins, openPreferences, prefs, readDoc, submitDocOp, saveProject, applyProjectSettings, toolCtx };
+  E.dialogs = { logic, openPageSettings, commitPageSettings, openFind, openFieldsTable, openAssignFootprints, openSchematicSetup, openSyncSheetPins, openPreferences, prefs, readDoc, submitDocOp, saveProject, applyProjectSettings, toolCtx };
 }

@@ -55,3 +55,31 @@ export async function zip(entries: ZipEntry[], when = new Date()): Promise<Uint8
   out.set(end, o);
   return out;
 }
+
+/** A ustar archive of text files (and their folders), for the TGZ choice. */
+export function tar(entries: { name: string; data: Uint8Array }[], when = new Date()): Uint8Array {
+  const enc = new TextEncoder(); const blocks: Uint8Array[] = []; let total = 0;
+  const oct = (n: number, len: number): string => n.toString(8).padStart(len - 1, "0") + "\0";
+  for (const e of entries) {
+    const hd = new Uint8Array(512);
+    let name = e.name, prefix = "";
+    if (name.length > 100) { let at = name.indexOf("/"); for (let i = at; i >= 0 && i < name.length - 1; i = name.indexOf("/", i + 1)) { if (name.length - i - 1 <= 100) { at = i; break; } } prefix = name.slice(0, at); name = name.slice(at + 1); }
+    const put = (s: string, at: number): void => { hd.set(enc.encode(s), at); };
+    put(name, 0); put(oct(e.name.endsWith("/") ? 0o755 : 0o644, 8), 100); put(oct(0, 8), 108); put(oct(0, 8), 116);
+    put(oct(e.data.length, 12), 124); put(oct(Math.floor(when.getTime() / 1000), 12), 136); put("        ", 148);
+    put(e.name.endsWith("/") ? "5" : "0", 156); put("ustar\0" + "00", 257); put(prefix, 345);
+    let sum = 0; for (let i = 0; i < 512; i++) sum += hd[i];
+    put(sum.toString(8).padStart(6, "0") + "\0 ", 148);
+    const body = new Uint8Array(Math.ceil(e.data.length / 512) * 512); body.set(e.data);
+    blocks.push(hd, body); total += 512 + body.length;
+  }
+  const out = new Uint8Array(total + 1024); let o = 0;
+  for (const b of blocks) { out.set(b, o); o += b.length; }
+  return out;
+}
+
+export async function gzip(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream("gzip");
+  const writer = cs.writable.getWriter(); void writer.write(data as BufferSource); void writer.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}

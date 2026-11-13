@@ -110,8 +110,8 @@
   "note": "Driven end to end: footprints, symbols and 3D models are copied into project libraries and every part, the schematics and the library table point at them; nothing else on the board changes. Datasheets it cannot download stay as links."
  },
  "com.github.aislerhq.PushForKiCad": {
-  "status": "partly",
-  "note": "Gerbers, drill files, the netlist and the component list are made, but the upload must also hold an ODB++ archive, which the web editor cannot write yet, so the push stops there."
+  "status": "works",
+  "note": "Driven end to end against a stand-in for AISLER's service: the uploaded archive is opened and its Gerbers, drill files, netlist, component list and ODB++ job are checked against the board, and the project id is written to the title block."
  },
  "com.github.aivon-pcba.Aivon-Fabrication-Toolkit-for-KiCad": {
   "status": "works",

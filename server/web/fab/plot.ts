@@ -410,7 +410,7 @@ export function padPrims(pad: Pad, layer: string, m: BoardModel, out: Prim[], ad
 
 // ---------------------------------------------------------------- unused-layer removal
 /** Where tracks end and zones reach on each copper layer: what keeps an inner annular ring. */
-class Connections {
+export class Connections {
   private readonly ends = new Map<string, Map<string, Pt[]>>();
   constructor(m: BoardModel) {
     const add = (layer: string, x: number, y: number): void => {
@@ -604,7 +604,7 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
     }
     const at = out.length;
     padPrims(pad, layer, m, out, cu ? opt.widthAdj || 0 : 0);
-    tag(at, knock.length, padMeta(pad, layer, m));
+    tag(at, knock.length, Object.assign(padMeta(pad, layer, m), { src: pad }));
   }
   // "Sketch pads on fabrication layers": the copper outline of the side's pads at the sketch width, with their numbers
   if (isFab(layer) && opt.sketchPadsOnFab) {
@@ -636,7 +636,7 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       d = (v.sizes ? v.sizes.get(cuLayer) ?? v.size : v.size) + 2 * m.settings.maskExpansion;
     } else continue;
     if (cu) d += opt.widthAdj || 0;
-    if (d > 0) out.push({ k: "circle", x: v.x, y: v.y, d, meta: cu ? { af: "ViaPad", info: 2, net: v.net } : undefined });
+    if (d > 0) out.push({ k: "circle", x: v.x, y: v.y, d, meta: cu ? { af: "ViaPad", info: 2, net: v.net, src: v } : { src: v } });
   }
 
   // tracks
@@ -648,13 +648,13 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
     }
     w += opt.widthAdj || 0;
     if (!(w > 0)) continue;
-    const meta: GbrMeta | undefined = cu ? { af: "Conductor", info: 2, net: t.net || "" } : undefined;
+    const meta: GbrMeta = cu ? { af: "Conductor", info: 2, net: t.net || "", src: t } : { src: t };
     if (t.arc && Math.hypot(t.x2 - t.x1, t.y2 - t.y1) > 1e-5) out.push({ k: "arc", cx: t.arc.cx, cy: t.arc.cy, r: t.arc.r, a0: t.arc.a0, a1: t.arc.a1, acw: t.arc.acw, w, meta });
     else out.push({ k: "seg", x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, w, meta });
   }
 
   // zone fills
-  for (const f of m.fills) if (f.layer === layer) out.push({ k: "region", pts: f.pts, meta: cu ? (f.net ? { af: "Conductor", info: 2, net: f.net } : { af: "NonConductor" }) : undefined });
+  for (const f of m.fills) if (f.layer === layer) out.push({ k: "region", pts: f.pts, meta: cu ? (f.net ? { af: "Conductor", info: 2, net: f.net, src: f } : { af: "NonConductor", src: f }) : { src: f } });
 
   // knockout text goes first: its cleared glyphs must not erase anything plotted before them
   return knock.concat(out);

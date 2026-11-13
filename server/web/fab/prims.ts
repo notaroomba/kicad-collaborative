@@ -43,6 +43,8 @@ export interface GbrMeta {
   keep?: boolean;
   /** m_ExtraData: lines written after the object attributes of this item (the P&P %TO.CRot … records) */
   extra?: string[];
+  /** the board item the primitive was plotted for (a Pad, Via, Track or ZoneFill of the model): the ODB++ writer links features to nets by it */
+  src?: unknown;
 }
 
 export const rad = (deg: number): number => deg * Math.PI / 180;

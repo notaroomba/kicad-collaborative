@@ -1694,6 +1694,17 @@ def NewEventType():
     return NewId()
 
 
+def _binder_for_type(type_id):
+    """The binder that stands for a raw event type id, made on first use (wx.NewEventType / NewId ids)."""
+    type_id = int(type_id)
+    for b in _binders.values():
+        if b.typeId == type_id:
+            return b
+    b = _binders["wxEVT_%d" % type_id] = PyEventBinder("wxEVT_%d" % type_id, False)
+    b.typeId, b.evtType = type_id, [type_id]
+    return b
+
+
 class Event:
     def __init__(self, source=None, binder=None, eid=None, id=None, commandEventType=None, eventType=None, winid=None, **_more):
         # wxPython's own spellings: wx.CommandEvent(commandEventType=…, id=…), wx.PyEvent(id=…, eventType=…)
@@ -1718,6 +1729,9 @@ class Event:
 
     def GetEventType(self):
         return self._binder.typeId if self._binder else 0
+
+    def SetEventType(self, type_id):
+        self._binder = _binder_for_type(type_id) if type_id else None
 
     def GetId(self):
         return self._wx_id
@@ -1834,8 +1848,12 @@ class EvtHandler:
         self._wx_handlers = [h for h in self._wx_handlers if not (h[0] is event and (source is None or h[2] is source) and (handler is None or h[1] == handler))]
         return len(self._wx_handlers) != n
 
-    Connect = lambda self, id1, id2, evtType, func: None
-    Disconnect = lambda self, *a, **k: True
+    def Connect(self, id1, id2, evtType, func):
+        """The old spelling of Bind: handlers are kept per raw event type id."""
+        self.Bind(_binder_for_type(evtType), func, id=id1)
+
+    def Disconnect(self, id1=ID_ANY, id2=ID_ANY, evtType=0, func=None):
+        return self.Unbind(_binder_for_type(evtType), id=id1, handler=func) if evtType else False
 
     def _wx_parent_handler(self):
         return None
