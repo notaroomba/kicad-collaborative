@@ -3,6 +3,7 @@ import type { BoardDoc, Mods, PcbCtx, Pt, SelectMove, SnapAnchor, SnapType } fro
 import { LOCKED_WARNING, overrideLocks } from "./actions";
 import { isLocked } from "./groups";
 import { padCovers, padsOf } from "./route-geom";
+import { itemOnLayer, snapAllLayers } from "./snap-pairs";
 import { K, S } from "./state";
 import { anchorOf } from "./transforms";
 import { MOVE_SNAP_MSG, angleSnapMode, displayConstraintsMsg } from "./draw-modes";
@@ -86,8 +87,11 @@ export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?:
   if (mods.shiftKey || !ctx.doc) return { p: g, anchor: null };
   const scale = SNAP_SCREEN_RADIUS / Math.max(1e-6, ctx.pxPerMm || 4); const range = gridOn && ctx.gridPitch ? Math.min(scale, ctx.gridPitch) : scale;
   let best: SnapAnchor | null = null, bd = range;
+  // MAGNETIC_SETTINGS::allLayers off: only what is on the active layer (ResolveSnap's LSET{ GetActiveLayer() })
+  const only = snapAllLayers(ctx) ? "" : (K.pcbSizes.state.activeLayer || S.gfxLayer || S.layer || "");
   for (const it of ctx.doc.items.values()) {
     if (skip && skip.has(it.id)) continue; const b = it.bbox;
+    if (only && !itemOnLayer(it, only)) continue;
     if (b && (mm[0] < b[0] - range || mm[0] > b[2] + range || mm[1] < b[1] - range || mm[1] > b[3] + range)) continue;
     for (const p of itemAnchors(it, false, null, ctx.gridPitch)) { const d = Math.hypot(p[0] - mm[0], p[1] - mm[1]); if (d <= bd) { bd = d; best = p; } }
   }

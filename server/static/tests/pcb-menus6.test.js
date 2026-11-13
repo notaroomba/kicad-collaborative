@@ -227,5 +227,48 @@ test("Attempt Finish Selected (Shift+F) routes every selected footprint's ratsne
   ctx.setTool("select");
 });
 
+// ---- Shift+V / Shift+S (PCB_CONTROL::CycleLayerPresets, SnapMode)
+const LBOARD = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal "Top") (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user) (7 "B.SilkS" user))
+  (gr_line (start 0 5) (end 10 5) (layer "B.SilkS") (width 0.1) (uuid "b1"))
+  (gr_line (start 0 8) (end 10 8) (layer "F.SilkS") (width 0.1) (uuid "f1"))
+)`;
+test("GetEnabledLayerPairs: the last manual pair first as Manual, then the enabled presets; the current one's index", () => {
+  P.resetLayerPairCycle();
+  const presets = [{ top: "F.Cu", bottom: "B.Cu", enabled: true }, { top: "In1.Cu", bottom: "In2.Cu", enabled: true, name: "inner" }, { top: "F.Cu", bottom: "In1.Cu", enabled: false }];
+  let r = P.enabledLayerPairs(["B.Cu", "F.Cu"], presets);
+  assert.equal(r.pairs.length, 2); assert.equal(r.current, 0, "HasSameLayers ignores the order");
+  r = P.enabledLayerPairs(["F.Cu", "In2.Cu"], presets);
+  assert.deepEqual(r.pairs.map((p) => p.name || ""), ["Manual", "", "inner"]); assert.equal(r.current, 0);
+  r = P.enabledLayerPairs(["In1.Cu", "In2.Cu"], presets);
+  assert.equal(r.pairs[0].name, "Manual", "the manual pair stays in the cycle"); assert.equal(r.current, 2);
+  r = P.enabledLayerPairs(["F.Cu", "B.Cu"], presets.concat([{ top: "In2.Cu", bottom: "F.Cu", enabled: true }]));
+  assert.equal(r.pairs[0].name, undefined, "a manual pair that became a preset is no longer Manual");
+});
+test("Shift+V cycles the routing layer pair through the presets; fewer than two does nothing", () => {
+  P.resetLayerPairCycle();
+  const doc = K.parseDoc(LBOARD, "kicad_pcb"); const { ctx } = fakeCtx(doc); const R = K.pcbSizes.state;
+  const shown = []; globalThis.window = globalThis.window || {}; globalThis.window.kcHotkeyCyclePopup = (t, items, sel) => shown.push([t, items, sel]);
+  R.layerPairPresets = [{ top: "F.Cu", bottom: "B.Cu", enabled: true }]; R.setLayerPair("F.Cu", "B.Cu");
+  assert.equal(pcb.runAction("layerPairPresetsCycle", ctx), true); assert.deepEqual(R.layerPair, ["F.Cu", "B.Cu"]); assert.equal(shown.length, 0);
+  R.layerPairPresets = [{ top: "F.Cu", bottom: "B.Cu", enabled: true }, { top: "In1.Cu", bottom: "In2.Cu", enabled: true, name: "inner" }];
+  pcb.runAction("layerPairPresetsCycle", ctx); assert.deepEqual(R.layerPair, ["In1.Cu", "In2.Cu"]);
+  assert.deepEqual(shown[0], ["Preset Layer Pairs", ["Top / B.Cu", "In1.Cu / In2.Cu (inner)"], 1]);
+  pcb.runAction("layerPairPresetsCycle", ctx); assert.deepEqual(R.layerPair, ["F.Cu", "B.Cu"]);
+  R.layerPairPresets = []; R.setLayerPair("F.Cu", "B.Cu"); delete globalThis.window.kcHotkeyCyclePopup;
+});
+test("Shift+S: snapping to the active layer only (KiCad's default) or to all layers", () => {
+  const doc = K.parseDoc(LBOARD, "kicad_pcb"); const { ctx } = fakeCtx(doc); const R = K.pcbSizes.state;
+  P.state.snapAllLayers = false; R.setActiveLayer("F.SilkS");
+  const at = (p) => P.snapCursor(ctx, p, null, {}).p;
+  assert.deepEqual(at([0.3, 5.2]), [0.3, 5.2], "a B.SilkS end is not an anchor on F.SilkS");
+  assert.deepEqual(at([0.3, 8.2]), [0, 8], "an F.SilkS end is");
+  pcb.runAction("magneticSnapToggle", ctx); assert.equal(P.state.snapAllLayers, true);
+  assert.deepEqual(at([0.3, 5.2]), [0, 5], "all layers: the B.SilkS end snaps");
+  pcb.runAction("magneticSnapActiveLayer", ctx); assert.equal(P.state.snapAllLayers, false);
+  pcb.runAction("magneticSnapAllLayers", ctx); assert.equal(P.state.snapAllLayers, true);
+  P.state.snapAllLayers = false; R.setActiveLayer("");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -34,3 +34,6 @@ export function hotkeyCyclePopup(title: string, items: string[], selection: numb
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => { if (box) box.style.display = "none"; timer = null; }, SHOW_TIME_MS);
 }
+
+// the board tools (static/pcb-tools.js, a separate bundle) flash their cycles through the same popup
+if (typeof window !== "undefined") (window as unknown as { kcHotkeyCyclePopup?: typeof hotkeyCyclePopup }).kcHotkeyCyclePopup = hotkeyCyclePopup;
