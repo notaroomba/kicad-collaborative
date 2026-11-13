@@ -83,5 +83,23 @@ test("Clarify Selection rows use GetItemDescription wording", () => {
   assert.strictEqual(sch.itemDescription(doc, "g1", "mm"), "Global Label 'A_VERY_LONG_GLOBAL_LABEL_NAME_THAT...'");
 });
 
+test("BUS_UNFOLD_MENU entries: a vector's nets, a group's nets and nested buses with their nets", () => {
+  const doc = K.parseDoc(HEAD + '(bus (pts (xy 0 0) (xy 50.8 0)) (stroke (width 0) (type default)) (uuid "b1"))' +
+    '(label "CTL{RD WR D[0..1]}" (at 10.16 0 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1"))' + ")");
+  const e = _.unfoldEntries(doc, doc.items.get("b1"));
+  assert.deepStrictEqual(e, [{ name: "CTL.RD", bus: false, members: [] }, { name: "CTL.WR", bus: false, members: [] }, { name: "CTL.D[0..1]", bus: true, members: ["CTL.D0", "CTL.D1"] }]);
+  assert.strictEqual(_.printBusForUI("A{slash}B"), "A/B");
+  assert.strictEqual(_.printBusForUI("~{RST}"), "~RST");
+});
+
+test("Unfold from Bus finds the bus under the cursor even when a graphic line lies on it", () => {
+  const doc = K.parseDoc(HEAD + '(polyline (pts (xy 20.32 0) (xy 60.96 0)) (stroke (width 0) (type dash)) (uuid "g1"))' +
+    '(bus (pts (xy 0 0) (xy 50.8 0)) (stroke (width 0) (type default)) (uuid "b1"))' + ")");
+  const c = makeCtx(doc); c.cursor = [30.48, 0];
+  const b = _.busForUnfolding(c);
+  assert.ok(b && b.id === "b1");
+  c.cursor = [58.42, 0]; assert.strictEqual(_.busForUnfolding(c), null);
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

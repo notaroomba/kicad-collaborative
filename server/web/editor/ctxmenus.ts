@@ -53,7 +53,7 @@ export interface MenuDef {
   icon?: string;
   entries: Entry[];
   /** filled in by the editor: the zoom presets, the grid list */
-  dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers";
+  dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers" | "unfold";
 }
 export type Entry =
   | { order: number; cond: Cond; act: string; check?: boolean }
@@ -63,7 +63,7 @@ export type Entry =
 const always: Cond = () => true;
 
 export class CondMenu implements MenuDef {
-  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers";
+  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers" | "unfold";
   constructor(title = "", icon?: string) { this.title = title; this.icon = icon; }
   private add(e: Entry, order: number | undefined): this {
     e.order = order === undefined || order < 0 ? this.entries.length : order;
@@ -188,7 +188,8 @@ const schAlignMenu = () => new CondMenu("Align", "align_items")
   .item("SCH_ACTIONS::alignLeft", moreThan(1)).item("SCH_ACTIONS::alignCenterX", moreThan(1)).item("SCH_ACTIONS::alignRight", moreThan(1))
   .sep(moreThan(1)).item("SCH_ACTIONS::alignTop", moreThan(1)).item("SCH_ACTIONS::alignCenterY", moreThan(1)).item("SCH_ACTIONS::alignBottom", moreThan(1));
 /** BUS_UNFOLD_MENU (sch_line_wire_bus_tool.cpp): the members are filled in by the desktop from the bus's labels. */
-const schUnfoldMenu = () => new CondMenu("Unfold from Bus", "add_line2bus").item("SCH_ACTIONS::unfoldBus");
+/** BUS_UNFOLD_MENU: the bus's members, filled in by the editor (a nested bus is a submenu of its nets). */
+const schUnfoldMenu = (): MenuDef => ({ title: "Unfold from Bus", icon: "add_line2bus", entries: [], dynamic: "unfold" });
 
 /** ALT_PIN_FUNCTION_MENU and PIN_TRICKS_MENU (sch_edit_tool.cpp): filled in by the editor from the selected pin. */
 const PIN_FUNCTION_MENU: MenuDef = { title: "Pin Function", icon: "component_select_unit", entries: [], dynamic: "pinfunction" };

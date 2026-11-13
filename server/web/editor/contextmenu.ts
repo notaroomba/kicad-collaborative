@@ -264,7 +264,47 @@ function pinHelperRows(): CtxItem[] {
     return it;
   });
 }
-function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : menu.dynamic === "pinfunction" ? pinFunctionRows() : menu.dynamic === "pinhelpers" ? pinHelperRows() : rows(items, c); }
+/** The schematic module's bus unfolding (sch-tools unfold.ts). */
+interface UnfoldEntry { name: string; bus: boolean; members: string[] }
+interface SchUnfold { unfoldEntries(d: KDoc, bus: KItem): UnfoldEntry[]; busForUnfolding(ctx: unknown): KItem | null; printBusForUI(s: string): string; unfoldAction(ctx: unknown, o: unknown): boolean }
+function schUnfold(): SchUnfold | null { const m = CollabTools.sch; const u = m && (m._ as unknown as SchUnfold | undefined); return u && typeof u.unfoldEntries === "function" ? u : null; }
+/**
+ * BUS_UNFOLD_MENU::update as popup entries: "No bus selected" / "Bus has no members" dimmed, else the members (a nested
+ * bus, and a differential pair's common stem, as a submenu); `title` adds the dimmed "Unfold from Bus" row on top.
+ */
+function unfoldPopup(entries: UnfoldEntry[], bus: KItem | null, at: Mm, title: boolean): PopupEntry[] {
+  const U = schUnfold(); if (!U) return [];
+  if (!bus) return [{ label: "No bus selected", disabled: true }];
+  if (!entries.length) return [{ label: "Bus has no members", disabled: true }];
+  const run = (net: string) => () => { U.unfoldAction(toolCtx(), { bus, member: net, at }); requestRender(); };
+  const out: PopupEntry[] = title ? [{ label: "Unfold from Bus", disabled: true }] : [];
+  const diff = new Map<string, PopupEntry>();
+  const stem = (n: string) => (/[+\-PN]$/.test(n) ? n.slice(0, -1) : null);
+  for (const e of entries) {
+    if (!e.bus) { out.push({ label: U.printBusForUI(e.name), run: run(e.name) }); continue; }
+    let sub: PopupEntry;
+    const st = stem(e.name);
+    if (st !== null && e.members.length) { const had = diff.get(st); if (had) sub = had; else { sub = { label: U.printBusForUI(st), sub: [] }; diff.set(st, sub); out.push(sub); } }
+    else { sub = { label: U.printBusForUI(e.name), sub: [] }; out.push(sub); }
+    for (const n of e.members) {
+      const s2 = stem(n);
+      if (s2 !== null) { let d = diff.get(s2); if (!d) { d = { label: U.printBusForUI(s2), sub: [] }; diff.set(s2, d); sub.sub!.push(d); } d.sub!.push({ label: U.printBusForUI(n), run: run(n) }); }
+      else sub.sub!.push({ label: U.printBusForUI(n), run: run(n) });
+    }
+  }
+  return out;
+}
+function unfoldRows(): CtxItem[] {
+  const U = schUnfold(), d = E.kdoc as KDoc | null; if (!U || !d) return [];
+  const bus = U.busForUnfolding(toolCtx()), at: Mm = [E.lastCursorMm[0], E.lastCursorMm[1]];
+  return popupRows(unfoldPopup(bus ? U.unfoldEntries(d, bus) : [], bus, at, false));
+}
+// SCH_LINE_WIRE_BUS_TOOL::UnfoldBus (C, Edit / context menu with no net given): the titled menu at the cursor
+(E.hooks as Record<string, unknown>).busUnfoldMenu = (entries: UnfoldEntry[], bus: KItem | null, at: Mm): void => {
+  const c = (E.lastClient as [number, number] | null) || [window.innerWidth / 2, window.innerHeight / 2];
+  openPopupMenu(c[0], c[1], unfoldPopup(entries, bus, at, true));
+};
+function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "unfold" ? unfoldRows() : menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : menu.dynamic === "pinfunction" ? pinFunctionRows() : menu.dynamic === "pinhelpers" ? pinHelperRows() : rows(items, c); }
 
 /** "Symbol R1 (10k)", "Wire", "Track [VCC] on B.Cu, length 0.6400 mm": how KiCad names an item in a disambiguation menu. */
 function describe(it: KItem | string): string {
@@ -525,17 +565,21 @@ export function openArcEditModeMenu(at?: { left: number; bottom: number } | null
 }
 
 /** A plain entry of a stand-alone popup (a dialog's wxMenu): a label and what it runs, a separator, or a radio / check row. */
-export interface PopupEntry { sep?: boolean; label?: string; tip?: string; run?: () => void; check?: boolean; checked?: boolean; disabled?: boolean }
-/** wxWindow::GetPopupMenuSelectionFromUser: a popup of plain rows at a client position, drawn by the chrome's context menu. */
-export function openPopupMenu(x: number, y: number, entries: PopupEntry[]): void {
-  runners = new Map(); anchor = null;
-  const items: CtxItem[] = entries.map((e): CtxItem => {
+export interface PopupEntry { sep?: boolean; label?: string; tip?: string; run?: () => void; check?: boolean; checked?: boolean; disabled?: boolean; sub?: PopupEntry[] }
+function popupRows(entries: PopupEntry[]): CtxItem[] {
+  return entries.map((e): CtxItem => {
     if (e.sep) return { sep: true };
+    if (e.sub) return { label: e.label || "", sub: popupRows(e.sub) };
     const it: CtxItem = { label: e.label || "" };
     if (e.check) { it.check = true; it.checked = !!e.checked; }
     if (e.run && !e.disabled) it.run = runRow(e.run); else it.why = e.tip || " ";
     return it;
   });
+}
+/** wxWindow::GetPopupMenuSelectionFromUser: a popup of plain rows at a client position, drawn by the chrome's context menu. */
+export function openPopupMenu(x: number, y: number, entries: PopupEntry[]): void {
+  runners = new Map(); anchor = null;
+  const items = popupRows(entries);
   E.contextMenuOpen = true;
   store.set({ contextMenu: { id: ++menuId, x, y, items } });
 }

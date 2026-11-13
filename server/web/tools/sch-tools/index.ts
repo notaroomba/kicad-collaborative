@@ -48,7 +48,7 @@ import { currentDoc, emptySheetDoc, ensureSheetDoc, nextPage, placeSheet, placeS
 import { snapConn } from "./snap";
 import { DELETE_CURSOR, S, TOOLS } from "./state";
 import { alignEdgeChanges, alignEdges, alignToGrid, alignToGridChanges, breakAgain, breakWire, breakWireChanges, endBreak, halfGrid, moveExactChanges, moveExactly, rotationCentre, selectionCentre, swapChanges, swapNodes, swapSelection, transformChanges, transformNode, transformSelected } from "./transforms";
-import { busLabelsOf, busMembers, unfoldAction, unfoldBus, unfoldMembers } from "./unfold";
+import { busForUnfolding, busLabelsOf, busMembers, printBusForUI, unfoldAction, unfoldBus, unfoldEntries, unfoldMembers } from "./unfold";
 import { itemSexpr, modChange, ruleAreaId, typeNameFor } from "./util";
 import { schArcDrawMode } from "./arcs";
 import { PIN_HELPERS, labelShapeForPin, pinAltFunction, pinAlternates, pinAt, pinBox, pinHelper, pinOf, pinProperties, setAltPinFunction, singleNetLabelForPin, swapPinLabels } from "./pins";
@@ -77,7 +77,7 @@ const sch = {
   _: { setFollow(on: boolean) { S.forceFollow = !!on; }, lineEndAt, lineEndDangling, selectThreshold, danglingLabelIds, dragJunctions, schArcDrawMode, pinAt, pinBox, pinAltFunction, pinOf, pinProperties, pinHelper, PIN_HELPERS, swapPinLabels, singleNetLabelForPin, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
     convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
     ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,
-    alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,
+    alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, unfoldEntries, busForUnfolding, printBusForUI, busLabelsOf, unfoldBus, unfoldAction,
     selectConnection, selectNode, stepNetItem, incrementSelection, editFieldPrompt, toggleSymbolFlag, stepUnit, cycleBodyStyle, placeNextUnit, libUnits, showDatasheet, CLIP, clipWrite, clipRead,
     lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
     tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, collisionInit, collisionMarkers, editPoints, editHandles, editPointColors, EDIT_BORDER_PX, polygonEdgeDrag, ellipseAngleAt, imageBoundingSize, imageOriginOffset, rectRadiusFor, applyPointEdit, editFollowers, pointEditStart, pointEditMove, pointEditEnd, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,

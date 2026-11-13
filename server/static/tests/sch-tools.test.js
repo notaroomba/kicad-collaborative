@@ -1418,7 +1418,7 @@ test("bus unfolding: member names from bus vectors and groups; an entry and the 
   sch.onActivate("select", c); c.selection = new Set([vb.id]); c.cursor = [180, 50.8]; assert.ok(sch.runAction("unfoldBus", c));
   const vn = d.items.get(sch.state.unfold.labelId).node; assert.deepStrictEqual([vn[1], atOf(vn)], ["CTRL.EN", [187.96, 53.34, 180]], "reads away from a vertical bus");
   _.cancelWire(c); sch.onActivate("select", c);
-  const nb = K.createItem(d, _.lineNode("bus", [10, 10], [30, 10])); c.selection = new Set([nb.id]); c.toasts.length = 0; assert.strictEqual(sch.runAction("unfoldBus", c), false); assert.ok(c.toasts.some((m) => /No bus label/.test(m)));
+  const nb = K.createItem(d, _.lineNode("bus", [10, 10], [30, 10])); c.selection = new Set([nb.id]); c.toasts.length = 0; assert.strictEqual(sch.runAction("unfoldBus", c), false, "BUS_UNFOLD_MENU: \"Bus has no members\"");
   c.selection = new Set(); c.selected = null; sch.select(null); c.cursor = [200, 200]; assert.strictEqual(sch.runAction("unfoldBus", c), false);
 });
 

@@ -2,7 +2,6 @@ import type { SAtom, SchCtx, Pt } from "./types";
 import { root } from "../root";
 import { cursorOf, editable, selectedItems } from "./commands";
 import { netItems } from "./highlight";
-import { hitNonSymbol } from "./hit";
 import { switchTool } from "./junction";
 import { busEntryNode, labelNode } from "./nodes";
 import { mmPerPx } from "./snap";
@@ -10,7 +9,6 @@ import { S, str } from "./state";
 import { closestOnSeg } from "./transforms";
 import { addNode, r4, segs } from "./util";
 import { startWire } from "./wire";
-import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- unfold bus (SCH_LINE_WIRE_BUS_TOOL::UnfoldBus)
 // NET_SETTINGS::ParseBusVector / ParseBusGroup: "DATA[0..3]" -> DATA0..DATA3 (a +-PN suffix rides along),
@@ -34,6 +32,52 @@ export function busLabelsOf(doc: KDoc, bus: KItem) {
   for (const id of netItems(doc, bus)) { const it = doc.items.get(id); if (it && (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label")) { const m = busMembers(it.node[1]); if (m) out.push(Object.assign({ label: it }, m)); } }
   return out;
 }
+/**
+ * BUS_UNFOLD_MENU::memberEntries: the bus's members in label order, a nested bus (a vector inside a group) as an entry
+ * of its own with its nets under it.  A named group's nested buses take its prefix ("NAME.DATA[0..3]"); every net
+ * carries its full name.
+ */
+export interface UnfoldEntry { name: string; bus: boolean; members: string[] }
+export function unfoldEntries(doc: KDoc, bus: KItem): UnfoldEntry[] {
+  const out: UnfoldEntry[] = [], seen = new Set<string>();
+  const add = (e: UnfoldEntry) => { const k = (e.bus ? "b:" : "n:") + e.name; if (seen.has(k)) return; seen.add(k); out.push(e); };
+  for (const id of netItems(doc, bus)) {
+    const it = doc.items.get(id); if (!it || !(it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label")) continue;
+    const text = str(it.node[1]).trim(), m = busMembers(text); if (!m) continue;
+    if (m.vector) { for (const n of m.members) add({ name: n, bus: false, members: [] }); continue; }
+    const g = text.match(/^([^\s\[\]{}]*)\{(.*)\}$/); if (!g) continue;
+    const prefix = g[1] ? g[1] + "." : "";
+    for (const tok of g[2].split(/[\s,]+/).filter(Boolean)) {
+      const sub = busMembers(tok);
+      if (sub && sub.vector) add({ name: prefix + tok, bus: true, members: sub.members.map((x) => prefix + x) });
+      else add({ name: prefix + tok, bus: false, members: [] });
+    }
+  }
+  return out;
+}
+/** SCH_CONNECTION::PrintBusForUI: the escapes undone and the formatting braces of ~{…} _{…} ^{…} dropped. */
+export function printBusForUI(name: string): string {
+  const K = root.KiCadCanvas as unknown as { unescapeText?: (s: string) => string } | undefined;
+  const u = K && K.unescapeText ? K.unescapeText(name) : name;
+  let out = "";
+  for (let i = 0; i < u.length; i++) {
+    const c = u[i];
+    if ((c === "~" || c === "_" || c === "^") && u[i + 1] === "{") { out += c; i++; continue; }
+    if (c === "}") continue;
+    if (c === "\\" && u[i + 1] === " ") continue;
+    out += c;
+  }
+  return out;
+}
+/** getBusForUnfolding: the selected bus, else the bus under the cursor. */
+export function busForUnfolding(ctx: SchCtx): KItem | null {
+  const sel = selectedItems(ctx).find((it) => it.kind === "bus"); if (sel) return sel;
+  // RequestSelection( { SCH_ITEM_LOCATE_BUS_T } ): only buses compete, so a graphic line lying on the bus doesn't hide it
+  const c = cursorOf(ctx), tol = Math.max(0.6, 8 * mmPerPx(ctx));
+  let best: KItem | null = null, bd = Infinity;
+  for (const it of ctx.doc.items.values()) if (it.kind === "bus") for (const [a, b] of segs(it)) { const q = closestOnSeg(c, a, b), d = Math.hypot(q[0] - c[0], q[1] - c[1]); if (d <= tol && d < bd) { bd = d; best = it; } }
+  return best;
+}
 export function unfoldMembers(doc: KDoc, bus: KItem) { const seen = new Set<string>(), out: string[] = []; for (const b of busLabelsOf(doc, bus)) for (const m of b.members) if (!seen.has(m)) { seen.add(m); out.push(m); } return out; }
 export function nearestOnLine(item: KItem, p: Pt) { let best: Pt | null = null, bd = Infinity; for (const [a, b] of segs(item)) { const q = closestOnSeg(p, a, b), d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = q; } } return best; }
 // Bus entry at the point, the member label on its far end (spun away from the bus like
@@ -55,16 +99,14 @@ export function unfoldBus(ctx: SchCtx, bus: KItem, member: string, at: Pt) {
 export function unfoldAction(ctx: SchCtx, opts?: { bus?: string | KItem; member?: string; at?: Pt } | null) {
   if (!editable(ctx)) return false;
   opts = opts || {};
-  const doc = ctx.doc; let bus: KItem | undefined = opts.bus ? (typeof opts.bus === "string" ? doc.items.get(opts.bus) : opts.bus) : selectedItems(ctx).find((it) => it.kind === "bus");
-  if (!bus) { const c = cursorOf(ctx), hit = hitNonSymbol(doc, c[0], c[1], Math.max(0.6, 8 * mmPerPx(ctx))); if (hit && hit.kind === "bus") bus = hit; }
-  if (!bus) { ctx.toast("Select a bus first"); return false; }
-  const members = unfoldMembers(doc, bus); if (!members.length) { ctx.toast("No bus label names this bus's members"); return false; }
-  const go = (m: string) => { if (m && members.includes(m)) unfoldBus(ctx, bus!, m, opts!.at!); };
-  if (opts.member) { go(opts.member); return true; }
-  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
-  if (!KD) { go(members[0]); return true; }
-  KD.open({ title: "Unfold from Bus", width: 320,
-    build(body) { body.innerHTML = `<div class="kv"><label>Net</label><k-select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</k-select></div>`; },
-    ok() { go((document.getElementById("kd-member") as HTMLSelectElement).value); } });
+  const doc = ctx.doc; const bus: KItem | null | undefined = opts.bus ? (typeof opts.bus === "string" ? doc.items.get(opts.bus) : opts.bus) : busForUnfolding(ctx);
+  const members = bus ? unfoldMembers(doc, bus) : [];
+  if (opts.member) { if (bus && members.includes(opts.member)) unfoldBus(ctx, bus, opts.member, opts.at!); return true; }
+  // SCH_LINE_WIRE_BUS_TOOL::UnfoldBus: BUS_UNFOLD_MENU pops up at the cursor (SetContextMenu CMENU_NOW), titled; a
+  // pick unfolds that net, closing the menu does nothing
+  const hk = root.CollabEditor && (root.CollabEditor as unknown as { hooks?: { busUnfoldMenu?: (entries: unknown[], bus: KItem | null, at: Pt) => void } }).hooks;
+  if (hk && hk.busUnfoldMenu) { hk.busUnfoldMenu(bus ? unfoldEntries(doc, bus) : [], bus || null, opts.at || cursorOf(ctx)); return true; }
+  if (!bus || !members.length) return false;
+  unfoldBus(ctx, bus, members[0], opts.at!);
   return true;
 }
