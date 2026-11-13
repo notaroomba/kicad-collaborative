@@ -1,11 +1,12 @@
 import type { SchCtx, Pt, SAtom, SheetJob } from "./types";
 import { root } from "../root";
-import { promptImpl } from "./dom";
+import { labelDefaults } from "./dom";
 import { sheetNode, sheetPinNode } from "./nodes";
 import { rememberPlaced } from "./repeat";
 import { mmPerPx } from "./snap";
 import { K, S, atOf, kid, kids, num, str } from "./state";
-import { addNode, deep, modChange, r4, segDist } from "./util";
+import { addNode, deep, ghost, modChange, r4, segDist } from "./util";
+import { strNumCmp, subsheetDoc } from "./erc";
 
 // ---------------------------------------------------------------- hierarchical sheets (the sheet file lives on the server first)
 export const SHEET_EXT = ".kicad_sch";
@@ -136,13 +137,96 @@ export function sheetPinPoint(ctx: SchCtx, edge: SheetEdge, p: Pt) {
   if (edge.side === "top") return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y)];
   return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y + edge.h)];
 }
-export function sheetPinClick(ctx: SchCtx, mm: Pt) {
-  const edge = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx)));
-  if (!edge) { ctx.toast("Click on the border of a sheet"); return null; }
-  const p = sheetPinPoint(ctx, edge, mm);
-  promptImpl("Sheet pin", "", S.cursorClient, (name) => { if (name) placeSheetPin(ctx, edge.item, name, p, edge.side); });
-  return edge;
+/** The sheet under a point (SCH_SELECTION_TOOL::SelectPoint for SCH_SHEET_T: anywhere over its body or border). */
+export function sheetAt(doc: KDoc, p: Pt, tol: number): KItem | null {
+  let best: KItem | null = null, area = Infinity;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "sheet") continue;
+    const [x, y] = atOf(it.node), s = kid(it.node, "size"), w = num(s && s[1], 0), h = num(s && s[2], 0);
+    if (p[0] < x - tol || p[0] > x + w + tol || p[1] < y - tol || p[1] > y + h + tol) continue;
+    if (w * h < area) { best = it; area = w * h; }   // the smallest of nested boxes
+  }
+  return best;
 }
+/** SCH_SHEET_PIN::ConstrainOnEdge( pos, true ): the nearest side of this sheet and the point on it. */
+export function constrainOnEdge(ctx: SchCtx, sheet: KItem, p: Pt): { p: Pt; side: string } {
+  const [x, y] = atOf(sheet.node), s = kid(sheet.node, "size"), w = num(s && s[1], 0), h = num(s && s[2], 0);
+  const edges: Record<string, Pt[]> = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
+  let side = "left", d = Infinity;
+  for (const k of ["left", "right", "top", "bottom"]) { const e = segDist(p, edges[k][0], edges[k][1]); if (e < d) { d = e; side = k; } }
+  const edge: SheetEdge = { item: sheet, side, d, x, y, w, h };
+  return { p: sheetPinPoint(ctx, edge, p) as Pt, side };
+}
+/**
+ * SCH_DRAWING_TOOLS::importHierLabel: the sub-sheet's hierarchical labels by StrNumCmp (ignoring case), the first
+ * one the sheet has no pin for; null when every label has one.
+ */
+export function importHierLabel(sheet: KItem, sub: KDoc): { name: string; shape: string } | null {
+  const have = new Set<string>(kids(sheet.node, "pin").map((p) => str(p[1])));
+  const labels = Array.from(sub.items.values()).filter((o) => o.kind === "hierarchical_label").map((o) => { const sh = kid(o.node, "shape"); return { name: str(o.node[1]), shape: sh ? str(sh[1]) : "input" }; });
+  labels.sort((a, b) => strNumCmp(a.name.toUpperCase(), b.name.toUpperCase()));
+  return labels.find((l) => !have.has(l.name)) || null;
+}
+/** The sheet's sub-sheet document: from ctx.sheetDocs at once, else read through ctx.loadSheetDoc. */
+function sheetDocOf(ctx: SchCtx, sheet: KItem): KDoc | Promise<KDoc | null> | null {
+  const d = ctx.sheetDocs ? subsheetDoc(ctx.sheetDocs, sheet) : null; if (d) return d;
+  return ctx.loadSheetDoc ? ctx.loadSheetDoc(sheet) : null;
+}
+/**
+ * Place Sheet Pins (SCH_DRAWING_TOOLS::TwoClickPlace, isSheetPin): the first click over a sheet (or the selected
+ * sheet) takes its next unplaced hierarchical label and a pin of that name and shape rides the sheet's edge with the
+ * cursor; the next click places it and the following label comes up, until "No new hierarchical labels found.".
+ */
+export function sheetPinClick(ctx: SchCtx, mm: Pt) {
+  if (S.pinPlace) { placePinPlace(ctx, mm); return null; }
+  let sheet = S.pinSheet ? ctx.doc.items.get(S.pinSheet) || null : null;
+  if (!sheet) sheet = sheetAt(ctx.doc, mm, Math.max(0.5, 4 * mmPerPx(ctx)));
+  if (!sheet) { ctx.toast("Click over a sheet.", 2000); return null; }
+  S.pinSheet = sheet.id;
+  beginPinPlace(ctx, sheet, mm);
+  return sheet;
+}
+export function beginPinPlace(ctx: SchCtx, sheet: KItem, mm: Pt): void {
+  const got = sheetDocOf(ctx, sheet);
+  const go = (sub: KDoc | null): void => {
+    if (S.tool !== "sheetpin" || S.pinPlace) return;
+    const cur = ctx.doc.items.get(sheet.id); if (!cur) return;
+    if (!sub) { ctx.toast("The sheet's file is not loaded", 2000); return; }
+    const label = importHierLabel(cur, sub);
+    if (!label) { ctx.toast("No new hierarchical labels found.", 2000); return; }
+    S.pinPlace = { sheetId: cur.id, name: label.name, shape: label.shape, node: cur.node, item: null, p: [0, 0], side: "left" };
+    movePinPlace(ctx, S.cursor || mm);
+  };
+  if (got && typeof (got as Promise<KDoc | null>).then === "function") (got as Promise<KDoc | null>).then(go, () => go(null)); else go(got as KDoc | null);
+}
+/** The pin follows the cursor along the sheet's edge (SCH_SHEET_PIN::ConstrainOnEdge); its ghost is the sheet with it. */
+export function movePinPlace(ctx: SchCtx, mm: Pt): void {
+  const pp = S.pinPlace; if (!pp) return;
+  const sheet = ctx.doc.items.get(pp.sheetId); if (!sheet) { S.pinPlace = null; ctx.requestRender(); return; }
+  const at = constrainOnEdge(ctx, sheet, mm);
+  if (pp.item && pp.p[0] === at.p[0] && pp.p[1] === at.p[1] && pp.side === at.side) return;
+  const ts = labelDefaults().textSize;   // createNewSheetPin: m_DefaultTextSize
+  const node = deep(sheet.node), pin = sheetPinNode(pp.name, at.p, at.side, ts); pin[2] = pp.shape;
+  const i = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (i >= 0) node.splice(i, 0, pin); else node.push(pin);
+  // the ghost is the sheet with the new pin, under a uuid of its own so it never stands in for the real sheet
+  const g = deep(node); const u = g.findIndex((c) => Array.isArray(c) && c[0] === "uuid"); if (u >= 0) g.splice(u, 1);
+  pp.node = node; pp.p = at.p; pp.side = at.side; pp.item = ghost(ctx.doc, g);
+  ctx.requestRender();
+}
+export function cancelPinPlace(ctx: SchCtx): void { S.pinPlace = null; ctx.requestRender(); }
+function placePinPlace(ctx: SchCtx, mm: Pt): void {
+  const pp = S.pinPlace; if (!pp) return;
+  movePinPlace(ctx, mm);
+  const sheet = ctx.doc.items.get(pp.sheetId); S.pinPlace = null; if (!sheet) return;
+  // commit.Modify( sheet ); sheet->AddPin( pin )
+  const node = deep(sheet.node), pin = deep(kids(pp.node, "pin").find((q) => str(q[1]) === pp.name && !kids(sheet.node, "pin").some((o) => str(o[1]) === pp.name && uuidOfNode(o) === uuidOfNode(q)))!);
+  const i = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (i >= 0) node.splice(i, 0, pin); else node.push(pin);
+  ctx.commit([modChange(ctx.doc, sheet, node)], "Add Sheet Pin");
+  // the next unplaced label follows the cursor
+  const cur = ctx.doc.items.get(pp.sheetId); if (cur) beginPinPlace(ctx, cur, S.cursor || mm);
+  ctx.requestRender();
+}
+const uuidOfNode = (n: SNode): string => { const u = kid(n, "uuid"); return u ? str(u[1]) : ""; };
 // The pin goes into a clone of the sheet node after the fields (before instance data), committed as a whole-item change.
 export function placeSheetPin(ctx: SchCtx, sheet: KItem, name: string, p: Pt, side: string) {
   const node = deep(sheet.node), pin = sheetPinNode(name, p, side);

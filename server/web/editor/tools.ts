@@ -9,6 +9,7 @@ import { sendOp } from "./net";
 import { cycleFollow } from "./peers";
 import { clearSelection, drawSelection, filterAllows, groupExpand, renderProps, scopeToEnteredGroup, selFilter } from "./selection";
 import { E } from "./state";
+import { subSheetDocs } from "./subsheets";
 import { api, toast } from "./util";
 import type { CommitOpts, ItemSummary, UndoEntry } from "./types";
 import { dragG, isSch, pxPerMm, requestRender, requestRepaint, stage, worldMm } from "./view";
@@ -42,6 +43,9 @@ export function toolCtx(extra?: Record<string, unknown>) {
     undo() { undoLast(); },
     applyLocal(changes: KChange[]) { applyChanges(changes); },
     requestRender: requestRepaint, toast, enterSheet, setTool,
+    // the sub-sheets the open page's sheet symbols name (Place Sheet Pins, the ERC's sheet pin checks)
+    sheetDocs: subSheetDocs,
+    loadSheetDoc(sheet: KItem): Promise<KDoc | null> { const f = E.hooks && (E.hooks as { loadSheetDoc?: (s: KItem) => Promise<KDoc | null> }).loadSheetDoc; return f ? f(sheet) : Promise.resolve(null); },
     // PCB_BASE_FRAME::SelectToolbarAction: a toolbar group shows the given action (the arc tool's drawing mode)
     setGroupCurrent(group: string, id: string) { if (store.get().groupCurrent[group] !== id) setGroupCurrent(group, id); },
     // PCB_SELECTION_TOOL's hover selection: the Clarify Selection candidates under a point, the popup that asks

@@ -103,5 +103,34 @@ test("duplicate, move, Esc: the dropped copy's ends no longer dangle, so a click
   if (_.setFollow) _.setFollow(false);
 });
 
+test("Place Sheet Pins: the next unplaced hierarchical label rides the sheet edge; KiCad's status texts", () => {
+  const { d, c } = fresh();
+  const sheet = K.createItem(d, _.sheetNode([50.8, 50.8], [76.2, 76.2], "Sub", "Sub.kicad_sch"));
+  const HL = (n, sh, y) => `(hierarchical_label "${n}" (shape ${sh}) (at 10 ${y} 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "h-${n}"))`;
+  c.sheetDocs = new Map([["Sub.kicad_sch", HEAD + HL("B", "output", 10) + HL("a10", "input", 20) + HL("A2", "bidirectional", 30) + ")"]]);
+  c.toasts.length = 0;
+  sch.onActivate("sheetpin", c);
+  assert.ok(sch.onPointerDown({ button: 0 }, [10, 10], c));
+  assert.ok(c.toasts.includes("Click over a sheet."), c.toasts.join("|"));
+  // a click anywhere over the sheet starts: StrNumCmp ignoring case puts A2 before a10 before B
+  sch.onPointerMove({}, [60, 60], c); sch.onPointerDown({ button: 0 }, [60, 60], c);
+  const pp = sch.state.pinPlace; assert.ok(pp && pp.name === "A2" && pp.shape === "bidirectional", JSON.stringify(pp && pp.name));
+  // it rides the nearest edge: the right one here
+  sch.onPointerMove({}, [75, 63.5], c); assert.deepStrictEqual([sch.state.pinPlace.side, sch.state.pinPlace.p], ["right", [76.2, 63.5]]);
+  sch.onPointerDown({ button: 0 }, [75, 63.5], c);
+  let pins = K.kids(d.items.get(sheet.id).node, "pin"); assert.deepStrictEqual(pins.map((p) => [p[1], p[2]]), [["A2", "bidirectional"]]);
+  assert.strictEqual(c.log[c.log.length - 1].label, "Add Sheet Pin");
+  assert.strictEqual(sch.state.pinPlace.name, "a10", "the next label comes up at once");
+  sch.onPointerMove({}, [52, 55.88], c); sch.onPointerDown({ button: 0 }, [52, 55.88], c);
+  assert.strictEqual(sch.state.pinPlace.name, "B");
+  // Esc drops the pin on the cursor; the next click over the sheet brings it back
+  _.onKeyCapture({ key: "Escape", target: null, stopImmediatePropagation() {}, preventDefault() {} }); assert.ok(!sch.state.pinPlace);
+  sch.onPointerDown({ button: 0 }, [60, 60], c); assert.strictEqual(sch.state.pinPlace.name, "B");
+  sch.onPointerDown({ button: 0 }, [60, 76.2], c);
+  pins = K.kids(d.items.get(sheet.id).node, "pin"); assert.deepStrictEqual(pins.map((p) => p[1]), ["A2", "a10", "B"]);
+  assert.ok(!sch.state.pinPlace && c.toasts.includes("No new hierarchical labels found."), c.toasts.join("|"));
+  sch.onActivate("select", c);
+});
+
 console.log(`sch-sweep9: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

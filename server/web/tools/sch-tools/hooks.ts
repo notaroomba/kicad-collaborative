@@ -14,9 +14,9 @@ import { repeatLast } from "./repeat";
 import { deleteAt, deleteSelected, duplicateSelected, orientSelected } from "./selection-edits";
 import { finishSchArc, showSchArcMode, schArcBackup, schArcDrawMode, schArcMove, schArcPosture, switchSchArcMode } from "./arcs";
 import { cancelDraw, drawClick, drawPoint, finishDraw, undoDrawPoint } from "./shapes";
-import { sheetEdgeAt, sheetPinClick } from "./sheets";
+import { beginPinPlace, movePinPlace, sheetAt, sheetPinClick } from "./sheets";
 import { mmPerPx, snapConn } from "./snap";
-import { DRAW_TOOLS, S, TEXT_KINDS, toolOf } from "./state";
+import { DRAW_TOOLS, S, TEXT_KINDS, atOf, toolOf } from "./state";
 import { restoreBreak } from "./transforms";
 import { ghost, same } from "./util";
 import { startWire, switchPosture, undoSegment, wireClick, wireFollow } from "./wire";
@@ -28,6 +28,7 @@ export function busyMessage() {
   if (S.drag) return S.drag.mode === "break" ? "Press <ESC> to cancel break." : S.drag.mode === "slice" ? "Press <ESC> to cancel slice."
     : S.dragMode === "move" ? "Press <ESC> to cancel move." : "Press <ESC> to cancel drag.";
   if (S.draw && S.draw.shape === "sheet") return "Press <ESC> to cancel sheet creation.";
+  if (S.pinPlace) return "Press <ESC> to cancel item creation.";
   if (S.carry) {
     const k = S.carry.kind;
     if (k === "symbol") return "Press <ESC> to cancel symbol creation.";
@@ -59,6 +60,13 @@ export function onActivate(toolId: string, ctx: SchCtx) {
   S.sel = null; S.hover = null; S.selEnds = null;
   if (toolId !== "place" && toolId !== "power" && toolId !== "image") S.carry = null;   // a carried duplicate rides into the place tool
   if (toolId !== "image") S.imageWait = false;    // a file chosen after leaving the tool is ignored anyway
+  // TwoClickPlace( placeSheetPin ): the selected sheet is the one to work on, and the first pin comes up at once
+  S.pinPlace = null; S.pinSheet = null;
+  if (toolId === "sheetpin" && !ctx.viewOnly) {
+    const ids = ctx.selection ? Array.from(ctx.selection as Iterable<string>) : [];
+    const sh = ids.map((id) => ctx.doc.items.get(id)).find((it) => it && it.kind === "sheet") || (ctx.selected ? ctx.doc.items.get(ctx.selected.id) : undefined);
+    if (sh && sh.kind === "sheet") { S.pinSheet = sh.id; beginPinPlace(ctx, sh, S.cursor || atOf(sh.node) as Pt); }
+  }
   if (toolId === "junction") startCarry(ctx, "junction", junctionNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "noconnect") startCarry(ctx, "no_connect", noConnectNode(S.cursor || [0, 0]), S.cursor);
   else if (toolId === "busentry") startCarry(ctx, "bus_entry", busEntryNode(S.cursor || [0, 0], 2.54, 2.54), S.cursor);
@@ -124,10 +132,11 @@ export function onPointerMove(ev: PtrEvent | null | undefined, mm: Pt, ctx: SchC
   if (S.carry) { placeCarry(ctx, mm, ev); return; }
   if (S.draw && S.draw.arc) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { schArcMove(S.draw, p); ctx.requestRender(); } return; }
   if (S.draw && !S.draw.await) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { S.draw.cur = p; ctx.requestRender(); } return; }
-  if (S.tool === "highlight" || S.tool === "sheetpin") {   // what the click would pick: a net item / pin, or the sheet whose border is near
+  if (S.pinPlace) { movePinPlace(ctx, mm); return; }
+  if (S.tool === "highlight" || S.tool === "sheetpin") {   // what the click would pick: a net item / pin, or the sheet under the cursor
     let id: string | null = null;
     if (S.tool === "highlight") { const p = pickNet(ctx, mm); id = p ? p.item.id : null; }
-    else if (!ctx.viewOnly) { const e = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx))); id = e ? e.item.id : null; }
+    else if (!ctx.viewOnly) { const e = S.pinSheet ? ctx.doc.items.get(S.pinSheet) : sheetAt(ctx.doc, mm, Math.max(0.5, 4 * mmPerPx(ctx))); id = e ? e.id : null; }
     if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
     return;
   }
@@ -224,7 +233,8 @@ export function onDocChanged(ctx: SchCtx) {
   // An edit of the same sheet (ours or a peer's) leaves a wire, a shape or an item on the cursor alone, as an
   // undo does on the desktop; a different sheet ends them.
   const sameDoc = S.docRef === ctx.doc;
-  if (!sameDoc) { S.wire = null; S.carry = null; S.draw = null; }
+  if (!sameDoc) { S.wire = null; S.carry = null; S.draw = null; S.pinPlace = null; S.pinSheet = null; }
+  else if (S.pinPlace) { const pp = S.pinPlace; pp.item = null; movePinPlace(ctx, S.cursor || pp.p); }
   else if (S.carry) S.carry.item = ghost(ctx.doc, S.carry.node);
   if (S.drag) {                                 // a paste or Pin Helpers > Wire in flight is ours alone and rides on; anything else in flight is dropped
     const d = S.drag;

@@ -46,6 +46,8 @@ export interface SchCtx extends ToolCtx {
   /** Sheetfile (or docId / path) -> parsed doc or its text, for ERC and sheet pins. */
   sheetDocs?: Map<string, KDoc | string> | Record<string, KDoc | string>;
   parentSheetPins?: unknown;
+  /** the sub-sheet document a sheet symbol names, read from the project (the editor caches it in sheetDocs) */
+  loadSheetDoc?(sheet: KItem): Promise<KDoc | null>;
   pageNumber?: number;
   docPath?: string;
   cursor?: Pt;
@@ -117,6 +119,8 @@ export interface PointEdit { item: KItem; ep: EditPoints; idx: number; orig: SNo
   imgSize0?: Pt }
 /** S.sheetJob: a sheet file being created on the server. */
 export interface SheetJob { doc: KDoc; promise: Promise<KItem | null> | null }
+/** A sheet pin from a hierarchical label riding the sheet's edge (SCH_DRAWING_TOOLS::TwoClickPlace, isSheetPin). */
+export interface SheetPinPlace { sheetId: string; name: string; shape: string; node: SNode; item: KItem | null; p: Pt; side: string }
 /** S.unfold: the label and entry a bus unfold placed while its wire is drawn. */
 export interface UnfoldJob { labelId: string; entryId: string; origin: Pt; placed: boolean }
 /** An item placed last, for Insert (repeat). */
@@ -144,6 +148,8 @@ export type SchState = {
   /** the stage cursor the drag-collision WARNING cursor replaced */
   collisionCursor?: string | null;
   labelQueue?: SNode[] | null;
+  /** Place Sheet Pins: the sheet the tool works on (the selected one, else the first clicked) and the pin on the cursor */
+  pinSheet?: string | null; pinPlace?: SheetPinPlace | null;
   lastLabelShape?: string; lastFlagShape?: string; lastAutoRotate?: boolean; autoRotateIds?: Set<string>;
   lastTextH?: string; lastTextV?: string; lastTextBold?: boolean; lastTextItalic?: boolean; lastTextVertical?: boolean; lastTextSpin?: number;
   // commands

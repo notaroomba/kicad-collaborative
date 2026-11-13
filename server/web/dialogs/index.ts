@@ -28,6 +28,7 @@ import { openFabOutputs } from "../editor/fab-outputs";
 import { editPageNumber } from "../editor/panels/hierarchy";
 import { findNetInNavigator } from "../editor/panels/netnav";
 import { assignNetclass } from "./assign-netclass";
+import { installSubSheets } from "./subsheets";
 import { selectionIds } from "../editor/gestures";
 
 type Handler = import("../editor/types").ActionHandler;
@@ -65,6 +66,7 @@ function typing(ev: KeyboardEvent): boolean { const t = ev.target as HTMLElement
 
 /** Register everything; called once from editor/index.ts before the handled ids are published. */
 export function installDialogs(HANDLERS: Record<string, Handler>): void {
+  installSubSheets();
   const needDoc = (fn: () => void, schOnly = false): Handler => () => { if (!E.kdoc) { toast("Open a document first"); return; } if (schOnly && !isSch()) { toast("This command belongs to the schematic editor"); return; } fn(); };
   const find = HANDLERS.find;
   Object.assign(HANDLERS, {

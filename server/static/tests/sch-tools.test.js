@@ -727,16 +727,17 @@ test("leaving the tool keeps the fixed segments; view-only ignores editing keys"
 });
 
 // ---- sheets, sheet pins, tables, curves, polygons, rule areas, images, net highlighting, multi-item drag ----
-test("sheet pin: a click near a sheet border prompts for the name; the pin lands on the nearest edge with KiCad's side rotation/justify, as a MODIFIED sheet", () => {
+test("sheet pin: a click over a sheet takes its next hierarchical label; the pin lands on the nearest edge with KiCad's side rotation/justify, as a MODIFIED sheet", () => {
   const { d, c } = fresh();
   const sheet = K.createItem(d, _.sheetNode([101.6, 88.9], [127, 101.6], "Power", "Power.kicad_sch"));
   sheet.node.push(["instances", ["project", "t", ["path", "/root-uuid", ["page", "2"]]]]);
+  c.sheetDocs = { "Power.kicad_sch": '(kicad_sch (version 20250114) (generator "t") (paper "A4") (hierarchical_label "VBUS" (shape input) (at 10 10 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "hv")))' };
   sch.onActivate("sheetpin", c);
-  sch.onPointerMove(ev(), [102, 95.3], c); assert.strictEqual(sch.state.hover, sheet.id, "hover shows the sheet whose border is near");
-  c.toasts.length = 0; assert.ok(sch.onPointerDown(ev(), [60, 60], c)); assert.ok(c.toasts.some((m) => /border of a sheet/.test(m)));
-  sch.setPrompt((title, initial, client, done) => { assert.strictEqual(title, "Sheet pin"); done("VBUS"); });
+  sch.onPointerMove(ev(), [102, 95.3], c); assert.strictEqual(sch.state.hover, sheet.id, "hover shows the sheet under the cursor");
+  c.toasts.length = 0; assert.ok(sch.onPointerDown(ev(), [60, 60], c)); assert.ok(c.toasts.includes("Click over a sheet."));
+  assert.ok(sch.onPointerDown(ev(), [102.2, 95.1], c)); assert.strictEqual(sch.state.pinPlace.name, "VBUS");
   assert.ok(sch.onPointerDown(ev(), [102.2, 95.1], c));              // left edge; y snaps to the grid
-  const cm = lastCommit(c); assert.strictEqual(cm.label, "sheet pin"); assert.deepStrictEqual(cm.changes.map((x) => [x.kind, x.id, x.typeName]), [["MODIFIED", sheet.id, "SCH_SHEET"]]);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "Add Sheet Pin"); assert.deepStrictEqual(cm.changes.map((x) => [x.kind, x.id, x.typeName]), [["MODIFIED", sheet.id, "SCH_SHEET"]]);
   assert.ok(!/\(pin /.test(cm.before[0]), "commit saw the sheet without the pin (its undo record)");
   const n = fragItem(cm.changes[0]), pins = kids(n, "pin"); assert.strictEqual(pins.length, 1);
   assert.deepStrictEqual(pins[0].slice(0, 4), ["pin", "VBUS", "input", ["at", 101.6, 95.25, 180]]); assert.strictEqual(pins[0][4][0], "uuid");

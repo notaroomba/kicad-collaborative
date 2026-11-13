@@ -224,6 +224,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
     if (d.shape !== "sheet") { c.fillStyle = CLR.sel; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
     c.restore();
   }
+  if (S.pinPlace && S.pinPlace.item) paintItems(c, view, doc, [S.pinPlace.item], { selected: new Set([S.pinPlace.item.id]) });   // the sheet with its new pin
   if (S.carry && S.carry.item) {
     // SCH_DRAWING_TOOLS: the new item is IS_NEW | IS_MOVING and selected, so it draws in its own colours and font with
     // the selection shadow, its field anchors hidden while it moves (parentMoving); an image as its bitmap
