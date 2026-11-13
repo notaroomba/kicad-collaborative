@@ -11,7 +11,8 @@
 //  · zoom animation: on a document whose pass is slow, the frames of a wheel zoom are drawn from zoom
 //    levels — the document rendered at a scale at or above the frame's, over the area the zoom will show —
 //    always scaled down, never up, so they stay sharp, and shown as a composited plate under the canvas (no copy); the
-//    full pass that ends the zoom is rendered in bands in idle time while the level still shows;
+//    full pass follows the zoom's last frame by REST_DELAY_MS, rendered at once (a level is supersampled and scaled
+//    down: its strokes are a little thinner and lighter than a true pass's, fine for a moving picture, not for one at rest);
 //  · anything else (an explicit requestRender, a document edit, other options, another size) renders
 //    the layer in full.
 //
@@ -46,6 +47,12 @@ const SCALED_MIN_MS = 33;
 // zoom frames come from zoom levels; a faster one is simply redone every frame.
 const SLOW_MS = 12;
 let wasScaling = false;
+// The full pass after a zoom drawn from levels waits this long after the zoom's last frame (itself 110 ms after the last
+// wheel notch, gestures.ts), so a notch that comes a little late in a burst goes on from the levels instead of waiting for
+// a pass; any longer only keeps the level on screen.
+const REST_DELAY_MS = 60;
+/** The last zoom frame came from a level and its full pass is due: repaints until then show the level too. */
+let restPending = false;
 export const stats: PaintStats = { full: 0, strips: 0, blits: 0, scaled: 0, lastFullMs: 0, down: 0, levels: 0, prefetch: 0, plates: 0, maxDownK: 0, last: "", view: null };
 /**
  * Paint tuning the perf probes flip: plate — zoom frames composited from a plate (false: copied into the target);
@@ -122,7 +129,6 @@ function backgroundOf(doc: KDoc, opts: Record<string, unknown>): string | false 
 }
 
 function full(l: Layer, doc: KDoc, view: KView, opts: Record<string, unknown>): void {
-  restJob = null;   // a banded pass under way is overtaken
   KiCadCanvas.render(doc, l.ctx, view, opts as KRenderOpts);
   l.view = Object.assign({}, view); l.opts = snapshot(opts); l.doc = doc; geomsOf(doc, l.geoms);
   stats.full++;
@@ -158,6 +164,8 @@ interface Level {
   rows: number;     // device rows rendered from the top (h: complete)
   slice: SliceLog | null;   // its last idle slices
   used: number;
+  /** the lowest scale a zoom out about its anchor finds it covering (where the next level out takes over) */
+  low: number;
 }
 let levels: Level[] = [];
 let levelKey: { doc: KDoc; opts: Record<string, unknown>; geoms: unknown[] } | null = null;
@@ -170,14 +178,9 @@ let flushCtx: CanvasRenderingContext2D | null = null;
 let jsMs = 0, frameMs = 0;
 const costOf = (): number => Math.max(jsMs, frameMs);
 let lastPaint = 0, lastWasFull = false;
-// the full pass at the end of a zoom drawn from a level waits this long for another notch
-const REST_DELAY_MS = 150;
-let restPending = false;
-/** The coming "rest" pass is the one that ends a zoom (not a pan's): it may be rendered in bands. */
-let restFromZoom = false;
 
 function dropLevels(): void {
-  hidePlate(); restJob = null; restPending = false;
+  hidePlate(); restPending = false;
   for (const L of levels) freeLevel(L);
   levels = []; queue = []; levelKey = null;
 }
@@ -215,7 +218,7 @@ function findLevel(view: KView, W: number, H: number, complete: boolean): Level 
  * A level at scale S (≥ the frame's s) over the frame-pixel rect [x0, x1] × [y0, y1] of `view` (its area at scale s).
  * Not rendered yet (rows 0).
  */
-function newLevel(view: KView, S: number, x0: number, y0: number, x1: number, y1: number): Level | null {
+function newLevel(view: KView, S: number, x0: number, y0: number, x1: number, y1: number, low: number): Level | null {
   const dpr = view.dpr || 1, s = scaleOf(view), r = S / s, M = LEVEL_MARGIN;
   const w = Math.ceil((x1 - x0) * r) + 2 * M, h = Math.ceil((y1 - y0) * r) + 2 * M;
   if (w <= 0 || h <= 0 || w > 16000 || h > 16000) return null;
@@ -227,7 +230,7 @@ function newLevel(view: KView, S: number, x0: number, y0: number, x1: number, y1
   if (paintConfig.bitmap && typeof OffscreenCanvas !== "undefined") cv = new OffscreenCanvas(w, h);
   else { cv = document.createElement("canvas"); cv.width = w; cv.height = h; }
   const ctx = cv.getContext("2d") as CanvasRenderingContext2D | null; if (!ctx) return null;
-  const L: Level = { cv, ctx, el: null, s: S, tx, ty, w, h, dpr, view: lv, rows: 0, slice: null, used: performance.now() };
+  const L: Level = { cv, ctx, el: null, s: S, tx, ty, w, h, dpr, view: lv, rows: 0, slice: null, used: performance.now(), low };
   levels.push(L);
   // keep the budget: the least recently used complete levels go first
   const budget = LEVEL_BUDGET * Math.max(1, (layer ? layer.cv.width * layer.cv.height : w * h));
@@ -280,15 +283,16 @@ function freeLevel(L: Level): void {
 }
 
 /**
- * The level a zoom frame with nothing ready renders now: a whole span in the zoom's direction (a burst of notches keeps
- * going, and a level made only up to where the zoom is heading would be outrun by the next notch at once).
+ * The level a zoom frame with nothing ready renders now, in the frame: up to where the zoom is heading, and at least a
+ * wheel notch (REST_SPAN) on, at most a span.  Its pixels grow with the square of that reach, and they are what this frame
+ * waits for; the level after it is prefetched in idle time (prefetchAhead).
  */
 function levelFor(view: KView, hint: ZoomHint, W: number, H: number): Level | null {
   const dpr = view.dpr || 1, s = scaleOf(view), sT = view.ppm * hint.to * dpr;
-  if (sT > s) return newLevel(view, s * LEVEL_SPAN, 0, 0, W, H);   // zooming in: the view now holds every later one
-  // zooming out (or holding): this scale, over the view the zoom shows at s / LEVEL_SPAN about its anchor
-  const r = LEVEL_SPAN, ax = hint.cx * dpr, ay = hint.cy * dpr;
-  return newLevel(view, s, ax - ax * r, ay - ay * r, ax + (W - ax) * r, ay + (H - ay) * r);
+  if (sT > s) return newLevel(view, s * Math.min(LEVEL_SPAN, Math.max(REST_SPAN, sT / s)), 0, 0, W, H, s);   // zooming in: the view now holds every later one
+  // zooming out (or holding): this scale, over the view the zoom shows at s / r about its anchor
+  const r = Math.min(LEVEL_SPAN, Math.max(REST_SPAN, s / sT)), ax = hint.cx * dpr, ay = hint.cy * dpr;
+  return newLevel(view, s, ax - ax * r, ay - ay * r, ax + (W - ax) * r, ay + (H - ay) * r, s / r);
 }
 
 /** Queue the level after L in the zoom's direction, to be rendered in idle time while the frames come from L. */
@@ -298,25 +302,25 @@ function prefetchAhead(L: Level, view: KView, hint: ZoomHint, W: number, H: numb
   const ax = hint.cx * dpr, ay = hint.cy * dpr;
   // in: the next level starts where L ends (the view at scale L.s is the frame's shrunk about the anchor) and goes up a
   // span; out: it serves from L's lowest scale down a span (the view there is the frame's grown about the anchor)
-  const S = sT > s ? L.s * LEVEL_SPAN : L.s / LEVEL_SPAN, r = sT > s ? s / L.s : s / (S / LEVEL_SPAN);
+  const S = sT > s ? L.s * LEVEL_SPAN : L.low, r = sT > s ? s / L.s : s / (S / LEVEL_SPAN);
   if (levels.some((x) => x.dpr === dpr && Math.abs(x.s / S - 1) < 0.05)) return;
   const x0 = ax - ax * r, x1 = ax + (W - ax) * r, y0 = ay - ay * r, y1 = ay + (H - ay) * r;
-  const N = newLevel(view, S, x0, y0, x1, y1);
+  const N = newLevel(view, S, x0, y0, x1, y1, sT > s ? L.s : S / LEVEL_SPAN);
   if (N) { queue.push(N); scheduleIdle(); }
 }
 
 /** After a pass at rest: one level in and one out around the view, rendered in idle time. */
 function prefetchRest(view: KView, W: number, H: number): void {
   const s = scaleOf(view), dpr = view.dpr || 1;
-  const want: [number, number, number, number, number][] = [
-    [s * REST_SPAN, 0, 0, W, H],                                                                    // in, from any anchor
-    [s, W * (1 - REST_SPAN), H * (1 - REST_SPAN), W * REST_SPAN, H * REST_SPAN],                     // out, from any anchor
+  const want: [number, number, number, number, number, number][] = [
+    [s * REST_SPAN, 0, 0, W, H, s],                                                                    // in, from any anchor
+    [s, W * (1 - REST_SPAN), H * (1 - REST_SPAN), W * REST_SPAN, H * REST_SPAN, s / REST_SPAN],         // out, from any anchor
   ];
-  for (const [S, x0, y0, x1, y1] of want) {
+  for (const [S, x0, y0, x1, y1, low] of want) {
     // already there (a level of the zoom that just ended)?
     const have = levels.some((L) => L.dpr === dpr && L.s >= S * 0.999 && L.s <= S * 1.1 && (S > s ? coversShrunk(L, view, W, H) : coversGrown(L, view, REST_SPAN, W, H)));
     if (have) continue;
-    const N = newLevel(view, S, x0, y0, x1, y1);
+    const N = newLevel(view, S, x0, y0, x1, y1, low);
     if (N) queue.push(N);
   }
   if (queue.length) scheduleIdle();
@@ -373,10 +377,9 @@ function sliceRows(w: number, ms: number, log: SliceLog | null): number {
 }
 function notePxMs(ms: number, px: number): void { if (px > 0) { const v = ms / px; pxMs = pxMs ? pxMs * 0.6 + v * 0.4 : v; } }
 
-/** Idle work: the banded rest pass first, then one slice of the oldest queued level. */
+/** Idle work: one slice of the oldest queued level. */
 function idleStep(d: IdleDeadline | null): void {
   const budget = sliceBudget(d);
-  if (restJob) { restStep(budget); if (restJob || queue.length) scheduleIdle(); return; }
   queue = queue.filter((L) => levels.indexOf(L) >= 0 && L.rows < L.h);
   const L = queue[0];
   if (!L || !levelKey) return;
@@ -389,43 +392,6 @@ function idleStep(d: IdleDeadline | null): void {
   if (queue.length) scheduleIdle();
 }
 
-// ---------------------------------------------------------------- the rest pass in bands
-// The full pass that ends a zoom drawn from levels is rendered into the layer a band at a time in idle time, while the
-// frames keep showing the level; when the last band is in, the next frame shows the layer: the full pass at the view the
-// zoom ended on.  A band is render's own region pass (as a pan's strips are); within a few pixels of a band's edge Skia's
-// clip leaves a faint difference from one unclipped pass (about 0.1% of the pixels, mean under 0.01/255).  Any change of
-// view, document or options drops the job.
-interface RestJob { doc: KDoc; view: KView; opts: Record<string, unknown>; geoms: unknown[]; W: number; H: number; rows: number; ms: number; slice: SliceLog | null; repaint: () => void }
-let restJob: RestJob | null = null;
-/** A completed banded rest pass not shown yet: the frame that blits it is that pass's frame. */
-let restShown = true;
-const sameView = (a: KView, b: KView): boolean => sameScale(a, b) && a.panX === b.panX && a.panY === b.panY;
-
-function restStep(budget: number): void {
-  const j = restJob!, l = layer;
-  if (!l || l.cv.width !== j.W || l.cv.height !== j.H) { restJob = null; j.repaint(); return; }
-  const t = performance.now(), y0 = j.rows, y1 = Math.min(j.H, y0 + sliceRows(j.W, budget, j.slice));
-  KiCadCanvas.render(j.doc, l.ctx, j.view, Object.assign({}, j.opts, { region: [0, y0, j.W, y1] }) as KRenderOpts);
-  if (!flushCtx) { const c = document.createElement("canvas"); c.width = 1; c.height = 1; flushCtx = c.getContext("2d"); }
-  if (flushCtx) flushCtx.drawImage(l.cv, 0, 0, 1, 1, 0, 0, 1, 1);
-  const dt = performance.now() - t; j.ms += dt; j.rows = y1; j.slice = logSlice(j.slice, y1 - y0, dt);
-  notePxMs(dt, (y1 - y0) * j.W);
-  if (j.rows < j.H) return;
-  restJob = null;
-  if (!sameGeoms(j.doc, j.geoms)) { j.repaint(); return; }   // edited meanwhile: the next frame renders afresh
-  l.view = Object.assign({}, j.view); l.opts = j.opts; l.doc = j.doc; l.geoms = j.geoms; l.ms = j.ms;
-  stats.full++; stats.lastFullMs = j.ms; jsMs = Math.max(jsMs * 0.7, j.ms);
-  restPending = false; restShown = false;
-  j.repaint();
-}
-function startRest(l: Layer, doc: KDoc, view: KView, opts: Record<string, unknown>, repaint: () => void): void {
-  l.view = null;
-  restJob = { doc, view: Object.assign({}, view), opts: snapshot(opts), geoms: geomsOf(doc, []), W: l.cv.width, H: l.cv.height, rows: 0, ms: 0, slice: null, repaint };
-  restPending = true;
-  if (restTimer) { clearTimeout(restTimer); restTimer = 0; }
-  scheduleIdle();
-}
-
 // A zoom frame shows its level as a plate: the level's own canvas, placed under the (cleared) target canvas with a CSS
 // transform, so the compositor scales it — on the GPU where there is one, and off the main thread where there is not —
 // instead of a scaled copy into the target on every frame.  The overlays the frame draws next land on the cleared target,
@@ -435,6 +401,16 @@ function hidePlate(): void {
   if (!plate) return;
   if (plate.parentNode) plate.parentNode.removeChild(plate);
   plate = null;
+}
+/** Frames painted while this is set copy their level into the target instead of showing a plate (settledFrame). */
+let plateHeld = false;
+/**
+ * Run `paint` (a frame of the editor) with the document drawn into the target canvas itself, never shown as a plate under
+ * a cleared canvas: for a reader of the canvas's pixels (an export of the view).
+ */
+export function settledFrame(paint: () => void): void {
+  plateHeld = true;
+  try { paint(); } finally { plateHeld = false; }
 }
 function showPlate(target: CanvasRenderingContext2D, L: Level, k: number, ox: number, oy: number): boolean {
   const cv = target.canvas as HTMLCanvasElement, parent = cv.parentNode;
@@ -460,8 +436,12 @@ function blitLevel(target: CanvasRenderingContext2D, L: Level, view: KView): voi
   const { k, ox, oy } = placement(L, view);
   L.used = performance.now();
   stats.down++; stats.maxDownK = Math.max(stats.maxDownK, k); stats.last = "down";
-  if (showPlate(target, L, k, ox, oy)) { stats.plates++; return; }
+  if (!plateHeld && showPlate(target, L, k, ox, oy)) { stats.plates++; return; }
   hidePlate();
+  copyLevel(target, L, k, ox, oy);
+}
+/** Level L drawn into the target, scaled down to the frame of `view`. */
+function copyLevel(target: CanvasRenderingContext2D, L: Level, k: number, ox: number, oy: number): void {
   target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
   // bilinear: a level is never more than LEVEL_SPAN above the frame, so every source pixel is sampled (mipmaps would
   // only soften it), and it is the cheapest filter where the canvas rasters on the CPU
@@ -472,13 +452,13 @@ function blitLevel(target: CanvasRenderingContext2D, L: Level, view: KView): voi
 
 /**
  * Paint the document pass for `view` onto `target` (which is then ready for the overlays).  `forceIn` renders
- * in full (true: anything may have changed; "rest": only the view did, the zoom levels are kept), or marks the last
+ * in full (true: anything may have changed; "rest": only the view did, and the zoom levels are kept), or marks the last
  * frame of a wheel zoom ("zoomEnd"); `zoom` (a zoom animation in flight: its target zoom and anchor) lets a slow
  * document draw this frame from a zoom level.
  * A frame that is a stand-in (scaled, or shifted with strips) calls `onRest` once the motion has stopped,
  * for the full pass.
  */
-export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view: KView, opts: Record<string, unknown>, forceIn: boolean | "rest" | "zoomEnd", zoom: ZoomHint | null, onRest: () => void, repaint: () => void = onRest): void {
+export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view: KView, opts: Record<string, unknown>, forceIn: boolean | "rest" | "zoomEnd", zoom: ZoomHint | null, onRest: () => void): void {
   const W = target.canvas.width, H = target.canvas.height;
   stats.view = view;
   const now = performance.now(), sincePaint = now - lastPaint; lastPaint = now;
@@ -489,24 +469,16 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
   if (lastWasFull && zoom && sincePaint < 250) frameMs = frameMs ? (frameMs + sincePaint - 2) / 2 : sincePaint - 2;
   const costMs = costOf();
   lastWasFull = false;
-  // "zoomEnd": the last frame of a wheel zoom, drawn from a level when one is ready, with the full pass a moment later
-  // (a notch that follows at once goes on from the levels); "rest": that full pass, or another one of an unchanged
-  // document (a pan's), which keeps the levels; any other forced pass may show a changed document and drops them
+  // "zoomEnd": the last frame of a wheel zoom, drawn from a level when one is ready, with the full pass REST_DELAY_MS later;
+  // "rest": that full pass, or another one of an unchanged document (a pan's), which keeps the levels; any other forced
+  // pass may show a changed document and drops them
   const zoomEnd = forceIn === "zoomEnd", force = zoomEnd ? false : forceIn;
   if (force && force !== "rest") dropLevels();
-  // a banded rest pass goes on only while nothing but repaints happen
-  if (restJob && (force || zoom || zoomEnd || W !== restJob.W || H !== restJob.H || restJob.doc !== doc || !sameView(view, restJob.view) || !sameOpts(opts, restJob.opts))) { restJob = null; restPending = false; }
-  if (zoom || (force && !restJob)) restPending = false;
+  if (zoom || force) restPending = false;
   const lv = l.view;
   // (walks every item: asked only where it matters)
   const isReusable = (): boolean => !force && !!lv && l.doc === doc && !!l.opts && sameOpts(opts, l.opts) && sameGeoms(doc, l.geoms);
   let stand = false;
-  const fromZoom = restFromZoom; restFromZoom = false;
-  if (force === "rest" && fromZoom && !restJob && costMs > SLOW_MS && levelKey && levelsValid(doc, opts)) {
-    // the pass that ends a zoom drawn from levels: in bands, while this frame (and any repaint until it is done) shows the level
-    const L = findLevel(view, W, H, true);
-    if (L) { startRest(l, doc, view, opts, repaint); blitLevel(target, L, view); wasScaling = true; return; }
-  }
   if ((zoom || zoomEnd || restPending) && !force && costMs > SLOW_MS && (!lv || !sameScale(view, lv))) {
     // a zoom frame on a slow document: drawn from a zoom level
     if (levelKey && !levelsValid(doc, opts)) dropLevels();
@@ -529,9 +501,9 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
       if (L.rows < L.h) { renderLevel(L, doc, opts); queue = queue.filter((x) => x !== L); }
       blitLevel(target, L, view);
       if (zoom) prefetchAhead(L, view, zoom, W, H);
-      wasScaling = wasScaling || !!zoom;   // a zoom's last frame keeps it: a notch right after goes on from the levels
+      wasScaling = true;   // a notch during the delay goes on from the levels, without a scaled frame
       if (zoom) { if (restTimer) { clearTimeout(restTimer); restTimer = 0; } }
-      else if (zoomEnd) { restPending = true; scheduleRest(() => { restPending = false; restFromZoom = true; onRest(); }, REST_DELAY_MS); }
+      else if (zoomEnd) { restPending = true; scheduleRest(() => { restPending = false; onRest(); }, REST_DELAY_MS); }
       return;
     }
   }
@@ -539,8 +511,7 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
     const dpr = view.dpr || 1, dx = (view.panX - lv.panX) * dpr, dy = (view.panY - lv.panY) * dpr;
     if (dx === 0 && dy === 0) {
       // the first showing of a banded rest pass is that full pass's frame
-      if (!restShown) { restShown = true; stats.last = "full"; finishFull(doc, view, opts, zoom, W, H); }
-      else { stats.blits++; stats.last = "blit"; }
+      stats.blits++; stats.last = "blit";
     }
     else if (l.ms > 6 && whole(dx) && whole(dy) && Math.abs(dx) < W * 0.75 && Math.abs(dy) < H * 0.75) {   // a cheap pass is simply redone
       // shift what is already drawn and render only the strips that came into view
@@ -567,7 +538,7 @@ function fullAndBlit(l: Layer, doc: KDoc, view: KView, opts: Record<string, unkn
   full(l, doc, view, opts);
   hidePlate(); target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
   target.drawImage(l.cv, 0, 0); target.restore();
-  l.ms = performance.now() - t0; stats.lastFullMs = l.ms; stats.last = "full"; restShown = true;
+  l.ms = performance.now() - t0; stats.lastFullMs = l.ms; stats.last = "full";
   jsMs = Math.max(jsMs * 0.7, l.ms);
   lastWasFull = true;
 }

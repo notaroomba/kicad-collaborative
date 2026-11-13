@@ -9,7 +9,7 @@ import { drawHover } from "./gestures";
 import { anchorMm, breakFollow, peerName, renderPeers, sendPresence } from "./peers";
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
-import { paintConfig, paintDocument, stats as paintStats } from "./paint";
+import { paintConfig, paintDocument, settledFrame, stats as paintStats } from "./paint";
 import { activeModule, toolCtx } from "./tools";
 import { drawAppOverlays } from "./overlays";
 import { toast } from "./util";
@@ -87,6 +87,9 @@ function boardSelected(): Set<string> | null {
   const more = CollabTools.pcb && CollabTools.pcb.selectedPadKeys ? CollabTools.pcb.selectedPadKeys() : []; for (const k of more) out.add(k);
   return out;
 }
+/** Paint a frame now with the whole picture in #canvas itself (for a reader of its pixels: a zoom frame may otherwise leave it blank over a plate). */
+export function drawCanvasSettled() { if (E.kdoc) settledFrame(drawCanvas); }
+E.drawCanvasSettled = drawCanvasSettled;
 export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
@@ -100,7 +103,7 @@ export function drawCanvas() {
   // updates the item's box only when it lands, after the document version was bumped)
   if (force && E.comments && E.comments.length) drawComments();
   updateMsgPanel();
-  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender, requestRepaint);
+  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off: HTMLCanvasElement = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));

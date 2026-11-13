@@ -955,7 +955,8 @@ function exportFootprintAsSVG(): void {
 /** EDA_DRAW_FRAME's "View as PNG" (SaveCanvasImageToFile): the canvas as it is on screen. */
 function exportFootprintAsPNG(): void {
   if (!E.kdoc) return; const name = FD().footprintName(E.kdoc) || "footprint";
-  const cv = document.querySelector("#stage canvas") as HTMLCanvasElement | null;
+  const cv = document.getElementById("canvas") as HTMLCanvasElement | null;
+  if (cv && E.drawCanvasSettled) E.drawCanvasSettled();   // a zoom frame may show the view on a plate over a blank #canvas (paint.ts)
   if (cv && cv.toBlob) { cv.toBlob((b) => { if (b) saveBlob(b, `${name}.png`); else toast("Can't save file"); }, "image/png"); return; }
   KiCadCanvas.renderPng(E.kdoc, Object.assign({ hidden: E.hiddenLayers }, E.renderOpts) as unknown as Record<string, unknown>).then((b: Blob) => saveBlob(b, `${name}.png`)).catch(() => toast("Can't save file"));
 }
