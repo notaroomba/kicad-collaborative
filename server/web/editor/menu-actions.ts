@@ -107,7 +107,13 @@ function setUnits(u: "mm" | "in" | "mil"): void { setUnitsAction(u, UNIT_ACTION[
 /** Ctrl+U (ACTIONS::toggleUnits, COMMON_TOOLS::ToggleUnits): between millimetres and the imperial unit last used. */
 function toggleUnits(): void { setUnits(E.units === "mm" ? (E.lastImperial || "mil") : "mm"); }
 
-function resetLocalCoords(): void { E.localOrigin = (E.lastCursorMm as number[]).slice(); store.slice("viewport", { origin: E.localOrigin.slice() }); }
+/** COMMON_TOOLS::ResetLocalCoords (Space): the local origin goes where the crosshair is (the forced or grid-snapped
+ *  GetCursorPosition the status bar shows), so dx / dy / dist read 0 right after. */
+function resetLocalCoords(): void {
+  const c = store.get().viewport.cursor as number[] | undefined;
+  E.localOrigin = (c && c.length === 2 ? c : (E.lastCursorMm as number[])).slice();
+  store.slice("viewport", { origin: E.localOrigin.slice() });
+}
 
 function stepSheet(dir: number): void {
   const sheets = (st.docs || []).filter((d) => d.docType === "kicad_sch"); if (sheets.length < 2) { toast("This schematic has one sheet"); return; }

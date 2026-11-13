@@ -16,7 +16,8 @@ export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comme
 
 export const PANE_EDITOR_ONLY: Record<string, "sch" | "pcb" | undefined> = { hier: "sch", netnav: "sch" };
 
-export const PANE_DEFAULT_HIDDEN: Record<"sch" | "pcb", string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav"], pcb: ["peers", "comments", "search"] };
+import { PANE_DEFAULT_HIDDEN } from "../tables";
+export { PANE_DEFAULT_HIDDEN };
 
 
 export const editorId = () => (isSch() ? "sch" : "pcb");
@@ -79,17 +80,24 @@ export function setupEditorChrome() {
 export function syncSchModes() {
   if (!isSch()) {   // the board's angle snap mode (PCBNEW_SETTINGS m_AngleSnapMode) on the same radio
     const pt = (window as unknown as { PcbTools?: { angleSnapMode?: () => string } }).PcbTools;
-    const am = pt && pt.angleSnapMode ? pt.angleSnapMode() : null;
-    if (am) setRadio("Line modes", am === "free" ? "lineModeFree" : am === "45" ? "lineMode45" : "lineMode90");
+    // until the board tools load, KiCad's default (pcbnew_settings.cpp pcb_angle_snap_mode: LEADER_MODE::DIRECT, Free)
+    const am = (pt && pt.angleSnapMode ? pt.angleSnapMode() : null) || "free";
+    setRadio("Line modes", am === "free" ? "lineModeFree" : am === "45" ? "lineMode45" : "lineMode90");
     store.slice("viewport", { lineMode: am === "free" || am === "45" || am === "90" ? am : null, dragMode: null }); return;
   }
   if (!CollabTools.sch || !CollabTools.sch.state) { store.slice("viewport", { lineMode: null, dragMode: null }); return; }
   const lm = CollabTools.sch.state.lineMode;
+  // Annotate Automatically (sch_edit_frame.cpp:1102 CHECK(m_AnnotatePanel.automatic), on by default)
+  setToggles({ toggleAnnotateAuto: (CollabTools.sch.state as { annotateAuto?: boolean }).annotateAuto !== false });
   setRadio("Line modes", lm === "free" ? "lineModeFree" : lm === "45" ? "lineMode45" : "lineMode90");
   store.slice("viewport", { lineMode: lm === "free" ? "free" : lm === "45" ? "45" : "90", dragMode: (CollabTools.sch.state.dragMode || null) as "move" | "drag" | null });
 }
 
-if (typeof window !== "undefined") window.addEventListener("kc:pcb-linemode", () => syncSchModes());
+if (typeof window !== "undefined") {
+  window.addEventListener("kc:pcb-linemode", () => syncSchModes());
+  // a module action run from a hotkey or a toolbar button may flip a mode the toolbar mirrors (Annotate Automatically)
+  window.addEventListener("kc:action", () => syncSchModes());
+}
 
 /**
  * EDA_DRAW_FRAME::ChangeUserUnits: every way of switching (the left toolbar's Units group, Ctrl+U) ends here.  It

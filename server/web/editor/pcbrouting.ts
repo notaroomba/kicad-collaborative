@@ -154,6 +154,10 @@ export function viaStackNames(pro: string | null | undefined): string[] {
 /** Every store update lands here (pointer moves included), so only a new project, document, view or unit does any work. */
 function onStore(): void {
   ensureProject();
+  // Show Ratsnest (pcb_edit_frame.cpp:1433 CHECK(globalRatsnestCond), ratsnest_global default on): the left toolbar
+  // and the Appearance panel flip the module's flag; the check follows it
+  const pcb = typeof CollabTools !== "undefined" ? CollabTools.pcb : undefined;
+  if (pcb && pcb.state && isBoard()) { const on = !!(pcb.state as { showRatsnest?: boolean }).showRatsnest; if (store.get().toggles.showRatsnest !== on) setToggles({ showRatsnest: on }); }
   if (E.kdoc !== seenDoc) { seenDoc = E.kdoc; seenInputs = ""; onDocument(); }
   const inputs = `${E.units}|${state.view}|${E.DOC_TYPE}|${E.kdoc ? 1 : 0}`;
   if (inputs !== seenInputs || E.proSettings !== seenPro) { seenInputs = inputs; seenPro = E.proSettings; publish(); }   // the labels follow the units, the stacks the project file
