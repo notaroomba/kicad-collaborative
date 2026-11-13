@@ -4,6 +4,7 @@
 // (default, Enter, F3), Find Previous (Shift+F3), Restart Search, Close, the status line and "Show search panel".
 // The hit list is rebuilt when the search string changes, on Restart Search and after any board change
 // (the BOARD_LISTENER callbacks that clear m_upToDate); each hit is selected and brought into view.
+import { comboInput } from "../../dialogs/dom";
 import { E } from "../state";
 import { applyView, mmH, mmW, mmX0, mmY0, stage, world } from "../view";
 import { centerOn } from "../comments";
@@ -32,11 +33,10 @@ const O = { matchCase: false, wholeWord: false, wildcards: false, wrap: true, re
 const HISTORY_KEY = "kui.pcbFindHistory";
 let history: string[] = (() => { try { const v = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); return Array.isArray(v) ? v.filter((s) => typeof s === "string").slice(0, 10) : []; } catch (e) { return []; } })();
 let hits: Hit[] = [], pos = -1, upToDate = false, builtFor = "", current: Hit | null = null;
-let dlg: DialogApi | null = null, combo: HTMLInputElement | null = null, statusEl: HTMLElement | null = null, listEl: HTMLDataListElement | null = null;
+let dlg: DialogApi | null = null, combo: HTMLInputElement | null = null, statusEl: HTMLElement | null = null;
 let searchText = history[0] || "";
 
 function saveHistory(): void { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) { /* private window */ } }
-function fillHistory(): void { if (!listEl) return; listEl.replaceChildren(...history.map((s) => h("option", { value: s }))); }
 function setStatus(t: string): void { if (statusEl) statusEl.textContent = t; }
 /** The board version the hit list was built for: any edit, local or remote, makes it stale (BOARD_LISTENER). */
 function boardKey(): string { const P = PT(); return E.kdoc ? `${E.kdoc.items.size}|${P ? P.state.docVer : 0}|${P ? P.state.markers.length : 0}|${(E.kdoc as unknown as { __id?: string }).__id || ""}` : ""; }
@@ -120,7 +120,7 @@ export function search(forward: boolean): void {
   if (!searchText) { if (!boardFindIsOpen()) openBoardFind(); return; }
   // the search string moves to the top of the history (at most ten)
   const idx = history.indexOf(searchText);
-  if (idx !== 0) { if (idx > 0) history.splice(idx, 1); history.unshift(searchText); history = history.slice(0, 10); upToDate = false; saveHistory(); fillHistory(); }
+  if (idx !== 0) { if (idx > 0) history.splice(idx, 1); history.unshift(searchText); history = history.slice(0, 10); upToDate = false; saveHistory(); }
   if (doc !== lastDoc || boardKey() !== builtFor) upToDate = false;
   let fresh = false;
   if (!upToDate) {
@@ -173,8 +173,8 @@ export function openBoardFind(): void {
   dlg = openDialog({ title: "Find", width: 560, modeless: true, noOk: true,
     build(body, api) {
       const foot = api.dialog.querySelector<HTMLElement>(".kd-foot"); if (foot) foot.style.display = "none";
-      listEl = h("datalist", { id: "kd-pfind-history" }); fillHistory();
-      combo = h("input", { id: "kd-pfind-q", type: "text", class: "kd-input", list: "kd-pfind-history", title: "Text with optional wildcards", value: searchText, style: "flex:1;min-width:0", autocomplete: "off" });
+      combo = h("input", { id: "kd-pfind-q", type: "text", class: "kd-input", title: "Text with optional wildcards", value: searchText, style: "flex:1;min-width:0", autocomplete: "off" });
+      comboInput(combo, () => history.slice());   // the search history drop-down
       combo.addEventListener("input", () => { searchText = combo!.value; });
       combo.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); search(true); } });
       const chk = (label: string, key: keyof typeof O, id: string) => {
@@ -184,7 +184,7 @@ export function openBoardFind(): void {
       };
       const btn = (label: string, id: string, fn: () => void, primary = false) => h("button", { class: "btn" + (primary ? " primary" : ""), type: "button", id, style: "width:120px", onclick: fn }, label);
       const left = h("div", { style: "flex:1;min-width:0" },
-        h("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:10px" }, h("label", { for: "kd-pfind-q" }, "Search for:"), combo, listEl),
+        h("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:10px" }, h("label", { for: "kd-pfind-q" }, "Search for:"), combo),
         h("div", { style: "display:grid;grid-template-columns:max-content max-content;gap:0 24px" },
           chk("Match case", "matchCase", "kd-pfind-case"), h("span"), chk("Whole words only", "wholeWord", "kd-pfind-word"), h("span"),
           chk("Wildcards", "wildcards", "kd-pfind-wild"), h("span"), chk("Wrap", "wrap", "kd-pfind-wrap"), h("span")),
@@ -206,7 +206,7 @@ export function openBoardFind(): void {
       api.dialog.addEventListener("keydown", (ev) => { if (ev.key === "F3") { ev.preventDefault(); ev.stopPropagation(); search(!ev.shiftKey); } });
       setTimeout(() => { if (combo) { combo.focus(); combo.select(); } }, 0);
     },
-    cancel() { dlg = null; combo = null; statusEl = null; listEl = null; } });
+    cancel() { dlg = null; combo = null; statusEl = null; } });
 }
 
 // dialogs/index.ts (Edit > Find, Ctrl+F, F3 / Shift+F3) reaches the dialog through these
