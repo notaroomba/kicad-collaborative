@@ -2302,3 +2302,21 @@ test("edit teardrops: pads and vias get the shape's defaults, specified values o
   const all = td(doc, { ...base, vias: false, pthPads: false, smdPads: false, action: "removeAll" });
   assert.deepEqual(all.map((c) => c.id).sort(), ["fp-1", "td-1", "v-1"], "Remove all teardrops ignores the scope");
 });
+
+test("repair board: duplicated uuids get new ones, footprints and pads claim first (BOARD::RepairDuplicateItemUuids)", () => {
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (footprint "T:J" (layer "F.Cu") (uuid "fp-1") (at 10 10)
+    (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "dup-a") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "dup-a"))
+    (pad "2" thru_hole circle (at 2.54 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (uuid "dup-b")))
+  (segment (start 0 0) (end 5 0) (width 0.25) (layer "F.Cu") (uuid "dup-b")))`, "kicad_pcb");
+  assert.equal(P.repairBoard(K.parseDoc(FIXTURE, "kicad_pcb")).duplicates, 0, "a clean board has nothing to repair");
+  const r = P.repairBoard(doc);
+  assert.equal(r.duplicates, 2); assert.deepEqual(r.details, ["2 duplicate IDs replaced."]);
+  const fp = node(r.changes.find((c) => c.id === "fp-1"));
+  assert.equal(K.str(K.kid(K.kids(fp, "pad")[0], "uuid")[1]), "dup-a", "the pad keeps its id");
+  assert.notEqual(K.str(K.kid(K.kid(fp, "property"), "uuid")[1]), "dup-a", "the field after it gets a new one");
+  const kinds = r.changes.map((c) => c.kind).sort();
+  assert.deepEqual(kinds, ["ADDED", "MODIFIED", "REMOVED"], "the track after the pad goes and comes back under a new id");
+});
