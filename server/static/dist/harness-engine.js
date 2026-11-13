@@ -7258,7 +7258,7 @@ var footprintDocApi = {
 };
 
 // web/canvas/version.ts
-var KICAD_BASE_VERSION = "10.99.0-unknown";
+var KICAD_BASE_VERSION = "10.99.0";
 
 // web/canvas/doc.ts
 function newDoc(type) {
