@@ -107,8 +107,7 @@
   "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: the upload holds the Gerbers, drill files, netlist and part lists with the board's size and layer count, and the quote page it names is opened. Needs network access granted."
  },
  "com.github.andresarmento.kicad2gcode": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works"
  },
  "com.github.asukiaaa.gerber-to-order": {
   "status": "works"
@@ -121,8 +120,8 @@
   "status": "works"
  },
  "com.github.black-ghost-off.autoled": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works",
+  "note": "Placing LEDs, capacitors and connectors from a picture works, with the footprints of KiCad's own libraries. Its autorouting step starts Freerouting, a Java program, which a browser cannot run: route the result with the editor's own router."
  },
  "com.github.cgrassin.kicad-pinout-generator": {
   "status": "works"
@@ -149,8 +148,7 @@
   "status": "works"
  },
  "com.github.easyw.kicad-rf-tools": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works"
  },
  "com.github.f-blaze.velatrace": {
   "status": "partly",
@@ -182,8 +180,7 @@
   "note": "It opens and reads the project's library tables, but finds nothing to do: an online project already holds its own libraries, and KiCad's standard libraries are served by the editor."
  },
  "com.github.jOaSbA.via-stitching": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works"
  },
  "com.github.jacmie.PosOrient": {
   "status": "works"
@@ -195,8 +192,7 @@
   "status": "works"
  },
  "com.github.jsreynaud.kicad-action-scripts": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works"
  },
  "com.github.kerstensrobin.kicad-breadboard": {
   "status": "works"
@@ -307,19 +303,19 @@
   "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.gitlab.egloff-studio.z0-field-solver": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "partly",
+  "note": "It solves boards whose signal layers lie close to a plane (a four-layer stackup with 0.1 mm prepreg: its 50 ohm width agrees with the textbook formula). A thick two-layer board (1.5 mm core) makes a mesh of over a million cells, and solving that needs more memory than a browser tab gives: it reports a memory error there."
  },
  "com.gitlab.egloff-studio.z0-wavelab": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works",
+  "note": "Net check, Monte Carlo and the wave simulation's numbers and pictures are checked. Its Monte Carlo and wave tabs use the same field solver as Z0 Field Solver, so a thick two-layer board can run out of browser memory there."
  },
  "com.gitlab.mgyger.oktizer": {
   "status": "works"
  },
  "com.gitlab.open-hardware-designs.kicad-ec-registration": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works",
+  "note": "The panel is checked in full. The stencil Gerbers are drawn by the web editor's own Gerber writer."
  },
  "com.infernoembedded.vulcans-trials": {
   "status": "unsupported",

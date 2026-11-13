@@ -1,6 +1,22 @@
 {
   "about": "What the test run cannot see for itself. scripts/plugins-python.mjs runs every official plugin and labels it from what happened; a plugin that runs without an error but cannot do its job here (it needs a program on the computer, a local server, …) is labelled by hand below, and these entries win over the run.",
   "plugins": {
+    "com.github.black-ghost-off.autoled": {
+      "status": "works",
+      "note": "Placing LEDs, capacitors and connectors from a picture works, with the footprints of KiCad's own libraries. Its autorouting step starts Freerouting, a Java program, which a browser cannot run: route the result with the editor's own router."
+    },
+    "com.gitlab.open-hardware-designs.kicad-ec-registration": {
+      "status": "works",
+      "note": "The panel is checked in full. The stencil Gerbers are drawn by the web editor's own Gerber writer."
+    },
+    "com.gitlab.egloff-studio.z0-field-solver": {
+      "status": "partly",
+      "note": "It solves boards whose signal layers lie close to a plane (a four-layer stackup with 0.1 mm prepreg: its 50 ohm width agrees with the textbook formula). A thick two-layer board (1.5 mm core) makes a mesh of over a million cells, and solving that needs more memory than a browser tab gives: it reports a memory error there."
+    },
+    "com.gitlab.egloff-studio.z0-wavelab": {
+      "status": "works",
+      "note": "Net check, Monte Carlo and the wave simulation's numbers and pictures are checked. Its Monte Carlo and wave tabs use the same field solver as Z0 Field Solver, so a thick two-layer board can run out of browser memory there."
+    },
     "com.github.adamws.kicad-git": {
       "status": "works",
       "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
