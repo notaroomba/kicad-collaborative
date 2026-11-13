@@ -19,6 +19,7 @@ import { circleNode, curveNode, imageNode, lineNode, polyNode, rectNode, ruleAre
 import { netUnder } from "./route-geom";
 import { K, S, lastCtx } from "./state";
 import { samePt, vadd, vsub, xy } from "./util";
+import { similarZoneNode, zoneCutoutChanges, zoneLayerList } from "./zone-modes";
 
 export function drawClick(ctx: PcbCtx, hv: Hover, t: string, ev: PtrEvent) {
   if (S.draw && S.draw.shape !== "garc") { const c = constrainDraw(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey))); hv = Object.assign({}, hv, { x: c[0], y: c[1] }); }
@@ -30,6 +31,15 @@ export function drawClick(ctx: PcbCtx, hv: Hover, t: string, ev: PtrEvent) {
     const tpl = zoneTemplate(ctx, false, true);
     S.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: tpl, layer: zoneLayers(tpl)[0] }; ctx.requestRender();
     return;
+  }
+  if (!S.draw && t === "zone" && S.zoneMode) {
+    // ZONE_MODE::CUTOUT / SIMILAR: no dialog, the source zone's settings (createZoneFromExisting); a similar zone goes on
+    // the active layer when the source is on it, else on the source's first layer
+    const src = ctx.doc.items.get(S.zoneMode.src);
+    if (!src) { S.zoneMode = null; ctx.setTool("select"); return; }
+    const layers = zoneLayerList(src.node), active = sizesOf(ctx).activeLayer || S.layer;
+    S.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: src.node, layer: S.zoneMode.mode === "similar" && !layers.includes(active) ? layers[0] : active, zoneMode: S.zoneMode.mode };
+    ctx.requestRender(); return;
   }
   if (!S.draw && (t === "zone" || t === "rulearea") && newItemDialogs.zone) {
     // ZONE_CREATE_HELPER::OnFirstPoint → createNewZone: the properties dialog on a template first; Cancel ends it
@@ -124,6 +134,21 @@ export function finishPoly(ctx: PcbCtx) {
   const d = S.draw; if (!d || !POLY_TOOLS.has(d.shape) || d.pending) return;
   S.draw = null; ctx.requestRender();
   d.pts = polyOutline(d);
+  if (d.template && d.zoneMode) {
+    if (d.pts.length < 3) return;
+    const src = S.zoneMode && ctx.doc.items.get(S.zoneMode.src);
+    if (!src) return;
+    if (d.zoneMode === "similar") {
+      const c = addedChange(ctx.doc, similarZoneNode(ctx.doc, src.node, d.pts), netOf(src.node));
+      ctx.commit([c], "Draw Zone"); applySelection(ctx, [c.id]); return;
+    }
+    // performZoneCutout: the selection is cleared, the source replaced by its remains; the first is the next cutout's source
+    applySelection(ctx, []);
+    const { changes, first } = zoneCutoutChanges(ctx.doc, src, d.pts);
+    ctx.commit(changes, "Add Zone Cutout");
+    if (first) { S.zoneMode = { mode: "cutout", src: first }; applySelection(ctx, [first]); } else { S.zoneMode = null; ctx.setTool("select"); }
+    return;
+  }
   if (d.template) {   // the zone the dialog set up, with the outline drawn
     if (d.pts.length < 3) return;   // OnComplete: fewer than three corners scrap the zone
     const node = JSON.parse(JSON.stringify(d.template)), poly = K.kid(node, "polygon");

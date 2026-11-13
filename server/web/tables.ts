@@ -165,7 +165,7 @@ export const FPEDIT_ONLY = new Set(["newLibrary", "addLibrary", "newFootprint", 
   "placePad", "placeThtPad", "placeSmdPad", "placeNpthPad", "placePasteAperturePad", "setAnchor", "checkFootprint", "showFootprintUsers", "loadFpFromBoard", "saveFpToBoard", "repairFootprint",
   "explodePad", "recombinePad", "pushPadSettings", "defaultPadProperties", "deleteFootprint", "renameFootprint"]);
 /** Board-only actions the Footprint Editor does not have (its tools and menus leave them out; their hotkeys do nothing there). */
-export const FPEDIT_BLOCKED = new Set(["routeSingleTrack", "routeDiffPair", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "drawVia", "drawZone", "drawCopperThievingZone", "drillOrigin", "placeFootprint",
+export const FPEDIT_BLOCKED = new Set(["getAndPlace", "routeSingleTrack", "routeDiffPair", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "drawVia", "drawZone", "drawCopperThievingZone", "drillOrigin", "placeFootprint",
   "runDRC", "zoneFillAll", "zoneUnfillAll", "zoneFill", "zoneUnfill", "showRatsnest", "editFpInFpEditor", "editLibFpInFpEditor_board", "updateFootprint", "changeFootprint", "boardSetup", "selectLayerPair",
   "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "updatePcbFromSchematic", "showEeschema", "highlightNet", "clearHighlight", "toggleNetHighlight"]);
 
@@ -198,7 +198,10 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "clearAnnotation", "toggleAnnotateAuto",
     // the arc tool's modes: the Arc toolbar group and EE_GRAPHIC_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
     "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode"],
-  pcb: ["duplicateIncrement",   // Duplicate and Increment: a hotkey (Ctrl+Shift+D) and the selection menu, in no menu bar
+  pcb: ["skip",   // Tab while moving individually: the move's own command
+    // context menus only (board_editor_control.cpp ZONE_CONTEXT_MENU, the selection tool's menu, EDIT_TOOL's menu)
+    "getAndPlace", "copyWithReference", "drawZoneCutout", "drawSimilarZone",
+    "duplicateIncrement",   // Duplicate and Increment: a hotkey (Ctrl+Shift+D) and the selection menu, in no menu bar
     // PCB_SELECTION_TOOL's context menu only: Enter Group / Leave Group
     "enterGroup", "leaveGroup",
     "highlightNetSelection", "cleanupTracks", "pack", "zoneFill", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",

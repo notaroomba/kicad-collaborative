@@ -51,6 +51,8 @@ import { isTuneTool, tuneMode, tuneUpdate } from "./tuning-tool";
 import { clone, fmt, layerOf, r6, widthOf } from "./util";
 import { flipFieldChange, requestField, rotateFieldChange } from "./field-edit";
 import { diffPairMarkers, matchedLengthMarkers } from "./dru";
+import { sourceZone } from "./zone-modes";
+import { copyWithReference, interactiveOffset, moveIndividually, moveWithReference, skipMoveItem } from "./ref-move";
 
 // ---------------------------------------------------------------- actions: pcbnew's non-tool commands
 export const VIA_SIZES = [[0.6, 0.3], [0.8, 0.4], [1.0, 0.5], [1.2, 0.6], [1.6, 0.8]];
@@ -238,6 +240,63 @@ act("moveExactly", "Move Exactly…", "Shift+M", (ctx: PcbCtx) => {
     apply: (v: { dx: number; dy: number; rotation: number; about: string }) => commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about }), "move exactly") });
 });
 alias("moveExact", "moveExactly");
+// EDIT_TOOL's other moves (ref-move.ts): a picked reference point, one item at a time, an interactive offset
+act("moveWithReference", "Move with Reference...", "", (ctx: PcbCtx) => {
+  if (S.route || S.move || !canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => runAction("moveWithReference", c) }); if (!sel) return true;
+  return moveWithReference(ctx, sel.ids, sel.hover);
+}, { tip: "Moves the selected item(s) with a specified starting point" });
+act("copyWithReference", "Copy with Reference...", "", (ctx: PcbCtx) => {
+  if (S.route || S.move) return true;
+  const sel = requestSelection(ctx, { locks: false, rerun: (c: PcbCtx) => runAction("copyWithReference", c) }); if (!sel) return true;
+  return copyWithReference(ctx, sel.ids, sel.hover);
+}, { tip: "Copy selected item(s) to clipboard with a specified starting point" });
+act("moveIndividually", "Move Individually", "Ctrl+M", (ctx: PcbCtx) => {
+  if (S.route || S.move || !canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => runAction("moveIndividually", c) }); if (!sel) return true;
+  return moveIndividually(ctx, sel.ids.filter((id) => { const it = ctx.doc.items.get(id); return it && it.kind !== "group" && !topParentOf(ctx.doc, id); }).concat(sel.ids.filter((id) => ctx.doc.items.get(id)?.kind === "group" && !topParentOf(ctx.doc, id))));
+}, { tip: "Moves the selected items one-by-one" });
+act("skip", "Skip", "Tab", (ctx: PcbCtx) => skipMoveItem(ctx), { menu: false, tip: "Skip to next item" });
+act("interactiveOffsetTool", "Interactive Offset Tool", "", (ctx: PcbCtx) => {
+  if (S.route || S.move || !canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => runAction("interactiveOffsetTool", c) }); if (!sel) return true;
+  return interactiveOffset(ctx, sel.ids, sel.hover);
+}, { tip: "Interactive tool for offsetting items by exact amounts" });
+/** GetFootprintFromBoardByReference's list: "REF    ( VALUE )" per board footprint, sorted (wxArrayString::Sort). */
+export function footprintRefChoices(doc: BoardDoc): string[] {
+  const out: string[] = []; for (const it of doc.items.values()) if (it.kind === "footprint") out.push(`${it.ref || ""}    ( ${it.value || ""} )`);
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+/** The footprint whose reference matches the entered text (trimmed, case-insensitive: CmpNoCase), or null. */
+export function footprintByRef(doc: BoardDoc, text: string): KItem | null {
+  const want = String(text || "").trim().toLowerCase(); if (!want) return null;
+  for (const it of doc.items.values()) if (it.kind === "footprint" && (it.ref || "").toLowerCase() === want) return it;
+  return null;
+}
+/**
+ * EDIT_TOOL::GetAndPlace (T): DIALOG_GET_FOOTPRINT_BY_NAME asks for a reference (typed, or picked from the list of the
+ * board's footprints); the footprint becomes the selection with its position as the reference point and Move runs on
+ * it, so it comes to the cursor; a click drops it, Escape puts it back.
+ */
+act("getAndPlace", "Get and Move Footprint", "T", (ctx: PcbCtx) => {
+  if (S.route || S.move) return true;
+  if (appGlobal(() => editorState()!.DOC_TYPE === "footprint", false) || !canEdit(ctx)) return true;   // makes sense only in the board editor
+  const choices = footprintRefChoices(ctx.doc); const refOf = (c: string) => c.split(" ")[0];
+  return openForm({ title: "Get and Move Footprint", width: 400, fields: [
+    { k: "ref", label: "Reference designator:", type: "text", value: "" },
+    { k: "list", label: "Available footprints:", type: "select", value: "", options: choices.map((c) => [refOf(c), c.replace(/ /g, "\u00a0")]) }],   // a wxChoice keeps the spaces an HTML option collapses
+    change: (k: string, v: unknown, set: (k: string, v: unknown) => void) => {
+      if (k === "list") set("ref", v);
+      else if (k === "ref") { const e = String(v).trim().toLowerCase(); const hit = choices.find((c) => refOf(c).toLowerCase() === e); set("list", hit ? refOf(hit) : ""); }
+    },
+    apply: (v: { ref: string }) => { getAndPlaceRef(ctx, v.ref); } });
+});
+/** The second half of Get and Move Footprint: select the footprint and move it with its position as the reference point. */
+export function getAndPlaceRef(ctx: PcbCtx, ref: string): boolean {
+  const fp = footprintByRef(ctx.doc, ref); if (!fp) return false;
+  applySelection(ctx, [fp.id]);
+  return beginCarryMove(ctx, { ids: [fp.id], origin: [fp.x || 0, fp.y || 0] });
+}
 act("positionRelative", "Position Relative To…", "Shift+P", (ctx: PcbCtx) => {
   if (!canEdit(ctx)) return true;
   const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => runAction("positionRelative", c) }); if (!sel) return true; const ids = sel.ids;
@@ -556,6 +615,23 @@ for (const [id, to, label] of [["convertToPoly", "poly", "Create Polygon from Se
   });
 for (const [id, how, label] of [["zonePriorityRaise", "raise", "Raise Zone Priority"], ["zonePriorityLower", "lower", "Lower Zone Priority"], ["zonePriorityMoveToTop", "top", "Move Zone Priority to Top"], ["zonePriorityMoveToBottom", "bottom", "Move Zone Priority to Bottom"]])
   act(id, label, "", (ctx: PcbCtx) => { const ids = selectionOrToast(ctx, "Select a zone first"); if (!ids) return true; return commitSel(ctx, zonePriorityChanges(ctx.doc, ids, how), label.toLowerCase()); });
+/**
+ * DRAWING_TOOL::DrawZone with ZONE_MODE::CUTOUT / SIMILAR: getSourceZoneForAction wants exactly one selected zone (with
+ * nothing selected, the zone under the cursor); without one the action does nothing.  The zone tool then runs in
+ * that mode (draw-tools.ts / zone-modes.ts).
+ */
+function zoneModeAction(mode: "cutout" | "similar") {
+  return (ctx: PcbCtx) => {
+    if (!canEdit(ctx) || S.route || S.move) return true;
+    const sel = Array.from(selectionIds(ctx));
+    const z = sourceZone(ctx, sel, sel.length ? [] : cursorCandidates(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx)));
+    if (!z) return true;
+    if (!sel.length) applySelection(ctx, [z.id]);
+    S.zoneModeNext = { mode, src: z.id }; ctx.setTool("zone"); return true;
+  };
+}
+act("drawZoneCutout", "Add a Zone Cutout", "Shift+C", zoneModeAction("cutout"), { tip: "Add a cutout to an existing zone or rule area" });
+act("drawSimilarZone", "Add a Similar Zone", "Ctrl+Shift+.", zoneModeAction("similar"), { tip: "Add a zone with the same settings as an existing zone" });
 act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx: PcbCtx) => {
   const ids = selectionOrToast(ctx, "Select a zone first"); if (!ids) return true; const zones = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it!.kind === "zone"); if (!zones.length) { ctx.toast("No zone selected"); return true; }
   return openForm({ title: "Duplicate Zone", fields: [{ k: "layer", label: "Layer", type: "select", value: zoneLayers(zones[0]!.node)[0] || "F.Cu", options: copperOf(ctx.doc) }], apply: (v: { layer: string }) => { const out = []; for (const z of zones) { const node = clone(z!.node); const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); for (const fp of K.kids(node, "filled_polygon")) node.splice(node.indexOf(fp), 1); const l = K.kid(node, "layer"), ls = K.kid(node, "layers"); if (l) l[1] = v.layer; else if (ls) ls.splice(1, ls.length - 1, v.layer); out.push(addedChange(ctx.doc, node, netOf(node))); } commitSel(ctx, out, "duplicate zone"); } });

@@ -10,12 +10,13 @@ import { menuMeta } from "../menuspec";
 import type { AppAction, CtxItem, Editor } from "../store";
 import { ZOOM_LIST, toolFor } from "../tables";
 import { gridChoiceText } from "../units";
+import { deleteSelectedField } from "./fieldops";
 import { HANDLERS } from "./actions";
 import { canComment, commentOnItem, commentOnNet, netOfItem, showThread, startThread, threadsOnItem } from "./comments";
 import { APP_TOOLS, state, store } from "./appstore";
 import { enterSheet, rootSchematic, setGridPitch } from "./doc";
 import { ARC_EDIT_MODE_MENU, evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
-import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
+import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startFieldMove, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
 import { HIT_PX, nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
@@ -139,10 +140,12 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "ACTIONS::unselectAll": () => () => clearAllSelection(),
   // SCH_EDIT_TOOL::SwapPinLabels (the error goes to the infobar)
   "SCH_ACTIONS::swapPinLabels": () => (schPins() ? () => { const P = schPins()!; const err = P.swapPinLabels(toolCtx(), (E.selPins as PinRef[]).slice()); if (err) toast(err, 5000); selectionChanged(); requestRender(); } : NOT_YET),
-  // a board footprint field is hidden (EDIT_TOOL::DeleteItems, PCB_FIELD_T): the board module's Delete takes the selected field
-  "ACTIONS::doDelete": () => (E.selField ? (isSch() ? DESKTOP : moduleKey("Delete")) : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
-  "SCH_ACTIONS::move": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
-  "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),
+  // a field selected on its own: a schematic field is hidden (SCH_EDIT_TOOL::DoDelete, fieldops.ts); a board footprint field
+  // goes to the board module's Delete (EDIT_TOOL::DeleteItems, PCB_FIELD_T: "Hide Field")
+  "ACTIONS::doDelete": () => (E.selField ? (isSch() ? () => { deleteSelectedField(); } : moduleKey("Delete")) : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
+  // SCH_MOVE_TOOL with a field selected on its own: the field follows the cursor (gestures.ts startFieldMove)
+  "SCH_ACTIONS::move": () => (E.selField && !selectionItems().length ? () => { startFieldMove((E.lastCursorMm || [0, 0]) as [number, number]); } : selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
+  "SCH_ACTIONS::drag": () => (E.selField && !selectionItems().length ? () => { startFieldMove((E.lastCursorMm || [0, 0]) as [number, number]); } : selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),
   "PCB_ACTIONS::move": () => (selectionItems().length || E.selField ? () => { startMove("move"); } : NOT_YET),
   "PCB_ACTIONS::drag45Degree": () => dragTrack(false), "PCB_ACTIONS::dragFreeAngle": () => dragTrack(true),
   "SCH_ACTIONS::enterSheet": () => { const it = selectionItems()[0]; const file = it && it.file; return file ? () => enterSheet(file) : NOT_YET; },

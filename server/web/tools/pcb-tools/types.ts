@@ -156,6 +156,9 @@ export type PcbState = {
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; netColorMode?: string; trackClearance?: number; padClearance?: boolean; showCourtyardConflicts?: boolean; enteredGroup?: string | null; hiddenSeverities?: Set<string> | null;
   arcMode?: number; arcEditMode?: number; angleSnap?: string; stickyUp?: boolean; startWithVia?: { from: string } | null;
   forceHover?: boolean; dragFree?: boolean; downHandled?: unknown; escCleared?: unknown;
+  /** DRAWING_TOOL::DrawZone's ZONE_MODE for the zone tool: a cutout of / a zone similar to the source zone (zone-modes.ts); next: what the next activation takes */
+  moveSeq?: import("./ref-move").MoveSeq | null;
+  zoneMode?: { mode: "cutout" | "similar"; src: string } | null; zoneModeNext?: { mode: "cutout" | "similar"; src: string } | null;
 };
 
 /** A copper shape: a core (point, segment, polyline, turned rectangle or polygon) plus an outward offset r. */
@@ -282,6 +285,8 @@ export interface DrawState {
   arc?: import("./arcs").ArcGeom; chainSeeded?: boolean; clickSeeded?: boolean; started?: boolean; lastClick?: Pt | null;
   /** a zone / rule area: its layer, the properties dialog still open, the node it set up */
   layer?: string; pending?: boolean; template?: SNode | null;
+  /** ZONE_MODE::CUTOUT / SIMILAR: the template is the source zone */
+  zoneMode?: "cutout" | "similar";
   /** a polygon: the snap mode, the leader to the cursor and the closing loop */
   mode?: string; leader?: Pt[] | null; loop?: Pt[] | null;
   /** a dimension: its end once placed, the height, the text position and the arrows */
@@ -305,6 +310,8 @@ export interface SelectMove {
   guide?: [Pt, Pt] | null;
   /** a lone tuning pattern being moved: its generator's id (the move re-tunes it rather than carrying its copper) */
   gen?: string;
+  /** Move Individually: commit into the previous step (amend), and what runs when the move ends (placed: a click dropped it; committed: a step was written) */
+  amend?: boolean; after?: (placed: boolean, committed: boolean) => void;
   [extra: string]: unknown;
 }
 /** S.pending: a press on a selected item that becomes a move once the pointer travels. */
@@ -351,4 +358,8 @@ export interface FormField {
   columns?: { label: string; width?: string }[]; rows?: unknown[][]; onRow?(i: number, row: HTMLElement): void; empty?: string;
 }
 /** A form: the fields, and apply(values) on OK (false keeps it open); V is what the fields hand back by key. */
-export interface FormSpec<V = Record<string, unknown>> { title: string; width?: number; readOnly?: boolean; fields: FormField[]; apply?(v: V): boolean | void }
+export interface FormSpec<V = Record<string, unknown>> {
+  title: string; width?: number; readOnly?: boolean; fields: FormField[]; apply?(v: V): boolean | void;
+  /** a field's value changed (typed or picked): set(k, value) writes another field (KiCad's OnSearchInputChanged-style handlers) */
+  change?(k: string, value: unknown, set: (k: string, value: unknown) => void): void;
+}

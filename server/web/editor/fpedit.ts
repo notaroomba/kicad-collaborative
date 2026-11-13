@@ -185,6 +185,7 @@ export function privateText(doc: DocEntry): string | null {
 /** After the text loaded: the snapshot seq it came from, the title, the pad dialog for pads, the libraries. */
 export function onFootprintOpened(snapSeq: number): void {
   FP.snapSeq = snapSeq;
+  if (state.project && state.docId) rememberFootprint(state.project.projectId, state.docId);
   // FOOTPRINT_EDITOR_SETTINGS' design settings for new graphics and text, never the project board's
   if (PT() && PT().useFootprintEditorDefaults) PT().useFootprintEditorDefaults(true);
   if (!FP.framed) {
@@ -1038,6 +1039,34 @@ export async function canLeaveFootprint(): Promise<boolean> {
   return confirmBox("Footprint Editor", `Save changes to '${what}' before closing?`, "Discard Changes");
 }
 
+/** The footprint the Footprint Editor showed last in this project (FOOTPRINT_EDIT_FRAME reloads it on start). */
+const lastKey = (projectId: string) => `kc.fpedit.last.${projectId}`;
+export function rememberFootprint(projectId: string, docId: string): void { if (docId.startsWith("board:")) return; try { localStorage.setItem(lastKey(projectId), docId); } catch { /* storage off */ } }
+/**
+ * ACTIONS::showFootprintEditor (Tools > Footprint Editor, the top toolbar, both editors): the Footprint Editor frame in
+ * its own window with its library tree, on the footprint it showed last (FOOTPRINT_EDIT_FRAME's startup reload), else the
+ * project's first footprint, else the first footprint of the first global library.  In the Footprint Editor it is a no-op
+ * (the frame is already up).
+ */
+async function showFootprintEditor(): Promise<void> {
+  if (isFpEdit() || !state.project) return;
+  const project = state.project; const fps = project.docs.filter((d) => d.docType === "footprint");
+  let target: string | null = null;
+  try { const last = localStorage.getItem(lastKey(project.projectId)); if (last && (last.startsWith("lib:") || fps.some((d) => d.docId === last))) target = last; } catch { /* storage off */ }
+  if (!target && fps.length) target = fps.slice().sort((a, b) => a.path.localeCompare(b.path))[0].docId;
+  const win = window.open("about:blank", "_blank");
+  if (!target) {
+    try {
+      const r = await fetch("/api/libs/footprints", { credentials: "same-origin", headers: { accept: "application/json" } });
+      const j = r.ok ? await r.json() as { libraries?: { name: string }[] } : null; const lib = j && j.libraries && j.libraries[0] && j.libraries[0].name;
+      if (lib) { const r2 = await fetch(`/api/libs/footprints/${encodeURIComponent(lib)}`, { credentials: "same-origin", headers: { accept: "application/json" } }); const j2 = r2.ok ? await r2.json() as { footprints?: { n: string }[] } : null; const n = j2 && j2.footprints && j2.footprints[0] && j2.footprints[0].n; if (n) target = libCopyId(lib, n); }
+    } catch { /* no global libraries */ }
+  }
+  if (!target) { if (win) win.close(); toast("No footprint libraries are available.", 4000); return; }
+  const url = `/p/${project.projectId}/edit?fp=${encodeURIComponent(target)}`;
+  if (win) win.location.href = url; else window.open(url, "_blank");
+}
+
 // ---------------------------------------------------------------- the handlers
 const fpOnly = (fn: () => unknown): ActionHandler => () => { if (isFpEdit()) fn(); };
 let installed = false;
@@ -1056,6 +1085,7 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   setAnchor: fpOnly(() => setTool("anchor")),
   showLibraryTree: fpOnly(() => showPane("libtree")),
   editFpInFpEditor: () => { if (!isFpEdit()) editFpInFpEditor(); },
+  showFootprintEditor: () => { void showFootprintEditor(); },
   showDatasheet: ((a) => { if (isFpEdit()) { showDatasheet(); return; } if (prevDatasheet) { prevDatasheet(a); return; } boardDatasheet(); }) as ActionHandler,
   editLibFpInFpEditor: fpOnly(() => { if (isFpPrivate()) void editLibraryFootprint(); }),
   addLibrary: fpOnly(addLibrary), repairFootprint: fpOnly(repairFootprint),

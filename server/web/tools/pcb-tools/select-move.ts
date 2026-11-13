@@ -87,6 +87,7 @@ export function selectMoveTo(ctx: PcbCtx, mm: Pt, mods?: SelectMove["mods"]) {
   const dirs = angleSnapDirections(angleSnapMode());
   const sn = snapCursor(ctx, [mm[0], mm[1]], m.skip || new Set(m.orig.keys()), mods || m.mods, dirs.length ? { origin: m.start, dirs } : null); m.snapAt = sn.anchor;
   const guide = sn.guide || null; if (!sameGuide(m.guide, guide)) { m.guide = guide; ctx.requestRender(); }
+  if (S.moveSeq && S.popup) S.popup.at = [mm[0], mm[1]];   // Move Individually's popup stays by the cursor
   const sN = sn.p; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
   if (dx === m.last[0] && dy === m.last[1]) return;
   m.last = [dx, dy]; m.moved = true;
@@ -95,10 +96,17 @@ export function selectMoveTo(ctx: PcbCtx, mm: Pt, mods?: SelectMove["mods"]) {
 }
 const sameGuide = (a: [Pt, Pt] | null | undefined, b: [Pt, Pt] | null) => (!a && !b) || (!!a && !!b && samePt(a[0], b[0]) && samePt(a[1], b[1]));
 export function finishSelectMove(ctx: PcbCtx, commit: boolean, force?: boolean) {
-  const m = S.move; S.move = null; if (!m) return; moveCursor(ctx, false);
+  const m = S.move; if (!m) return;
+  if (!m.after) { finishMove(ctx, m, commit, force); return; }
+  const wrote = finishMove(ctx, m, commit, force);
+  m.after(commit, wrote);
+}
+/** finishSelectMove's body: true when a step was committed. */
+function finishMove(ctx: PcbCtx, m: SelectMove, commit: boolean, force?: boolean): boolean {
+  S.move = null; moveCursor(ctx, false);
   if (m.gen) {   // genFinishEdit with the move's commit, genCancelEdit on Escape
     if (commit && m.moved && (m.last[0] || m.last[1])) genFinishEdit(ctx); else genCancelEdit(ctx);
-    if (m.hover) applySelection(ctx, []); ctx.requestRender(); return;
+    if (m.hover) applySelection(ctx, []); ctx.requestRender(); return false;
   }
   const [dx, dy] = m.last; moveRestore(ctx, m);            // originals back first, so commit() records a true inverse
   const unhover = () => { if (m.hover) applySelection(ctx, []); };   // a hover selection does not outlive the move
@@ -106,17 +114,17 @@ export function finishSelectMove(ctx: PcbCtx, commit: boolean, force?: boolean) 
     const gone = m.placing.filter((id: string) => ctx.doc.items.has(id)).map((id: string) => ctx.doc.items.get(id)!);
     const back = (m.restore || []).filter((r) => ctx.doc.items.has(r.id)).map((r) => replacedChange(ctx.doc.items.get(r.id)!, r.node));   // groups the copies had joined
     if (gone.length || back.length) ctx.commit(back.concat(deleteChanges(ctx.doc, gone)), "cancel", { amend: true, discard: true });
-    applySelection(ctx, []); ctx.requestRender(); return;
+    applySelection(ctx, []); ctx.requestRender(); return false;
   }
-  if (!commit || (!m.xformed && (!m.moved || (!dx && !dy)))) { unhover(); ctx.requestRender(); return; }
+  if (!commit || (!m.xformed && (!m.moved || (!dx && !dy)))) { unhover(); ctx.requestRender(); return false; }
   if (m.conns && !force) {   // COMPONENT_DRAGGER::FixRoute: refused while the dragged items collide (Ctrl+click forces)
     moveApply(ctx, m, dx, dy); const hits = componentDragHits(ctx, m, dx, dy); moveApply(ctx, m, 0, 0); S.rworld = null; S.sworld = null;
-    if (hits.length) { showViolations(hits, hits.at || cursorPoint(ctx)); ctx.toast("Track violates DRC."); ctx.requestRender(); return; }
+    if (hits.length) { showViolations(hits, hits.at || cursorPoint(ctx)); ctx.toast("Track violates DRC."); ctx.requestRender(); return false; }
   }
   const changes = moveNodesAt(m, dx, dy).map(({ id, node }) => replacedChange(ctx.doc.items.get(id)!, node));
   if (m.conns && m.conns.length) changes.push(...dragChanges(ctx, { sol: { lines: connLines(m, dx, dy) } }));
-  ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing ? { amend: true } : undefined);
-  unhover(); ctx.requestRender();
+  ctx.commit(changes, m.conns && m.conns.length ? "drag" : "move", m.placing || m.amend ? { amend: true } : undefined);
+  unhover(); ctx.requestRender(); return true;
 }
 /**
  * Move (M, EDIT_TOOL::Move): everything selected — tracks, vias, graphics, text, zones, footprints, the members of a

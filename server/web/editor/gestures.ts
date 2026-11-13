@@ -25,6 +25,7 @@ import { HIT_PX, clearSelection, drawSelection, filterAllows, nearestFootprint, 
 import { E } from "./state";
 import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
 import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, requestZoomEnd, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
+import { toast } from "./util";
 
 // typed faces of the untyped editor modules this file leans on
 type Mm = [number, number];
@@ -245,16 +246,19 @@ function revertAppDrag(): void {
 }
 
 /**
- * Move (M) of the selected footprint field: it follows the cursor until a click drops it, Esc puts it back.  KiCad warps
- * the cursor onto the text's position (GetMoveWarpsCursor); a browser cannot, so the text comes to the cursor instead.
+ * Move (M) of the selected footprint field, or Move / Drag (M / G) of a schematic field selected on its own
+ * (SCH_MOVE_TOOL): it follows the cursor until a click drops it, Esc puts it back.  KiCad warps the cursor onto the
+ * text's position (GetMoveWarpsCursor); a browser cannot, so the text comes to the cursor instead.
  */
 export function startFieldMove(mm: Mm): boolean {
-  const d = doc(), sf = E.selField as { id: string; name: string } | null; if (!d || !sf || E.viewOnly) return false;
-  const it = d.items.get(sf.id); if (!it || it.kind !== "footprint") return false;
+  const d = doc(), sf = E.selField as { id: string; name: string } | null; if (!d || !sf) return false;
+  if (E.viewOnly) { toast("View-only access"); return true; }
+  const it = d.items.get(sf.id); if (!it || (!isSch() && it.kind !== "footprint")) return false;
   const K = window.KDialogs as (KDialogsApi & { _: { fieldNode?(node: SNode, name: string): SNode | null } }) | undefined;
   const pn = K && K._.fieldNode ? K._.fieldNode(it.node, sf.name) : null, at = pn && KiCadCanvas.kid(pn, "at"); if (!at) return false;
-  const g = (it.geom as { t: string; field?: string; textPos?: number[] }[]).find((q) => q.t === "text" && q.field === sf.name && q.textPos);
-  const pos = g && g.textPos ? [g.textPos[0], g.textPos[1]] : [mm[0], mm[1]];
+  // a schematic field's (at) is in sheet coordinates: the text's own position
+  const g = isSch() ? null : (it.geom as { t: string; field?: string; textPos?: number[] }[]).find((q) => q.t === "text" && q.field === sf.name && q.textPos);
+  const pos = isSch() ? [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])] : g && g.textPos ? [g.textPos[0], g.textPos[1]] : [mm[0], mm[1]];
   E.fdrag = { id: it.id, name: sf.name, startMm: [mm[0], mm[1]], orig: [KiCadCanvas.num(at[1]), KiCadCanvas.num(at[2])], origAt: at.slice(), moved: false, sticky: true, origin: pos };
   return true;
 }
@@ -310,7 +314,7 @@ export function cancelInteraction(): boolean {
 /** A pointer-driven drag is running although no button is down any more: the release was lost. */
 function buttonLost(ev: PointerEvent): boolean {
   if (ev.pointerType !== "mouse" || ev.buttons !== 0) return false;
-  if (E.pan || E.rdown || E.boxSel || E.zoomRect || (E.fdrag && !E.fdrag.sticky)) return true;
+  if (E.pan || E.rdown || E.boxSel || E.zoomRect || (E.fdrag && !E.fdrag.sticky)) return true;   // a field carried by M / G needs no button
   if (E.drag && !E.drag.sticky) return true;
   if (isSch()) { const s = schState(); return !!(s && (s.pending || (s.drag && s.drag.byPointer))); }
   const p = pcbState(); return !!(p && (p.pending || (p.move && !p.move.sticky) || (p.drag && p.drag.bySelect)));   // a Move that follows the cursor needs no button

@@ -18,6 +18,7 @@ export const PROPS = () => root.CollabTools && root.CollabTools.props && root.Co
 export let formImpl = function (spec: FormSpec): boolean {
   const kd = KD(); if (!kd || typeof document === "undefined") { if (lastCtx) lastCtx.toast(`${spec.title}: dialogs are unavailable here`); return false; }
   const inputs: Record<string, HTMLInputElement | HTMLSelectElement | { type: "radio"; value: unknown }> = {};
+  const set = (k: string, v: unknown) => { const i = inputs[k]; if (!i || i.type === "radio") return; const e = i as HTMLInputElement; if (e.type === "checkbox") e.checked = !!v; else e.value = v === undefined || v === null ? "" : String(v); };
   kd.open({
     title: spec.title, width: spec.width || 420, readOnly: !!spec.readOnly,
     build(body) {
@@ -52,6 +53,7 @@ export let formImpl = function (spec: FormSpec): boolean {
         else { inp = document.createElement("input"); inp.type = f.type === "num" ? "number" : "text"; if (f.type === "num") inp.step = f.step || "any"; inp.value = (f.value === undefined || f.value === null ? "" : f.value) as string; }
         inp.dataset.k = f.k; inp.style.cssText += ";font:inherit;background:var(--panel,#0A1421);color:inherit;border:1px solid var(--line,#24374E);border-radius:3px;padding:3px 5px";
         inputs[f.k!] = inp; row.appendChild(inp); body.appendChild(row);
+        if (spec.change) { const k = f.k!, el = inp; el.addEventListener(f.type === "select" || f.type === "check" ? "change" : "input", () => spec.change!(k, el.type === "checkbox" ? (el as HTMLInputElement).checked : el.value, set)); }
       }
     },
     ok() {

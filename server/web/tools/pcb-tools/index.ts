@@ -28,7 +28,7 @@ import type { PickerFn, PromptFn } from "./dom";
 import type { LayerPicker } from "./route-tool";
 import type { RouterSettings } from "./router-settings";
 import { root } from "../root";
-import { ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
+import { footprintByRef, footprintRefChoices, ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
 import { hoverPoint, liveSelected, nextWidth, sizesOf } from "./app-state";
 import { ArcGeom, arcBackup, arcDrawMode, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, arcMove, arcTangentSeedAt, arcTangentSeedNear, finishArc, setArcDrawMode, showArcMode } from "./arcs";
 import { arrayChanges, arrayOrigin, arraySize, arrayStacked, arrayTransform } from "./array";
@@ -103,6 +103,7 @@ import { isTuningPattern, regenerateTuningChanges, setCustomRules, tuneClick, tu
 import { TUNE_MSG_DP_NETS, TUNE_MSG_SKEW_NETS, TUNE_MSG_SKEW_PICK, assembleDiffPair, coupledLength, isTuneTool, tunePieces, tuningPatternNode } from "./tuning-tool";
 import { LINE_W, TEXT_STYLE, flipLayerName, layerClass, layerOf, norm180, norm360, pt, r6, textStyle, useFootprintEditorDefaults, widthOf } from "./util";
 import { dir8, hullOf, isFreePad, legPts, pathClear, pathHits, routeClearance, routeObstacles, routerWorld, simplifyPts, walkHead, walkTo } from "./walkaround";
+import { uniqueZoneName, subtractOutline } from "./zone-modes";
 
 /** Every pad picked on its own ("footprintId#padIndex"), the last one picked first; those picked before it with
  *  Shift count while it is still the picked pad. */
@@ -144,6 +145,7 @@ export const pcb = {
     S.violations = null;
     if (!isTuneTool(t) || t !== S.modTool) { S.tune.pattern = null; S.tune.picker = null; }
     if (S.drag && t !== "drag") { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }
+    S.zoneMode = t === "zone" ? S.zoneModeNext || null : null; S.zoneModeNext = null;
     S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     if (enumRunning() && t !== "enumpads") enumLeave(ctx, true);   // EnumeratePads: another tool pushes the step (Esc reverted it already)
     S.modTool = mine ? t : null;
@@ -320,6 +322,7 @@ export const pcb = {
     case "1": case "2": case "3": case "4":
       if (!isTuneTool(S.modTool) || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
       return runAction(({ 1: "spacingIncrease", 2: "spacingDecrease", 3: "amplIncrease", 4: "amplDecrease" } as Record<string, string>)[k], ctx);
+    case "Tab": return S.moveSeq ? runAction("skip", ctx) : false;   // PCB_ACTIONS::skip while moving individually
     case "End": if (S.route) { if (editing()) endRoute(ctx, true); return true; } return false;
     case "u": case "U": return expandSelection(ctx) || (selectionIds(ctx).size ? runAction("selectConnection", ctx) : false);   // app.js's selection goes through the action
     case "w": case "W": if (editing()) cycleWidth(ctx, shift ? -1 : 1); return true;
@@ -447,7 +450,7 @@ export const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { netNameCmp, fieldEdit: { requestField, rotateFieldChange, flipFieldChange, hideFieldChanges, footprintFieldNode }, boardFindHits, edaMatches, findStep, unescapeKiCad, nearestSnapLinePoint, angleSnapDirections, MOVE_SNAP_MSG, ANGLE_SNAP_MSG, DRAWING_TOOL_IDS, useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad: padToolApi, exchange: exchangeApi, fpProps: fpPropsApi, fpPads: fpPadsApi, fpCheck: fpCheckApi, fpUsers: fpUsersApi, setEnumParams, openForm: (spec: FormSpec) => formImpl(spec), arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { uniqueZoneName, subtractOutline, footprintRefChoices, footprintByRef, netNameCmp, fieldEdit: { requestField, rotateFieldChange, flipFieldChange, hideFieldChanges, footprintFieldNode }, boardFindHits, edaMatches, findStep, unescapeKiCad, nearestSnapLinePoint, angleSnapDirections, MOVE_SNAP_MSG, ANGLE_SNAP_MSG, DRAWING_TOOL_IDS, useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad: padToolApi, exchange: exchangeApi, fpProps: fpPropsApi, fpPads: fpPadsApi, fpCheck: fpCheckApi, fpUsers: fpUsersApi, setEnumParams, openForm: (spec: FormSpec) => formImpl(spec), arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)
