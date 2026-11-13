@@ -14,7 +14,7 @@ import { K } from "./state";
 import { addedChange, removedChange, replacedChange } from "./changes";
 import { rotateNode, translateNode } from "./transforms";
 import { clone, isList, r6, rotator } from "./util";
-import { canHaveNumber } from "./pad-tool";
+import { canHaveNumber, defaultPad, padMemory, typeFromPad } from "./pad-tool";
 import { padShapePolygon } from "./pad-outline";
 
 const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
@@ -58,6 +58,27 @@ export function importPadSettings(target: SNode, master: SNode): SNode {
   if (str(n[3]) === "circle") { const s = K.kid(n, "size"); if (s) s[2] = s[1]; }
   if (["smd", "connect", "non_component"].includes(str(n[2]))) setKid(n, "drill", null);
   return n;
+}
+/** PAD_TOOL::m_bufferPad: the pad properties Copy Pad Properties to Default took (MakeDefaultPad( THT ) at first). */
+let bufferPad: SNode | null = null;
+export function bufferPadNode(): SNode { return clone(bufferPad || defaultPad("tht")); }
+/** PAD_TOOL::copyPadSettings: one selected pad's settings go to the buffer and become the master pad of their type. */
+export function copyPadSettings(doc: BoardDoc, ids: string[]): boolean {
+  if (ids.length !== 1) return false;
+  const it = doc.items.get(ids[0]); if (!it || it.kind !== "pad") return false;
+  bufferPad = clone(it.node);
+  const t = typeFromPad(it.node); if (t) { padMemory.lastType = t; padMemory.lastByType[t] = it.id; }   // RecordNewMasterPad
+  return true;
+}
+/** PAD_TOOL::pastePadProperties: every selected pad imports the buffer's settings (one "Paste Pad Properties" commit). */
+export function pastePadChanges(doc: BoardDoc, ids: string[]): PcbChange[] {
+  const out: PcbChange[] = []; const master = bufferPadNode();
+  for (const id of ids) {
+    const it = doc.items.get(id); if (!it || it.kind !== "pad") continue;
+    const n = importPadSettings(it.node, master);
+    if (K.serialize(n) !== K.serialize(it.node)) out.push(replacedChange(it, n));
+  }
+  return out;
 }
 /** doPushPadProperties on the footprint being edited: the pads the filters let through take the source pad's settings. */
 export function pushPadChanges(doc: BoardDoc, srcId: string, f: PushFilters): PcbChange[] {
@@ -363,5 +384,5 @@ export function enumChanges(doc: BoardDoc, st: EnumState): PcbChange[] {
   return out;
 }
 
-export const fpPadsApi = { pushPadChanges, importPadSettings, explodePadChanges, recombinePadChanges, principalLayer, padOutline, shapeTouchesPad, padTableRows, padRow, applyPadRow, padTableChanges, padNumberSummary,
+export const fpPadsApi = { copyPadSettings, pastePadChanges, bufferPadNode, pushPadChanges, importPadSettings, explodePadChanges, recombinePadChanges, principalLayer, padOutline, shapeTouchesPad, padTableRows, padRow, applyPadRow, padTableChanges, padNumberSummary,
   toCsv, parseCsv, colForLabel, PAD_TYPES, PAD_SHAPES, PAD_TABLE_COLS, drillsEditable, enumBegin, enumPick, enumChanges, enumPopup, enumNextValue, padsAt, padsAlong, setKid };

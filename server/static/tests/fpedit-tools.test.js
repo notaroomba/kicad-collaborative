@@ -172,3 +172,24 @@ test("Recombine keeps the pad's real copper: TransformShapeToPolygon of roundrec
   const ci = FPP.padOutline(["pad", "1", "thru_hole", "circle", ["at", 0, 0], ["size", 1, 1], ["drill", 0.5], ["layers", "*.Cu"]]);
   assert.equal(ci.length, 24); assert.ok(ci.every((p) => Math.abs(Math.hypot(p[0], p[1]) - 0.5) < 2e-6), "ERROR_INSIDE: on the circle");
 });
+
+test("GENERAL_COLLECTOR::FootprintItems: a click on a pad or a field of the edited footprint hits it (hitTestItem)", () => {
+  const doc = fpDoc();
+  const hit = P.hitTestItem(doc, -0.825, 0.1, 0.2); assert.ok(hit && hit.kind === "pad" && K.str(hit.node[1]) === "1");
+  const f = [...doc.items.values()].find((i) => i.kind === "property" && i.bbox && K.str(i.node[1]) === "Reference");
+  const b = f.bbox; const fh = P.hitTestItem(doc, (b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 0.2); assert.ok(fh && fh.id === f.id);
+  assert.equal(P.hitTestItem(doc, 3, 3, 0.2), null);
+});
+test("PAD_TOOL::copyPadSettings / pastePadProperties: the buffer pad's settings go to the selected pads, numbers and positions stay", () => {
+  const doc = fpDoc(); const [p1, p2] = pads(doc);
+  const big = K.parse('(pad "1" thru_hole circle (at -0.825 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (uuid "44444444-4444-4444-8444-444444444444"))');
+  K.applyChange(doc, { kind: "MODIFIED", id: p1.id, sexpr: P.wrapBoard ? P.wrapBoard(big) : K.serialize(big) }, IU);
+  assert.ok(P.fpPads.copyPadSettings(doc, [p1.id]));
+  assert.equal(PT.padMemory.lastType, "tht");
+  const ch = P.fpPads.pastePadChanges(doc, [p2.id]); assert.equal(ch.length, 1);
+  for (const c of ch) K.applyChange(doc, c, IU);
+  const n2 = doc.items.get(p2.id).node;
+  assert.equal(K.str(n2[1]), "2"); assert.equal(K.str(n2[2]), "thru_hole"); assert.equal(K.str(n2[3]), "circle");
+  assert.deepEqual(K.kid(n2, "at").slice(1, 3), [0.825, 0]);
+  assert.equal(P.fpPads.copyPadSettings(doc, [p1.id, p2.id]), false, "one pad only");
+});

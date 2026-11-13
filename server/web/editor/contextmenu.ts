@@ -15,6 +15,7 @@ import { HANDLERS } from "./actions";
 import { canComment, commentOnItem, commentOnNet, netOfItem, showThread, startThread, threadsOnItem } from "./comments";
 import { APP_TOOLS, state, store } from "./appstore";
 import { enterSheet, rootSchematic, setGridPitch } from "./doc";
+import { FP } from "./fpedit";
 import { ARC_EDIT_MODE_MENU, evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
 import { activeModuleTool, clearAllSelection, hitsAt, markerUnder, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startFieldMove, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
@@ -90,6 +91,7 @@ function menuCtx(): MenuCtx {
   const canRemoveCorner = !!(one && P && P.canRemoveCorner && E.kdoc && P.canRemoveCorner(E.kdoc as KDoc, one.id, (E.lastCursorMm as number[] | null) || null));
   return {
     editor: editor(), kinds, tool: E.tool, drawingLine, routing,
+    fpEditor: !sch && !!(E.kdoc && E.kdoc.fpEditor), padEdit: !sch && !!FP.padEdit,
     busy: interactionBusy() || drawingLine || routing || !!draw || (sch && !!s && !!s.carry),
     canAddCorner, canRemoveCorner,
     canClose: outline && n >= 3, canUndoPoint: (outline || (!!draw && (draw.shape === "lines" || draw.shape === "gcurve"))) && n >= 1,

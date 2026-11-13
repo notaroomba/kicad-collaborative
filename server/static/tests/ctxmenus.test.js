@@ -96,6 +96,19 @@ test("every action a menu can show has a label in the generated spec", () => {
   assert.ok(spec.actions["ACTIONS::gridOrigin"], "the Grid sub-menu's first entry");
 });
 
+test("footprint editor: PAD_TOOL's pad entries; no Paste Special, Get and Move, Locking, Zones, Net Inspection, Routing (board-only tools)", () => {
+  const pad = menu({ editor: "pcb", fpEditor: true, kinds: ["pad"], hasUnlocked: true });
+  for (const a of ["padTable", "enumeratePads", "explodePad", "copyPadSettings", "applyPadSettings", "pushPadSettings"]) assert.ok(pad.includes(a), a);
+  assert.ok(!pad.includes("recombinePad"));
+  for (const a of ["pasteSpecial", "getAndPlace", ">Locking", ">Net Inspection Tools", ">Routing", "assignNetClass"]) assert.ok(!pad.includes(a), a);
+  const editing = menu({ editor: "pcb", fpEditor: true, kinds: [], padEdit: true });
+  assert.ok(editing.includes("recombinePad") && !editing.includes("explodePad") && editing.includes("padTable"));
+  const board = menu({ editor: "pcb", kinds: [] });
+  assert.ok(board.includes("getAndPlace") && board.includes("pasteSpecial") && !board.includes("padTable"));
+  const two = menu({ editor: "pcb", fpEditor: true, kinds: ["pad", "pad"] });
+  assert.ok(two.includes("applyPadSettings") && !two.includes("copyPadSettings") && !two.includes("pushPadSettings"));
+});
+
 // pcb-tools: cancel() puts a select-tool move back and clears what was in flight
 require(path.join(__dirname, "..", "kicad-canvas.js")); require(path.join(__dirname, "..", "pcb-tools.js"));
 test("pcb-tools cancel(): nothing in flight afterwards", () => {

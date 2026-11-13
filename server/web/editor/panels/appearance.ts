@@ -121,7 +121,9 @@ interface Viewport { name: string; rect: [number, number, number, number] }
 interface ProjectPrefs { hidden: string[] | null; netColors: Record<string, string>; classColors: Record<string, string>; hiddenNets: string[]; hiddenClasses: string[]; presets: Preset[]; viewports: Viewport[]; viewport: string | null; contrastMode?: InactiveMode }
 
 const USER_KEY = "kui.appearance";
-const projKey = () => "kui.appearance." + (projectId() || "x");
+// the Footprint Editor keeps its own (FOOTPRINT_EDITOR_SETTINGS beside PCBNEW_SETTINGS)
+const fpEditor = (): boolean => !!(kdoc() as { fpEditor?: boolean } | null)?.fpEditor;
+const projKey = () => "kui.appearance." + (fpEditor() ? "fp." : "") + (projectId() || "x");
 let user: UserPrefs = Object.assign({ colors: {}, objHidden: OBJECTS.filter((o) => o.defaultHidden).map((o) => o.id), objOpacity: {}, netColorMode: "ratsnest" as NetColorMode, ratsnestMode: "all" as RatsnestMode },
   loadJson<Partial<UserPrefs>>(USER_KEY, {}));
 // rows added after a user's prefs were saved start as KiCad has them (Board Area Shadow hidden)
@@ -452,7 +454,8 @@ export function appearanceDispatch(a: PanelAction): boolean {
 export function appearanceDocOpened(): void {
   if (isSchDoc() || !kdoc()) { publishAppearance(); return; }
   loadProj();
-  if (proj.hidden) { const keys = new Set(layerKeys()); E.hiddenLayers = new Set(proj.hidden.filter((l) => keys.has(l))); store.slice("document", { hiddenLayers: Array.from(E.hiddenLayers as Set<string>) }); }
+  // the Footprint Editor starts with every layer shown (makeFpHolderBoard: SetVisibleAlls), never a saved set
+  if (proj.hidden && !fpEditor()) { const keys = new Set(layerKeys()); E.hiddenLayers = new Set(proj.hidden.filter((l) => keys.has(l))); store.slice("document", { hiddenLayers: Array.from(E.hiddenLayers as Set<string>) }); }
   if (user.objHidden.includes("grid") && E.gridOn) setGridAndRatsnest();
   const m = proj.contrastMode, mode: InactiveMode = m === "dim" || m === "hide" ? m : "normal";
   if (mode !== inactiveMode()) setInactive(mode, false);

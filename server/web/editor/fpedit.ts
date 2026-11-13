@@ -900,6 +900,19 @@ function selectedPadId(): string | null {
   const pads = Array.from(ids).filter((id) => { const it = doc.items.get(id); return it && it.kind === "pad"; });
   return pads.length === 1 && ids.size === 1 ? pads[0] : null;
 }
+/** Every selected item id (the app's selection and the board module's). */
+function selectedIds(): string[] {
+  const pcbSel = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string> }).sel;
+  return Array.from(new Set<string>([...(E.selection as Set<string>), ...(pcbSel ? Array.from(pcbSel) : [])]));
+}
+/** PAD_TOOL::copyPadSettings: the one selected pad becomes the default (the buffer pad and the master pad of its type). */
+function copyPadSettings(): void { const doc = E.kdoc as KDoc | null; if (doc) PT().fpPads.copyPadSettings(doc, selectedIds()); }
+/** PAD_TOOL::pastePadProperties: the selected pads take the default pad's properties. */
+function applyPadSettings(): void {
+  const doc = E.kdoc as KDoc | null; if (!doc || E.viewOnly) return;
+  const ch = PT().fpPads.pastePadChanges(doc, selectedIds()) as KChange[];
+  if (ch.length) toolCtx().commit(ch, "Paste Pad Properties");
+}
 /** PAD_TOOL::pushPadSettings. */
 function pushPadSettings(): void {
   const id = selectedPadId(); if (!id) { toast("Select a pad first"); return; }
@@ -1080,6 +1093,7 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   revert: ((a) => { if (isFpEdit()) { revertFootprint(); return; } if (prevRevert) prevRevert(a); }) as ActionHandler,
   saveAs: fpOnly(saveAs), newFootprint: fpOnly(newFootprint), createFootprint: fpOnly(() => createFootprint()), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
   enumeratePads: fpOnly(enumeratePads), checkFootprint: fpOnly(checkFootprint), padTable: fpOnly(padTable), pushPadSettings: fpOnly(pushPadSettings),
+  copyPadSettings: fpOnly(copyPadSettings), applyPadSettings: fpOnly(applyPadSettings),
   explodePad: fpOnly(editPad), recombinePad: fpOnly(editPad), exportFootprint: fpOnly(exportFootprint), exportFootprintAsSVG: fpOnly(exportFootprintAsSVG), exportFootprintAsPNG: fpOnly(exportFootprintAsPNG),
   importFootprint: fpOnly(importFootprint), showFootprintUsers: fpOnly(showFootprintUsers), loadFpFromBoard: fpOnly(loadFromBoard), saveFpToBoard: fpOnly(insertIntoBoard),
   setAnchor: fpOnly(() => setTool("anchor")),

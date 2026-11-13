@@ -162,7 +162,8 @@ export function setDocFromText(text: string, then?: WireChange[] | null) {
   else { const b = E.kdoc.bbox, m = 5; E.vb = [b[0] - m, b[1] - m, (b[2] - b[0]) + 2 * m, (b[3] - b[1]) + 2 * m]; }
   base.replaceChildren(); base.setAttribute("viewBox", E.vb.join(" ")); overlay.setAttribute("viewBox", E.vb.join(" "));
   $("#ovRoot").setAttribute("transform", "scale(1)");
-  if (!E.layersSeeded) { E.hiddenLayers = new Set(isSch() ? [] : Array.from(KiCadCanvas.PCB_HIDDEN_DEFAULT)); E.layersSeeded = true; }
+  // FOOTPRINT_EDIT_FRAME (makeFpHolderBoard, the constructor): GetBoard()->SetVisibleAlls(), every layer shown
+  if (!E.layersSeeded) { E.hiddenLayers = new Set(isSch() || E.kdoc.fpEditor ? [] : Array.from(KiCadCanvas.PCB_HIDDEN_DEFAULT)); E.layersSeeded = true; }
   renderLayersFromDoc(); syncItemsFromDoc(); renderModuleTools(); bumpDoc();
   const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } }
   canvas.style.display = "block"; requestRender();

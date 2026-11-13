@@ -32,6 +32,10 @@ export interface MenuCtx {
   /** PCB_POINT_EDITOR::addCornerCondition / removeCornerCondition for the single selected item at the cursor */
   canAddCorner?: boolean; canRemoveCorner?: boolean;
   highlight: boolean;
+  /** PCB_TOOL_BASE::m_isFootprintEditor: the board tools run in the Footprint Editor */
+  fpEditor?: boolean;
+  /** PAD_TOOL::m_editPad: a pad is in pad edit mode (exploded) */
+  padEdit?: boolean;
   /** the one selected pin has alternate functions (SCH_CONDITIONS::SingleMultiFunctionPin) */
   pinAlts?: boolean;
   belowRoot: boolean;
@@ -305,7 +309,9 @@ const PCB_TO_TRACK = set("gr_line", "gr_arc");
 const pcbCanMirror = or(hasTypes(PCB_MIRRORABLE));
 const pcbSingleFootprint = and(count(1), onlyTypes(PCB_FOOTPRINT));
 const pcbMultipleFootprints = and(moreThan(1), onlyTypes(PCB_FOOTPRINT));
-const pcbRoutable = and(hasTypes(PCB_ROUTABLE), idle);
+/** EDIT_TOOL::Init inFootprintEditor */
+const inFpEditor: Cond = (c) => !!c.fpEditor;
+const pcbRoutable = and(hasTypes(PCB_ROUTABLE), idle, not(inFpEditor));
 /** EDIT_TOOL::Init propertiesCondition: one item, or nothing but tracks. */
 const pcbProperties: Cond = (c) => c.kinds.length === 1 || (c.kinds.length > 1 && (c.kinds.every((k) => PCB_TRACKS.has(k)) || c.kinds.every((k) => k === "table_cell")));
 const noActiveTool = tool("select");
@@ -371,21 +377,25 @@ function pcbSelectionMenu(): CondMenu {
   // PCB_POINT_EDITOR::Init
   m.item("PCB_ACTIONS::pointEditorAddCorner", and(count(1), (c) => !!c.canAddCorner)).item("PCB_ACTIONS::pointEditorRemoveCorner", and(count(1), (c) => !!c.canRemoveCorner));
   m.item("ACTIONS::cycleArcEditMode", and(count(1), onlyTypes(set("gr_arc")))).sep();
-  m.item("PCB_ACTIONS::packAndMoveFootprints", and(moreThan(1), hasTypes(PCB_FOOTPRINT))).item("PCB_ACTIONS::assignNetClass", onlyTypes(PCB_CONNECTED)).item("PCB_ACTIONS::inspectClearance", count(2));
+  m.item("PCB_ACTIONS::packAndMoveFootprints", and(moreThan(1), hasTypes(PCB_FOOTPRINT))).item("PCB_ACTIONS::assignNetClass", and(onlyTypes(PCB_CONNECTED), not(inFpEditor))).item("PCB_ACTIONS::inspectClearance", count(2));
   m.sep();
   m.item("PCB_ACTIONS::editFpInFpEditor", pcbSingleFootprint).item("PCB_ACTIONS::updateFootprint", pcbSingleFootprint).item("PCB_ACTIONS::updateFootprints", pcbMultipleFootprints);
   m.item("PCB_ACTIONS::changeFootprint", pcbSingleFootprint).item("PCB_ACTIONS::changeFootprints", pcbMultipleFootprints).sub(pcbFpAttributesMenu(), or(pcbSingleFootprint, pcbMultipleFootprints));
   m.sep(100).sub(pcbRoutingMenu(), pcbRoutable, 100).sub(pcbMirrorRotateMenu(), pcbCanMirror, 100).sub(pcbPositionMenu(), idleSelection, 100);
   m.sep(150).item("ACTIONS::cut", notEmpty, 150).item("ACTIONS::copy", notEmpty, 150).item("PCB_ACTIONS::copyWithReference", idleSelection, 150).item("ACTIONS::copyAsText", onlyTypes(PCB_COPY_TEXT), 150);
-  m.item("ACTIONS::paste", noActiveTool, 150).item("ACTIONS::pasteSpecial", noActiveTool, 150).item("ACTIONS::duplicate", notEmpty, 150).item("ACTIONS::doDelete", notEmpty, 150);
+  m.item("ACTIONS::paste", noActiveTool, 150).item("ACTIONS::pasteSpecial", and(noActiveTool, not(inFpEditor)), 150).item("ACTIONS::duplicate", notEmpty, 150).item("ACTIONS::doDelete", notEmpty, 150);
   m.sep(2000).item("PCB_ACTIONS::properties", pcbProperties, 2000);
   // PAD_TOOL::Init
   m.sep(400);
-  // BOARD_EDITOR_CONTROL::Init
-  m.item("PCB_ACTIONS::getAndPlace", and(noActiveTool, empty)).sep();
-  m.sub(pcbLockMenu(), notEmpty, 100).sub(pcbZoneMenu(), onlyTypes(PCB_ZONE), 100).sub(pcbZoneMenu(), tool("zone"), 300);
-  // BOARD_INSPECTION_TOOL::Init
-  m.sub(pcbNetMenu(), onlyTypes(PCB_CONNECTED), 100);
+  const singlePad = and(count(1), onlyTypes(set("pad")));
+  m.item("PCB_ACTIONS::padTable", inFpEditor, 400).item("PCB_ACTIONS::enumeratePads", inFpEditor, 400)
+    .item("PCB_ACTIONS::recombinePad", and(inFpEditor, (c) => !!c.padEdit), 400).item("PCB_ACTIONS::explodePad", and(inFpEditor, (c) => !c.padEdit, singlePad), 400);
+  m.item("PCB_ACTIONS::copyPadSettings", singlePad, 400).item("PCB_ACTIONS::applyPadSettings", hasTypes(set("pad")), 400).item("PCB_ACTIONS::pushPadSettings", singlePad, 400);
+  // BOARD_EDITOR_CONTROL::Init and BOARD_INSPECTION_TOOL::Init: board editor only (FOOTPRINT_EDIT_FRAME::setupTools registers neither)
+  const board = not(inFpEditor);
+  m.item("PCB_ACTIONS::getAndPlace", and(noActiveTool, empty, board)).sep(board);
+  m.sub(pcbLockMenu(), and(notEmpty, board), 100).sub(pcbZoneMenu(), and(onlyTypes(PCB_ZONE), board), 100).sub(pcbZoneMenu(), and(tool("zone"), board), 300);
+  m.sub(pcbNetMenu(), and(onlyTypes(PCB_CONNECTED), board), 100);
   // ALIGN_DISTRIBUTE_TOOL::Init, CONVERT_TOOL::Init, PCB_GROUP_TOOL::Init, CONSTRAINT_EDIT_TOOL::Init
   m.sub(pcbAlignMenu(), moreThan(1), 100).sub(pcbConvertMenu(), hasTypes(set(...PCB_SHAPES, "segment", "arc", "zone")), 100);
   m.sub(GROUP_MENU, notEmpty, 100).sub(pcbConstraintMenu(), always, 100);

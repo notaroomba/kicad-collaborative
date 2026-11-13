@@ -1,5 +1,6 @@
 // pcb-tools/hit.ts — hit testing of the non-footprint items.
 import type { BoardDoc, PcbGeom, Pt } from "./types";
+import { K } from "./state";
 
 // ---------------------------------------------------------------- hit testing (non-footprint items)
 export function distSeg(px: number, py: number, x1: number, y1: number, x2: number, y2: number) {
@@ -34,6 +35,22 @@ export function geomDist(g: PcbGeom, x: number, y: number) {
   if (g.t === "rect" || g.t === "image") return (x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h) ? 0 : Infinity;
   return Infinity;
 }
+/**
+ * PAD::HitTest at a point: 0 on the pad, else the smallest accuracy (up to `slop`) at which the pad's shape is hit.
+ * The pad's number and net name labels are not part of the pad.
+ */
+export function padDist(geom: PcbGeom[], x: number, y: number, slop: number) {
+  let d = Infinity;
+  for (const g of geom) {
+    const gg = g as PcbGeom & { padText?: unknown; padNum?: unknown; noBox?: unknown };
+    if (gg.padText || gg.padNum || gg.noBox || g.t === "text") continue;
+    if (K.geomHit(g, x, y, 0)) return 0;
+    if (!(slop > 0) || !K.geomHit(g, x, y, slop)) continue;
+    let lo = 0, hi = slop; for (let i = 0; i < 12; i++) { const m = (lo + hi) / 2; if (K.geomHit(g, x, y, m)) hi = m; else lo = m; }
+    d = Math.min(d, hi);
+  }
+  return d;
+}
 /** Nearest track / via / graphic / text within slop mm of (x, y); footprints are app.js's business. */
 export function hitTestItem(doc: BoardDoc, x: number, y: number, slop: number, only?: ((it: KItem) => boolean) | null) {
   let best: KItem | null = null, bd = slop;
@@ -42,7 +59,8 @@ export function hitTestItem(doc: BoardDoc, x: number, y: number, slop: number, o
     if (only && !only(it)) continue;
     const b = it.bbox; if (x < b[0] - slop || x > b[2] + slop || y < b[1] - slop || y > b[3] + slop) continue;
     let d = Infinity;
-    if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension") d = (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) ? slop * 0.5 : Infinity;   // precise copper hits win over a text box
+    if (it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "dimension" || it.kind === "property") d = (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) ? slop * 0.5 : Infinity;   // precise copper hits win over a text box (a footprint editor field is a PCB_FIELD text)
+    else if (it.kind === "pad") d = padDist(it.geom as PcbGeom[], x, y, slop);   // the footprint editor's pads are items of their own (GENERAL_COLLECTOR::FootprintItems)
     else for (const g of it.geom as PcbGeom[]) { if (it.kind === "zone" && g.fill) continue; d = Math.min(d, geomDist(g, x, y)); }
     if (d < bd) { bd = d; best = it; }
   }
