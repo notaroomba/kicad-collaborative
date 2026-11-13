@@ -24,7 +24,7 @@ import { state, store } from "./appstore";
 import { closeThread, placeComment } from "./comments";
 import { noteModifiers, refreshCursor } from "./cursors";
 import { followHypertext } from "./hypertext-follow";
-import { dragModifier, selModifier } from "./selmodes";
+import { dragKeeps, dragModifier, selModifier } from "./selmodes";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
@@ -302,7 +302,7 @@ stage.addEventListener("pointerdown", (ev) => {
   const smode = selModifier(ev);
   if (!best) {
     if (!smode) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
-    if (E.tool === "select" && E.kdoc) { { const dm = dragModifier(ev, isSch()); E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: !!dm, mode: dm, startClient: [ev.clientX, ev.clientY] }; } stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
+    if (E.tool === "select" && E.kdoc) { { const dm = dragModifier(ev, isSch()); E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: dragKeeps(ev), mode: dm, startClient: [ev.clientX, ev.clientY] }; } stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
     return;
   }
   if (smode) {                                         // KiCad: Shift+click adds, Ctrl+click toggles, Ctrl+Shift+click removes
@@ -342,11 +342,11 @@ function selectPinOnly(pin: { id: string; number: string }): void {
 
 const smodeOf = (ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => selModifier(ev);
 /** PCB_SELECTION_TOOL::selectMultiple re-reads the modifiers on every event: Shift / Ctrl pressed or let go mid-drag change the mode. */
-function boxSelModifiers(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): void {
+function boxSelModifiers(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): void {
   const b = E.boxSel as { add?: boolean; mode?: string | null } | null; if (!b) return;
-  const m = dragModifier(ev, isSch()); b.mode = m; b.add = !!m;
+  b.mode = dragModifier(ev, isSch()); b.add = dragKeeps(ev);
 }
-for (const t of ["keydown", "keyup"]) window.addEventListener(t, (ev) => { const k = (ev as KeyboardEvent).key; if (E.boxSel && (k === "Shift" || k === "Control" || k === "Meta")) { boxSelModifiers(ev as KeyboardEvent); drawBoxSel(); } });
+for (const t of ["keydown", "keyup"]) window.addEventListener(t, (ev) => { const k = (ev as KeyboardEvent).key; if (E.boxSel && (k === "Shift" || k === "Control" || k === "Meta" || k === "Alt")) { boxSelModifiers(ev as KeyboardEvent); drawBoxSel(); } });
 /** DRAG_SELECTED on an item that was not selected: the press picked it (the board module's own pick), a drag draws a box. */
 function startModuleBox(ev: PointerEvent, x: number, y: number): void {
   if (E.tool !== "select" || !E.kdoc) return;

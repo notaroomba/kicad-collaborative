@@ -25,6 +25,30 @@ test("box drag in the schematic: SelectMultiple( area, m_drag_subtractive, false
   assert.equal(M.dragModifier(ev({ ctrlKey: true, shiftKey: true }), true), "remove");
   assert.equal(M.dragModifier(ev({ ctrlKey: true, altKey: true }), true), null);
 });
+test("drag keeps the selection: m_drag_additive || m_drag_subtractive, ( Ctrl || Shift ) && !Alt in both editors", () => {
+  assert.equal(M.dragKeeps(ev({})), false);
+  assert.equal(M.dragKeeps(ev({ ctrlKey: true })), true);
+  assert.equal(M.dragKeeps(ev({ shiftKey: true })), true);
+  assert.equal(M.dragKeeps(ev({ ctrlKey: true, shiftKey: true, altKey: true })), false);
+  // pcbnew's SelectMultiple ignores Alt: Alt+Ctrl+Shift still removes, but from a cleared selection
+  assert.equal(M.dragModifier(ev({ ctrlKey: true, shiftKey: true, altKey: true }), false), "remove");
+});
+test("selection area fill: boxes and eeschema's lasso from m_drag_additive, pcbnew's lasso from m_additive / m_subtractive", () => {
+  const fill = (o, lasso, sch) => M.areaFill({ lasso, add: M.dragKeeps(ev(o)), mode: M.dragModifier(ev(o), sch) }, sch);
+  for (const lasso of [false, true]) {
+    assert.deepEqual(fill({ ctrlKey: true }, lasso, true), { additive: true, subtractive: false });
+    assert.deepEqual(fill({ ctrlKey: true, shiftKey: true }, lasso, true), { additive: true, subtractive: true });
+    assert.deepEqual(fill({ ctrlKey: true, altKey: true }, lasso, true), { additive: false, subtractive: false });
+  }
+  assert.deepEqual(fill({ ctrlKey: true }, false, false), { additive: true, subtractive: false });
+  assert.deepEqual(fill({ ctrlKey: true, shiftKey: true }, false, false), { additive: true, subtractive: true });
+  assert.deepEqual(fill({ ctrlKey: true, altKey: true }, false, false), { additive: false, subtractive: false });
+  // SelectPolyArea: a Ctrl lasso has the normal fill, Ctrl+Shift the subtract fill, Shift the additive one
+  assert.deepEqual(fill({}, true, false), { additive: false, subtractive: false });
+  assert.deepEqual(fill({ ctrlKey: true }, true, false), { additive: false, subtractive: false });
+  assert.deepEqual(fill({ ctrlKey: true, shiftKey: true }, true, false), { additive: false, subtractive: true });
+  assert.deepEqual(fill({ shiftKey: true }, true, false), { additive: true, subtractive: false });
+});
 test("click modifiers: Shift adds, Ctrl toggles, Ctrl+Shift removes", () => {
   assert.equal(M.selModifier(ev({})), null);
   assert.equal(M.selModifier(ev({ shiftKey: true })), "add");

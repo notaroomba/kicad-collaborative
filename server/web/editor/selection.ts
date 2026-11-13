@@ -196,8 +196,9 @@ export function finishBoxSel(ev: { clientX: number; clientY: number }) {
   scopeToEnteredGroup(picked);
   const pcbSel = CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel;
   if (schM && schM.state && !b.add) schM.state.selEnds = null;
-  if (!b.add) { E.selPins = []; E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too
-  // SelectMultiple(area, subtractive, exclusive_or): Ctrl+Shift takes the boxed items out, Ctrl toggles them, Shift adds
+  if (!b.add) { E.selPins = []; E.selected = null; E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too
+  // SelectMultiple(area, subtractive, exclusive_or): Ctrl+Shift takes the boxed items out, Ctrl toggles them, Shift adds;
+  // on the board Alt only drops the kept selection (m_drag_additive), so Alt+Ctrl+Shift takes out of nothing
   if (b.mode === "remove" || b.mode === "toggle") {
     if (E.selected) E.selection.add(E.selected.id);
     for (const it of picked) { const was = E.selection.has(it.id) || (pcbSel && pcbSel.has(it.id)); E.selection.delete(it.id); if (pcbSel) pcbSel.delete(it.id); if (b.mode === "toggle" && !was) E.selection.add(it.id); }
