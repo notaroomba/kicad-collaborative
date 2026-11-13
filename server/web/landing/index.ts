@@ -4,6 +4,7 @@
 import { startLettering } from "./lettering";
 import { startMini } from "./mini";
 import { startStory } from "./story";
+import { startAi } from "./ai";
 
 function theme(): void {
   const btn = document.getElementById("theme");
@@ -71,6 +72,8 @@ function start(): void {
   startLettering();
   if (hero) startMini(hero);
   if (story) startStory(story);
+  const ai = document.getElementById("ai");
+  if (ai) startAi(ai);
   session();
 }
 

@@ -323,6 +323,16 @@ pub async fn brand_file(Path((v, name)): Path<(String, String)>) -> Response {
 pub async fn landing_image(Path(name): Path<String>) -> Response {
     let bytes: &'static [u8] = match name.as_str() {
         "editor.webp" => include_bytes!("../static/landing/editor.webp"),
+        // The AI chapter's recorded run (scripts/landing-ai/record.mjs), fetched when it comes near.
+        "ai-esp32.kicad_sch" | "ai-esp32.kicad_pcb" | "ai-timeline.json" => {
+            let text: &'static str = match name.as_str() {
+                "ai-esp32.kicad_sch" => include_str!("../web/landing/ai/esp32.kicad_sch"),
+                "ai-esp32.kicad_pcb" => include_str!("../web/landing/ai/esp32.kicad_pcb"),
+                _ => include_str!("../web/landing/ai/timeline.json"),
+            };
+            let kind = if name.ends_with(".json") { "application/json" } else { "text/plain; charset=utf-8" };
+            return ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, "no-cache")], text).into_response();
+        }
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
     ([(header::CONTENT_TYPE, "image/webp"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response()
@@ -1304,6 +1314,11 @@ mod landing_tests {
         // The demo design it draws is real KiCad files, bundled into the page script.
         assert!(include_str!("../web/landing/demo/blinker.kicad_sch").starts_with("(kicad_sch"));
         assert!(include_str!("../web/landing/demo/blinker.kicad_pcb").starts_with("(kicad_pcb"));
+        // The AI chapter plays back a real recorded run: both documents and the order they were made in.
+        assert!(html.contains("id=\"ai\"") && html.contains("data-prompt") && html.matches("data-call").count() == 2);
+        assert!(include_str!("../web/landing/ai/esp32.kicad_sch").starts_with("(kicad_sch"));
+        assert!(include_str!("../web/landing/ai/esp32.kicad_pcb").starts_with("(kicad_pcb"));
+        assert!(include_str!("../web/landing/ai/timeline.json").contains("\"stats\""));
         assert!(html.contains(&format!("href=\"/brand/{}/icon.svg\"", super::ICON_V)) && super::MARK.starts_with("<svg"));
     }
 }

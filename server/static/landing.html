@@ -164,6 +164,43 @@
   .story[data-chapter="3"] .scene canvas:active { cursor: grabbing; }
   .story[data-chapter="0"] .chip .c0, .story[data-chapter="1"] .chip .c1, .story[data-chapter="2"] .chip .c2, .story[data-chapter="3"] .chip .c3 { display: inline; }
 
+  /* ---- design with an AI: a recorded run, scrubbed by the scroll ---- */
+  .ai { padding: 0; }
+  .ai-track { height: 620vh; position: relative; }
+  .ai-pin { position: sticky; top: 0; height: 100vh; height: 100svh; display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+            gap: clamp(20px, 3vw, 48px); align-items: center; padding-top: 58px; }
+  .chat { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); display: flex; flex-direction: column; max-height: min(80vh, 760px); overflow: hidden;
+          box-shadow: 0 30px 60px -32px #0007, 0 8px 18px -10px #0003; }
+  .chat-bar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--bench); color: var(--ink-2); font: 12px var(--mono); }
+  .chat-bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--wire); }
+  .chat-body { padding: 14px; display: grid; gap: 12px; overflow: auto; scrollbar-width: none; }
+  .chat-body::-webkit-scrollbar { display: none; }
+  .chat-body > * { min-width: 0; overflow-wrap: anywhere; }
+  .ai-pin > * { min-width: 0; }
+  .msg small { display: block; font: 500 11px var(--mono); color: var(--ink-3); margin-bottom: 4px; }
+  .msg p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--ink); min-height: 1.5em; }
+  .msg.you p { padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+  .caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -0.15em; background: var(--accent); animation: blink 1s steps(1) infinite; }
+  .caret[hidden] { display: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .call, .msg.ai { display: none; }
+  .call.on, .msg.ai.on { display: block; }
+  .call { border: 1px solid var(--line); border-radius: 4px; font: 12.5px/1.5 var(--mono); color: var(--ink-2); }
+  .call-h { display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
+  .call-h code { font: 600 12px var(--mono); color: var(--ink); }
+  .call-h span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .call .spin { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid var(--line-2); border-top-color: var(--accent); opacity: 0; }
+  .call.busy .spin { opacity: 1; animation: spin .8s linear infinite; }
+  .ai.still .call.busy .spin, .ai.still .caret { animation: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .call ul { display: none; margin: 0; padding: 7px 10px 8px 26px; border-top: 1px solid var(--line); }
+  .call ul.on { display: block; }
+  .call li { margin: 1px 0; }
+  .ai-scene .chip .b, .ai[data-phase="pcb"] .ai-scene .chip .s { display: none; }
+  .ai[data-phase="pcb"] .ai-scene .chip .b { display: inline; }
+  .ai-scene .chip span { display: inline; }
+  .ai[data-phase="pcb"] .ai-scene { background: #001023; }
+
   /* ---- together ---- */
   .together-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: clamp(28px, 4vw, 60px); margin-top: 44px; align-items: start; }
   .shot { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--bench);
@@ -254,6 +291,10 @@
     .nav nav { display: none; }
     .hero-row { grid-template-columns: 1fr; }
     .story-track { height: 480vh; }
+    .ai-track { height: 540vh; }
+    .ai-pin { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); gap: 12px; align-items: stretch; padding: 66px 0 16px; }
+    .chat { max-height: 36vh; max-height: 36svh; }
+    .ai .ai-scene { order: 0; height: auto; min-height: 0; }
     .story-pin { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); gap: 14px; align-items: start; padding: 66px 0 16px; }
     .scene { order: -1; height: 52vh; height: 52svh; }
     .steps { grid-template-columns: repeat(4, 1fr); column-gap: 8px; }
@@ -295,6 +336,7 @@
     <a class="brand" href="/welcome" aria-label="Junction">{{MARK}}<span>Junction</span></a>
     <nav aria-label="Sections">
       <a href="#make">How a board gets made</a>
+      <a href="#ai">Design with an AI</a>
       <a href="#together">Working together</a>
       <a href="#get">Get it</a>
     </nav>
@@ -364,7 +406,7 @@
 
 <section class="story" id="make" data-chapter="0">
   <div class="wrap story-head">
-    <div class="sheet-h rv"><h2 data-stroke>How a board gets made</h2><span class="sheet-n">Sheet 1 / 3</span></div>
+    <div class="sheet-h rv"><h2 data-stroke>How a board gets made</h2><span class="sheet-n">Sheet 1 / 4</span></div>
     <p class="lead rv" style="--i:1; margin-top:18px">One design, from the first wire to a finished board, in a file everyone has open. Scroll to follow it.</p>
   </div>
   <div class="story-track">
@@ -389,9 +431,39 @@
   </div>
 </section>
 
+<section class="ai" id="ai">
+  <div class="wrap story-head">
+    <div class="sheet-h rv"><h2 data-stroke>Design with an AI</h2><span class="sheet-n">Sheet 2 / 4</span></div>
+    <p class="lead rv" style="--i:1; margin-top:18px">Connect an AI app to your projects over MCP and ask it for a board. Its edits land in the same files, live, like anyone else's. This is a recorded run, played back as you scroll.</p>
+  </div>
+  <div class="ai-track">
+    <div class="wrap ai-pin">
+      <div class="chat" aria-live="off">
+        <div class="chat-bar"><span class="dot"></span>AI app, connected to Junction over MCP</div>
+        <div class="chat-body">
+          <div class="msg you"><small>You</small><p><span data-prompt></span><i class="caret" data-caret></i></p></div>
+          <div class="call" data-call>
+            <div class="call-h"><code>run_python</code><span>ESP32-C3 battery devboard schematic</span><i class="spin"></i></div>
+            <ul data-out></ul>
+          </div>
+          <div class="call" data-call>
+            <div class="call-h"><code>run_python</code><span>Place and route the board</span><i class="spin"></i></div>
+            <ul data-out></ul>
+          </div>
+          <div class="msg ai" data-done><small>AI</small><p></p></div>
+        </div>
+      </div>
+      <div class="scene ai-scene">
+        <canvas aria-label="An ESP32-C3 devboard drawn by an AI: the schematic appears item by item, then the footprints move from a pile onto a Pico-sized board and the tracks are laid, as you scroll."></canvas>
+        <span class="chip"><span class="s">esp32.kicad_sch</span><span class="b">esp32.kicad_pcb</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="together">
   <div class="wrap">
-    <div class="sheet-h rv"><h2 data-stroke>Working together</h2><span class="sheet-n">Sheet 2 / 3</span></div>
+    <div class="sheet-h rv"><h2 data-stroke>Working together</h2><span class="sheet-n">Sheet 3 / 4</span></div>
     <p class="lead rv" style="--i:1; margin-top:18px">What you see when someone else is in the file.</p>
     <div class="together-grid">
       <figure class="rv">
@@ -412,7 +484,7 @@
 
 <section id="get" style="padding-top:0">
   <div class="wrap">
-    <div class="sheet-h rv"><h2 data-stroke>Get it</h2><span class="sheet-n">Sheet 3 / 3</span></div>
+    <div class="sheet-h rv"><h2 data-stroke>Get it</h2><span class="sheet-n">Sheet 4 / 4</span></div>
     <p class="lead rv" style="--i:1; margin-top:18px">Use the desktop app or the browser. It is the same project either way.</p>
     <div class="get-grid rv" style="--i:2">
       <div>

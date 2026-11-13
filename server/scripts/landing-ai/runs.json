@@ -1,0 +1,12 @@
+{
+ "design.py": {
+  "seconds": 148.2,
+  "calls": 411,
+  "output": "page {'paper': 'User', 'was': 'User', 'moved': [0.0, 0.0], 'fits': True, 'size': [420.0, 330]}\nschematic {'placed': 50, 'nets': 33, 'page': 'A3', 'overlaps': 0, 'problems': [], 'unconnected': [], 'pins_swapped': ['U2', 'U4', 'U5']}\noverlaps [] tidy {'overlaps': 0, 'by_kind': {}, 'first': []}\nerc {'check': 'ERC', 'errors': 0, 'warnings': 1, 'by_kind': {}, 'first': []}"
+ },
+ "board.py": {
+  "seconds": 152.6,
+  "calls": 46,
+  "output": "sync 50\nplaced {'ratsnest': 567.955, 'overlaps': 64, 'courtyardClashes': 0, 'outside': 0, 'area': 1071, 'clashes': [], 'outsideRefs': []} clashes []\nrouted {'routed': 117, 'connections': 119, 'vias': 53, 'length_mm': 536.7784, 'unrouted': ['GPIO1: U1.5 to J2.16 (blocked)', 'GND: C7.2 to C16.2 (blocked)'], 'left': {'GND': 1, 'GPIO1': 1}, 'zones_filled': 4, 'ground_vias': [{'net': 'Net-(AE1-FEED)', 'ground': 'GND', 'fence': 5, 'return_vias': 0, 'spacing_mm': 2, 'note': '3 of 8 fence positions had no room or no ground pour on two layers'}, {'net': 'RF_LNA', 'ground': 'GND', 'fence': 0, 'return_vias': 0, 'spacing_mm': 2, 'note': '4 of 4 fence positions had no room or no ground pour on two layers'}, {'net': 'USB_D-', 'ground': 'GND', 'fence': 0, 'return_vias': 1, 'spacing_mm': 2, 'note': 'no room in the ground pour beside a layer change'}], 'domains': {'kept_apart': {'Net-(AE1-FEED)': 'rf', 'XTAL_P': 'analog', 'XTAL_N': 'analog', 'RF_LNA': 'rf', 'Net-(D1-K)': 'fast', 'USB_D+': 'fast', 'USB_D-': 'fast', 'VBAT_SENSE': 'analog'}, 'quiet_mm': 0.3, 'noisy_mm': 0.5, 'relaxed': []}}\nretry {'GND': 1, 'GPIO1': 1}\ndrc 2 136 {'unconnected_items': 2} [\"error unconnected_items: Missing connection between items (net 'GND') [C16, C7] at (107.79, 87.2)\", \"error unconnected_items: Missing connection between items (net 'GPIO1') [J2, U1] at (101.61, 89.47)\"]\nboard {'size_mm': {'width': 21, 'height': 51, 'area_mm2': 1071}, 'copper_layers': ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'], 'footprints': 50, 'nets': 64, 'unrouted_connections': 2, 'ratsnest_mm': 12.006, 'vias': 66, 'track_length_mm': 536.778, 'clearance': 0.15, 'min_track_width': 0.15}\nmodels {'parts': 50, 'from_kicad_library': 50, 'from_vendor': 0, 'without_model': []}"
+ }
+}

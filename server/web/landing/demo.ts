@@ -139,14 +139,17 @@ export interface Rat { net: number; name: string; a: Pt; b: Pt; ids: [string, st
 /** KiCad's ratsnest: per net, the shortest lines that would join its separate islands of
  *  copper.  `poured` names the net whose back-layer pour is filled, joining everything of
  *  that net that reaches the back.  `only` limits tracks and vias to the ones that exist yet. */
-export function ratsnest(doc: KDoc, opts: { only?: Set<string> | null; poured?: number } = {}): Rat[] {
+export function ratsnest(doc: KDoc, opts: { only?: Set<string> | null; poured?: number; planes?: { net: number; layers: string[] }[] } = {}): Rat[] {
   const nodes = copper(doc, opts.only || null), n = nodes.length;
   const parent = nodes.map((_, i) => i);
   const find = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-  let pour = -1;
+  // Filled pours: everything of a net that reaches one of its pour layers is one piece of copper.
+  const planes = opts.planes ? opts.planes.slice() : [];
+  if (opts.poured) planes.push({ net: opts.poured, layers: ["B.Cu"] });
+  const pour = new Map<number, number>();
   for (let i = 0; i < n; i++) {
     const a = nodes[i];
-    if (opts.poured && a.net === opts.poured && (!a.layers || a.layers.includes("B.Cu"))) { if (pour < 0) pour = i; else parent[find(i)] = find(pour); }
+    for (const pl of planes) if (a.net === pl.net && (!a.layers || a.layers.some((l) => pl.layers.includes(l)))) { const f = pour.get(pl.net); if (f === undefined) pour.set(pl.net, i); else parent[find(i)] = find(f); }
     for (let j = i + 1; j < n; j++) { const b = nodes[j]; if (a.net === b.net && find(i) !== find(j) && touches(a, b)) parent[find(i)] = find(j); }
   }
   const byNet = new Map<number, Map<number, Node[]>>();
