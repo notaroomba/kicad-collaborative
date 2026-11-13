@@ -6,7 +6,7 @@ export interface LayerPickerOpts { layers: string[]; current: string; disallow: 
 /** The layer picker: done(layer) with the picked layer, or done(null) on Cancel. */
 export type LayerPicker = (opts: LayerPickerOpts, done: (layer: string | null) => void) => void;
 import { runAction } from "./actions";
-import { connectedWidth, netNameOf, otherCopperLayers, sizesOf } from "./app-state";
+import { connectedWidth, hoverPoint, netNameOf, otherCopperLayers, sizesOf } from "./app-state";
 import { branchChanges, routeCtx, routeDoc, updateHead } from "./branch";
 import { addedChange } from "./changes";
 import { padAt } from "./convert";
@@ -40,10 +40,14 @@ export function endRoute(ctx: PcbCtx, fixCurrent: boolean) {
   if (rt.dp) { if (fixCurrent && rt.dpLines) dpFix(ctx, { finish: true }); }
   else if (fixCurrent && ((rt.els && rt.els.length) || rt.placingVia)) fixHead(ctx, { finish: true });
   S.route = null; commitRoute(ctx, rt); routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
+  if (S.routeQueue && routeQueueNext) { const next = routeQueueNext; Promise.resolve().then(() => next(ctx)); }   // RouteSelected: the next one
 }
+/** route-selected.ts's routeNext, handed over at load (the modules import each other). */
+let routeQueueNext: ((ctx: PcbCtx) => unknown) | null = null;
+export function setRouteQueueNext(fn: (ctx: PcbCtx) => unknown) { routeQueueNext = fn; }
 /** Escape / another tool (ROUTER::AbortPlacement): the route and everything fixed in it are dropped. */
 export function abortRoute(ctx: PcbCtx) {
-  const rt = S.route; if (!rt) return; S.route = null; S.violations = null;
+  const rt = S.route; if (!rt) return; S.route = null; S.violations = null; S.routeQueue = null;   // RouteSelected stops (m_cancelled)
   if (rt.layer !== rt.startLayer && ctx) { /* the active layer stays where routing left it, as in pcbnew */ }
   if (ctx) { routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender(); } else if (K.pcbSizes) K.pcbSizes.state.endRoute();
 }
@@ -267,3 +271,40 @@ export function startSpans(ctx: PcbCtx, rt: Route, layer: string) {
 export let layerPickerImpl: LayerPicker = function (opts, done) { done(null); };
 /** pcb.setLayerPicker: the editor installs the real layer picker. */
 export function setLayerPickerImpl(fn: LayerPicker) { layerPickerImpl = fn; }
+
+/**
+ * ROUTER::Finish (routerAttemptFinish, F while routing): the head is walked to the nearest ratsnest anchor
+ * (GetNearestRatnestAnchor) up to five times while it keeps moving; when it gets there on a layer the anchor has, the
+ * route is fixed there and ends (FixRoute).  Otherwise the head stays where the walk got to (KiCad warps the mouse
+ * there).  False when nothing is routed or there is no anchor to go to.
+ */
+export function attemptFinish(ctx: PcbCtx): boolean {
+  const rt = S.route; if (!rt || rt.dp) return false;
+  leadingRatline(ctx, rt); const a = rt.ratAnchor; if (!a) return false;
+  const goal: Pt = a.p.slice();
+  for (let tries = 5; tries > 0; tries--) { const before = rt.target.slice(); rt.cursor = goal.slice(); updateHead(ctx); if (samePt(rt.target, before)) break; }
+  if (samePt(rt.target, goal) && (a.layers.includes(rt.layer) || a.layers.includes("*.Cu"))) {
+    const hv = hoverPoint(ctx, goal, true);
+    routeClick(ctx, { x: goal[0], y: goal[1], snap: hv.snap }, goal, { enter: true });
+    if (S.route === rt) endRoute(ctx, false);
+    return true;
+  }
+  ctx.requestRender(); return true;
+}
+/**
+ * ROUTER::ContinueFromEnd (routerContinueFromEnd, Ctrl+E while routing): what is fixed is committed, routing restarts at
+ * the nearest ratsnest anchor (on the current layer when the anchor has it, else the anchor's first layer) and the
+ * head is pulled back to where the route had got to.
+ */
+export function continueFromEnd(ctx: PcbCtx): boolean {
+  const rt = S.route; if (!rt || rt.dp) return false;
+  leadingRatline(ctx, rt); const a = rt.ratAnchor; if (!a) { ctx.toast("No ratsnest end to continue from."); return true; }
+  const currentEnd = rt.target.slice(), layer = rt.layer;
+  endRoute(ctx, false);
+  const next = a.layers.includes(layer) || a.layers.includes("*.Cu") || !a.layers.length ? layer : a.layers[0];
+  if (next !== S.layer) setLayer(ctx, next);
+  const hv = hoverPoint(ctx, a.p.slice(), true);
+  routeClick(ctx, { x: a.p[0], y: a.p[1], snap: hv.snap }, a.p.slice());
+  const nr = S.route as Route | null; if (!nr) return true;
+  nr.cursor = currentEnd; updateHead(ctx); ctx.requestRender(); return true;
+}

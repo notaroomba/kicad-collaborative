@@ -142,7 +142,7 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "SCH_ACTIONS::swapPinLabels": () => (schPins() ? () => { const P = schPins()!; const err = P.swapPinLabels(toolCtx(), (E.selPins as PinRef[]).slice()); if (err) toast(err, 5000); selectionChanged(); requestRender(); } : NOT_YET),
   // a field selected on its own: a schematic field is hidden (SCH_EDIT_TOOL::DoDelete, fieldops.ts); a board footprint field
   // goes to the board module's Delete (EDIT_TOOL::DeleteItems, PCB_FIELD_T: "Hide Field")
-  "ACTIONS::doDelete": () => (E.selField ? (isSch() ? () => { deleteSelectedField(); } : moduleKey("Delete")) : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
+  "ACTIONS::doDelete": () => (E.selField && !selectionItems().length ? (isSch() ? () => { deleteSelectedField(); } : moduleKey("Delete")) : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
   // SCH_MOVE_TOOL with a field selected on its own: the field follows the cursor (gestures.ts startFieldMove)
   "SCH_ACTIONS::move": () => (E.selField && !selectionItems().length ? () => { startFieldMove((E.lastCursorMm || [0, 0]) as [number, number]); } : selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
   "SCH_ACTIONS::drag": () => (E.selField && !selectionItems().length ? () => { startFieldMove((E.lastCursorMm || [0, 0]) as [number, number]); } : selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),

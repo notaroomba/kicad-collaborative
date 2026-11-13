@@ -84,6 +84,6 @@ export function placeTextAt(ctx: PcbCtx, at: Pt) {
     ctx.requestRender();
   });
 }
-export function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); if (S.tune) S.tune.pattern = null; }
+export function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.routeQueue = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); if (S.tune) S.tune.pattern = null; }
 /** pcb.setNewItemDialogs: the editor's dialogs for a new item. */
 export function setNewItemDialogsImpl(d: Record<string, NewItemDialog | undefined>) { newItemDialogs = d; }

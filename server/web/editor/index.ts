@@ -627,13 +627,13 @@ document.addEventListener("keydown", (ev) => {
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   // a schematic field selected on its own: Delete hides it, M / G carry it (SCH_EDIT_TOOL::DoDelete, SCH_MOVE_TOOL); a board
   // field goes on to the board module (Delete: "Hide Field") and the Move action (gestures.ts startFieldMove)
-  if (isSch() && E.selField && !E.selection.size && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+  if (isSch() && E.selField && !selectionIds().length && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     if ((k === "Delete" || k === "Backspace") && deleteSelectedField()) { ev.preventDefault(); return; }
     if ((k === "m" || k === "M" || k === "g" || k === "G") && !ev.shiftKey && !E.fdrag && startFieldMove((E.lastCursorMm || [0, 0]) as [number, number])) { ev.preventDefault(); return; }
   }
   promotePin(ev);
   hoverSelect(ev);                                                      // SCH_SELECTION_TOOL::RequestSelection: nothing selected -> the item under the cursor
-  if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
+  if ((k === "Delete" || (k === "Backspace" && isSch())) && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }   // a board's Backspace is Unroute Segment first (the module)
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "g" || k === "G")) { ev.preventDefault(); HANDLERS.showSearch(); return; }   // ACTIONS::showSearch
   if (pcbLayerKey(ev)) { ev.preventDefault(); return; }               // the board editor's + / - step the active copper layer, as in pcbnew

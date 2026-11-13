@@ -104,6 +104,7 @@ import { TUNE_MSG_DP_NETS, TUNE_MSG_SKEW_NETS, TUNE_MSG_SKEW_PICK, assembleDiffP
 import { LINE_W, TEXT_STYLE, flipLayerName, layerClass, layerOf, norm180, norm360, pt, r6, textStyle, useFootprintEditorDefaults, widthOf } from "./util";
 import { dir8, hullOf, isFreePad, legPts, pathClear, pathHits, routeClearance, routeObstacles, routerWorld, simplifyPts, walkHead, walkTo } from "./walkaround";
 import { uniqueZoneName, subtractOutline } from "./zone-modes";
+import { unrouteSegment, itemRatsnestAnchors } from "./route-selected";
 
 /** Every pad picked on its own ("footprintId#padIndex"), the last one picked first; those picked before it with
  *  Shift count while it is still the picked pad. */
@@ -352,6 +353,7 @@ export const pcb = {
     // @ts-expect-error -- TS7029: the fall-through to "Delete" below is intended
     case "Backspace":
       if (S.route) { if (editing()) undoRouteLeg(ctx); return true; }   // routerUndoLastSegment: silent with nothing fixed
+      if (!S.draw && !S.move && !ev.shiftKey && !ctx.viewOnly && unrouteSegment(ctx)) return true;   // PCB_ACTIONS::unrouteSegment on selected tracks / vias
       // fall through: deleteLastPoint and doDelete are the same while drawing; with nothing drawn Backspace deletes like Delete
     case "Delete":
       if (S.draw && S.draw.shape === "garc") { arcBackup(ctx); return true; }   // ARC_MODE_SESSION::RemoveLastPoint
@@ -450,7 +452,7 @@ export const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { uniqueZoneName, subtractOutline, footprintRefChoices, footprintByRef, netNameCmp, fieldEdit: { requestField, rotateFieldChange, flipFieldChange, hideFieldChanges, footprintFieldNode }, boardFindHits, edaMatches, findStep, unescapeKiCad, nearestSnapLinePoint, angleSnapDirections, MOVE_SNAP_MSG, ANGLE_SNAP_MSG, DRAWING_TOOL_IDS, useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad: padToolApi, exchange: exchangeApi, fpProps: fpPropsApi, fpPads: fpPadsApi, fpCheck: fpCheckApi, fpUsers: fpUsersApi, setEnumParams, openForm: (spec: FormSpec) => formImpl(spec), arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { itemRatsnestAnchors, uniqueZoneName, subtractOutline, footprintRefChoices, footprintByRef, netNameCmp, fieldEdit: { requestField, rotateFieldChange, flipFieldChange, hideFieldChanges, footprintFieldNode }, boardFindHits, edaMatches, findStep, unescapeKiCad, nearestSnapLinePoint, angleSnapDirections, MOVE_SNAP_MSG, ANGLE_SNAP_MSG, DRAWING_TOOL_IDS, useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad: padToolApi, exchange: exchangeApi, fpProps: fpPropsApi, fpPads: fpPadsApi, fpCheck: fpCheckApi, fpUsers: fpUsersApi, setEnumParams, openForm: (spec: FormSpec) => formImpl(spec), arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)

@@ -178,5 +178,54 @@ test("Interactive Offset: Offset Item starts at the vector between the points; O
   const set = {}; spec.change("polar", true, (k, v) => { set[k] = v; }); assert.equal(set.x, Math.round(Math.hypot(10, 5) * 1e6) / 1e6);
 });
 
+const RBOARD = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (net 0 "") (net 1 "A")
+  (footprint "T:R1" (layer "F.Cu") (uuid "fa") (at 10 10)
+    (property "Reference" "R1" (at 0 -2 0) (layer "F.SilkS") (uuid "fa-r"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A") (uuid "pa")))
+  (footprint "T:R2" (layer "F.Cu") (uuid "fb") (at 30 10)
+    (property "Reference" "R2" (at 0 -2 0) (layer "F.SilkS") (uuid "fb-r"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A") (uuid "pb")))
+  (segment (start 0 30) (end 10 30) (width 0.25) (layer "F.Cu") (net 0) (uuid "t1"))
+  (segment (start 10 30) (end 20 30) (width 0.25) (layer "F.Cu") (net 0) (uuid "t2"))
+  (segment (start 20 30) (end 30 30) (width 0.25) (layer "F.Cu") (net 0) (uuid "t3"))
+)`;
+test("Attempt Finish (F while routing) walks the head to the ratsnest end and fixes the route there", () => {
+  const doc = K.parseDoc(RBOARD, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); P.state.layer = "F.Cu";
+  ctx.setTool("route"); pcb.onPointerDown(ev(), [10, 10], ctx);
+  assert.ok(P.state.route, "routing"); assert.equal(pcb.runAction("routerAttemptFinish", ctx), true);
+  assert.equal(P.state.route, null, "the route ended");
+  assert.equal(log.commits.length, 1); assert.equal(log.commits[0].label, "Route Track");
+  const segs = [...doc.items.values()].filter((it) => it.kind === "segment" && !["t1", "t2", "t3"].includes(it.id));
+  const ends = segs.flatMap((s) => [kid(s.node, "start").slice(1), kid(s.node, "end").slice(1)].map((p) => p.join(",")));
+  assert.ok(ends.includes("10,10") && ends.includes("30,10"), ends.join(" "));
+  ctx.setTool("select");
+});
+test("Attempt Finish outside routing leaves F to Flip", () => {
+  const doc = K.parseDoc(RBOARD, "kicad_pcb"); const { ctx } = fakeCtx(doc);
+  assert.equal(pcb.runAction("routerAttemptFinish", ctx), false);
+});
+test("Unroute Segment: the selected track goes, the tracks it touched become the selection", () => {
+  const doc = K.parseDoc(RBOARD, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); sel(ctx, ["t2"]);
+  assert.equal(pcb.runAction("unrouteSegment", ctx), true);
+  assert.equal(log.commits[0].label, "Unroute Segment"); assert.ok(!doc.items.has("t2"));
+  assert.deepEqual([...ctx.selection].sort(), ["t1", "t3"]);
+});
+test("Route Selected: each unrouted end of the selected footprints starts a route in turn", () => {
+  const doc = K.parseDoc(RBOARD, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); P.state.layer = "F.Cu"; sel(ctx, ["fa"]);
+  pcb.runAction("routerRouteSelected", ctx);
+  assert.ok(P.state.route, "a route started"); assert.deepEqual(P.state.route.start, [10, 10]);
+  assert.deepEqual(P.state.routeQueue.items, ["fa"]);
+  pcb.cancel && pcb.cancel(); ctx.setTool("select");
+  assert.equal(P.state.routeQueue, null, "Escape stops the queue");
+});
+test("Attempt Finish Selected (Shift+F) routes every selected footprint's ratsnest it can", () => {
+  const doc = K.parseDoc(RBOARD, "kicad_pcb"); const { ctx, log } = fakeCtx(doc); P.state.layer = "F.Cu"; sel(ctx, ["fa"]);
+  pcb.runAction("routerAutorouteSelected", ctx);
+  assert.equal(P.state.route, null); assert.equal(log.commits.length, 1); assert.equal(P.state.routeQueue, null);
+  ctx.setTool("select");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

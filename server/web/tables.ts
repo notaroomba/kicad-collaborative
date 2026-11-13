@@ -201,6 +201,8 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
   pcb: ["skip",   // Tab while moving individually: the move's own command
     // context menus only (board_editor_control.cpp ZONE_CONTEXT_MENU, the selection tool's menu, EDIT_TOOL's menu)
     "getAndPlace", "copyWithReference", "drawZoneCutout", "drawSimilarZone",
+    // ROUTER_TOOL's context menu (router_tool.cpp:700-708) and the selection tool's (unrouteSegment)
+    "routerAttemptFinish", "routerContinueFromEnd", "routerRouteSelected", "routerRouteSelectedFromEnd", "routerAutorouteSelected", "unrouteSegment",
     "duplicateIncrement",   // Duplicate and Increment: a hotkey (Ctrl+Shift+D) and the selection menu, in no menu bar
     // PCB_SELECTION_TOOL's context menu only: Enter Group / Leave Group
     "enterGroup", "leaveGroup",

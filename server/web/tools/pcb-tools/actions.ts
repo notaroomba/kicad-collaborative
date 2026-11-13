@@ -39,7 +39,7 @@ import { netOf } from "./nets";
 import { zoneLayers } from "./nodes";
 import { ARC_EDIT_ACTIONS, addCornerChanges, arcEditMode, canAddCorner, handleTol, nextArcEditMode, peSingleId, removeCornerChanges, setArcEditMode } from "./point-editor";
 import { netUnder } from "./route-geom";
-import { selectLayerAndPlaceVia, setLayer, startWithVia, toggleViaPlacement, undoRouteLeg, viaSpan } from "./route-tool";
+import { attemptFinish, continueFromEnd, selectLayerAndPlaceVia, setLayer, startWithVia, toggleViaPlacement, undoRouteLeg, viaSpan } from "./route-tool";
 import { CM_M45, CM_M90, CM_R45, CM_R90, RM_MARK, RM_SHOVE, RM_WALK, setRouterSettings } from "./router-settings";
 import { beginCarryMove, moveTransform } from "./select-move";
 import { K, S, bind, lastCtx } from "./state";
@@ -52,6 +52,7 @@ import { clone, fmt, layerOf, r6, widthOf } from "./util";
 import { flipFieldChange, requestField, rotateFieldChange } from "./field-edit";
 import { diffPairMarkers, matchedLengthMarkers } from "./dru";
 import { sourceZone } from "./zone-modes";
+import { routeSelected, unrouteSegment } from "./route-selected";
 import { copyWithReference, interactiveOffset, moveIndividually, moveWithReference, skipMoveItem } from "./ref-move";
 
 // ---------------------------------------------------------------- actions: pcbnew's non-tool commands
@@ -338,7 +339,7 @@ act("rotateSelectionCw", "Rotate Clockwise", "", (ctx: PcbCtx) => rotateBy(ctx, 
  * several about the middle of their box; nothing is said afterwards.
  */
 export function flipBy(ctx: PcbCtx) {
-  if (S.route) return true;
+  if (S.route) { attemptFinish(ctx); return true; }   // F while routing is routerAttemptFinish
   if (moveInFlight(ctx)) return moveTransform(ctx, "flip");
   if (!canEdit(ctx)) return true;
   // a footprint field: PCB_TEXT::Flip about its own position ("Change Side / Flip")
@@ -529,6 +530,12 @@ act("ACT_SelLayerAndPlaceThroughVia", "Select Layer and Place Through Via...", "
 act("ACT_SelLayerAndPlaceBlindVia", "Select Layer and Place Blind/Buried Via...", "", (ctx: PcbCtx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "blind")), Object.assign({ tip: "Select a layer, then add a blind or buried via at the end of currently routed track." }, ROUTER_ACTION));
 act("ACT_SelLayerAndPlaceMicroVia", "Select Layer and Place Micro Via...", "", (ctx: PcbCtx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "micro")), Object.assign({ tip: "Select a layer, then add a micro via at the end of currently routed track." }, ROUTER_ACTION));
 act("routerDiffPairDialog", "Differential Pair Dimensions...", "", (ctx: PcbCtx) => { if (routingDialogs.diffPair) routingDialogs.diffPair(ctx); else ctx.toast("Differential Pair Dimensions: dialogs are unavailable here"); return true; }, Object.assign({ tip: "Open Differential Pair Dimension settings" }, ROUTER_ACTION));
+act("routerAttemptFinish", "Attempt Finish", "F", (ctx: PcbCtx) => (S.route ? (attemptFinish(ctx), true) : false), Object.assign({ tip: "Attempts to complete current route to nearest ratsnest end." }, ROUTER_ACTION));
+act("routerContinueFromEnd", "Route From Other End", "Ctrl+E", (ctx: PcbCtx) => (S.route ? (continueFromEnd(ctx), true) : false), Object.assign({ tip: "Commits current segments and starts next segment from nearest ratsnest end." }, ROUTER_ACTION));
+act("routerRouteSelected", "Route Selected", "Shift+X", (ctx: PcbCtx) => { if (!canEdit(ctx)) return true; routeSelected(ctx, "manual"); return true; }, { menu: false, tip: "Sequentially route selected items from ratsnest anchor" });
+act("routerRouteSelectedFromEnd", "Route Selected From Other End", "Shift+E", (ctx: PcbCtx) => { if (!canEdit(ctx)) return true; routeSelected(ctx, "otherEnd"); return true; }, { menu: false, tip: "Sequentially route selected items to ratsnest anchor" });
+act("routerAutorouteSelected", "Attempt Finish Selected (Autoroute)", "Shift+F", (ctx: PcbCtx) => { if (!canEdit(ctx)) return true; routeSelected(ctx, "auto"); return true; }, { menu: false, tip: "Sequentially trigger routing and attempt to finish all selected items" });
+act("unrouteSegment", "Unroute Segment", "Backspace", (ctx: PcbCtx) => (S.route || S.draw || S.move || !canEdit(ctx) ? false : unrouteSegment(ctx)), { menu: false, tip: "Unroutes the selected track segment and selects the connected tracks" });
 act("routerUndoLastSegment", "Undo Last Segment", "", (ctx: PcbCtx) => routingOnly(ctx, () => undoRouteLeg(ctx)), Object.assign({ tip: "Walks the current track back one segment." }, ROUTER_ACTION));
 act("selectLayerPair", "Set Layer Pair...", "", (ctx: PcbCtx) => { if (routingDialogs.layerPair) routingDialogs.layerPair(ctx); else ctx.toast("Set Layer Pair: dialogs are unavailable here"); return true; }, { menu: "-" });
 act("editPredefinedSizes", "Edit Pre-defined Sizes...", "", (ctx: PcbCtx) => { if (routingDialogs.sizes) routingDialogs.sizes(ctx); else ctx.toast("Edit Pre-defined Sizes: dialogs are unavailable here"); return true; }, { menu: "-" });

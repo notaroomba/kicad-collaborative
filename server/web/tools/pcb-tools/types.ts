@@ -157,7 +157,7 @@ export type PcbState = {
   arcMode?: number; arcEditMode?: number; angleSnap?: string; stickyUp?: boolean; startWithVia?: { from: string } | null;
   forceHover?: boolean; dragFree?: boolean; downHandled?: unknown; escCleared?: unknown;
   /** DRAWING_TOOL::DrawZone's ZONE_MODE for the zone tool: a cutout of / a zone similar to the source zone (zone-modes.ts); next: what the next activation takes */
-  moveSeq?: import("./ref-move").MoveSeq | null;
+  moveSeq?: import("./ref-move").MoveSeq | null; routeQueue?: import("./route-selected").RouteQueue | null;
   zoneMode?: { mode: "cutout" | "similar"; src: string } | null; zoneModeNext?: { mode: "cutout" | "similar"; src: string } | null;
 };
 
