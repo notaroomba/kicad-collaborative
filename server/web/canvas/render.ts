@@ -446,6 +446,8 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     if (vx0 <= 0 && vx1 >= 0) { ctx.moveTo(0, vy0); ctx.lineTo(0, vy1); }
     ctx.stroke();
   }
+  // PCB_GRID_ITEMs (LAYER_SUBGRIDS): the custom routing / placement grids, over the background grid and its axes
+  if (isPcb && opts.subgrids !== false) drawGridItems(ctx, doc, opts, s, dpr, sCss, [vx0, vy0, vx1, vy1], bg || PCB_BG);
   // the drawing sheet (frame, tick band, title block) and, above it, the page outline.  Under the
   // flipped board view KiCad mirrors the sheet back about the page — "Draw the title block normally
   // even if the view is flipped" (ds_proxy_view_item.cpp:114-128) — so it is drawn unflipped here.
@@ -829,6 +831,98 @@ function drawUmbilicals(ctx: Ctx2D, doc: Doc, selected: Set<string>, s: number, 
   ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.strokeStyle = ANCHOR_COLOR; ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath();
   for (const [a, b] of lines) { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
   ctx.stroke(); ctx.restore();
+}
+
+/** A PCB_GRID_ITEM as GRID_GEOMETRY: (grid_item xy|polar (at x y) (extent …) (spacing …) (angle deg) (priority n) (tick_interval n) …). */
+export interface GridItemGeom { kind: "xy" | "polar"; origin: Pt; pitch: Pt; extent: Pt; orientation: number; priority: number; tick: number; id?: string }
+export function gridItemGeom(node: readonly unknown[]): GridItemGeom | null {
+  if (str(node[0]) !== "grid_item") return null;
+  const kind = str(node[1]) === "polar" ? "polar" : "xy", pair = (k: string): Pt => { const n = kid(node, k); return n ? [num(n[1]), num(n[2])] : [0, 0]; };
+  const deg = Math.PI / 180, ext = pair("extent"), sp = pair("spacing");
+  const pr = kid(node, "priority"), tk = kid(node, "tick_interval"), an = kid(node, "angle");
+  return { kind, origin: pair("at"), orientation: an ? num(an[1]) * deg : 0, priority: Math.max(1, pr ? num(pr[1], 1) : 1), tick: tk ? num(tk[1]) : 0,
+    // polar: (extent rMax phiMaxDeg) (spacing dr dPhiDeg); the angles in radians as GRID_GEOMETRY keeps them
+    extent: kind === "polar" ? [ext[0], ext[1] * deg] : ext, pitch: kind === "polar" ? [sp[0], sp[1] * deg] : sp };
+}
+/** GRID_GEOMETRY::Area and TakesPrecedenceOver: higher priority first, then the smaller area. */
+export function gridItemArea(g: GridItemGeom): number { return g.kind === "polar" ? 0.5 * g.extent[0] * g.extent[0] * g.extent[1] : 4 * g.extent[0] * g.extent[1]; }
+export function gridTakesPrecedence(a: GridItemGeom, b: GridItemGeom): boolean { return a.priority !== b.priority ? a.priority > b.priority : gridItemArea(a) < gridItemArea(b); }
+/** AutoSparsePitch: multiply the pitch by the major tick (2 without one) until marks are more than `threshold` apart. */
+export function autoSparsePitch(pitch: number, tick: number, threshold: number): number { const m = tick > 1 ? tick : 2; let p = pitch, guard = 0; while (p > 0 && p <= threshold && guard++ < 40) p *= m; return p; }
+/** LAYER_SUBGRIDS (builtin_color_themes.h: 194, 194, 0); GRID_DIM_ALPHA, GRID_EDGE_DARKEN, GRID_SELECTED_BRIGHTEN. */
+export const SUBGRID_COLOR = "#C2C200", GRID_DIM_ALPHA = 0.4, GRID_EDGE_DARKEN = 0.75, GRID_SELECTED_BRIGHTEN = 0.5;
+/**
+ * GAL::drawGridSources for the board's grid items: lowest precedence first, the selected ones last.  Each clears its
+ * coverage with the background (a selected one only washes it at GRID_DIM_ALPHA), draws its lattice in the display
+ * grid's style (thinned out as the main grid is: gridLattice), and outlines its coverage one pixel wide in its colour
+ * Darkened( 0.75 ).  A selected grid is Brightened( 0.5 ).
+ */
+function drawGridItems(ctx: Ctx2D, doc: Doc, opts: RenderOpts, s: number, dpr: number, sCss: number, vr: number[], bg: string): void {
+  const list: GridItemGeom[] = [];
+  for (const it of doc.items.values()) { if (it.kind !== "grid_item") continue; const g = gridItemGeom(it.node); if (g && g.pitch[0] > 0 && g.pitch[1] > 0) { g.id = it.id; list.push(g); } }
+  if (!list.length) return;
+  list.sort((a, b) => (gridTakesPrecedence(a, b) ? -1 : gridTakesPrecedence(b, a) ? 1 : 0));
+  const sel = opts.selected || null, isSel = (g: GridItemGeom) => !!sel && sel.has(g.id!);
+  const order = [...list.filter((g) => !isSel(g)).reverse(), ...list.filter(isSel).reverse()];
+  const style = opts.gridStyle === "lines" || opts.gridStyle === "crosses" ? opts.gridStyle : "dots";
+  const threshold = (opts.gridMinSpacing! > 0 ? opts.gridMinSpacing! : GRID_MIN_SPACING) * (style === "crosses" ? 2 : 1) / sCss;
+  const px1 = Math.max(1, dpr) / s, base = opts.gridItemColor || SUBGRID_COLOR;
+  ctx.save(); ctx.setLineDash([]); ctx.lineCap = "butt";
+  for (const g of order) {
+    const hi = isSel(g), color = hi ? brightened(base, GRID_SELECTED_BRIGHTEN) : base;
+    const tick = g.tick > 0 ? g.tick : GRID_TICK, major = (i: number) => tick > 0 && i % tick === 0;
+    // the lattice (gridLattice): both cartesian axes thin by one factor; polar radius and angle each on their own
+    let dx: number, dy: number;
+    if (g.kind === "polar") { dx = autoSparsePitch(g.pitch[0], tick, threshold); dy = g.extent[0] > 0 ? autoSparsePitch(g.pitch[1], tick, threshold / g.extent[0]) : g.pitch[1]; }
+    else { const mp = Math.min(g.pitch[0], g.pitch[1]), k = autoSparsePitch(mp, tick, threshold) / mp; dx = g.pitch[0] * k; dy = g.pitch[1] * k; }
+    ctx.save(); ctx.translate(g.origin[0], g.origin[1]); ctx.rotate(-g.orientation);
+    const coverage = () => {
+      ctx.beginPath();
+      if (g.kind === "xy") ctx.rect(-g.extent[0], -g.extent[1], 2 * g.extent[0], 2 * g.extent[1]);
+      else if (g.extent[0] > 0 && g.extent[1] >= 2 * Math.PI - 1e-6) ctx.arc(0, 0, g.extent[0], 0, 2 * Math.PI);
+      else if (g.extent[0] > 0 && g.extent[1] > 0) { const n = Math.max(16, Math.floor(g.extent[1] / (Math.PI / 16))); ctx.moveTo(0, 0); for (let i = 0; i <= n; i++) { const a = g.extent[1] * i / n; ctx.lineTo(g.extent[0] * Math.cos(a), g.extent[0] * Math.sin(a)); } ctx.closePath(); }
+    };
+    // clear the coverage (the grids under it stop there); a selected grid only washes it
+    ctx.globalAlpha = hi ? GRID_DIM_ALPHA : 1; ctx.fillStyle = bg; coverage(); ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = color; ctx.fillStyle = color;
+    const dot = (x: number, y: number, mx: boolean, my: boolean) => { const w = mx ? 2 * px1 : px1, h = my ? 2 * px1 : px1; ctx.rect(x - w / 2, y - h / 2, w, h); };
+    const cross = (x: number, y: number, mj: boolean, ang: number) => { const w = mj ? 2 * px1 : px1, len = 2 * w, c = Math.cos(ang) * len, sn = Math.sin(ang) * len; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x - c, y - sn); ctx.lineTo(x + c, y + sn); ctx.moveTo(x + sn, y - c); ctx.lineTo(x - sn, y + c); ctx.stroke(); };
+    let count = 0; const LIMIT = 200000;
+    if (g.kind === "polar" && g.extent[0] > 0 && g.extent[1] > 0) {
+      const rMax = g.extent[0], phiMax = g.extent[1];
+      if (style === "lines") {
+        let ri = 1; for (let r = dx; r <= rMax + 1e-6 && count++ < LIMIT; r += dx, ri++) { ctx.lineWidth = major(ri) ? 2 * px1 : px1; ctx.beginPath(); ctx.arc(0, 0, r, 0, phiMax); ctx.stroke(); }
+        let pi = 0; for (let ph = 0; ph <= phiMax + 1e-6 && count++ < LIMIT; ph += dy, pi++) { ctx.lineWidth = major(pi) ? 2 * px1 : px1; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(rMax * Math.cos(ph), rMax * Math.sin(ph)); ctx.stroke(); }
+      } else {
+        if (style === "dots") ctx.beginPath();
+        let ri = 0; for (let r = 0; r <= rMax + 1e-6; r += dx, ri++) { let pi = 0; for (let ph = 0; ph <= phiMax + 1e-6 && count++ < LIMIT; ph += dy, pi++) { const x = r * Math.cos(ph), y = r * Math.sin(ph); if (style === "dots") dot(x, y, major(ri), major(pi)); else cross(x, y, major(ri) && major(pi), ph); } }
+        if (style === "dots") ctx.fill();
+      }
+    } else if (g.kind === "xy") {
+      // the visible part, in the grid's own frame (gridScreenBBox), one pitch of bleed, clipped to the extent
+      const co = Math.cos(g.orientation), so = Math.sin(g.orientation);
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const [wx, wy] of [[vr[0], vr[1]], [vr[2], vr[1]], [vr[0], vr[3]], [vr[2], vr[3]]]) { const ox = wx - g.origin[0], oy = wy - g.origin[1], lx = co * ox - so * oy, ly = so * ox + co * oy; x0 = Math.min(x0, lx); x1 = Math.max(x1, lx); y0 = Math.min(y0, ly); y1 = Math.max(y1, ly); }
+      x0 = Math.max(x0 - dx, -g.extent[0]); x1 = Math.min(x1 + dx, g.extent[0]); y0 = Math.max(y0 - dy, -g.extent[1]); y1 = Math.min(y1 + dy, g.extent[1]);
+      const ix0 = Math.max(Math.floor(x0 / dx), -Math.trunc(g.extent[0] / dx)), ix1 = Math.min(Math.ceil(x1 / dx), Math.trunc(g.extent[0] / dx));
+      const iy0 = Math.max(Math.floor(y0 / dy), -Math.trunc(g.extent[1] / dy)), iy1 = Math.min(Math.ceil(y1 / dy), Math.trunc(g.extent[1] / dy));
+      if (x1 >= x0 && y1 >= y0 && (ix1 - ix0 + 1) * (iy1 - iy0 + 1) < 400000) {
+        if (style === "lines") {
+          for (const mj of [false, true]) {
+            ctx.lineWidth = mj ? 2 * px1 : px1; ctx.beginPath();
+            for (let i = ix0; i <= ix1; i++) if (major(i) === mj) { ctx.moveTo(i * dx, y0); ctx.lineTo(i * dx, y1); }
+            for (let j = iy0; j <= iy1; j++) if (major(j) === mj) { ctx.moveTo(x0, j * dy); ctx.lineTo(x1, j * dy); }
+            ctx.stroke();
+          }
+        } else if (style === "dots") { ctx.beginPath(); for (let i = ix0; i <= ix1; i++) for (let j = iy0; j <= iy1; j++) dot(i * dx, j * dy, major(i), major(j)); ctx.fill(); }
+        else for (let i = ix0; i <= ix1; i++) for (let j = iy0; j <= iy1; j++) cross(i * dx, j * dy, major(i) && major(j), 0);
+      }
+    }
+    // the coverage outline, so a grid too sparse to draw still reads as an area
+    ctx.strokeStyle = darkened(color, GRID_EDGE_DARKEN); ctx.lineWidth = px1; coverage(); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 /** LAYER_VIA_STITCHING (builtin_color_themes.h: 77, 204, 178). */

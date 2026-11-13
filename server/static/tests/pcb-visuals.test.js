@@ -146,5 +146,27 @@ test("via stitching generator: its outline and the inward hairline ticks every 2
   assert(!draw({ objects: { show: new Set(), hide: new Set() } }, d).some((o) => o.op === "stroke" && o.stroke === "#4DCCB2"), "hidden with its row off");
 });
 
+test("grid items (PCB_GRID_ITEM): geometry, precedence, sparse pitch, drawn over the grid with a darkened outline", () => {
+  const g = K.gridItemGeom(K.parse('(grid_item xy (at 10 20) (extent 5 3) (spacing 1 0.5) (angle 30) (priority 2) (tick_interval 5) (affects (cursor yes) (routing yes) (placement yes)) (uuid "g1"))'));
+  assert.deepEqual([g.kind, g.origin, g.extent, g.pitch, g.priority, g.tick], ["xy", [10, 20], [5, 3], [1, 0.5], 2, 5]);
+  assert(Math.abs(g.orientation - Math.PI / 6) < 1e-12);
+  const p = K.gridItemGeom(K.parse('(grid_item polar (at 0 0) (extent 10 90) (spacing 2 15) (priority 1) (uuid "g2"))'));
+  assert(Math.abs(p.extent[1] - Math.PI / 2) < 1e-12 && Math.abs(p.pitch[1] - Math.PI / 12) < 1e-12, "polar angles in radians");
+  assert(Math.abs(K.gridItemArea(p) - 0.5 * 100 * Math.PI / 2) < 1e-9 && K.gridItemArea(g) === 60);
+  assert(K.gridTakesPrecedence(g, p) && !K.gridTakesPrecedence(p, g), "higher priority first");
+  const q = Object.assign({}, g, { priority: 1 }); assert(K.gridTakesPrecedence(q, p), "same priority: the smaller area");
+  assert.strictEqual(K.autoSparsePitch(0.1, 10, 0.5), 1); assert.strictEqual(K.autoSparsePitch(0.1, 0, 0.5), 0.8); assert.strictEqual(K.autoSparsePitch(1, 10, 0.5), 1);
+  const d = K.parseDoc(HEAD + '(grid_item xy (at 5 0) (extent 4 2) (spacing 1 1) (priority 1) (uuid "g1"))'
+    + ' (gr_line (start -1 -1) (end 11 -1) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts") (uuid "e1")))');
+  const ops = draw({ grid: 0.5 }, d);
+  assert(ops.some((o) => o.op === "fill" && o.fill === "#C2C200"), "the lattice in LAYER_SUBGRIDS");
+  assert(ops.some((o) => o.op === "stroke" && o.stroke === K.darkened("#C2C200", 0.75)), "the coverage outline");
+  assert(ops.some((o) => o.op === "fill" && o.fill === K.PCB_BG && o.alpha === 1), "the coverage cleared with the background");
+  assert(!draw({ grid: 0.5, subgrids: false }, d).some((o) => o.fill === "#C2C200"), "Appearance ▸ Grids off");
+  const lit = draw({ grid: 0.5, selected: new Set(["g1"]) }, d);
+  assert(lit.some((o) => o.op === "fill" && o.fill === K.brightened("#C2C200", 0.5)), "a selected grid brightened");
+  assert(lit.some((o) => o.op === "fill" && o.fill === K.PCB_BG && o.alpha === 0.4), "a selected grid only washes its area");
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

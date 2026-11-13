@@ -10,7 +10,7 @@ import { courtyards, netClearance } from "./drc";
 import { settingsOf } from "./dialogs";
 import { POLY_TOOLS, RULE_AREA_LAYERS, drawWidth } from "./draw-modes";
 import { selectionIds } from "./groups";
-import { drawGroupFrames } from "./group-edit";
+import { drawGroupFrames, enteredGroupIds } from "./group-edit";
 import { netTable, ratsnest } from "./netlist";
 import { netOf } from "./nets";
 import { tableGrid } from "./nodes";
@@ -136,7 +136,12 @@ export function drawClearanceOutlines(c: CanvasRenderingContext2D, ctx: PcbCtx, 
   const KC = K as unknown as { selectedColor(c: string): string; highlightColor(c: string, pcb: boolean): string; darkened(c: string, f: number): string; HL_FACTOR: number };
   c.save(); c.globalAlpha = 1; c.setLineDash([]); c.lineWidth = cpx; c.lineCap = "round"; c.lineJoin = "round";
   const base = color(layer);
+  // group edit mode: what is outside the entered group fades to the Outside Group opacity, unless selected
+  const entered = enteredGroupIds(doc);
+  const ro = entered ? appGlobal(() => (editorState() as unknown as { renderOpts?: { outsideGroupOpacity?: number; objects?: { opacity?: Record<string, number> } } }).renderOpts || null, null) : null;
+  const outsideOp = !entered ? 1 : ro && typeof ro.outsideGroupOpacity === "number" ? ro.outsideGroupOpacity : ro && ro.objects && ro.objects.opacity && typeof ro.objects.opacity.outsideGroup === "number" ? ro.objects.opacity.outsideGroup : 0.2;
   for (const o of list) {
+    c.globalAlpha = entered && !entered.has(o.id) && !sel.has(o.id) ? outsideOp : 1;
     let col = o.npth ? NPTH_COLOR : base;
     const lit = !!hl && (hl.has(o.id) || (o.padIndex !== undefined && hl.has(o.id + "#" + o.padIndex)));
     if (sel.has(o.id)) col = KC.selectedColor(col);

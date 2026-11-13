@@ -233,6 +233,7 @@ export function applyAppearance(): void {
   if (show.has("lockedShadow") && P) { const ids = new Set<string>(); for (const it of doc.items.values()) { try { if (P.isLocked(it.node)) ids.add(it.id); } catch (e) { /* not lockable */ } } ro.lockedIds = ids; }
   else ro.lockedIds = undefined;
   ro.frame = user.objHidden.includes("drawingSheet") ? false : undefined;
+  ro.subgrids = user.objHidden.includes("subgrids") ? false : undefined;   // LAYER_SUBGRIDS: the board's grid items
   // LAYER_BOARD_OUTLINE_AREA: the board outline filled under everything (PCB_PAINTER::draw( PCB_BOARD_OUTLINE ))
   if (show.has("boardArea") && P && (P as unknown as { boardOutline?: (d: KDoc) => { outline: number[][] | null } }).boardOutline) {
     try { const o = (P as unknown as { boardOutline: (d: KDoc) => { outline: number[][] | null } }).boardOutline(doc).outline; ro.boardArea = o && o.length > 2 ? [o] : undefined; } catch (e) { ro.boardArea = undefined; }
