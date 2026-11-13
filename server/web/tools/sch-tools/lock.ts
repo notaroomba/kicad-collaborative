@@ -6,8 +6,8 @@ import { editable, selectedItems } from "./commands";
 import { kid, str } from "./state";
 import { deep, modChange } from "./util";
 
-/** SCH_ITEM::IsLocked as read back from the file: "(locked yes)" (or a bare "locked" atom). */
-export function isLockedNode(node: SNode): boolean { const l = kid(node, "locked"); return node.includes("locked") || (!!l && str(l[1]) !== "no"); }
+/** SCH_ITEM::IsLocked as read back from the file: SCH_IO_KICAD_SEXPR only takes the "(locked yes)" child. */
+export function isLockedNode(node: SNode): boolean { const l = kid(node, "locked"); return !!l && str(l[1]) !== "no"; }
 /** The item or (a group) any of its members is locked: FilterSelectionForLockedItems' lockedDescendant. */
 export function isLockedItem(doc: KDoc, it: KItem): boolean {
   if (isLockedNode(it.node)) return true;
@@ -22,7 +22,7 @@ const SHEET_ATTRS = new Set(["exclude_from_sim", "in_bom", "on_board", "in_pos_f
  */
 export function setLockedNode(kind: string, node: SNode, on: boolean): SNode {
   const n = deep(node);
-  for (let i = n.length - 1; i > 0; i--) { const c = n[i]; if (c === "locked" || (Array.isArray(c) && c[0] === "locked")) n.splice(i, 1); }
+  for (let i = n.length - 1; i > 0; i--) { const c = n[i]; if (Array.isArray(c) && c[0] === "locked") n.splice(i, 1); }
   if (!on) return n;
   const flag: SNode = ["locked", "yes"];
   const at = (tok: string) => n.findIndex((c, i) => i > 0 && Array.isArray(c) && c[0] === tok);

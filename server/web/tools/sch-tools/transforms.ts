@@ -12,7 +12,7 @@ import { mmPerPx } from "./snap";
 import { K, LINE_KINDS, POINT_KINDS, S, TEXT_KINDS, atOf, kid, kids, num, ptsOf, setAt, setPts, str } from "./state";
 import { selEndOf } from "./line-ends";
 import { addNode, deep, dropKid, modChange, r4, removeChange, replaceKid, same } from "./util";
-import { unlockedSelection } from "./lock";
+import { isLockedNode, unlockedSelection } from "./lock";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 // ---------------------------------------------------------------- group transforms: rotate / mirror about the selection centre, swap, align, move exactly
@@ -307,19 +307,28 @@ export function alignToGridChanges(ctx: SchCtx, items: KItem[]) {
 }
 export function alignToGrid(ctx: SchCtx) {
   if (!editable(ctx)) return false;
-  const items = selectedItems(ctx); if (!items.length) return false;
+  const items = unlockedSelection(ctx); if (!items.length) return false;   // FilterSelectionForLockedItems
   const changes = alignToGridChanges(ctx, items); if (!changes.length) { ctx.toast("Already on the grid"); return true; }
   ctx.commit(changes, "align to grid"); return true;
 }
 // Edge alignment (sch_align_tool.cpp): every item's box edge moves to the extreme edge of the selection.
+// SCH_ALIGN_TOOL::GetSelections keeps the locked items in place as anchors: with any locked, selectTarget takes the
+// edge of the locked one under the cursor, else of the first locked one in the command's sort order.
 export function alignEdgeChanges(ctx: SchCtx, items: KItem[], which: string) {
   const doc = ctx.doc, boxes = items.map((it: KItem) => it.bbox || rectOf(it)).filter(Boolean) as Box[]; if (boxes.length < 2) return [];
-  const target = which === "top" ? Math.min(...boxes.map((b) => b[1])) : which === "bottom" ? Math.max(...boxes.map((b) => b[3])) : which === "left" ? Math.min(...boxes.map((b) => b[0])) : which === "right" ? Math.max(...boxes.map((b) => b[2]))
+  const edge = (b: Box) => which === "top" ? b[1] : which === "bottom" ? b[3] : which === "left" ? b[0] : which === "right" ? b[2] : which === "centerX" ? (b[0] + b[2]) / 2 : (b[1] + b[3]) / 2;
+  const locked = items.filter((it) => isLockedNode(it.node)).map((it) => it.bbox || rectOf(it)).filter(Boolean) as Box[];
+  let target: number;
+  if (locked.length) {
+    const c = cursorOf(ctx), hit = c && locked.find((b) => c[0] >= b[0] && c[0] <= b[2] && c[1] >= b[1] && c[1] <= b[3]);
+    const vals = locked.map(edge);
+    target = hit ? edge(hit) : which === "bottom" || which === "right" ? Math.max(...vals) : Math.min(...vals);
+  } else target = which === "top" ? Math.min(...boxes.map((b) => b[1])) : which === "bottom" ? Math.max(...boxes.map((b) => b[3])) : which === "left" ? Math.min(...boxes.map((b) => b[0])) : which === "right" ? Math.max(...boxes.map((b) => b[2]))
     : which === "centerX" ? boxes.reduce((t, b) => t + (b[0] + b[2]) / 2, 0) / boxes.length : boxes.reduce((t, b) => t + (b[1] + b[3]) / 2, 0) / boxes.length;
   const out: KChange[] = [], touched: Pt[] = [], keep = new Set<string>();
   for (const it of items) {
-    const b = it.bbox || rectOf(it); if (!b || !DRAG_KINDS.has(it.kind)) continue;
-    const cur = which === "top" ? b[1] : which === "bottom" ? b[3] : which === "left" ? b[0] : which === "right" ? b[2] : which === "centerX" ? (b[0] + b[2]) / 2 : (b[1] + b[3]) / 2;
+    const b = it.bbox || rectOf(it); if (!b || !DRAG_KINDS.has(it.kind) || isLockedNode(it.node)) continue;
+    const cur = edge(b);
     const d = (ctx.snap as SchCtx["snap"] | undefined) ? r4(K.snap(target - cur, ctx.gridPitch || 1.27)) : r4(target - cur); if (!d) continue;
     const n = deep(it.node); shiftNode(it.kind, n, which === "left" || which === "right" || which === "centerX" ? d : 0, which === "top" || which === "bottom" || which === "centerY" ? d : 0);
     for (const p of connPoints(doc, it)) touched.push(p);

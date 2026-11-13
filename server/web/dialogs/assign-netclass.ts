@@ -74,9 +74,94 @@ export function assignNetclass(): void {
     },
     cancel() { clearHighlight(); } });
 }
-/** NET_SETTINGS::ForEachBusMember: a vector pattern "D[0..3]" is its members' patterns, anything else itself. */
+// NET_SETTINGS::ParseBusVector / ParseBusGroup with their member lists (common/project/net_settings.cpp).
+const isSuperSubOverbar = (c: string): boolean => c === "_" || c === "^" || c === "~";
+const isDigit = (c: string): boolean => c >= "0" && c <= "9";
+function isEscaped(s: string, pos: number): boolean { let n = 0; while (pos > 0 && s[pos - 1] === "\\") { n++; pos--; } return n % 2 === 1; }
+/** ParseBusVector( aBus, nullptr, &members ): null when the text is not a vector bus. */
+function busVectorMembers(bus: string): string[] | null {
+  const len = bus.length; let i = 0, nest = 0, inQuotes = false, fmtWrapsName = false, parsedEnd = false, padded = false, width = 0;
+  let prefix = "", suffix = "", tmp = "", begin = 0, end = 0;
+  for (; i < len; ++i) {
+    const c = bus[i];
+    if (c === '"' && !isEscaped(bus, i)) { inQuotes = !inQuotes; continue; }
+    if (inQuotes) { if (c === "\\" && i + 1 < len) prefix += bus[++i]; else prefix += c; continue; }
+    if (c === "{") { if (i > 0 && isSuperSubOverbar(bus[i - 1])) { nest++; prefix += "{"; continue; } return null; }
+    if (c === "}") { nest--; prefix += "}"; continue; }
+    if (c === "\\" && i + 1 < len && bus[i + 1] === " ") { prefix += bus[++i]; continue; }
+    if (c === " " || c === "]") return null;
+    if (c === "[") {
+      if (nest > 0) {
+        const f = prefix.lastIndexOf("{");
+        if (f > 0 && isSuperSubOverbar(prefix[f - 1])) { if (f === prefix.length - 1) prefix = prefix.slice(0, f - 1); else fmtWrapsName = true; }
+      }
+      break;
+    }
+    prefix += c;
+  }
+  i++;
+  if (i >= len) return null;
+  for (; i < len; ++i) {
+    if (bus[i] === "." && i + 1 < len && bus[i + 1] === ".") { if (!tmp) return null; begin = parseInt(tmp, 10); width = tmp.length; padded = width > 1 && tmp[0] === "0"; i += 2; break; }
+    if (!isDigit(bus[i])) return null;
+    tmp += bus[i];
+  }
+  tmp = "";
+  if (i >= len) return null;
+  for (; i < len; ++i) {
+    if (bus[i] === "]") { if (!tmp) return null; end = parseInt(tmp, 10); padded = padded || (tmp.length > 1 && tmp[0] === "0"); width = Math.max(width, tmp.length); parsedEnd = true; ++i; break; }
+    if (!isDigit(bus[i])) return null;
+    tmp += bus[i];
+  }
+  if (!parsedEnd) return null;
+  for (; i < len; ++i) {
+    const c = bus[i];
+    if (c === "}") { nest--; if (fmtWrapsName) suffix += c; }
+    else if (c === "+" || c === "-" || c === "P" || c === "N") suffix += c;
+    else return null;
+  }
+  if (nest !== 0 || begin === end) return null;
+  if (begin > end) { const t = begin; begin = end; end = t; }
+  const out: string[] = [];
+  for (let idx = begin; idx <= end; idx++) { const n = String(idx); out.push(prefix + (padded && n.length < width ? "0".repeat(width - n.length) : "") + n + suffix); }
+  return out;
+}
+/** ParseBusGroup( aGroup, nullptr, &members ): null when the text is not a bus group. */
+function busGroupMembers(group: string): string[] | null {
+  const len = group.length; let i = 0, nest = 0, inQuotes = false, tmp = "";
+  const esc = (m: string) => m.replace(/ /g, "\\ ").replace(/\//g, "{slash}").replace(/[\r\n]/g, "");   // escapeSpacesForBus, EscapeString( CTX_NETNAME )
+  for (; i < len; ++i) {
+    const c = group[i];
+    if (c === '"' && !isEscaped(group, i)) { inQuotes = !inQuotes; continue; }
+    if (inQuotes) { if (c === "\\" && i + 1 < len) ++i; continue; }
+    if (c === "{") { if (i > 0 && isSuperSubOverbar(group[i - 1])) { nest++; continue; } break; }
+    if (c === "}") { nest--; continue; }
+    if (c === "\\" && i + 1 < len && group[i + 1] === " ") { ++i; continue; }
+    if (c === " " || c === "[" || c === "]") return null;
+  }
+  if (nest !== 0) return null;
+  i++;
+  if (i >= len) return null;
+  inQuotes = false;
+  const out: string[] = [];
+  for (; i < len; ++i) {
+    const c = group[i];
+    if (c === '"' && !isEscaped(group, i)) { inQuotes = !inQuotes; continue; }
+    if (inQuotes) { if (c === "\\" && i + 1 < len) tmp += group[++i]; else tmp += c; continue; }
+    if (c === "{") { if (i > 0 && isSuperSubOverbar(group[i - 1])) { nest++; tmp += "{"; continue; } return null; }
+    if (c === "}") { if (nest) { nest--; tmp += "}"; continue; } if (tmp) out.push(esc(tmp)); return out; }
+    if (c === "\\" && i + 1 < len && group[i + 1] === " ") { tmp += group[++i]; continue; }
+    if (c === " " || c === ",") { if (tmp) out.push(esc(tmp)); tmp = ""; continue; }
+    tmp += c;
+  }
+  return null;
+}
+/**
+ * NET_SETTINGS::ForEachBusMember: a vector pattern "D[0..3]" is its members' patterns, a group "NAME{A B[0..1]}" its
+ * members' (each expanded again), anything else itself.
+ */
 export function busMemberPatterns(p: string): string[] {
-  const v = /^(.*?)\[(\d+)\.\.(\d+)\](.*)$/.exec(p);
-  if (v) { const a = +v[2], b = +v[3], out: string[] = []; for (let i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(v[1] + i + v[4]); return out; }
+  const v = busVectorMembers(p); if (v) return v;
+  const g = busGroupMembers(p); if (g) return g.flatMap((m) => busMemberPatterns(m));
   return [p];
 }

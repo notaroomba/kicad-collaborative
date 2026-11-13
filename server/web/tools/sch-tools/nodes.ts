@@ -98,9 +98,9 @@ export function sheetNode(a: Pt, b: Pt, name: string, file: string): SNode {
 // rightwards = justify left, right edge leftwards = justify right, top like right, bottom like left)
 // and getSheetPinAngle the stored angle (right 0, top 90, left 180, bottom 270).
 export const PIN_SIDE: Record<string, [number, string]> = { right: [0, "right"], top: [90, "right"], left: [180, "left"], bottom: [270, "left"] };
-export function sheetPinNode(name: string, p: Pt, side: string): SNode {
+export function sheetPinNode(name: string, p: Pt, side: string, textSize = 1.27): SNode {
   const [rot, just] = PIN_SIDE[side] || PIN_SIDE.left;
-  return ["pin", name, "input", ["at", r4(p[0]), r4(p[1]), rot], ["uuid", K.newUuid()], ["effects", fontNode(1.27), ["justify", just]]];
+  return ["pin", name, "input", ["at", r4(p[0]), r4(p[1]), rot], ["uuid", K.newUuid()], ["effects", fontNode(textSize), ["justify", just]]];
 }
 // Table (saveTable): border and separator strokes, column widths, row heights, uuid, then the cells as
 // SCH_TABLECELLs (saveTextBox without a stroke).  Cells are the corner box split evenly, rounded to the

@@ -7,6 +7,7 @@ import { KD, h } from "./dom";
 import { kids, str } from "./logic";
 import { projectDocs, readDoc, submitDocOp } from "./project";
 import { selectionIds } from "../editor/gestures";
+import { labelDefaults } from "../editor/schnets";
 
 interface SchInternals { sheetPinNode(name: string, p: [number, number], side: string): SNode; labelNode(kind: string, text: string, p: [number, number], rot: number): SNode; modChange(doc: KDoc, item: KItem, node: SNode): KChange; itemSexpr(doc: KDoc, kind: string, node: SNode): string; typeNameFor(item: { kind: string }): string; autoPlaceSheetPinsNode(sheet: SNode, sub: KDoc, textSize?: number): SNode | null }
 const S = appState;
@@ -91,7 +92,7 @@ export async function autoplaceAllSheetPins(): Promise<void> {
   if (entry) { try { sub = await readDoc(entry.docId, "kicad_sch"); } catch (e) { sub = null; } }
   const cur = (E.kdoc as KDoc).items.get(sheet.id); if (!cur) return;
   const I = CollabTools.sch!._ as unknown as SchInternals;
-  const node = sub ? I.autoPlaceSheetPinsNode(cur.node, sub) : null;
+  const node = sub ? I.autoPlaceSheetPinsNode(cur.node, sub, labelDefaults().textSize) : null;   // Schematic().Settings().m_DefaultTextSize
   const ctx = toolCtx(); ctx.setSelection([]);
   if (!node) { toast("No new hierarchical labels found.", 2000); return; }
   ctx.commit([I.modChange(E.kdoc as KDoc, cur, node)], "Auto-place Sheet Pins");

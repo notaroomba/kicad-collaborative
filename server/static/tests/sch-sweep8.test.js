@@ -167,5 +167,46 @@ test("Draw Ellipses / Draw Elliptical Arcs: the box's inscribed ellipse, then th
   assert.strictEqual(v("start_angle"), 0); assert.strictEqual(v("end_angle"), 90, "the end after the start (Y down: the bottom is +90)");
 });
 
+test("IsLocked reads only the (locked yes) child: a label or text reading 'locked' is not locked", () => {
+  const lab = K.parse('(label "locked" (at 10.16 10.16 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1"))');
+  const txt = K.parse('(text "locked" (exclude_from_sim no) (at 10.16 10.16 0) (effects (font (size 1.27 1.27))) (uuid "t1"))');
+  assert.strictEqual(_.isLockedNode(lab), false); assert.strictEqual(_.isLockedNode(txt), false);
+  const on = _.setLockedNode("label", lab, true);
+  assert.strictEqual(_.isLockedNode(on), true);
+  assert.strictEqual(K.serialize(_.setLockedNode("label", on, false)), K.serialize(lab), "unlock keeps the label's text");
+  const doc = K.parseDoc(HEAD + K.serialize(lab) + ")"), c = makeCtx(doc); c.selection = new Set(["l1"]);
+  sch.runAction("rotateSelection", c);
+  assert.strictEqual(c.log.length, 1, "a label reading 'locked' still rotates");
+});
+
+test("Align to Grid leaves locked items; Align Edges keeps them in place as the anchor", () => {
+  const lab = (id, x, y, lock) => `(label "N${id}" (at ${x} ${y} 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "${id}")${lock ? " (locked yes)" : ""})`;
+  let doc = K.parseDoc(HEAD + lab("a", 10.5, 10.5, true) + lab("b", 20.5, 20.5, false) + ")"), c = makeCtx(doc);
+  c.selection = new Set(["a", "b"]);
+  _.alignToGrid(c);
+  assert.deepStrictEqual(K.kid(doc.items.get("a").node, "at").slice(1, 3), [10.5, 10.5], "the locked label stays off the grid");
+  const b = K.kid(doc.items.get("b").node, "at").slice(1, 3);
+  assert.ok(Math.abs(b[0] / 1.27 - Math.round(b[0] / 1.27)) < 1e-6, "the free one is on the grid: " + b);
+  doc = K.parseDoc(HEAD + lab("a", 10.16, 30.48, true) + lab("b", 20.32, 10.16, false) + lab("c", 30.48, 20.32, false) + ")"); c = makeCtx(doc);
+  c.selection = new Set(["a", "b", "c"]); c.cursor = [0, 0];
+  const top = (id) => { const it = doc.items.get(id); return (it.bbox || K.itemBBox?.(doc, it) || [0, 0, 0, 0])[1]; };
+  const aTop = top("a");
+  _.alignEdges(c, "top");
+  assert.deepStrictEqual(K.kid(doc.items.get("a").node, "at").slice(1, 3), [10.16, 30.48], "the locked label is not moved");
+  assert.ok(Math.abs(top("b") - aTop) < 0.01 && Math.abs(top("c") - aTop) < 0.01, "the others take the locked one's top: " + [top("b"), top("c"), aTop]);
+});
+
+test("Autoplace sheet pins: a hand-placed field below the sheet stays as the sheet grows; pins take the default text size", () => {
+  const sheet = (ap) => `(sheet (at 100 50) (size 20 5) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)${ap ? " (fields_autoplaced yes)" : ""} (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid "h1") (property "Sheetname" "S" (at 100 49.3 0) (effects (font (size 1.27 1.27)) (justify left bottom))) (property "Sheetfile" "s.kicad_sch" (at 100 55.6 0) (effects (font (size 1.27 1.27)) (justify left top))))`;
+  const sub = K.parseDoc(HEAD + ["A", "B", "C", "D"].map((n, i) => `(hierarchical_label "${n}" (shape input) (at 10 ${10 + i * 2.54} 180) (effects (font (size 1.27 1.27)) (justify right)) (uuid "hl${i}"))`).join("") + ")");
+  const fileAt = (n) => K.kid(K.kids(n, "property").find((p) => p[1] === "Sheetfile"), "at")[2];
+  const manual = _.autoPlaceSheetPinsNode(K.parse(sheet(false)), sub, 2.54);
+  assert.ok(+K.kid(manual, "size")[2] > 5, "the sheet grew");
+  assert.strictEqual(fileAt(manual), 55.6, "the hand-placed field stays put");
+  assert.deepStrictEqual(K.kid(K.kid(K.kids(manual, "pin")[0], "effects"), "font").slice(1)[0].slice(1), [2.54, 2.54], "pin text at the default text size");
+  const auto = _.autoPlaceSheetPinsNode(K.parse(sheet(true)), sub, 2.54);
+  assert.ok(fileAt(auto) > 55.6, "an autoplaced field follows the bottom edge");
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

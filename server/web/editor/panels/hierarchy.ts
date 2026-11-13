@@ -9,6 +9,7 @@ import { openDoc, rootSchematic } from "../doc";
 import { E } from "../state";
 import { toast } from "../util";
 import { selectionIds } from "../gestures";
+import { projectJson, saveProject, sub } from "../../dialogs/project";
 import { KC, currentDocId, isSchDoc, kdoc, openDocs, panelStore, projectId, projectName, textEntry, type DocEntryLite, tctx } from "./core";
 
 interface SheetRef { id: string; name: string; file: string; page: string }
@@ -72,9 +73,10 @@ function build(): HierNode | null {
         current: !!child && child.docId === cur, children: child ? walk(child, p, depth + 1) : [] };
     });
   };
-  // the project root itself is hidden (wxTR_HIDE_ROOT): the tree starts at the top-level sheet, named by its file
-  // when it has no sheet name (HIERARCHY_PANE::UpdateHierarchyTree)
-  return { path: "/", name: stem || projectName() || "Schematic", page: rootEntry ? rootEntry.page : "1", docId: root.docId, file: root.path.split("/").pop() || "", parentDocId: null, sheetId: null,
+  // the project root itself is hidden (wxTR_HIDE_ROOT): the tree starts at the top-level sheet, named by its
+  // schematic.top_level_sheets entry, else by its file (HIERARCHY_PANE::UpdateHierarchyTree)
+  const tl = topLevelEntry(root.path);
+  return { path: "/", name: (tl && typeof tl.name === "string" && tl.name) || stem || projectName() || "Schematic", page: rootEntry ? rootEntry.page : "1", docId: root.docId, file: root.path.split("/").pop() || "", parentDocId: null, sheetId: null,
     current: root.docId === cur, children: walk(root, "/", 0) };
 }
 
@@ -126,11 +128,33 @@ function setSheetPage(n: SNode, page: string): boolean {
   return changed;
 }
 
+/** The project file's schematic.top_level_sheets entry (TOP_LEVEL_SHEET_INFO) for this root schematic file. */
+function topLevelEntry(file: string, pro: Record<string, unknown> = projectJson()): Record<string, unknown> | null {
+  const sch = pro.schematic as Record<string, unknown> | undefined, list = sch && Array.isArray(sch.top_level_sheets) ? sch.top_level_sheets as Record<string, unknown>[] : [];
+  const base = file.split("/").pop();
+  return list.find((e) => e && (e.filename === file || e.filename === base)) || null;
+}
+/**
+ * HIERARCHY_PANE's Rename, then renameSheet: a sub-sheet's Sheetname field in its parent sheet; a top-level sheet's
+ * name, which SCH_EDIT_FRAME::SaveProjectLocalSettings keeps in the project file's schematic.top_level_sheets.
+ */
 async function rename(path: string): Promise<void> {
-  const node = find(path); if (!node || !node.sheetId) return;
+  const node = find(path); if (!node) return;
   const name = await textEntry("Rename", "Change name of this sheet", node.name); if (name === null) return;
   const nm = name.trim(); if (!nm || nm === node.name) return;
-  await editSheetSymbol(node, "renaming sheet", (n) => setSheetName(n, nm));
+  if (node.sheetId) { await editSheetSymbol(node, "renaming sheet", (n) => setSheetName(n, nm)); return; }
+  if (E.viewOnly) { toast("View-only access"); return; }
+  const root = (store.get().project ? rootSchematic() : null) as DocEntryLite | null; if (!root) return;
+  try {
+    await saveProject((pro) => {
+      const list = sub(pro, "schematic").top_level_sheets;
+      const e = topLevelEntry(root.path, pro);
+      if (e) e.name = nm;
+      else if (Array.isArray(list)) list.push({ uuid: "00000000-0000-0000-0000-000000000000", name: nm, filename: node.file });
+      else sub(pro, "schematic").top_level_sheets = [{ uuid: "00000000-0000-0000-0000-000000000000", name: nm, filename: node.file }];
+    }, "rename sheet");
+  } catch (e) { toast(`Could not rename the sheet: ${(e as Error).message}`, 5000); return; }
+  publishHierarchy();
 }
 async function editPage(path: string): Promise<void> {
   const node = find(path); if (!node) return;
@@ -138,20 +162,20 @@ async function editPage(path: string): Promise<void> {
   // SCH_SHEET_PATH::PathHumanReadable( false ): the root file's stem, then each sheet name, each closed by '/'
   const root = panelStore.get().hierarchy.root, stem = root ? root.file.replace(/\.kicad_sch$/, "") : "";
   const human = stem + "/" + namesTo(path).map((n) => n + "/").join("");
-  const page = await textEntry("Edit Sheet Page Number", `Enter page number for sheet path${human.length > 20 ? "\n" + human : " " + human}`, node.page); if (page === null) return;
+  const page = await textEntry("Edit Sheet Page Number", `Enter page number for sheet path${human.length > 20 ? "\n" + human : " " + human}`, node.page, { alnum: true }); if (page === null) return;
   const pg = page.trim(); if (!pg || pg === node.page) return;
   await editSheetSymbol(node, "change sheet page number", (n) => setSheetPage(n, pg));
 }
 /**
- * SCH_EDIT_TOOL::EditPageNumber (Edit > Edit Sheet Page Number..., the sheet context menu): the selected sheet's
- * instance under the sheet on screen, else the sheet on screen itself; nothing for more than one selected item.
+ * SCH_EDIT_TOOL::EditPageNumber (Edit > Edit Sheet Page Number..., the sheet context menu): RequestSelection( {
+ * SCH_SHEET_T } ) drops everything but sheets, so the one selected sheet's instance under the sheet on screen, else
+ * the sheet on screen itself; nothing for more than one selected sheet.
  */
 export function editPageNumber(): boolean {
   const doc = kdoc(); if (!doc || !isSchDoc()) return false;
-  const ids = new Set<string>(selectionIds());
-  if (ids.size > 1) return true;
-  const cur = currentDocId(), sel = [...ids].map((id) => doc.items.get(id)).find((it) => it && it.kind === "sheet");
-  if (ids.size === 1 && !sel) return true;
+  const sheets = [...new Set<string>(selectionIds())].map((id) => doc.items.get(id)).filter((it): it is KItem => !!it && it.kind === "sheet");
+  if (sheets.length > 1) return true;
+  const cur = currentDocId(), sel = sheets[0];
   const walk = (n: HierNode | null, ok: (x: HierNode) => boolean): HierNode | null => { if (!n) return null; if (ok(n)) return n; for (const c of n.children) { const r = walk(c, ok); if (r) return r; } return null; };
   const root = panelStore.get().hierarchy.root;
   const node = sel ? walk(root, (x) => x.sheetId === sel.id && x.parentDocId === cur) : walk(root, (x) => x.current);

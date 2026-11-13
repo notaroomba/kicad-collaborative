@@ -65,11 +65,48 @@ const describe = (id: string): string => { const s = sch(), d = E.kdoc as KDoc |
 export function selectedMarker(): ErcViolation | null { return markers().find((m) => m.selected) || null; }
 export function selectMarker(m: ErcViolation | null): void { for (const x of markers()) if (x.selected && x !== m) delete x.selected; if (m) m.selected = true; requestRender(); }
 
+// ---------------------------------------------------------------- DIALOG_ERC::OnERCItemRClick's Inspect / Fix entries
+type Handlers = Record<string, ((a?: unknown) => void) | undefined>;
+const handlers = (): Handlers => ((E as unknown as { api?: { HANDLERS?: Handlers } }).api?.HANDLERS) || {};
+/** The violation's main item, selected on the sheet (ResolveItem( GetMainItemID() )), or null. */
+function mainItem(m: ErcViolation): KItem | null {
+  const d = E.kdoc as KDoc | null, id = m.ids.find((x) => d && d.items.has(x)); if (!d || !id) return null;
+  return d.items.get(id) || null;
+}
+function runOn(m: ErcViolation, act: string): void {
+  const it = mainItem(m), h = handlers()[act]; if (!it || !h) return;
+  toolCtx().setSelection([it.id]); h();
+}
+/**
+ * SCH_INSPECTION_TOOL::InspectERCErrorMenuText / InspectERCError, then SCH_EDIT_TOOL::FixERCErrorMenuText / FixERCError
+ * (a command the web editor does not have is listed disabled).
+ */
+export function fixEntries(m: ErcViolation): PopItem[] {
+  const out: PopItem[] = [], hs = handlers();
+  const run = (label: string, act: string, fn: () => void): void => { out.push(hs[act] ? { label, run: fn } : { label, disabled: true }); };
+  if (m.code === "bus_to_net_conflict") out.push({ label: "Run: Inspect > Show Bus Syntax Help", run: () => syntaxHelp(false) });
+  else if (m.code === "lib_symbol_mismatch") run("Run: Inspect > Compare Symbol with Library", "diffSymbol", () => runOn(m, "diffSymbol"));
+  switch (m.code) {
+    case "simulation_model_issue": case "footprint_filter": case "footprint_link_issues":
+      run("Edit Symbol Properties...", "properties", () => runOn(m, "properties")); break;
+    case "lib_symbol_issues": run("Run: Preferences > Manage Symbol Libraries...", "showSymbolLibTable", () => hs.showSymbolLibTable?.()); break;
+    case "lib_symbol_mismatch": run("Run: Update Symbol...", "updateSymbol", () => runOn(m, "updateSymbol")); break;
+    case "unannotated": case "duplicate_reference": run("Run: Tools > Annotate Schematic...", "annotate", () => hs.annotate?.()); break;
+    case "undefined_netclass": out.push({ label: "Edit Netclasses...", run: () => openSchematicSetup("Net Classes") }); break;
+    case "empty_label_name": out.push({ label: "Remove Empty Label", run: () => {
+      const it = mainItem(m), s = sch() as (SchModule & { _?: { deleteChanges?(d: KDoc, it: KItem): KChange[] } }) | null, ctx = toolCtx();
+      if (!it || !/label$/.test(it.kind) || !s || !s._ || !s._.deleteChanges) return;
+      ctx.setSelection([]); ctx.commit(s._.deleteChanges(ctx.doc as KDoc, it), "Remove Empty Label");
+    } }); break;
+  }
+  return out;
+}
+
 let api: DlgApi | null = null;   // the dialog this module opened last (KDialogs keeps one dialog at a time)
 /** The open dialog's handles (SCH_INSPECTION_TOOL::PrevMarker / NextMarker / ExcludeMarker / CrossProbe reach DIALOG_ERC only while it exists). */
 let live: { step(dir: 1 | -1): void; show(m: ErcViolation): void; exclude(m: ErcViolation | null): void; refresh(): void } | null = null;
 const isLive = (): boolean => { if (live && api && api.body.isConnected) return true; live = null; return false; };
-export function ercPrevMarker(): void { if (isLive()) live!.step(-1); else openErc(); }
+export function ercPrevMarker(): void { if (isLive()) live!.step(-1); else { openErc(); if (isLive()) live!.step(-1); } }
 export function ercNextMarker(): void { if (isLive()) live!.step(1); else { openErc(); if (isLive()) live!.step(1); } }
 /** SCH_INSPECTION_TOOL::ExcludeMarker: the marker selected on the canvas, else the dialog's current row. */
 export function ercExcludeMarker(): void {
@@ -189,8 +226,8 @@ export function openErc(): void {
       : [{ label: "Exclude this violation", run: () => exclude(m, true) },
          { label: "Exclude with comment...", run: () => { void promptText("Exclusion Comment", "", "").then((t) => { if (t !== null) exclude(m, true, t); }); } }];
     items.push({ sep: true });
-    // SCH_INSPECTION_TOOL::InspectERCErrorMenuText: the bus syntax help for a bus-to-net conflict
-    if (m.code === "bus_to_net_conflict") items.push({ label: "Run: Inspect > Show Bus Syntax Help", run: () => syntaxHelp(false) }, { sep: true });
+    // SCH_INSPECTION_TOOL::InspectERCErrorMenuText then SCH_EDIT_TOOL::FixERCErrorMenuText, a separator after them
+    const fixes = fixEntries(m); if (fixes.length) items.push(...fixes, { sep: true });
     if (m.code !== "pin_to_pin") {
       if (sev === "warning") items.push({ label: `Change severity to Error for all '${et}' violations`, run: () => setSeverity(m.code, "error") });
       else items.push({ label: `Change severity to Warning for all '${et}' violations`, run: () => setSeverity(m.code, "warning") });

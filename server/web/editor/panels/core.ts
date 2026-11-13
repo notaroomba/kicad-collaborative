@@ -63,14 +63,25 @@ export const KC = (): KiCadCanvasApi & CanvasExtras => window.KiCadCanvas as KiC
 // ---------------------------------------------------------------- dialogs (wxTextEntryDialog / EDA_LIST_DIALOG)
 function esc(s: string): string { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
-/** KiCad's wxTextEntryDialog: a caption, one message line and a text field; resolves null on Cancel. */
-export function textEntry(title: string, message: string, value: string): Promise<string | null> {
+/**
+ * KiCad's wxTextEntryDialog: a caption, one message line and a text field; resolves null on Cancel.  `alnum` is
+ * SetTextValidator( wxFILTER_ALPHANUMERIC ): characters other than letters and digits never reach the field.
+ */
+export function textEntry(title: string, message: string, value: string, opts?: { alnum?: boolean }): Promise<string | null> {
   return new Promise((resolve) => {
     const D = window.KDialogs;
     if (!D) { resolve(null); return; }   // never the browser's prompt()
     let done = false; const finish = (v: string | null) => { if (!done) { done = true; resolve(v); } };
     D.open({ title, width: 360,
-      build(body: HTMLElement) { body.innerHTML = `<p style="margin:0 0 8px;white-space:pre-line">${esc(message)}</p><input id="kd-entry" type="text" value="${esc(value)}" style="width:100%">`; },
+      build(body: HTMLElement) {
+        body.innerHTML = `<p style="margin:0 0 8px;white-space:pre-line">${esc(message)}</p><input id="kd-entry" type="text" value="${esc(value)}" style="width:100%">`;
+        const inp = body.querySelector<HTMLInputElement>("#kd-entry");
+        if (inp && opts?.alnum) inp.addEventListener("input", () => {
+          const bad = /[^\p{L}\p{N}]/gu; if (!bad.test(inp.value)) return;
+          const at = inp.selectionStart ?? inp.value.length, before = inp.value.slice(0, at).replace(bad, "").length;
+          inp.value = inp.value.replace(bad, ""); inp.setSelectionRange(before, before);
+        });
+      },
       ok() { const inp = document.querySelector<HTMLInputElement>("#kd-entry"); finish(inp ? inp.value : null); },
       cancel() { finish(null); } });
   });

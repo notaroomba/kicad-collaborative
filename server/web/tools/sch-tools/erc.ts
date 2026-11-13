@@ -214,14 +214,18 @@ export function autoPlaceSheetPinsNode(sheetNode: SNode, sub: KDoc, textSize = 1
   const byText = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const right = labels.filter((l) => l.shape === "output").sort(byText), left = labels.filter((l) => l.shape !== "output").sort(byText);
   const needBot = Math.max(leftY + left.length * pitch, rightY + right.length * pitch) + margin;
-  if (needBot > topY + h0) {   // SCH_SHEET::Resize: the fields autoplaced below the sheet follow its bottom edge
+  if (needBot > topY + h0) {
+    // SCH_SHEET::Resize re-runs AutoplaceFields only when the fields are autoplaced: those below the sheet then follow
+    // its bottom edge; fields placed by hand stay where they are
     const dh = needBot - topY - h0; size[2] = mm(needBot - topY);
-    for (const f of kids(node, "property")) { const fa = kid(f, "at"); if (fa && iu(num(fa[2])) >= topY + h0) fa[2] = mm(iu(num(fa[2])) + dh); }
+    const ap = kid(node, "fields_autoplaced"), auto = !!ap && str(ap[1]) !== "no";
+    if (auto) for (const f of kids(node, "property")) { const fa = kid(f, "at"); if (fa && iu(num(fa[2])) >= topY + h0) fa[2] = mm(iu(num(fa[2])) + dh); }
     for (const p of kids(node, "pin")) { const a = kid(p, "at"); if (a && iu(num(a[2])) === topY + h0 && (Math.round(num(a[3]) || 0) % 360 + 360) % 360 === 270) a[2] = mm(needBot); }
   }
   const column = (col: { name: string; shape: string }[], px: number, start: number, side: string) => {
     let py = Math.round(start / grid) * grid;
-    for (const l of col) { py += pitch; const pin = sheetPinNode(l.name, [mm(px), mm(py)], side); pin[2] = l.shape; const i = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (i >= 0) node.splice(i, 0, pin); else node.push(pin); }
+    // pin->SetTextSize( m_DefaultTextSize )
+    for (const l of col) { py += pitch; const pin = sheetPinNode(l.name, [mm(px), mm(py)], side, textSize); pin[2] = l.shape; const i = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (i >= 0) node.splice(i, 0, pin); else node.push(pin); }
   };
   column(left, leftX, leftY, "left"); column(right, rightX, rightY, "right");
   return node;

@@ -1,6 +1,7 @@
 import type { SchCtx, Pt, Box } from "./types";
 import { editable, selectedItems } from "./commands";
 import { isPowerSymbol } from "./dom";
+import { isLockedNode } from "./lock";
 import { isNetLine } from "./drag";
 import { fontNode } from "./nodes";
 import { K, atOf, kid, kids, num, ptsOf, str } from "./state";
@@ -164,7 +165,8 @@ export function autoplaceNode(doc: KDoc, item: KItem, opts?: { manual?: boolean 
 export function autoplaceSelection(ctx: SchCtx, opts?: { manual?: boolean } | null) {
   if (!editable(ctx)) return false;
   const changes: KChange[] = [];
-  for (const it of selectedItems(ctx)) { if (it.kind !== "symbol") continue; const n = autoplaceNode(ctx.doc, it, opts); if (n) changes.push(modChange(ctx.doc, it, n)); }
+  // SCH_EDIT_TOOL::AutoplaceFields skips the items that IsLocked()
+  for (const it of selectedItems(ctx)) { if (it.kind !== "symbol" || isLockedNode(it.node)) continue; const n = autoplaceNode(ctx.doc, it, opts); if (n) changes.push(modChange(ctx.doc, it, n)); }
   if (!changes.length) return false;
   ctx.commit(changes, "autoplace fields"); return true;
 }

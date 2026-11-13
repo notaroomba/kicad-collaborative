@@ -25,7 +25,8 @@ export function HierarchyPane() {
   const DESKTOP = "runs in the desktop app";
   const items = (n: HierNode): MenuItem[] => [
     { label: "Edit Page Number", run: () => pdispatch({ t: "hierPage", path: n.path }), disabled: viewOnly || !n.sheetId },
-    { label: "Rename", run: () => pdispatch({ t: "hierRename", path: n.path }), disabled: viewOnly || !n.sheetId },
+    // the project root is hidden (wxTR_HIDE_ROOT), so a top-level sheet is never isProjectRoot: Rename is offered
+    { label: "Rename", run: () => pdispatch({ t: "hierRename", path: n.path }), disabled: viewOnly },
     ...(n.parentDocId ? [] : [{ label: "Delete Top-Level Sheet", run: () => {}, disabled: true, title: DESKTOP } satisfies MenuItem]),
     "-",
     { label: "New Top-Level Sheet", run: () => {}, disabled: true, title: DESKTOP },
