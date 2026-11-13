@@ -192,12 +192,13 @@ export function beginDrag(ctx: SchCtx, items: KItem | KItem[], mm: Pt, byPointer
 // stub wires are drawn from d.preview by the overlay.
 export function applyDrag(doc: KDoc, d: SchDrag, dx: number, dy: number) {
   for (const e of d.items) {
-    if (!dx && !dy) restoreNode(e.item.node, e.orig);
+    if (e.base) { restoreNode(e.item.node, e.base); if (dx || dy) shiftNode(e.kind, e.item.node, dx, dy); }
+    else if (!dx && !dy) restoreNode(e.item.node, e.orig);
     else shiftNode(e.kind, e.item.node, r4(dx - d.applied[0]), r4(dy - d.applied[1]));
     K.replaceChange(doc, e.item);
   }
   d.applied = [dx, dy];
-  for (const r of d.riders) { const [cx, cy] = atOf(r.item.node); shiftNode(r.item.kind, r.item.node, r4(r.orig[0] + dx - cx), r4(r.orig[1] + dy - cy)); K.replaceChange(doc, r.item); }
+  for (const r of d.riders) { if (r.base) restoreNode(r.item.node, r.base); const [cx, cy] = atOf(r.item.node); shiftNode(r.item.kind, r.item.node, r4(r.orig[0] + dx - cx), r4(r.orig[1] + dy - cy)); K.replaceChange(doc, r.item); }
   d.preview = [];
   const connected = S.dragMode === "drag";
   for (const e of d.ends || []) {
@@ -207,7 +208,7 @@ export function applyDrag(doc: KDoc, d: SchDrag, dx: number, dy: number) {
     for (const x of g.extra) d.preview.push({ kind: e.item.kind, pts: x });
   }
   for (const a of d.anchors) {
-    const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)];
+    const Pn = anchorTo(d, a.p, dx, dy);
     for (const e of a.ends) {
       let pts = e.orig.map((q: Pt) => q.slice());
       if (connected) { const g = endGeometry(e, Pn, d.mode ? "free" : S.lineMode); pts = g.extra ? (e.index === 0 ? [g.extra[1], g.extra[0], g.pts[1]] : [g.pts[0], g.extra[0], g.extra[1]]) : g.pts; }
@@ -215,6 +216,17 @@ export function applyDrag(doc: KDoc, d: SchDrag, dx: number, dy: number) {
     }
     for (const f of a.followers) { const to = connected ? Pn : f.orig; const [cx, cy] = atOf(f.item.node); shiftNode(f.item.kind, f.item.node, r4(to[0] - cx), r4(to[1] - cy)); K.replaceChange(doc, f.item); }
     if (connected && a.stub && !same(a.p, Pn)) d.preview.push({ kind: a.stub.kind, pts: [a.p, Pn] });
+  }
+}
+/** Where a connection point found before the drag is now: turned with the drag's R / X / Y, then moved. */
+export function anchorTo(d: SchDrag, p: Pt, dx: number, dy: number): Pt { const q = d.mapPt ? d.mapPt(p) : p; return [r4(q[0] + dx), r4(q[1] + dy)]; }
+/** The nodes as they were before the drag (a drag turned with R keeps its turned copies in `base`). */
+export function restorePristine(doc: KDoc, d: SchDrag) {
+  for (const e of d.items) if (e.base) { restoreNode(e.item.node, e.orig); K.replaceChange(doc, e.item); }
+  for (const r of d.riders) if (r.node0) { restoreNode(r.item.node, r.node0); K.replaceChange(doc, r.item); }
+  if (d.mapPt) for (const a of d.anchors) {                // the wires stretched to the turned pins go back too
+    for (const e of a.ends) { setPts(e.item.node, e.orig.map((q: Pt) => q.slice())); K.replaceChange(doc, e.item); }
+    for (const f of a.followers) { const [cx, cy] = atOf(f.item.node); shiftNode(f.item.kind, f.item.node, r4(f.orig[0] - cx), r4(f.orig[1] - cy)); K.replaceChange(doc, f.item); }
   }
 }
 export function moveDrag(ctx: SchCtx, mm: Pt) {
@@ -236,14 +248,15 @@ export function endDrag(ctx: SchCtx, commit: boolean) {
   if (d.brk) { endBreak(ctx, d, commit); done(); return; }
   if (d.local) {                                // a paste / duplicate in flight: never committed yet
     if (!commit) { dropLocal(ctx, d); done(); return; }
-    const changes = dragChanges(ctx, d, dx, dy);
+    const changes = dragChanges(ctx, d, dx, dy, true);
     for (const id of d.local) ctx.doc.items.delete(id);
     if (changes.length) ctx.commit(changes, d.label || "paste");
     setSelectionIds(ctx, Array.from(d.local).filter((id) => ctx.doc.items.has(id)));
     done(); return;
   }
-  if (!commit || !d.moved || (!dx && !dy)) { done(); return; }
-  const changes = dragChanges(ctx, d, dx, dy);
+  const turned = !!d.mapPt;
+  if (!commit || (!turned && (!d.moved || (!dx && !dy)))) { restorePristine(doc, d); done(); return; }
+  const changes = dragChanges(ctx, d, dx, dy, true);
   if (changes.length) ctx.commit(changes, S.dragMode === "drag" ? "drag" : "move");
   done();
 }
@@ -256,8 +269,15 @@ export function dropLocal(ctx: SchCtx, d: SchDrag) {
 export function cancelDrag(ctx: SchCtx) { if (S.drag) endDrag(ctx, false); }
 
 // The committed change set for a finished drag, built from cloned nodes.
-export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number) {
+export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number, pristine = false) {
   const doc = ctx.doc, connected = S.dragMode === "drag", out = new Map<string, KChange>();
+  // a turned drag builds from the turned copies, then hands the document its pre-drag nodes back so the commit's undo is true
+  const res = dragChangeList(ctx, d, dx, dy, connected, out);
+  if (pristine) restorePristine(doc, d);
+  return res;
+}
+function dragChangeList(ctx: SchCtx, d: SchDrag, dx: number, dy: number, connected: boolean, out: Map<string, KChange>) {
+  const doc = ctx.doc;
   const put = (c: KChange) => {
     const prev = out.get(c.id);
     if (prev && prev.kind === "ADDED" && c.kind === "REMOVED") { out.delete(c.id); doc.items.delete(c.id); return; }
@@ -279,8 +299,9 @@ export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number) {
     for (const x of g.extra) if (!same(x[0], x[1])) { put(addNode(doc, lineNode(e.item.kind, x[0], x[1])).change); touched.push(...x); }
   }
   for (const e of d.items) for (const p of (d.local && isNetLine(e.kind) ? ptsOf(e.item.node) : connPoints(doc, e.item))) { if (!d.local) touched.push(p); touched.push([r4(p[0] + dx), r4(p[1] + dy)]); }
+  for (const p of d.touched0 || []) touched.push(p);
   if (connected) for (const a of d.anchors) {
-    const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)]; touched.push(a.p, Pn);
+    const Pn = anchorTo(d, a.p, dx, dy); touched.push(a.p, Pn);
     for (const e of a.ends) {
       const g = endGeometry(e, Pn, d.mode ? "free" : S.lineMode);
       if (g.zero) { put(K.removeChange(e.item)); continue; }

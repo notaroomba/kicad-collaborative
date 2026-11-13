@@ -181,6 +181,35 @@ export function transformChanges(ctx: SchCtx, items: KItem[], op: string, C: Pt,
   for (const c of extra) if (c.kind === "ADDED") doc.items.delete(c.id);   // commit re-adds them from the fragments
   return out.concat(extra);
 }
+/**
+ * R / Shift+R / X / Y during a Move or Drag (SCH_MOVE_TOOL::handleMoveToolActions): the items in flight turn or mirror
+ * inside the move's own commit about the move's reference point and the move goes on; Esc puts everything back and one
+ * undo takes the whole move.  The turn is kept in the pre-drag frame (about the reference point before the offset), so
+ * the moved items, their riders and the connection points the stretched wires follow all map the same way.
+ */
+export function orientDrag(ctx: SchCtx, op: string) {
+  const d = S.drag; if (!d) return false;
+  if (d.brk || (d.ends && d.ends.length)) return true;              // a break or a line end in flight has nothing to turn
+  const [dx, dy] = d.last, doc = ctx.doc, C: Pt = [d.anchor0[0], d.anchor0[1]], lone = d.items.length === 1;
+  applyDrag(doc, d, 0, 0);
+  if (!d.touched0) { d.touched0 = []; for (const e of d.items) d.touched0.push(...connPoints(doc, e.item)); }
+  for (const e of d.items) {
+    const n = deep(e.base || e.orig);
+    // a lone reference image turns the other way (SCH_EDIT_TOOL::Rotate's SCH_BITMAP_T case)
+    const lop = lone && e.kind === "image" && (op === "ccw" || op === "cw") ? (op === "ccw" ? "cw" : "ccw") : op;
+    if (transformNode(e.kind, n, lop, C, lone) === false) continue;
+    e.base = n;
+  }
+  for (const r of d.riders) {
+    if (!r.node0) r.node0 = deep(r.item.node);
+    const n = deep(r.base || r.node0); transformNode(r.item.kind, n, op, C);
+    r.base = n; const a = atOf(n); r.orig = [a[0], a[1]];
+  }
+  const prev = d.mapPt; d.mapPt = (p: Pt) => mapPoint(op, C, prev ? prev(p) : p);
+  applyDrag(doc, d, dx, dy);
+  ctx.requestRender();
+  return true;
+}
 export function transformSelected(ctx: SchCtx, op: string, items: KItem[], centre?: Pt) {
   if (!editable(ctx)) return false;
   items = items || selectedItems(ctx); if (!items.length) return false;

@@ -55,7 +55,7 @@ export interface SchCtx extends ToolCtx {
 /** One end of a net line that follows a drag: the line, which point, and its points before the drag. */
 export interface LineEnd { item: KItem; index: number; orig: Pt[] }
 /** An item riding on a dragged line (label, junction, entry, no-connect) and its position before the drag. */
-export interface Rider { item: KItem; orig: Pt }
+export interface Rider { item: KItem; orig: Pt; node0?: SNode; base?: SNode }
 /** A connection point of the moved items: the line ends it stretches, the stub wire it grows, the no-connects it carries. */
 export interface Anchor { p: Pt; ends: LineEnd[]; stub: { from: Pt; kind: string; split?: KItem } | null; followers: Rider[] }
 /** A wire cut by Break / Slice: the part that keeps the start, the copy that runs on, and the cut point. */
@@ -72,7 +72,8 @@ export interface PartialLine {
   attach?: { lines: LineEnd[]; junction: boolean; pin: boolean; any: boolean };
 }
 export interface SchDrag {
-  items: { item: KItem; kind: string; orig: SNode }[];
+  /** orig: the node before the drag; base: orig turned / mirrored by R / X / Y pressed during the drag (handleMoveToolActions) */
+  items: { item: KItem; kind: string; orig: SNode; base?: SNode }[];
   item: KItem; kind: string; orig: SNode | null;
   anchor0: Pt; grab: Pt; last: Pt; applied: Pt; moved: boolean; byPointer: boolean;
   riders: Rider[]; anchors: Anchor[]; preview: { kind: string; pts: Pt[] }[];
@@ -89,6 +90,10 @@ export interface SchDrag {
   pasted?: boolean; libs?: string[]; label?: string;
   /** the lines selected by one end only: SCH_MOVE_TOOL moves that end alone (index into the point list) */
   ends?: PartialLine[];
+  /** the turns and mirrors taken during the drag, as one point map about the drag's reference point (pre-drag frame) */
+  mapPt?: (p: Pt) => Pt;
+  /** the moved items' connection points before the first turn (the cleanup looks there too) */
+  touched0?: Pt[];
 }
 /** S.wire: the wire / bus / line being drawn. */
 export interface SchWire { kind: string; segs: Pt[][]; cur: Pt; quitOnDraw: boolean; stroke: SNode | null }

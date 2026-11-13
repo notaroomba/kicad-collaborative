@@ -7,7 +7,7 @@ import { pickAny } from "./hit";
 import { switchTool } from "./junction";
 import { anchorOf, cloneNode, mirrorNode, rotateNode, shiftNode } from "./orient";
 import { LINE_KINDS, S, ptsOf } from "./state";
-import { loneLinePivot, rotationCentre, transformNode, transformSelected } from "./transforms";
+import { loneLinePivot, orientDrag, rotationCentre, transformNode, transformSelected } from "./transforms";
 import { deep, ghost, modChange, removeChange } from "./util";
 
 // ---------------------------------------------------------------- edits on the current selection
@@ -16,6 +16,7 @@ export function selectedItem(ctx: SchCtx) { const id = ctx.selected ? ctx.select
 // One item turns about its own anchor (or, for items without an orientation of their own, about
 // its half-grid box centre); a multi-selection turns as a whole about the selection centre.
 export function orientSelected(ctx: SchCtx, op: string) {
+  if (S.drag) return orientDrag(ctx, op);                                        // handleMoveToolActions: the move goes on
   const c = S.carry;
   if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node), true); refreshCarry(ctx); return true; }
   const items = selectedItems(ctx);
