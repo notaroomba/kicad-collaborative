@@ -48,6 +48,10 @@ export const canvas = $<HTMLCanvasElement>("#canvas"), cctx = canvas.getContext(
 
 /** Repaint everything on the next frame (the document pass included). */
 export function requestRender() { E.renderFull = true; requestRepaint(); }
+/** The last frame of a wheel zoom: the view changed, nothing else did, so the zoom levels (paint.ts) are kept. */
+export function requestZoomEnd() { if (E.renderFull !== true && E.renderFull !== "rest") E.renderFull = "zoomEnd"; requestRepaint(); }
+/** The full pass once the view rests after a zoom or pan stand-in (the zoom levels are kept). */
+function requestRestRender() { if (E.renderFull !== true) E.renderFull = "rest"; requestRepaint(); }
 E.paintStats = paintStats;   // frame counters (full passes, strip pans, blits, scaled zoom frames) for the perf tests
 /** Repaint on the next frame, re-rendering the document only when it, the options or the view changed (paint.ts). */
 export function requestRepaint() { if (E.renderReq || !E.kdoc) return; E.renderReq = requestAnimationFrame(() => { E.renderReq = 0; drawCanvas(); }); }
@@ -89,12 +93,12 @@ export function drawCanvas() {
   const m0 = activeModule() as { hiddenIds?: () => Set<string> | null } | null;
   const own = m0 && m0.hiddenIds ? m0.hiddenIds() : null;   // the board module's items drawn elsewhere (a router drag's lines)
   const skip = ghosts.length || own ? new Set([...ghosts.flatMap((g) => [...g.ids]), ...(own || [])]) : null;
-  const force = E.renderFull !== false; E.renderFull = false;
+  const force: boolean | "rest" | "zoomEnd" = E.renderFull === "rest" || E.renderFull === "zoomEnd" ? E.renderFull : E.renderFull !== false; E.renderFull = false;
   // pinned comment threads sit on their part or net: a full render means items may have moved (a local move
   // updates the item's box only when it lands, after the document version was bumped)
   if (force && E.comments && E.comments.length) drawComments();
   updateMsgPanel();
-  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, !!E.zoomAnim, requestRender);
+  paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, E.zoomAnim ? { to: E.zoomAnim.to, cx: E.zoomAnim.cx, cy: E.zoomAnim.cy } : null, requestRestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
     const off: HTMLCanvasElement = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));

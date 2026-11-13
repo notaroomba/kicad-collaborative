@@ -22,7 +22,7 @@ import { breakFollow, sendPresence } from "./peers";
 import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps, selFilter } from "./selection";
 import { E } from "./state";
 import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
-import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
+import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, requestZoomEnd, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
 
 // typed faces of the untyped editor modules this file leans on
 type Mm = [number, number];
@@ -413,7 +413,7 @@ function wheelZoom(factor: number, cx: number, cy: number): void {
     const z = a.from * Math.pow(a.to / a.from, p >= 1 ? 1 : Math.max(e, 0.35));
     if (p >= 1) E.zoomAnim = null;
     if (z !== E.zoom) zoomBy(z / E.zoom, a.cx, a.cy);
-    if (p >= 1) requestRender(); else a.raf = requestAnimationFrame(step);
+    if (p >= 1) requestZoomEnd(); else a.raf = requestAnimationFrame(step);
   };
   a.raf = requestAnimationFrame(step);
 }
