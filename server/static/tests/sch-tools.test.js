@@ -1201,6 +1201,19 @@ test("annotate: new units of a multi-unit symbol share one reference with distin
   const ch2 = sch.annotateChanges(d, {}).find((x) => x.id === h.id); assert.strictEqual(kids(fragItem(ch2), "property")[0][2], "U2", "a different value never shares U1");
 });
 
+test("annotate reset: units keep their packages unless Regroup symbol units is on", () => {
+  const { d, c } = fresh();
+  d.lib.set("T:DUAL", K.parse(`(symbol "T:DUAL" (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes) (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "DUAL" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (symbol "DUAL_1_1" (pin input line (at 0 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))))
+    (symbol "DUAL_2_1" (pin input line (at 0 0 0) (length 2.54) (name "B" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))))`));
+  const withUnit = (it, u) => { kid(it.node, "unit")[1] = u; return it; };
+  // U7 unit A at the left, U9 unit B next to it: kept apart on a reset, packed into one with Regroup
+  const a = withUnit(place(c, "T:DUAL", [20.32, 76.2], "U7"), 1), b = withUnit(place(c, "T:DUAL", [40.64, 76.2], "U9"), 2);
+  const refs = (o) => { const ch = sch.annotateChanges(d, o); const r = (it) => { const x = ch.find((y) => y.id === it.id); return x ? kids(fragItem(x), "property")[0][2] : null; }; return [r(a), r(b)]; };
+  assert.deepStrictEqual(refs({ keep: false }), ["U1", "U2"]);
+  assert.deepStrictEqual(refs({ keep: false, regroup: true }), ["U1", "U1"]);
+});
+
 test("ERC on the embedded sheet: unconnected pins, dangling wires, then the fixes and the other findings", () => {
   const { d, c } = fresh();
   assert.ok(sch.runAction("runERC", c));

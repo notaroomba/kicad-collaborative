@@ -21,7 +21,7 @@ export function splitRef(ref: SAtom) {
 // opts: { order: "x" | "y", keep: true (incremental) | false (renumber everything), start: 0, sheetInterval: 0 | 100 | 1000, sheetNumber: 1, only: Set of ids,
 //         reserved: references in use on the project's other sheets (KiCad annotates against the whole hierarchy's reference list) }
 /** Annotation options (see annotateChanges). */
-export interface AnnotateOpts { order?: string; keep?: boolean; start?: number; sheetInterval?: number; sheetNumber?: number; only?: Set<string> | null; reserved?: Iterable<string> }
+export interface AnnotateOpts { order?: string; keep?: boolean; /** reset only: multi-unit symbols are not kept in their old packages */ regroup?: boolean; start?: number; sheetInterval?: number; sheetNumber?: number; only?: Set<string> | null; reserved?: Iterable<string> }
 /** A symbol's reference as the annotation sees it. */
 interface RefEntry { item: KItem; prefix: string; num: number; isNew: boolean; old: string; x: number; y: number; unit: number }
 /** Who holds a reference number: the library symbol, its value and the unit (-1: another sheet). */
@@ -64,7 +64,8 @@ export function annotateChanges(doc: KDoc, opts?: AnnotateOpts | null) {
     let n: number;
     const multi = libUnits(doc, r.item.node).units > 1;
     // units of one multi-unit package (same old reference) stay together, like KiCad's locked-unit map
-    const packageKey = multi && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
+    // (Regroup symbol units, with a reset: they are packed afresh like new units)
+    const packageKey = multi && !opts.regroup && r.old && !/\?$/.test(r.old) ? r.prefix + ":" + r.old : null;
     if (packageKey && assigned.has(packageKey)) n = assigned.get(packageKey)!;
     else { n = packageKey ? firstFree(r, false) : firstFree(r, multi); if (packageKey) assigned.set(packageKey, n); }
     take(r, n);

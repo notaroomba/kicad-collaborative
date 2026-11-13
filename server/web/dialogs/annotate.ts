@@ -6,10 +6,17 @@
 // that sheet's undo list, as Find and Replace's Replace All does.
 import { E, appState, pushUndoFor, toolCtx } from "./editor";
 import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
-import { projectDocs, readDoc, submitDocOp } from "./project";
+import { obj, projectDocs, projectJson, readDoc, saveProject, sub, submitDocOp } from "./project";
+import { effectiveTheme } from "../theme";
+
+/** BITMAPS::annotate_down_right / annotate_right_down (24 px, light and dark), beside the two sort orders. */
+const ORDER_BMP: Record<string, [string, string]> = {
+  x: ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAQAAABKfvVzAAABcUlEQVR4AZyTA2xeURTHZ9u2/c7/vjcjmO0tmL1gtm3bCId4aJwiqm27sb6gbh+u6ser3/FpVt7Iu+kA4qcNaxxQMHVggwE6SufgM24ZF2YPkLend6FNGKID91BefQc2ay5uWj0Rz74jWzTWltMXBVWAsUWWT79wu/J7Dq9FwNNBQbJ8cz5SF7Sr3BuFDBmwdZRhuywffmy3M8ozB+tR8qGXZP8YFI5qa4/Zb9qsA4WGFCF2Bc+8vfs4rQOZ5ggRQIIx0xsfwxMdiALx4wZDKg8B24KfGkB/aSUH6BHdEMxbgAANwHu23x3PbI8ia4wAWAjjAHfymjfeTX+ljExDtA5sZb+dpRaIYst4ebBVdBi5bJW1XALQH0W2m9iIEO7wxDZIcirtq9JASDYnVn47IBmLpABfqD5eQnNV4DaeNmuOz/RNKZFeVIhy9ldr0cndEYVY+osOatPgCcqN9Qpgu8uLTK4r5nVKA1u/YuZaZJcaANc6D+SZmvZDAAAAAElFTkSuQmCC", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAQAAABKfvVzAAABc0lEQVR4AZ2UA6ybURTHZ9u2bSuY7S2YvWC2bdsIh3iKM0Tzs76e/6nbWA0e6vbq+ePV797jKsEK3pUHkEldKgZ4He3LDdBO+yEE+ByO2Nup07mNeJnVyQBwCcHo/T1YVZ50NkcmXsNBXTTA1xreCEAr1P3xjs+Hv4f4vgyIM36o+9NkWFQnWMXRAzAAX2su4tXq/vwF62MtuPM6mlYKuFvIy61e8OXWjrXxnpabgE+1EJ3AreTcZd5vAszdZABZGJts76IbBkApGCaW20fAEiagFXhrnvCR5woA13BG9GgKvpnAY9qcaDvqwm/1EoBtFP4YAJ3AqSS8Hh8VAwxBqgmsxPt4uxqlYFZiPLO5fR62s8s+z5qtAGgLf0xNXopfQuH0WpQTizR6qSUQcrl/sIq7HnJt0xQDH4kCBbaJGsDn6WawKj/HKzVEsluQD8GEVjLQlFKQjo/uenrS0A0EsVgDYuqKINPiKpkp5Ux97lfpqhECB494COOT5+8AAAAASUVORK5CYII="],
+  y: ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAQAAABKfvVzAAABU0lEQVR4AaWUM5zcURSF/zOxbdu6332xmthOyti2bdvugi5GFds2l+1utztsxvyd9nzvXVuOOJU4wFzZTKV4gGU4yNQdploMAG/IIBuHR7lkkcE33nCZY7pKR7WqHAS0qtGqhq732J/JtCalTTVTG5F+TGK1XiSdz2xsViowpOU80zGWLUQQNtOE3byy7H5Auyp+5iCId6ZazGWlMCflSox9sOw6lC9yhsIxAO0K6Rhe6xO6x9DpVio7SNer2tubWwSgdX1ZySe+y7rW9aPOkunCNdJkr2nvfTci0LqMXOA74+oWiGmW2hTnAxu7Fox5+GSEng1laF6+ZsGQANX5I0ukbiCgQ/jBmjYVQuTQsiYH+UWKXGCbznZNaWdBYDoOHGSY/do0ZFlNNR3JQnZznrs85TWpOLyS+6ZJtNHwhuQgh9sthnsLHRVgoJzVDskfgdjlBJq3EE2kTXGiAAAAAElFTkSuQmCC", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAQAAABKfvVzAAABVklEQVR4AZySM5xcYRTFY9u2kyZo4iq2kzK2bdu2u6Bbo1rb3v3uue+NZ9rdbndsvtnfae//6pw25ijVegCn6SGGRgNcgRkmPFOPVACgDEY0wWwTt1AjjGhAGWLxhW7QDmlYACBGi9G4awcKxBG5X/1IHodZvIYO0E38h4Fq+T739V/pKgqwy9w2yBpteTq9RIm5nQ8gD/cv9oVQUT9S8Vs13fg74pT60I43ow6/NN0UAHJX7KJS5ImlCpyW5uAZDIjHSp/bggENk/g6aiBwp2FSxCzRYk6AHq8xz6dvcEDVH/8gsKeus6Is1fVCFd+nLorDR9vwO1hB/SDfJp5TR0HGJXmCP4BNIOmWfnCQG2gMvwdDi394Qidph1jEs606ag+lEW+lGUHfWj+StvN5eom/SEc+lUIHs0OUWTc9CBBkJTOakSq22h8dGaD1+M2WWSP4tC81AA41eI6chFwMAAAAAElFTkSuQmCC"],
+};
 
 type Scope = "all" | "sheet" | "selection";
-interface AnnotateOpts { order: "x" | "y"; keep: boolean; start: number; sheetInterval: number; sheetNumber?: number; only?: Set<string>; reserved?: string[] }
+interface AnnotateOpts { order: "x" | "y"; keep: boolean; regroup?: boolean; start: number; sheetInterval: number; sheetNumber?: number; only?: Set<string>; reserved?: string[] }
 interface SchAnnotate {
   annotateChanges(doc: KDoc, opts: AnnotateOpts): KChange[];
   clearAnnotationChanges(doc: KDoc, only?: Set<string> | null): KChange[];
@@ -17,7 +24,7 @@ interface SchAnnotate {
 const sch = (): SchAnnotate | null => ((window as unknown as { CollabTools?: { sch?: SchAnnotate } }).CollabTools || {}).sch || null;
 
 /** What the dialog remembers between openings (KiCad keeps these in the eeschema settings). */
-const A = { scope: "all" as Scope, order: "x" as "x" | "y", numbering: "first" as "first" | "100" | "1000", start: 0, keep: true };
+const A = { scope: "all" as Scope, order: "x" as "x" | "y", numbering: "first" as "first" | "100" | "1000", start: 0, keep: true, regroup: false };
 
 /** The annotated references of a sheet ("R1", "#PWR03"; "R?" is not one) — what the other sheets must not reuse. */
 export function usedRefs(doc: KDoc): string[] {
@@ -60,7 +67,8 @@ async function runAnnotate(): Promise<void> {
   const S = sch(); if (!S || !E.kdoc) return;
   if (E.viewOnly) { say("View-only access", true); return; }
   const interval = A.numbering === "100" ? 100 : A.numbering === "1000" ? 1000 : 0;
-  const base: AnnotateOpts = { order: A.order, keep: A.keep, start: A.numbering === "first" ? A.start : 0, sheetInterval: interval };
+  await storeReusedSheetMode();   // annotation reads the mode from the project
+  const base: AnnotateOpts = { order: A.order, keep: A.keep, regroup: !A.keep && A.regroup, start: A.numbering === "first" ? A.start : 0, sheetInterval: interval };
   const only = A.scope === "selection" ? new Set<string>(E.selection) : undefined;
   if (A.scope === "selection" && E.selected) only!.add(E.selected.id);
   const others = await otherSheets();
@@ -103,6 +111,13 @@ async function runClear(): Promise<void> {
   say(total ? `Cleared the annotation of ${total} symbol${total === 1 ? "" : "s"}.` : "No annotated symbols in scope.");
 }
 
+let regroup: HTMLInputElement, reuseSuffix = false, initialReuse = false;
+/** storeReusedSheetMode: the Reused Sheets choice written to the project when it changed. */
+async function storeReusedSheetMode(): Promise<void> {
+  if (reuseSuffix === initialReuse) return;
+  initialReuse = reuseSuffix; const on = reuseSuffix;
+  await saveProject((pro) => { sub(pro, "schematic", "annotation").reused_sheet_suffixes = on; }, "annotation options");
+}
 export function openAnnotate(): void {
   const radio = (name: string, value: string, label: string, on: boolean, set: () => void, disabled = false) => {
     const r = h("input", { type: "radio", name, value, checked: on, disabled, id: `kd-ann-${name}-${value}` }); r.addEventListener("change", () => { if (r.checked) set(); });
@@ -113,18 +128,32 @@ export function openAnnotate(): void {
     title: "Annotate Schematic", width: 600,
     build(body) {
       const hasSel = E.selection.size > 0 || !!E.selected;
+      const dark = effectiveTheme() === "dark";
+      const withBmp = (row: HTMLElement, o: string) => h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:12px" }, row, h("img", { src: ORDER_BMP[o][dark ? 1 : 0], width: "24", height: "24", alt: "" }));
+      const withTip = (row: HTMLElement, tip: string) => { row.title = tip; return row; };
+      regroup = h("input", { type: "checkbox", id: "kd-ann-regroup", checked: A.regroup, disabled: A.keep }) as HTMLInputElement;
+      regroup.addEventListener("change", () => { A.regroup = regroup.checked; });
+      const regroupRow = h("label", { class: "kd-chk", style: "display:flex;gap:6px;align-items:center" }, regroup, "Regroup symbol units");
+      reuseSuffix = obj(obj(obj(projectJson()).schematic).annotation).reused_sheet_suffixes === true;
+      initialReuse = reuseSuffix;
       const start = textInput(String(A.start), (v) => { A.start = Math.max(0, parseInt(v, 10) || 0); }, { id: "kd-ann-start", style: "width:70px", type: "number", min: "0" });
       body.append(
         h("div", { style: "display:flex;gap:12px" },
           box("Scope", radio("scope", "all", "Entire schematic", A.scope === "all", () => { A.scope = "all"; }), radio("scope", "sheet", "Current sheet only", A.scope === "sheet", () => { A.scope = "sheet"; }),
             radio("scope", "selection", "Selection", A.scope === "selection", () => { A.scope = "selection"; }, !hasSel),
             checkbox("Recurse into subsheets", true, undefined, { disabled: true, title: "Every sheet of the project is annotated" })),
-          box("Options", radio("keep", "keep", "Keep existing annotations", A.keep, () => { A.keep = true; }), radio("keep", "reset", "Reset existing annotations", !A.keep, () => { A.keep = false; }))),
+          box("Options", radio("keep", "keep", "Keep existing annotations", A.keep, () => { A.keep = true; regroup.disabled = true; }), radio("keep", "reset", "Reset existing annotations", !A.keep, () => { A.keep = false; regroup.disabled = false; }),
+            regroupRow)),
         h("div", { style: "display:flex;gap:12px;margin-top:8px" },
-          box("Order", radio("order", "x", "Sort symbols by X position", A.order === "x", () => { A.order = "x"; }), radio("order", "y", "Sort symbols by Y position", A.order === "y", () => { A.order = "y"; })),
+          box("Order", withBmp(radio("order", "x", "Sort symbols by X position", A.order === "x", () => { A.order = "x"; }), "x"), withBmp(radio("order", "y", "Sort symbols by Y position", A.order === "y", () => { A.order = "y"; }), "y")),
           box("Numbering", h("div", { style: "display:flex;gap:6px;align-items:center" }, radio("num", "first", "Use first free number after:", A.numbering === "first", () => { A.numbering = "first"; }), start),
             radio("num", "100", "First free after sheet number X 100", A.numbering === "100", () => { A.numbering = "100"; }),
             radio("num", "1000", "First free after sheet number X 1000", A.numbering === "1000", () => { A.numbering = "1000"; }))),
+        // DIALOG_ANNOTATE's Reused Sheets box: SCHEMATIC_SETTINGS::m_AnnotateReusedSheetSuffixes (annotation.reused_sheet_suffixes)
+        h("div", { style: "margin-top:8px" }, box("Reused Sheets",
+          radio("reuse", "separate", "Number each sheet instance separately (R1, R2 ...)", !reuseSuffix, () => { reuseSuffix = false; }),
+          withTip(radio("reuse", "suffix", "Number each file once and add the sheet's reference suffix (R1_M1, R1_M2 ...)", reuseSuffix, () => { reuseSuffix = true; }),
+            "Repeated instances of one sheet file need distinct full reference suffixes. Set Reference Suffix in Sheet Properties."))),
         msgs = h("div", { "data-ann-msgs": "1", style: "margin-top:10px;height:90px;overflow:auto;border:1px solid var(--line);background:var(--panel);padding:4px 6px;font-size:12px" }));
       if (A.scope === "selection" && !hasSel) { A.scope = "all"; const r = body.querySelector<HTMLInputElement>("#kd-ann-scope-all"); if (r) r.checked = true; }
     },
