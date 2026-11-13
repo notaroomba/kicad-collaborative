@@ -491,6 +491,16 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           if (!doc.copper.includes(layer)) throw new ToolError(`${layer} is not a copper layer of this board (${doc.copper.join(", ")})`);
           const s = P.designSettings(ed.proSettings || null); const width = e.width === undefined ? s.trackWidth : num(e.width, "width");
           if (!(width > 0)) throw new ToolError("width must be positive"); const ids: string[] = [];
+          // no square corners (the person's rule): a bend of 90° or sharper is cut with a 45° piece, except on antenna and RF nets or when square: true
+          const W = globalThis as any; const R = W.PcbAutoRouter;
+          if (e.square !== true && pts.length > 2 && !(R && R.netKind && R.netKind(net.name) === "rf") && !/(^|[/_\-])(RF|ANT|ANTENNA|LNA)(\d|_|$|[/_\-])/i.test(net.name)) {
+            for (let j = pts.length - 2; j >= 1; j--) {
+              const v = pts[j], a = pts[j - 1], b = pts[j + 1]; const la = Math.hypot(a[0] - v[0], a[1] - v[1]), lb = Math.hypot(b[0] - v[0], b[1] - v[1]); if (la < 1e-6 || lb < 1e-6) continue;
+              const cos = ((a[0] - v[0]) * (b[0] - v[0]) + (a[1] - v[1]) * (b[1] - v[1])) / (la * lb); if (cos < Math.cos(91 * Math.PI / 180)) continue;
+              const d = Math.min(1.0, 3 * width, la / 2, lb / 2); const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+              pts.splice(j, 1, [r6(v[0] + (a[0] - v[0]) / la * d), r6(v[1] + (a[1] - v[1]) / la * d)], [r6(v[0] + (b[0] - v[0]) / lb * d), r6(v[1] + (b[1] - v[1]) / lb * d)]);
+            }
+          }
           for (let j = 1; j < pts.length; j++) { const c = added(doc, P.segmentNode(doc, pts[j - 1], pts[j], width, layer, net)); changes.push(c); ids.push(c.id); }
           lines.push({ kind: "add", text: `Add ${fmt(width)} mm track on ${layer}, net ${net.name}, ${pts.length - 1} segment${pts.length > 2 ? "s" : ""}`, ids });
           break;

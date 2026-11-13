@@ -4,6 +4,7 @@
 import { buildClass, DX, DY, fillPoly, Grid, Obstacle, pickGrid, pointGap, Pt, RuleClass, Shape, stamp, stampClass, viaFits } from "./grid";
 import { costOf, dirOf, Features, featuresOf, Node, probe, ProbeResult, Terminal, Win } from "./probe";
 import { TRAINED, Weights } from "./weights";
+import { cornerAngle, SQUARE_MAX } from "./corners";
 import { stackupOf, traceOn, usualImpedance, widthFor, z0, zdiff } from "./impedance";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -375,7 +376,9 @@ export class Router {
     const G = this.G, plan: NetPlan = (this.opts.netOpts || {})[netKey] || {}; const rank = (this.opts.order || []).indexOf(netKey);
     let allowed: boolean[] | null = null;
     if (plan.layers && plan.layers.length) { allowed = G.layers.map((nm) => plan.layers!.includes(nm)); if (!allowed.some(Boolean)) allowed = null; }
-    return { allowed, allowVias: this.allowVias && plan.allowVias !== false, maxVias: plan.maxVias === undefined || plan.maxVias === null ? Infinity : Math.max(0, +plan.maxVias),
+    // USB 2.0 data lines take no via unless the plan allows one: a via is a stub and an impedance step on a 90 ohm pair (the person's rule)
+    const usbData = plan.maxVias === undefined && usualImpedance(netKey, true) === 90 && /USB|(^|[\/_(])D[+\-PM]\)?$/i.test(netKey) && !!pairName(netKey);
+    return { allowed, allowVias: this.allowVias && plan.allowVias !== false, maxVias: usbData ? 0 : plan.maxVias === undefined || plan.maxVias === null ? Infinity : Math.max(0, +plan.maxVias),
       avoid: (plan.avoid || []).map((b) => this.cellBox(b)).filter(Boolean) as [number, number, number, number][], rank: rank < 0 ? Infinity : rank, priority: +plan.priority! || 0 };
   }
   /** A connection between two given points of a net, outside the run's own list (the trainer and tools use this). */
@@ -859,6 +862,55 @@ export class Router {
     }
     return simplify(out);
   }
+  /**
+   * No square corners (the person's rule): wherever two tracks of a net meet end to end on a layer at 90° or
+   * sharper, cut the corner with a 45° piece, as long as it keeps every clearance.  The grid search already mitres
+   * what it can (mitre()); this catches the rest: bends it was squeezed into, and the bends between a pad's stub and
+   * the route.  Antenna and RF nets keep their corners, those are drawn on purpose.  What cannot be cut even by a
+   * hair is left for review_design to report.
+   */
+  unsquare(): void {
+    type End = { c: Conn; o: Obstacle; at: "a" | "b" };
+    const live = this.conns.filter((c) => c.nodes && !c.pair && this.kindOf(c.net) !== "rf"); if (!live.length) return;
+    const P = this.P; const kf = (l: number, net: string, p: Pt) => `${l}\n${net}\n${p[0].toFixed(3)},${p[1].toFixed(3)}`;
+    // the board's own copper of each net: a bend on a pad or via is hidden under it, and a track already on the board is not ours to move
+    const fixedEnds = new Set<string>(); const cover = new Map<string, Shape[]>();
+    for (const [net, list] of this.G.obstacles) if (net) for (const ob of list) {
+      if (ob.pad || ob.shape.t === "circle") for (const l of ob.layers) { const k = l + "\n" + net; let e = cover.get(k); if (!e) cover.set(k, e = []); e.push(ob.shape); }
+      else if (ob.shape.t === "seg" || ob.shape.t === "path") for (const l of ob.layers) { for (const q of ob.shape.t === "seg" ? [ob.shape.a, ob.shape.b] : ob.shape.pts) fixedEnds.add(kf(l, net, q)); const k = l + "\n" + net; let e = cover.get(k); if (!e) cover.set(k, e = []); e.push({ ...ob.shape, r: 0 } as Shape); }
+      else for (const l of ob.layers) { const k = l + "\n" + net; let e = cover.get(k); if (!e) cover.set(k, e = []); e.push(ob.shape); }
+    }
+    for (const c of live) this.place(c, -1);
+    try {
+      for (let round = 0; round < 4; round++) {
+        const ends = new Map<string, End[]>(); const all: Conn[] = this.conns.filter((c) => c.nodes);
+        for (const c of all) for (const o of c.shapes) { const sh = o.shape as any; if (sh.t === "circle") { for (const l of o.layers) { const k = l + "\n" + c.net; let e = cover.get(k); if (!e) cover.set(k, e = []); if (!e.includes(sh)) e.push(sh); } continue; } if (sh.t !== "seg") continue;
+          for (const at of ["a", "b"] as const) { const k = kf(o.layers[0], c.net, sh[at]); let l = ends.get(k); if (!l) ends.set(k, l = []); l.push({ c, o, at }); } }
+        const degree = (k: string) => (ends.get(k) || []).length + (fixedEnds.has(k) ? 1 : 0);
+        const touched = new Set<Obstacle>(); let cut = 0;
+        for (const [k, list] of ends) {
+          if (list.length !== 2 || fixedEnds.has(k)) continue; const [e1, e2] = list; const c = e1.c; if (c.pair || e2.c.pair || this.kindOf(c.net) === "rf" || touched.has(e1.o) || touched.has(e2.o)) continue;
+          const s1 = e1.o.shape as any, s2 = e2.o.shape as any; const v: Pt = s1[e1.at]; const o1: Pt = s1[e1.at === "a" ? "b" : "a"], o2: Pt = s2[e2.at === "a" ? "b" : "a"];
+          if (cornerAngle(v, o1, o2) > SQUARE_MAX) continue; const l = e1.o.layers[0];
+          if ((cover.get(l + "\n" + c.net) || []).some((sh) => pointGap(sh, v[0], v[1]) <= 1e-6)) continue;
+          // another route of the net that tees in here, onto the middle of one of these two: cutting would leave it hanging
+          if (all.some((d) => d.net === c.net && d.shapes.some((o) => o !== e1.o && o !== e2.o && o.layers[0] === l && o.shape.t === "seg" && pointGap({ ...o.shape, r: 0 } as Shape, v[0], v[1]) <= 1e-4))) continue;
+          const L1 = Math.hypot(o1[0] - v[0], o1[1] - v[1]), L2 = Math.hypot(o2[0] - v[0], o2[1] - v[1]);
+          const cap = (L: number, o: Pt) => degree(kf(l, c.net, o)) === 2 ? L / 2 : L - 0.02;   // the far end may be a bend of its own, which needs room too
+          const most = Math.min(cap(L1, o1), cap(L2, o2)); if (most <= 0.01) continue;
+          const u1: Pt = [(o1[0] - v[0]) / L1, (o1[1] - v[1]) / L1], u2: Pt = [(o2[0] - v[0]) / L2, (o2[1] - v[1]) / L2]; const w = Math.max(s1.r, s2.r); const clr = Math.max(e1.o.clr, e2.o.clr);
+          for (const d of [Math.min(1.0, 4 * w), 3 * w, 2 * w, 1.5 * w, w, 0.75 * w, 0.5 * w, 0.3 * w, 0.02].filter((x) => x <= most + 1e-9)) {
+            const p1: Pt = [r6(v[0] + u1[0] * d), r6(v[1] + u1[1] * d)], p2: Pt = [r6(v[0] + u2[0] * d), r6(v[1] + u2[1] * d)];
+            const piece: Shape = { t: "seg", a: p1, b: p2, r: w };
+            this.cur = null; this.curSoft = false; if (!this.clearOf(piece, l, c.net, clr)) continue;
+            s1[e1.at] = p1; s2[e2.at] = p2; const ob: Obstacle = { net: c.net, layers: [l], shape: piece, clr }; c.shapes.push(ob);
+            touched.add(e1.o); touched.add(e2.o); touched.add(ob); cut++; this.stat.cornersCut = (this.stat.cornersCut || 0) + 1; break;
+          }
+        }
+        if (!cut) break;
+      }
+    } finally { for (const c of live) this.place(c, 1); }
+  }
   /** Lay a found route: its copper becomes an obstacle for every other net. */
   commit(conn: Conn, found: Found): void {
     const G = this.G, { res, flip } = found; const nodes = res.nodes; const w = conn.cls.width; const all = G.layers.map((_, i) => i);
@@ -981,6 +1033,7 @@ export class Router {
     if (this.opts.zones !== false && !this.stopped) this.stitch(timeUp);   // what the last two steps moved may have cut a pour again
     if (ripUp && this.opts.zones !== false && !this.stopped && conns.some((c) => !c.nodes && !c.moot && c.stitch)) { this.repair(timeUp); this.stitch(timeUp); }   // a cut-off pad still not joined: let it push others aside
     if (this.opts.matchLengths !== false && !this.stopped) this.tune();
+    this.unsquare();
     this.validate();
     if (this.opts.fence !== false && !this.stopped) this.fence();
     if (this.opts.explain !== false) this.explain();

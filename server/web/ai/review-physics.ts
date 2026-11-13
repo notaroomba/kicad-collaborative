@@ -20,6 +20,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { netKind, pairName } from "../router/route";
 import { stackupOf, traceOn, widthFor, z0 } from "../router/impedance";
+import { boardSquareCorners } from "../router/corners";
 
 type Level = "error" | "warning" | "note";
 type Add = (rule: string, level: Level, message: string, items?: string[]) => void;
@@ -28,6 +29,7 @@ type Pt = [number, number];
 
 /** The numbers the checks use (millimetres unless named otherwise); pcb-design-rules.md gives the source of each. */
 export const LIMITS = {
+  groundViaReach: 1.5,      // a ground pad with no ground via or through-hole pad this close reaches the plane only through its own pour
   powerPath: 0.3,           // a net through a power inductor or from a battery is at least this wide (about 1 A on 1 oz outer copper)
   antennaClear: 0.5,        // no copper inside the antenna's courtyard grown by this (the datasheet's keep-out is usually larger)
   antennaKeepout: 2.0,      // what board.antenna() clears around the part by default
@@ -674,6 +676,54 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
       }
       if (worst.size) add("creepage", "error", "These conductors are closer than IPC-2221 allows for the voltage between them (table 6-1: B4 for outer layers under solder mask, B1 for inner layers). Widen the gap or raise the net class clearance (board.rules or a net class). A product connected to mains needs the larger distances of its safety standard, and a slot where the board cannot give them.", Array.from(worst.entries()).map(([kk, w]) => `${kk.split(" / ").map((n) => bare(n) || "unconnected copper").join(" to ")}: ${r2(w.gap)} mm near ${at(w.x, w.y)}, ${Math.round(w.v)} V needs ${w.need} mm`));
     }
+  }
+  // ---- square corners: none anywhere but on antenna and RF nets (the person's rule)
+  {
+    const corners = boardSquareCorners(doc, P, (n) => kindOf(n) === "rf");
+    if (corners.length) add("tracks.corners", "error", "These tracks turn a right angle (or sharper). Junction routes with 45° corners only: a square bend is an acid trap when etched and a step in impedance. Cut each with a 45° piece (route again with board.route(), which chamfers every corner it lays, or redraw the track through a 45° point). Antenna and RF lines are exempt.",
+      few(corners.map((c) => `${bare(c.net)} on ${c.layer} at ${at(c.x, c.y)}, ${c.angle}°`), 12));
+  }
+
+  // ---- USB data lines: no vias at all costs; where one cannot be avoided, D+ and D- each take one, side by side, at one width (the person's rule)
+  {
+    const usb = Array.from(pairBase.values()).filter((e) => e.p && e.n && /USB|(^|[\/_(])D[+\-PM]\)?$/i.test(e.p!) && pairInterface(e.p!) === "usb2");
+    const holed: string[] = [], uneven: string[] = [];
+    for (const e of usb) {
+      const vp = viasOf.get(e.p!) || [], vn = viasOf.get(e.n!) || [];
+      if (vp.length + vn.length) holed.push(`${bare(e.p!)} ${vp.length} via${vp.length === 1 ? "" : "s"}, ${bare(e.n!)} ${vn.length}`);
+      if (vp.length !== vn.length) uneven.push(`${bare(e.p!)} and ${bare(e.n!)} change layer a different number of times (${vp.length} and ${vn.length})`);
+      else for (const a of vp) { const d = Math.min(...vn.map((b) => Math.hypot(b.shape.x - a.shape.x, b.shape.y - a.shape.y))); if (d > 1.5) uneven.push(`the ${bare(e.p!)} via at ${at(a.shape.x, a.shape.y)} has no ${bare(e.n!)} via beside it (${r2(d)} mm)`); }
+      const widths = (net: string) => new Set((tracksOf.get(net) || []).map((t: any) => r2((t.shape.r || 0) * 2)));
+      const wp = widths(e.p!), wn = widths(e.n!); if (vp.length + vn.length && (wp.size > 1 || wn.size > 1 || [...wp].join() !== [...wn].join())) uneven.push(`${bare(e.p!)} runs at ${[...wp].join("/")} mm and ${bare(e.n!)} at ${[...wn].join("/")} mm`);
+    }
+    if (holed.length) add("usb.vias", "error", "USB data lines should take no via at all: each one is a stub and an impedance step on the 90 ohm pair. Route D+ and D- on one layer (board.route() gives USB data lines no vias unless max_vias is set for them), or turn or swap the parts in their way, for example the ESD part's package.", holed);
+    if (uneven.length) add("usb.vias", "error", "Where a USB pair must change layer, both lines change together: one via each, side by side, and the pair keeps one width and matched lengths.", uneven);
+  }
+
+  // ---- ground pads must really reach the ground plane  // ---- ground pads must really reach the ground plane, not only through a piece of pour that may never be there
+  if (gz && S.filled) {
+    const planeLayers = copper.filter((l) => S.zoneOutlines.some((z) => isGnd(z.net) && z.layers.includes(l)));
+    const outer = new Set([copper[0], copper[copper.length - 1]]);
+    const holes: Pt[] = []; for (const v of S.vias) if (isGnd(v.net)) holes.push([v.shape.x, v.shape.y]); for (const f of fps) for (const p of f.pads) if (isGnd(p.net) && p.type === "thru_hole") holes.push([p.x, p.y]);
+    const near = (x: number, y: number, r: number) => holes.some((h) => Math.hypot(h[0] - x, h[1] - y) <= r);
+    if (planeLayers.some((l) => !outer.has(l)) || planeLayers.length >= 2) {
+      const lone: string[] = [];
+      for (const f of fps) for (const p of f.pads) {
+        if (!isGnd(p.net) || p.type !== "smd" || antennas.includes(f)) continue;
+        const reach = Math.max(LIMITS.groundViaReach, (Math.max(p.box[2] - p.box[0], p.box[3] - p.box[1])) / 2 + 0.6);
+        if (!near(p.x, p.y, reach)) lone.push(`${f.ref}.${p.number} at ${at(p.x, p.y)}`);
+      }
+      if (lone.length) add("ground.pour_only", "warning", `These ground pads reach the ground plane only through the pour on their own layer: no ground via within ${LIMITS.groundViaReach} mm. Such a joint lasts only while that piece of pour is filled and unbroken; a track routed past it later, or a pour that was never refilled, leaves the pad on its own (the ratsnest lines to ground pads). Give each its own via to the plane: board.ground_pads().`, few(lone, 12));
+    }
+    // pieces of an outer ground pour with no via or through-hole pad in them: islands the plane does not reach
+    const islands: string[] = []; let pieces = 0;
+    for (const c of S.conds) {
+      if (c.kind !== "zone" || !isGnd(c.net) || ![...c.layers].some((l: string) => outer.has(l))) continue; pieces++;
+      const pts: Pt[] = c.shape.pts; let area = 0; for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; area += a[0] * b[1] - b[0] * a[1]; } area = Math.abs(area) / 2;
+      if (area < 0.5) continue;
+      if (!holes.some((h) => inBox(c.bbox, h[0], h[1]) && inPoly(pts, h[0], h[1]))) islands.push(`${Array.from(c.layers).join(", ")} near ${at((c.bbox[0] + c.bbox[2]) / 2, (c.bbox[1] + c.bbox[3]) / 2)}, ${r2(area)} mm²`);
+    }
+    if (islands.length) add("pour.islands", "warning", "Tracks have cut these pieces off the ground pour, and no via or through-hole pad joins them to the plane: they hang on whatever ground pads sit in them, or on nothing. Stitch them (board.stitch(), board.ground_pads()) or route the tracks that cut them closer together so the pour stays whole.", few(islands, 10));
   }
   void settings;
 }

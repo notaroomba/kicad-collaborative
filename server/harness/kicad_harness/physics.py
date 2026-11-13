@@ -204,6 +204,10 @@ def _finish(self, stitch: float | None = 10.0) -> dict:
         out["thermal"] = {k: v["vias"] for k, v in self.thermal_vias().items()}
     except HarnessError:
         pass
+    try:      # every ground pad its own via to the plane, so none hangs on a piece of pour alone
+        out["ground_pads"] = self.ground_pads()["vias"]
+    except HarnessError:
+        out["ground_pads"] = 0
     if stitch:
         try:
             out["stitching"] = self.stitch(spacing=stitch)["vias"]

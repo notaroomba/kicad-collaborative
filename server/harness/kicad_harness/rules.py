@@ -641,6 +641,171 @@ def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0
     return out
 
 
+def _ground_pads(self, net: str = "GND", size: float | None = None, drill: float | None = None, width: float = 0.25, rounds: int = 8) -> dict:
+    """Give every ground pad that reaches the plane only through the pour on its own layer (review rule
+    ground.pour_only) its own via beside it, joined by one short straight track.  A pad on a pour hangs on that piece
+    of copper; a track routed past it, or a pour not refilled, cuts it off and leaves ratsnest lines to ground.  Each
+    via is tried in eight directions at a few distances; any the rules check finds at fault is taken out again and the
+    next spot tried.  Call it after routing (finish() does).  Returns {"vias": n, "pads": [...], "left": [...]}."""
+    name = self._net(net)
+    done: list = []
+    state: dict = {}        # pad -> index of the next spot to try
+    left: list = []
+    steps = [(dx, dy) for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))]
+    for _ in range(rounds):
+        try:
+            self.fill()
+        except HarnessError:
+            pass
+        r = self._call("review_design", rule="ground.pour_only")
+        items = [i for f in r.get("findings", []) if f.get("rule") == "ground.pour_only" for i in f.get("items") or []]
+        pads = [m.group(1) for m in (re.match(r"^(\S+\.\S+) at ", i) for i in items) if m]
+        left = [p for p in pads if p not in done]
+        if not left:
+            break
+        g = self.geometry()
+        tried: dict = {}
+        for spec in left:
+            q = self.pad(spec)
+            k = state.get(spec, 0)
+            while k < len(steps) * 3:
+                dx, dy = steps[k % len(steps)]
+                dist = (0.8, 1.05, 1.35)[k // len(steps)]
+                n = math.hypot(dx, dy)
+                at = (_r(q["x"] + dx / n * dist), _r(q["y"] + dy / n * dist))
+                k += 1
+                if _clear_of_pads(g, at, name, 0.6):
+                    break
+            else:
+                state[spec] = k
+                continue
+            state[spec] = k
+            side = next((p.get("side") for p in g["parts"] if p["ref"] == spec.split(".")[0]), "front")
+            self.via(name, at, size=size, drill=drill)
+            self.track(name, [(q["x"], q["y"]), at], layer="B.Cu" if side == "back" else "F.Cu", width=width)
+            res = self.flush() or {}
+            tried[spec] = (at, (q["x"], q["y"]), list(res.get("added") or []))
+        if not tried:
+            break
+        bad = set()
+        for v in self._call("run_checks").get("violations", []):
+            if v.get("severity") != "error" or v.get("code") in ("unconnected_items", "track_right_angle"):
+                continue
+            for spec, (at, pad, _ids) in tried.items():
+                if _seg_dist((v["x"], v["y"]), pad, at) < 0.6:
+                    bad.add(spec)
+        for spec in bad:
+            for i in tried[spec][2]:
+                self._edit({"op": "remove", "id": i})
+        self.flush()
+        done += [s for s in tried if s not in bad]
+    out = {"vias": len(done), "pads": done, "left": [p for p in left if p not in done]}
+    self.project.note(f"board: {out['vias']} ground pads given their own via" + (f", {len(out['left'])} without room" if out["left"] else ""))
+    return out
+
+
+_QUIET_NET = re.compile(r"^/?(.*/)?([ADP]?GND\w*|VSS\w*|EARTH)$", re.I)
+
+
+def _cross(a, b, c, d) -> bool:
+    """Do segments ab and cd cross (not merely touch at an end)?"""
+    def o(p, q, r):
+        v = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+        return 0 if abs(v) < 1e-9 else (1 if v > 0 else -1)
+    if min(math.hypot(a[0] - x[0], a[1] - x[1]) for x in (c, d)) < 1e-6 or min(math.hypot(b[0] - x[0], b[1] - x[1]) for x in (c, d)) < 1e-6:
+        return False
+    return o(a, b, c) * o(a, b, d) < 0 and o(c, d, a) * o(c, d, b) < 0
+
+
+def _compare_parts(self, ref: str, options: dict, rotations=(0, 90, 180, 270), at=None) -> list:
+    """Weigh other packages (or other parts) for one part by how well they would route where it sits, before choosing
+    one: the plan an engineer makes when picking a part, not after.  For each option and each rotation the pads are
+    laid where the part is (or at `at`), every signal pad gets a straight line to the nearest pad of its net on another
+    part, and the option is scored on those lines: how many cross each other (each crossing is a via or a detour),
+    how many have to run back across the part's own body, and their total length.  Ground and supply pads are left out
+    of the crossings: they drop to the plane through a via of their own.
+
+    options: {name: {"footprint": "Lib:Footprint", "nets": {net: pad}}} with the pad each net lands on in that
+    package (read the datasheet's pin table), or {"footprint": ..., "symbol": "Lib:Symbol"} to map by pin name
+    through the part's present symbol.  Include the present package to compare against it.
+    Returns the options best first: {"option", "rotation", "crossings", "through_body", "length_mm", "score"}.
+    Example: the TPD2E2U06 in DCK (SC70: IO1 and IO2 side by side, GND opposite) against DRL (SOT-553: IO1 and IO2
+    on opposite sides): board.compare_parts("U6", {"DCK": {"footprint": "Package_TO_SOT_SMD:SOT-323_SC-70",
+    "nets": {"USB_D+": "1", "USB_D-": "2", "GND": "3"}}, "DRL": {"footprint": "Package_TO_SOT_SMD:SOT-553",
+    "nets": {"USB_D+": "3", "USB_D-": "5", "GND": "4"}}})."""
+    g = self.geometry()
+    me = next((p for p in g["parts"] if p["ref"].lower() == ref.lower()), None)
+    if not me:
+        raise HarnessError(f"There is no footprint {ref} on the board.")
+    cx, cy = (at or (me["x"], me["y"]))[:2]
+    others: dict = {}
+    for p in g["parts"]:
+        if p["ref"] == me["ref"]:
+            continue
+        for q in p["pads"]:
+            if q[3]:
+                others.setdefault(q[3], []).append((q[1], q[2]))
+    by_name: dict = {}
+    for name, opt in options.items():
+        nets = dict(opt.get("nets") or {})
+        if not nets and opt.get("symbol"):
+            sch_pins = {}
+            for d in self.project._open.values():
+                if hasattr(d, "sections"):
+                    for sp in d.geometry().get("parts", []):
+                        if sp["ref"] == me["ref"]:
+                            sch_pins = {pin[1]: pin[6] for pin in sp["pins"] if pin[1]}
+            lib = self.project.transport.call("get_library_part", {"id": opt["symbol"], "brief": True}).get("pins") or {}
+            nets = {sch_pins[nm]: num for num, nm in lib.items() if nm and nm in sch_pins and sch_pins[nm]}
+            if not nets:
+                raise HarnessError(f"{name}: the symbol's pins have no names to match; give nets={{net: pad}} from the datasheet's pin table.")
+        fp = self.project.transport.call("get_library_part", {"id": opt["footprint"], "kind": "footprint"})
+        pads = {str(q["number"]): (q["dx"], q["dy"]) for q in fp.get("pad_list") or []}
+        missing = [pad for pad in nets.values() if str(pad) not in pads]
+        if missing:
+            raise HarnessError(f"{name}: {opt['footprint']} has no pad {', '.join(map(str, missing))}.")
+        ext = fp.get("extent_box") or [-1, -1, 1, 1]
+        body = max(0.3, min(abs(v) for v in (pads and [max(abs(dx) for dx, _ in pads.values()), max(abs(dy) for _, dy in pads.values())] or [1])) * 0.6)
+        for rot in rotations:
+            t = math.radians(rot)
+            c, sn = math.cos(t), math.sin(t)
+            lines = []
+            length = 0.0
+            through = 0
+            for net, pad in nets.items():
+                full = next((n for n in others if n == net or n.split("/")[-1] == net.split("/")[-1]), None)
+                if not full:
+                    continue
+                dx, dy = pads[str(pad)]
+                px, py = cx + dx * c + dy * sn, cy - dx * sn + dy * c
+                dests = sorted(others[full], key=lambda q: math.hypot(q[0] - px, q[1] - py))
+                for q in dests[:2 if len(dests) > 1 and not _QUIET_NET.match(full) else 1]:
+                    length += math.hypot(q[0] - px, q[1] - py)
+                    if _QUIET_NET.match(full):
+                        continue
+                    lines.append(((px, py), q))
+                    # does the line run back over the part's own body (the pad faces away from where its net goes)?
+                    if _seg_dist((cx, cy), (px, py), q) < body and math.hypot(q[0] - cx, q[1] - cy) > math.hypot(px - cx, py - cy):
+                        through += 1
+            crossings = sum(1 for i in range(len(lines)) for j in range(i + 1, len(lines)) if _cross(*lines[i], *lines[j]))
+            score = crossings * 10 + through * 4 + length * 0.2
+            row = {"option": name, "rotation": rot, "crossings": crossings, "through_body": through, "length_mm": round(length, 2), "score": round(score, 2)}
+            if name not in by_name or score < by_name[name]["score"]:
+                by_name[name] = row
+        _ = ext
+    out = sorted(by_name.values(), key=lambda r: r["score"])
+    self.project.note(f"board: {ref} packages compared, best {out[0]['option']} at {out[0]['rotation']}°" if out else f"board: {ref} no package to compare")
+    return out
+
+
+def _seg_dist(p, a, b) -> float:
+    ax, ay = a
+    bx, by = b
+    L2 = (bx - ax) ** 2 + (by - ay) ** 2
+    t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, ((p[0] - ax) * (bx - ax) + (p[1] - ay) * (by - ay)) / L2))
+    return math.hypot(p[0] - (ax + t * (bx - ax)), p[1] - (ay + t * (by - ay)))
+
+
 def _vias_checked(self, name: str, pts: list, size, drill) -> dict:
     """Place a via at each point, then take out those the rules check finds at fault."""
     ids = {}
@@ -680,6 +845,8 @@ def install(Project, Schematic, Board) -> None:
     Board.fiducials = _board_fiducials
     Board.mark = _mark
     Board.stitch = _stitch
+    Board.ground_pads = _ground_pads
+    Board.compare_parts = _compare_parts
     Board.fence = _fence
     Board.silkscreen = _silkscreen
     Board.cleanup = _cleanup

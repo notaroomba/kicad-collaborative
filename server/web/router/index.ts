@@ -6,9 +6,10 @@ import { DEFAULT_WEIGHTS, PROVENANCE, TRAINED } from "./weights";
 import { autoroute, install, open, summaryText } from "./ui";
 import { place, placementChanges } from "./place";
 import { evaluate } from "./evaluate";
+import { boardSquareCorners, findSquareCorners } from "./corners";
 import { autoplace, openPlace, placeSummaryText } from "./placeui";
 
-const api = { route, Router, isSupply, pairName, netKind, impedance: { stackupOf, traceOn, z0, zdiff, widthFor, usualImpedance }, place, placementChanges, evaluate, autoplace, openPlace, placeSummaryText, autoroute, open, summaryText, probe, featuresOf, costOf, DEFAULT_WEIGHTS, TRAINED, PROVENANCE };
+const api = { route, boardSquareCorners, findSquareCorners, Router, isSupply, pairName, netKind, impedance: { stackupOf, traceOn, z0, zdiff, widthFor, usualImpedance }, place, placementChanges, evaluate, autoplace, openPlace, placeSummaryText, autoroute, open, summaryText, probe, featuresOf, costOf, DEFAULT_WEIGHTS, TRAINED, PROVENANCE };
 (globalThis as unknown as { PcbAutoRouter: typeof api }).PcbAutoRouter = api;
 install();
 export default api;
