@@ -26,6 +26,11 @@ interface Layer {
 
 let layer: Layer | null = null;
 let restTimer = 0;
+// KiCad's GAL redraws every zoom frame at full resolution, so a wheel zoom stays sharp.  A scaled copy of the cached
+// pass is only a stand-in for the first frame of a zoom on a board too slow to redraw at 30 frames a second (so the
+// wheel answers at once); every later frame of the zoom is a full pass, so the picture never blurs while it goes on.
+const SCALED_MIN_MS = 33;
+let wasScaling = false;
 export const stats: PaintStats = { full: 0, strips: 0, blits: 0, scaled: 0, lastFullMs: 0 };
 
 function ensureLayer(w: number, h: number): Layer | null {
@@ -109,7 +114,7 @@ function full(l: Layer, doc: KDoc, view: KView, opts: Record<string, unknown>): 
 export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view: KView, opts: Record<string, unknown>, force: boolean, scaling: boolean, onRest: () => void): void {
   const W = target.canvas.width, H = target.canvas.height;
   const l = ensureLayer(W, H);
-  if (!l) { KiCadCanvas.render(doc, target, view, opts as KRenderOpts); return; }
+  if (!l) { KiCadCanvas.render(doc, target, view, opts as KRenderOpts); wasScaling = scaling; return; }
   const lv = l.view;
   const reusable = !force && !!lv && l.doc === doc && !!l.opts && sameOpts(opts, l.opts) && sameGeoms(doc, l.geoms);
   let stand = false;
@@ -127,7 +132,7 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
       l.view = Object.assign({}, view);
       stats.strips++; stand = true;
     } else { full(l, doc, view, opts); }
-  } else if (reusable && lv && scaling && l.ms > 12 && (view.dpr || 1) === (lv.dpr || 1) && view.ppm === lv.ppm && view.x0 === lv.x0 && view.y0 === lv.y0) {
+  } else if (reusable && lv && scaling && !wasScaling && l.ms > SCALED_MIN_MS && (view.dpr || 1) === (lv.dpr || 1) && view.ppm === lv.ppm && view.x0 === lv.x0 && view.y0 === lv.y0) {
     // a zoom frame on a slow board: the cached pass scaled about the same document origin
     const dpr = view.dpr || 1, k = view.zoom / lv.zoom;
     const ox = view.panX * dpr - lv.panX * dpr * k, oy = view.panY * dpr - lv.panY * dpr * k;
@@ -135,10 +140,11 @@ export function paintDocument(doc: KDoc, target: CanvasRenderingContext2D, view:
     target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1;
     if (bg) { target.fillStyle = bg; target.fillRect(0, 0, W, H); } else target.clearRect(0, 0, W, H);
     target.imageSmoothingEnabled = true; target.drawImage(l.cv, ox, oy, W * k, H * k); target.restore();
-    stats.scaled++;
-    scheduleRest(onRest, 90);
+    stats.scaled++; wasScaling = true;
+    scheduleRest(onRest, 0);   // the full pass follows on the next frame, whether or not the zoom goes on
     return;
   } else full(l, doc, view, opts);
+  wasScaling = scaling;
   target.save(); target.setTransform(1, 0, 0, 1, 0, 0); target.globalAlpha = 1; target.globalCompositeOperation = "copy";
   target.drawImage(l.cv, 0, 0); target.restore();
   if (stand) scheduleRest(() => { invalidateLayer(); onRest(); }, 160);
