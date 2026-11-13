@@ -21,6 +21,7 @@ import { openUnusedPads } from "./unused-pads";
 import { openCleanupGraphics } from "./cleanup-graphics";
 import { openEditTeardrops } from "./teardrops";
 import { repairBoard } from "./repair";
+import { openReannotate } from "./reannotate";
 import { openUpdatePcb, projectNetlist, updatePcbFromSchematicEditor } from "./update-pcb";
 import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
 import { commitObservers, toolCtx } from "../tools";
@@ -51,6 +52,7 @@ export function installPcbDialogs(): void {
   action("cleanupGraphics", "Cleanup Graphics...", "", openCleanupGraphics);   // GLOBAL_EDIT_TOOL::CleanupGraphics
   action("editTeardrops", "Edit Teardrops...", "", openEditTeardrops);   // GLOBAL_EDIT_TOOL::EditTeardrops
   action("repairBoard", "Repair Board", "", repairBoard);   // BOARD_EDITOR_CONTROL::RepairBoard
+  action("boardReannotate", "Geographical Reannotate...", "", openReannotate);   // BOARD_REANNOTATE_TOOL::ShowReannotateDialog
   action("removeUnusedPads", "Remove Unused Pads...", "", openUnusedPads);   // GLOBAL_EDIT_TOOL::RemoveUnusedPads
   action("updatePcbFromSchematic", "Update PCB from Schematic...", "F8", (ctx) => { void openUpdatePcb(ctx); });
   // GLOBAL_EDIT_TOOL::ExchangeFootprints (DIALOG_EXCHANGE_FOOTPRINTS)

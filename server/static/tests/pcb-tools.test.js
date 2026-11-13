@@ -2320,3 +2320,25 @@ test("repair board: duplicated uuids get new ones, footprints and pads claim fir
   const kinds = r.changes.map((c) => c.kind).sort();
   assert.deepEqual(kinds, ["ADDED", "MODIFIED", "REMOVED"], "the track after the pad goes and comes back under a new id");
 });
+
+test("geographical reannotate: sort by rounded location, renumber per prefix, exclusions and prefixes (DIALOG_BOARD_REANNOTATE)", () => {
+  const fp = (ref, x, y, extra = "", layer = "F.Cu") => `(footprint "T:R" (layer "${layer}") (uuid "u-${ref}-${x}") (at ${x} ${y}) ${extra}
+    (property "Reference" "${ref}" (at 0 -2 0) (layer "F.SilkS") (uuid "p-${ref}-${x}") (effects (font (size 1 1) (thickness 0.15)))))`;
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  ${fp("R7", 30, 10)} ${fp("R2", 10, 10.2)} ${fp("R9", 20, 9.9)} ${fp("C4", 10, 20)} ${fp("REF**", 50, 50)} ${fp("R1", 40, 40, "", "B.Cu")} ${fp("U3", 5, 5, "(locked yes)")})`, "kicad_pcb");
+  const base = { sortCode: 0, useFootprintLocation: true, grid: 1.27, scope: "all", excludeLocked: true, exclude: "", frontStart: "1", backStart: "", frontPrefix: "", backPrefix: "", removeFrontPrefix: false, removeBackPrefix: false };
+  const r = P.geographicalReannotate(doc, base);
+  assert.ok(r.ok);
+  const ren = Object.fromEntries(r.renames.map((x) => [x.from, x.to]));
+  assert.deepEqual(ren, { R2: "R1", R9: "R2", R7: "R3", C4: "C1", R1: "R4" }, "top to bottom, left to right; the back side continues the numbering; the locked U3 stays");
+  assert.equal(r.bad.length, 1, "REF** has no number"); assert.ok(r.report.some((l) => l.text === "REF**  (unannotated; not updated)"));
+  assert.ok(r.report.some((l) => l.text === "U3  (excluded)"));
+  const ex = P.geographicalReannotate(doc, { ...base, exclude: "C" });
+  assert.ok(!ex.renames.some((x) => x.from === "C4"), "Exclude references: C means C*");
+  const pre = P.geographicalReannotate(doc, { ...base, backPrefix: "B_", backStart: "100" });
+  assert.equal(pre.renames.find((x) => x.from === "R1").to, "B_R100", "a back prefix and start");
+  const front = P.geographicalReannotate(doc, { ...base, scope: "front", frontStart: "1" });
+  assert.ok(!front.renames.some((x) => x.from === "R1"), "Front only leaves the back side");
+  assert.equal(K.str(K.kid(node(r.changes.find((c) => c.id === "u-R2-10")), "property")[2]), "R1", "the Reference field is rewritten");
+});

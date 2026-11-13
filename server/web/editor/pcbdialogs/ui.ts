@@ -143,6 +143,9 @@ textarea.pd-text { width: 100%; min-height: 260px; font-family: var(--mono); fon
 .pd-layercell k-select { flex: 1; }
 .pd-report .ln.sel { background: var(--sel-soft); }
 .pd-report .ln[tabindex] { cursor: pointer; }
+.pd-reann-dirs { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 8px; }
+.pd-reann-dir { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.pd-reann-pic { border: 1px solid var(--line); border-radius: var(--r-2); background: var(--panel); }
 .pd-infobar .msg { flex: 1; white-space: pre-wrap; }
 .pd-infobar .x { border: 0; background: none; color: var(--ink-2); padding: 0 4px; }
 .pd-grid td.cellsel input[type=text], .pd-grid td.cellsel { background: var(--sel-soft); }
