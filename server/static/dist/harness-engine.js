@@ -89560,7 +89560,23 @@ function planSilk(doc, opts = {}) {
     }
     netNames2.set(fp.id, s);
   }
-  const isOldLabel = (fp, g2) => g2[0] === "fp_text" && k.str(g2[1]) === "user" && /SilkS$/.test(layerOfNode(g2)) && (netNames2.get(fp.id) || /* @__PURE__ */ new Set()).has(k.str(g2[2]));
+  const padAts = /* @__PURE__ */ new Map();
+  const inLine = (fp, g2) => {
+    if (!/^(J|P|CN|X|BT)\d/i.test(String(fp.ref || "")) || !/^[^\s$]+$/.test(k.str(g2[2]))) return false;
+    let l = padAts.get(fp.id);
+    if (!l) {
+      l = fp.node.filter((n2) => Array.isArray(n2) && n2[0] === "pad").map((n2) => {
+        const a2 = k.kid(n2, "at");
+        return a2 ? [Number(a2[1]) || 0, Number(a2[2]) || 0] : [NaN, NaN];
+      });
+      padAts.set(fp.id, l);
+    }
+    const a = k.kid(g2, "at");
+    if (!a) return false;
+    const x = Number(a[1]) || 0, y = Number(a[2]) || 0;
+    return l.some((q) => Math.abs(q[0] - x) < 0.02 || Math.abs(q[1] - y) < 0.02);
+  };
+  const isOldLabel = (fp, g2) => g2[0] === "fp_text" && k.str(g2[1]) === "user" && /SilkS$/.test(layerOfNode(g2)) && ((netNames2.get(fp.id) || /* @__PURE__ */ new Set()).has(k.str(g2[2])) || inLine(fp, g2));
   for (const e of els) {
     if (!isFinite(e.bbox[0])) continue;
     if (e.fp && e.kind === "property" && k.str(e.node[1]) === "Reference" && mine.has(e.fp.id)) continue;

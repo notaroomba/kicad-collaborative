@@ -173,7 +173,15 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
   const netNames = new Map<string, Set<string>>();      // footprint id → the labels this pass may have printed for it before
   const NT = P.netTable(doc);
   for (const fp of fps) { const s = new Set<string>(); for (const p of P.padsOf(fp)) { const n = shortNet(NT.key(p.net) || ""); if (n) s.add(n); } netNames.set(fp.id, s); }
-  const isOldLabel = (fp: any, g: any) => g[0] === "fp_text" && k.str(g[1]) === "user" && /SilkS$/.test(layerOfNode(g)) && (netNames.get(fp.id) || new Set()).has(k.str(g[2]));
+  // a name this pass printed before: the pad's net name, or (the net was renamed since) a single word on a connector that sits in line with one of its pads
+  const padAts = new Map<string, number[][]>();
+  const inLine = (fp: any, g: any): boolean => {
+    if (!/^(J|P|CN|X|BT)\d/i.test(String(fp.ref || "")) || !/^[^\s$]+$/.test(k.str(g[2]))) return false;
+    let l = padAts.get(fp.id); if (!l) { l = (fp.node as any[]).filter((n) => Array.isArray(n) && n[0] === "pad").map((n) => { const a = k.kid(n, "at"); return a ? [Number(a[1]) || 0, Number(a[2]) || 0] : [NaN, NaN]; }); padAts.set(fp.id, l); }
+    const a = k.kid(g, "at"); if (!a) return false; const x = Number(a[1]) || 0, y = Number(a[2]) || 0;
+    return l.some((q) => Math.abs(q[0] - x) < 0.02 || Math.abs(q[1] - y) < 0.02);
+  };
+  const isOldLabel = (fp: any, g: any) => g[0] === "fp_text" && k.str(g[1]) === "user" && /SilkS$/.test(layerOfNode(g)) && ((netNames.get(fp.id) || new Set()).has(k.str(g[2])) || inLine(fp, g));
   for (const e of els) {
     if (!isFinite(e.bbox[0])) continue;
     if (e.fp && e.kind === "property" && k.str(e.node[1]) === "Reference" && mine.has(e.fp.id)) continue;
