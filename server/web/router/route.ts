@@ -327,12 +327,18 @@ export class Router {
       const cls = this.classFor(net.key);
       const info: NetInfo = { key: net.key, obj: nl.table.byName.get(net.key) || { code: net.code, name: net.name }, cls, conns: [], clusters: clusters.length, zoneCells, zoneCluster, guide: this.guideFor(net.key), anchors, pour };
       // Prim's tree over the islands through their nearest anchors (the ratsnest)
+      // A differential pair's net passes through its in-line parts: a connector's twin pins are bridged first, and a
+      // chip joins the ESD part or series resistor beside the connector, never the connector's other pin past it.
+      const isPair = !!pairName(net.key); const partOf = (i: number) => { for (const a of clusters[i]) { const r = this.padNames.get(a.p[0].toFixed(3) + "," + a.p[1].toFixed(3)); if (r) return r.replace(/\.[^.]*$/, ""); } return "#" + i; };
+      const parts = isPair ? clusters.map((_, i) => partOf(i)) : null; const isConn = (r: string) => /^(J|P|CN|USB|X)\d/i.test(r);
       const near = (i: number, j: number) => { let best: [number, Anchor, Anchor] | null = null; for (const a of clusters[i]) for (const b of clusters[j]) { const d = Math.hypot(a.p[0] - b.p[0], a.p[1] - b.p[1]); if (!best || d < best[0]) best = [d, a, b]; } return best!; };
+      const cost = (i: number, j: number, e: [number, Anchor, Anchor]) => !parts ? e[0] : parts[i] === parts[j] ? e[0] * 0.01 : e[0] + (isConn(parts[i]) || isConn(parts[j]) ? 5 : 0);
       const inTree = clusters.map(() => false); const bestTo: ([number, Anchor, Anchor] | null)[] = clusters.map(() => null);
-      const update = (k: number) => { for (let j = 0; j < clusters.length; j++) { if (inTree[j]) continue; const e = near(k, j); if (!bestTo[j] || e[0] < bestTo[j]![0]) bestTo[j] = e; } };
+      const bestCost: number[] = clusters.map(() => Infinity);
+      const update = (k: number) => { for (let j = 0; j < clusters.length; j++) { if (inTree[j]) continue; const e = near(k, j), c = cost(k, j, e); if (!bestTo[j] || c < bestCost[j]) { bestTo[j] = e; bestCost[j] = c; } } };
       inTree[0] = true; update(0);
       for (let n = 1; n < (watchOnly ? 0 : clusters.length); n++) {
-        let j = -1; for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestTo[i]![0] < bestTo[j]![0])) j = i;
+        let j = -1; for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestCost[i] < bestCost[j])) j = i;
         inTree[j] = true; const e = bestTo[j]!;
         const room = Math.min(this.roomAt(e[1], net.key), this.roomAt(e[2], net.key));
         const conn: Conn = { id: this.conns.length, net: net.key, cls: this.classFor(net.key, room), a: e[2], b: e[1], len: e[0], nodes: null, shapes: [], viaCells: [], landed: -1, rips: 0, feat: null, stubs: [], zoneEnd: false };
