@@ -116,6 +116,10 @@
     "com.github.Huaqiu-Electronics.kicad-hqpcb-plugin": {
       "status": "works",
       "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: Update Price sends the order form and shows the prices answered; Add to Cart uploads the Gerber and drill files with the form and opens the order page. Needs network access granted."
+    },
+    "com.github.mrcpuddington.kobeestudio": {
+      "status": "works",
+      "note": "Runs here. Place artwork puts the label on the board as a footprint that follows the cursor until you click; with an artwork selected the window opens on it and Update artwork replaces it in place."
     }
   }
 }

@@ -644,7 +644,43 @@ const DESK_META = { $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'Desk 
 // A plugin for KiCad's IPC interface: a program of its own that talks to KiCad through kipy (plugin.json names its entry point).
 const IPC_ID = 'com.example.ipctool';
 const IPC_JSON = { $schema: 'https://go.kicad.org/api/schemas/v1', identifier: IPC_ID, name: 'IPC Tool', description: 'Adds a via through the IPC interface', runtime: { type: 'python', min_version: '3.9' },
-  actions: [{ identifier: 'via', name: 'IPC: add via', description: 'Adds a via and a track in one commit', 'show-button': true, scopes: ['pcb'], entrypoint: 'main.py' }] };
+  actions: [{ identifier: 'via', name: 'IPC: add via', description: 'Adds a via and a track in one commit', 'show-button': true, scopes: ['pcb'], entrypoint: 'main.py' },
+    { identifier: 'label', name: 'IPC: place label', description: 'Makes a footprint and hands it to the cursor', 'show-button': true, scopes: ['pcb'], entrypoint: 'label.py' }] };
+// A footprint built through the interface (as label makers do) and handed to the cursor with interactive_move.
+const IPC_LABEL_PY = String.raw`
+from kipy import KiCad
+from kipy.board_types import BoardPolygon, Field, FootprintInstance
+from kipy.geometry import PolyLineNode, PolygonWithHoles, Vector2
+from kipy.proto.board.board_types_pb2 import BoardLayer
+from kipy.util import from_mm
+
+board = KiCad().get_board()
+fp = FootprintInstance()
+fp.definition.id.name = "ipc-label"
+shape = BoardPolygon()
+shape.layer = BoardLayer.BL_F_SilkS
+shape.attributes.fill.filled = True
+poly = PolygonWithHoles()
+for x, y in ((120, 80), (124, 80), (124, 82), (120, 82)):
+    poly.outline.append(PolyLineNode.from_point(Vector2.from_xy_mm(x, y)))
+poly.outline.closed = True
+shape.polygons.append(poly)
+fp.definition.add_item(shape)
+note = Field()
+note.name = "IPC_NOTE"
+note.text.value = "made by kipy"
+note.visible = False
+fp.definition.add_item(note)
+fp.layer = BoardLayer.BL_F_Cu
+fp.position = Vector2.from_xy_mm(122, 81)
+fp.reference_field.text.value = "IPCLABEL"
+fp.value_field.text.value = "label"
+commit = board.begin_commit()
+made = board.create_items(fp)
+board.push_commit(commit, "IPC: place label")
+board.interactive_move(made[0].id)
+print("IPCLABEL made=%s id=%s items=%d" % (type(made[0]).__name__, made[0].id.value, len(made[0].definition.items)))
+`;
 const IPC_PY = String.raw`
 from kipy import KiCad
 from kipy.board_types import Track, Via
@@ -702,7 +738,7 @@ function zip(files) {
 const packageZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(METADATA)), 'plugins/__init__.py': Buffer.from('from .tool import *\n'), 'plugins/tool.py': Buffer.from(PLUGIN_PY), 'resources/icon.png': Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64') });
 const pcmBase = `http://127.0.0.1:${PCM_PORT}`;
 const packages = [Object.assign({}, METADATA, { versions: [Object.assign({}, METADATA.versions[0], { download_url: `${pcmBase}/zips/${ID}.zip`, download_sha256: crypto.createHash('sha256').update(packageZip).digest('hex'), download_size: packageZip.length, install_size: PLUGIN_PY.length })] })];
-const ipcZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(IPC_META)), 'plugins/plugin.json': Buffer.from(JSON.stringify(IPC_JSON)), 'plugins/main.py': Buffer.from(IPC_PY), 'plugins/requirements.txt': Buffer.from('kicad-python>=0.3.0\n') });
+const ipcZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(IPC_META)), 'plugins/plugin.json': Buffer.from(JSON.stringify(IPC_JSON)), 'plugins/main.py': Buffer.from(IPC_PY), 'plugins/label.py': Buffer.from(IPC_LABEL_PY), 'plugins/requirements.txt': Buffer.from('kicad-python>=0.3.0\n') });
 packages.push(Object.assign({}, IPC_META, { versions: [Object.assign({}, IPC_META.versions[0], { download_url: `${pcmBase}/zips/${IPC_ID}.zip`, download_sha256: crypto.createHash('sha256').update(ipcZip).digest('hex'), download_size: ipcZip.length, install_size: IPC_PY.length })] }));
 const deskZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(DESK_META)), 'plugins/__init__.py': Buffer.from('from .desk import *\n'), 'plugins/desk.py': Buffer.from(DESK_PY), 'plugins/client.py': Buffer.from(DESK_CLIENT) });
 packages.push(Object.assign({}, DESK_META, { versions: [Object.assign({}, DESK_META.versions[0], { download_url: `${pcmBase}/zips/${DESK_ID}.zip`, download_sha256: crypto.createHash('sha256').update(deskZip).digest('hex'), download_size: deskZip.length, install_size: deskZip.length })] }));
@@ -1007,7 +1043,7 @@ await a.waitForFunction((i) => window.KcPlugins.store.get().installed.some((p) =
 await a.click('#pluginManager .kd-x').catch(() => {});
 await ready(a, IPC_ID, 120000);
 const ipcActs = ((await state(a)).py[IPC_ID] || []);
-check('the actions of its plugin.json become editor commands', ipcActs.map((x) => x.name).join() === 'IPC: add via', JSON.stringify(ipcActs) + ((await state(a)).logs[IPC_ID] || []).slice(-4).map((l) => l.text).join(' | '));
+check('the actions of its plugin.json become editor commands', ipcActs.map((x) => x.name).join() === 'IPC: add via,IPC: place label', JSON.stringify(ipcActs) + ((await state(a)).logs[IPC_ID] || []).slice(-4).map((l) => l.text).join(' | '));
 const viasBefore = await count(a, 'via'), segsBefore = await count(a, 'segment'), ipcDepth = await undoDepth(a);
 await a.evaluate(([i, x]) => { window.KcPlugins.runUi(`plugin:${i}:${x}`); }, [IPC_ID, ipcActs[0] ? ipcActs[0].identifier : '']);
 await waitLog(a, IPC_ID, /IPCTOOL /, 90000);
@@ -1021,13 +1057,28 @@ await idle(a, IPC_ID);
 await a.keyboard.press('Control+z');
 await a.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'via').length === n, viasBefore, { timeout: 20000 }).catch(() => {});
 check('and one Undo takes both away', (await count(a, 'via')) === viasBefore && (await count(a, 'segment')) === segsBefore);
+// a footprint made through the interface, then handed to the cursor (KiCad's interactive move)
+const ipcFps = await count(a, 'footprint');
+await a.mouse.move(700, 400);
+await a.evaluate(([i, x]) => { window.KcPlugins.runUi(`plugin:${i}:${x}`); }, [IPC_ID, ipcActs[1] ? ipcActs[1].identifier : '']);
+await waitLog(a, IPC_ID, /IPCLABEL /, 90000).catch(() => {});
+const labelLine = (await logOf(a, IPC_ID)).find((l) => l.includes('IPCLABEL ')) || (await logOf(a, IPC_ID)).slice(-4).join(' | ');
+const labelId = (/id=([0-9a-f-]{36})/.exec(labelLine) || [])[1] || '';
+const label = await a.evaluate((id) => { const it = window.CollabEditor.kdoc.items.get(id); const txt = it ? window.CollabEditor.kdoc.textOf ? window.CollabEditor.kdoc.textOf(it) : JSON.stringify(it.node || '') : ''; return { there: !!it, kind: it && it.kind, text: String(txt).slice(0, 4000), sel: window.CollabEditor.hooks.selectedIds(), busy: window.CollabEditor.hooks.busy() }; }, labelId);
+check('a footprint made through kipy lands on the board', /made=FootprintInstance/.test(labelLine) && label.there && label.kind === 'footprint' && (await count(a, 'footprint')) === ipcFps + 1, labelLine + ' ' + JSON.stringify({ there: label.there, kind: label.kind }));
+check('interactive_move hands it to the cursor, selected', label.busy === true && label.sel.includes(labelId), JSON.stringify({ busy: label.busy, sel: label.sel }));
+await a.keyboard.press('Escape');
+await idle(a, IPC_ID);
+await a.keyboard.press('Control+z');
+await a.waitForFunction((n) => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'footprint').length === n, ipcFps, { timeout: 20000 }).catch(() => {});
+check('and one Undo takes the footprint away', (await count(a, 'footprint')) === ipcFps, `${await count(a, 'footprint')} vs ${ipcFps}`);
 await a.evaluate(() => { window.confirm = () => true; });
 await menu(a, 'tools', 'External Plugins', 'pluginManager');
 await a.waitForSelector('#pluginDetail');
 const ipcDetail = await a.locator('#pluginDetail').innerText();
 await a.click('#pluginUninstall');
 await a.waitForFunction((i) => !window.KcPlugins.store.get().installed.some((p) => p.identifier === i), IPC_ID, { timeout: 20000 }).catch(() => {});
-check('the manager shows it with its command, and uninstalling it leaves the other plugin running', /IPC Tool/.test(ipcDetail) && /Command: IPC: add via/.test(ipcDetail) && !(await state(a)).installed.includes(IPC_ID) && (await state(a)).installed.includes(ID), ipcDetail.slice(0, 300));
+check('the manager shows it with its command, and uninstalling it leaves the other plugin running', /IPC Tool/.test(ipcDetail) && /IPC: add via/.test(ipcDetail) && !(await state(a)).installed.includes(IPC_ID) && (await state(a)).installed.includes(ID), ipcDetail.slice(0, 300));
 await a.click('#pluginManager .kd-x').catch(() => {});
 
 // ---- a plugin that leans on the desktop: kicad-cli, git, a Qt window, a footprint wizard

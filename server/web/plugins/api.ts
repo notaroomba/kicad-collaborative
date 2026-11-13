@@ -510,6 +510,11 @@ const idsOf = (doc: any, a: any): string[] => {
 
 export const views: Record<string, (a: any) => Promise<unknown>> = {
   select: async (a) => { const { ed, doc } = liveDoc(); const ids = idsOf(doc, a); ed.api.toolCtx().setSelection(ids); return { selected: ids.length }; },
+  // KiCad's Move (M) on these items: they follow the cursor until a click drops them, Esc puts them back.
+  move: async (a) => {
+    const { ed, doc } = liveDoc(); const ids = idsOf(doc, a); if (!ids.length) return { moving: false };
+    ed.api.toolCtx().setSelection(ids); return { moving: !!ed.api.startMove("move") };
+  },
   highlight: async (a) => {
     const { ed, doc } = liveDoc(); const ids = idsOf(doc, a);
     // By net name: the board editor's own net highlight (Highlight Net), so the message panel and the router know it too.

@@ -63,7 +63,7 @@ export function sandboxRuntime(): void {
     assistant: { registerTool: reg("tool") },
     wizards: { register: reg("wizard") },
     design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit", "undo", "redo", "copied", "copy"]),
-    view: group("view", ["select", "highlight", "focus", "appearance", "setMarkers", "clearMarkers", "openDocument"]),
+    view: group("view", ["select", "move", "highlight", "focus", "appearance", "setMarkers", "clearMarkers", "openDocument"]),
     fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom", "svg", "drc", "netlist", "render", "model"]),
     project: group("project", ["versions", "saveVersion", "addLibraryFiles"]),
     libs: group("libs", ["libraries", "footprints", "footprint"]),

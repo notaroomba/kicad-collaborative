@@ -744,6 +744,80 @@ def _write_footprint(f, m):
         _try(f.SetDNP, None, bool(at.do_not_populate))
         _try(f.SetExcludedFromBOM, None, bool(at.exclude_from_bill_of_materials))
         _try(f.SetExcludedFromPosFiles, None, bool(at.exclude_from_position_files))
+    # What the footprint holds is only rewritten when the caller changed it: a footprint read, moved and sent back
+    # keeps everything, also the kinds of item this interface does not describe.
+    if list(m.definition.items) and [a.value for a in m.definition.items] != [a.value for a in _footprint(f).definition.items]:
+        _definition_items(f, m)
+
+
+def _definition_items(f, m):
+    """The items a footprint message carries in its definition become the footprint's own, in board coordinates as
+    KiCad reads them.  Shapes, texts and extra fields the footprint held before are replaced; pads are matched by
+    their identifier and anything this interface does not describe is left alone."""
+    names = {a.type_url.rsplit(".", 1)[-1] for a in m.definition.items}
+    if "Pad" in names and not f.Pads():
+        raise ApiFail("Footprints with pads cannot be created through the IPC interface in the web editor yet; place one from a library instead")
+    for g in list(f.GraphicalItems()):
+        if _to_message(g) is not None:
+            f.Remove(g)
+    for fld in list(_try(f.GetFields, []) or []):
+        if str(_try(fld.GetName, "") or "") not in ("Reference", "Value", "Footprint", "Datasheet", "Description"):
+            _try(f.RemoveField, None, fld.GetName())
+    pads = {_id(p): p for p in f.Pads()}
+    for a in m.definition.items:
+        name, im = _unpack(a)
+        if im is None:
+            continue
+        if name == "BoardGraphicShape":
+            s = pcbnew.PCB_SHAPE(f)
+            f.Add(s)
+            _write_shape(s, im)
+        elif name == "BoardText":
+            t = pcbnew.PCB_TEXT(f)
+            f.Add(t)
+            _write_text(t, im)
+        elif name == "Field":
+            if not im.name:
+                continue
+            f.SetField(im.name, im.text.text.text)
+            fld = f.GetFieldByName(im.name)
+            if fld is not None:
+                _try(fld.SetVisible, None, bool(im.visible))
+                layer = _unlayer(im.text.layer)
+                if layer != pcbnew.UNDEFINED_LAYER:
+                    _try(fld.SetLayer, None, layer)
+        elif name == "Pad":
+            p = pads.get(im.id.value)
+            if p is not None:
+                _write_pad(p, im)
+
+
+def _new_footprint(f, m):
+    """A footprint made through the interface: where it sits first, then what it holds, as KiCad does."""
+    d = m.definition
+    if d.id.entry_name or d.id.library_nickname:
+        f.SetFPIDAsString(":".join(x for x in (d.id.library_nickname, d.id.entry_name) if x))
+    f.SetPosition(_pt(m.position))
+    if m.orientation.value_degrees:
+        f.SetOrientationDegrees(float(m.orientation.value_degrees))
+    layer = _unlayer(m.layer)
+    if layer == pcbnew.B_Cu:
+        f.SetLayer(layer)
+    for name, src in (("Reference", m.reference_field), ("Value", m.value_field)):
+        f.SetField(name, src.text.text.text)
+        fld = f.GetFieldByName(name)
+        if fld is not None and m.HasField("reference_field" if name == "Reference" else "value_field"):
+            _try(fld.SetVisible, None, bool(src.visible))
+            fl = _unlayer(src.text.layer)
+            if fl != pcbnew.UNDEFINED_LAYER:
+                _try(fld.SetLayer, None, fl)
+    at = m.attributes if m.HasField("attributes") else d.attributes
+    _try(f.SetBoardOnly, None, bool(at.not_in_schematic))
+    _try(f.SetDNP, None, bool(at.do_not_populate))
+    _try(f.SetExcludedFromBOM, None, bool(at.exclude_from_bill_of_materials))
+    _try(f.SetExcludedFromPosFiles, None, bool(at.exclude_from_position_files))
+    _definition_items(f, m)
+    _set_locked(f, m)
 
 
 def _write_pad(p, m):
@@ -766,7 +840,7 @@ def _makers():
             "BoardText": (pcbnew.PCB_TEXT, _write_text, pcbnew.PCB_TEXT),
             "BoardGraphicShape": (pcbnew.PCB_SHAPE, _write_shape, pcbnew.PCB_SHAPE),
             "Zone": (pcbnew.ZONE, _write_zone, pcbnew.ZONE),
-            "FootprintInstance": (None, _write_footprint, pcbnew.FOOTPRINT),
+            "FootprintInstance": (pcbnew.FOOTPRINT, _write_footprint, pcbnew.FOOTPRINT),
             "Pad": (None, _write_pad, pcbnew.PAD),
             "Field": (None, _write_field, pcbnew.PCB_FIELD),
         }
@@ -919,7 +993,7 @@ def create_items(cmd):
             continue
         try:
             item = cls(board)
-            write(item, m)
+            (_new_footprint if name == "FootprintInstance" else write)(item, m)
             # KiCad keeps the identifier a caller supplies for a new item, as long as nothing on the board has it yet.
             want = str(_message_id(name, m) or "")
             if want and board.GetItem(want) is None:
@@ -1102,6 +1176,20 @@ def run_action(cmd):
     else:
         r.status = ec.RAS_INVALID
     return r
+
+
+def interactive_move(cmd):
+    """The items follow the cursor until a click drops them, as with Move (M).  KiCad answers at once."""
+    ids = [i.value for i in cmd.items if i.value]
+    board = _board()
+    if not ids or any(board.GetItem(i) is None for i in ids):
+        raise ApiFail("One of the items to move is not on the board")
+    if _state["commit"] is not None:
+        raise ApiFail("Cannot start a move while a commit is open")
+    web = _web()
+    web.flush()
+    web._call("view.move", {"ids": ids})
+    return _p()["empty"].Empty()
 
 
 def refresh_editor(cmd):
@@ -1494,7 +1582,7 @@ def _handlers():
             (bc.GetBoardStackup, get_stackup), (bc.RefillZones, refill_zones), (bc.GetItemsByNet, get_items_by_net), (bc.GetItemsByNetClass, get_items_by_netclass),
             (bc.GetConnectedItems, get_connected_items), (bc.GetPadShapeAsPolygon, get_pad_polygons), (bc.CheckPadstackPresenceOnLayers, padstack_presence),
             (bc.FlipItems, flip_items), (bc.GetBoardEditorAppearanceSettings, get_appearance), (bc.SetBoardEditorAppearanceSettings, nothing),
-            (bc.GetGraphicsDefaults, get_graphics_defaults),
+            (bc.GetGraphicsDefaults, get_graphics_defaults), (bc.InteractiveMoveItems, interactive_move),
         ]
         _HANDLERS = {cls.DESCRIPTOR.full_name: (cls, fn) for cls, fn in table}
     return _HANDLERS

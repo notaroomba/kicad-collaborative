@@ -30,6 +30,15 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const server = path.resolve(here, "..");
 const shimDir = path.join(server, "plugins", "python");
+// The file names inside a ZIP a plugin handed over (its central directory), so a result says what was actually made.
+function zipNames(b64) {
+  const out = []; let buf; try { buf = Buffer.from(b64 || "", "base64"); } catch { return out; }
+  for (let i = buf.indexOf("PK\x01\x02", 0, "latin1"); i >= 0 && out.length < 60; i = buf.indexOf("PK\x01\x02", i + 46, "latin1")) {
+    if (i + 46 > buf.length) break;
+    const n = buf.readUInt16LE(i + 28); out.push(buf.toString("utf8", i + 46, i + 46 + n));
+  }
+  return out;
+}
 const defaultBoard = path.resolve(server, "..", "demos", "ecc83", "ecc83-pp.kicad_pcb");
 const TEXT = /\.(py|pyi|json|txt|md|rst|csv|tsv|xml|xrc|html?|css|js|ya?ml|toml|ini|cfg|conf|fbp|kicad_[a-z]+|svg|po|pot|lua|sh|bat|in|tpl|template|dru|net|cmp|pro|lib|mod|dcm)$/i;
 const MAX_FILE = 4 * 1024 * 1024;
@@ -154,15 +163,17 @@ async function one(dir, boardPath, boardGiven) {
   if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
   let copied = ""; { const m = driveSrc && /^# copied: (\S+)$/m.exec(driveSrc); if (m) copied = fs.readFileSync(path.resolve(server, "..", m[1]), "utf8"); }
-  const libraryFiles = [];
+  const libraryFiles = []; const moving = [];
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
-    calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75) } : undefined });
+    calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75), ...(/\.zip$/i.test(a.filename || "") ? { holds: zipNames(a.base64) } : {}) } : undefined });
     // After a commit the stand-in editor's board is what the plugin's own copy now says, as the real editor's would be,
     // and what was selected stays selected while it is still on the board.
     if (method === "design.commit") edited = true;
     // a plugin selecting its result, or a drive clicking an item, moves the selection
     if (method === "view.select" && Array.isArray(a.ids)) startSelection.splice(0, startSelection.length, ...a.ids);
+    // Move (M) started for these items: the stand-in editor selects them and remembers that they follow the cursor.
+    if (method === "view.move" && Array.isArray(a.ids)) { startSelection.splice(0, startSelection.length, ...a.ids); moving.push(a.ids); return JSON.stringify({ moving: true }); }
     if (method === "design.board") {
       let text = board;
       if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
@@ -337,6 +348,7 @@ json.dumps(_kc_r, default=str)`)); if (d.error) out = { ok: false, error: "drive
   const after = JSON.parse(py.runPython("import json, kicad_web; json.dumps(kicad_web.describe()['missing'])"));
   result.missing = after; result.messages = py.runPython("import json, wx; json.dumps(wx._messages[-6:])");
   result.libraries = libraryFiles.map((f) => f.path);
+  if (moving.length) result.moving = moving;
   result.log = logs.slice(-40); result.said = said.slice(-12); result.net = calls.filter((c) => c.method === "net.fetch").length;
   if (again && !process.env.KC_AGAIN && result.actions.every((x) => x.ok)) {
     const r = spawnSync(process.execPath, process.argv.slice(1), { env: { ...process.env, KC_AGAIN: "1" }, encoding: "utf8", maxBuffer: 1 << 28, timeout: 600000 });

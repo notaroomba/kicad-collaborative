@@ -592,4 +592,4 @@ async function importLibraryFiles(files: { path: string; text: string }[]): Prom
   if (models.added.length && project) store.set({ project: Object.assign({}, project) });
   return { added: [...sym.added, ...fp.added, ...models.added], updated: [...sym.updated, ...fp.updated, ...models.updated], failed: [...sym.failed, ...fp.failed, ...models.failed] };
 }
-E.api = { importLibraryFiles, HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, state, store, toolCtx, undoLast, worldMm };
+E.api = { importLibraryFiles, HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, startMove, state, store, toolCtx, undoLast, worldMm };

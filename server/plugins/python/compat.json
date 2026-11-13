@@ -216,7 +216,8 @@
   "status": "works"
  },
  "com.github.mrcpuddington.kobeestudio": {
-  "status": "works"
+  "status": "works",
+  "note": "Runs here. Place artwork puts the label on the board as a footprint that follows the cursor until you click; with an artwork selected the window opens on it and Update artwork replaces it in place."
  },
  "com.github.officialdyray.projectinstances": {
   "status": "works"

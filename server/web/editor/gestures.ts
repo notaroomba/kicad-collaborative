@@ -315,6 +315,9 @@ export function startMove(mode: "move" | "drag"): boolean {
  * now runs.
  */
 E.hooks.handoffDrag = (): boolean => handoffAppDrag();
+// True while something follows the cursor (a move, a drag, a placement).
+E.hooks.busy = (): boolean => interactionBusy();
+E.hooks.selectedIds = (): string[] => selectionIds();
 export function handoffAppDrag(): boolean {
   const g = E.drag as { fp?: { id: string }; group?: { fp: { id: string } }[]; engine?: boolean; startMm?: Mm; sticky?: boolean } | null;
   const pm = CollabTools.pcb as (PcbToolModule & { beginMove?(ctx: ToolCtx, at: Mm, sticky: boolean): boolean }) | undefined;
