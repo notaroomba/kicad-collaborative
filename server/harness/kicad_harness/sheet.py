@@ -624,9 +624,23 @@ class Blocks:
 
             on_bus = lambda q: any(b[0] - 0.1 <= q[0] <= b[2] + 0.1 and b[1] - 0.1 <= q[1] <= b[3] + 0.1 for b in lines)
 
-            def fits(plan, tk=None, sf=None):
+            def end_rects(plan, prior):
+                """What the end of a row takes up: its rail symbol, or only the joining wire when the row beside it ends on the
+                same rail (power_ends ties the two and draws one symbol), so such rows line up instead of stepping apart."""
+                out = []
+                for e in plan["ends"]:
+                    near = [p for p in prior if p[1] == e[1] and p[2] == e[2] and abs(p[0][1] - e[0][1]) <= 2 * G + 1e-6]
+                    if near:
+                        X = max([e[0][0] * d] + [p[0][0] * d for p in near]) * d
+                        ys = [e[0][1]] + [p[0][1] for p in near]
+                        out += [_rect(X - 0.2, min(ys), X + 0.2, max(ys)), _rect(min(e[0][0], X), e[0][1] - 0.2, max(e[0][0], X), e[0][1] + 0.2)]
+                    else:
+                        out.append(self.sym_rect(e[1], e[0]))
+                return out
+
+            def fits(plan, tk=None, sf=None, prior=None):
                 mine = {e[1] for e in plan["ends"]}
-                if clash(plan["rects"], tk) or clash([self.sym_rect(e[1], e[0]) for e in plan["ends"]], tk):
+                if clash(plan["rects"], tk) or clash(end_rects(plan, ends if prior is None else prior), tk):
                     return False
                 if any(on_bus(q) for op in plan["ops"] if op[0] == "wire" for q in op[1][1:]) or any(on_bus(e[0]) for e in plan["ends"]):
                     return False        # a wire may cross a bus, but a corner or an end on it would join the two nets
@@ -676,17 +690,18 @@ class Blocks:
             # room, the rows planned before it start further out, past everything that row needs, and the planning runs again
             first_lead: dict = {}
             for _ in range(4):
-                tk, sf, used, bad = list(taken), list(soft), [], None
+                tk, sf, used, bad, pe = list(taken), list(soft), [], None, list(ends)
                 for idx, (run, net, k, origin, wired, busy, barred, _b) in enumerate(later):
                     if not busy:
                         continue
                     plan = None
                     for i in range(first_lead.get(idx, 1), 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, used=tuple(used), wired=wired)
-                        if not plan or fits(plan, tk, sf):
+                        if not plan or fits(plan, tk, sf, pe):
                             break
                         plan = None
                     if plan:
+                        pe += plan["ends"]
                         tk += plan["rects"]
                         sf += [(self.sym_rect(e[1], e[0]), e[1]) for e in plan["ends"]]
                         used += plan["refs"]

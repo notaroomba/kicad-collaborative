@@ -2645,9 +2645,23 @@ class Blocks:
 
             on_bus = lambda q: any(b[0] - 0.1 <= q[0] <= b[2] + 0.1 and b[1] - 0.1 <= q[1] <= b[3] + 0.1 for b in lines)
 
-            def fits(plan, tk=None, sf=None):
+            def end_rects(plan, prior):
+                """What the end of a row takes up: its rail symbol, or only the joining wire when the row beside it ends on the
+                same rail (power_ends ties the two and draws one symbol), so such rows line up instead of stepping apart."""
+                out = []
+                for e in plan["ends"]:
+                    near = [p for p in prior if p[1] == e[1] and p[2] == e[2] and abs(p[0][1] - e[0][1]) <= 2 * G + 1e-6]
+                    if near:
+                        X = max([e[0][0] * d] + [p[0][0] * d for p in near]) * d
+                        ys = [e[0][1]] + [p[0][1] for p in near]
+                        out += [_rect(X - 0.2, min(ys), X + 0.2, max(ys)), _rect(min(e[0][0], X), e[0][1] - 0.2, max(e[0][0], X), e[0][1] + 0.2)]
+                    else:
+                        out.append(self.sym_rect(e[1], e[0]))
+                return out
+
+            def fits(plan, tk=None, sf=None, prior=None):
                 mine = {e[1] for e in plan["ends"]}
-                if clash(plan["rects"], tk) or clash([self.sym_rect(e[1], e[0]) for e in plan["ends"]], tk):
+                if clash(plan["rects"], tk) or clash(end_rects(plan, ends if prior is None else prior), tk):
                     return False
                 if any(on_bus(q) for op in plan["ops"] if op[0] == "wire" for q in op[1][1:]) or any(on_bus(e[0]) for e in plan["ends"]):
                     return False        # a wire may cross a bus, but a corner or an end on it would join the two nets
@@ -2697,17 +2711,18 @@ class Blocks:
             # room, the rows planned before it start further out, past everything that row needs, and the planning runs again
             first_lead: dict = {}
             for _ in range(4):
-                tk, sf, used, bad = list(taken), list(soft), [], None
+                tk, sf, used, bad, pe = list(taken), list(soft), [], None, list(ends)
                 for idx, (run, net, k, origin, wired, busy, barred, _b) in enumerate(later):
                     if not busy:
                         continue
                     plan = None
                     for i in range(first_lead.get(idx, 1), 44):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, used=tuple(used), wired=wired)
-                        if not plan or fits(plan, tk, sf):
+                        if not plan or fits(plan, tk, sf, pe):
                             break
                         plan = None
                     if plan:
+                        pe += plan["ends"]
                         tk += plan["rects"]
                         sf += [(self.sym_rect(e[1], e[0]), e[1]) for e in plan["ends"]]
                         used += plan["refs"]
@@ -5012,9 +5027,9 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var p=require("node:fs"),O=globalThis,R=p.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
-`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var B=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",_],["kicad_harness/parts/datasheet.py",b],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],G=`
+`;var d=require("node:fs"),O=globalThis,R=d.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
+`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function p(e){let s=Buffer.from(JSON.stringify(e)+`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=d.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var B=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",_],["kicad_harness/parts/datasheet.py",b],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],G=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -5045,6 +5060,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of B)i.FS.writeFile("/kh/"+r,l);i.runPython(G);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(p({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of B)i.FS.writeFile("/kh/"+r,l);i.runPython(G);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
 `).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
-`),d(o),process.exit(0)}L().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`),p(o),process.exit(0)}L().catch(e=>{try{p({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
