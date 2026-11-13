@@ -18,6 +18,8 @@
 //
 // Each bundle that builds a select imports this file; the first one to load defines the element.
 
+import { menuScroller } from "../menufit";
+
 export const KSELECT_TAG = "k-select";
 
 /** The element, typed as the <select> it stands in for. */
@@ -272,6 +274,7 @@ export function defineKSelect(): void {
       pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
       const w = pop.offsetWidth; pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
       const row = pop.querySelector(".hi, .on") as HTMLElement | null; if (row) this.scrollRow(pop, row);
+      menuScroller(pop);
     }
     private highlight(i: number, scroll = true): void {
       this.hi = i; const pop = this.pop; if (!pop) return;

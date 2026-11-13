@@ -14,6 +14,7 @@ import { h, confirmBox, download } from "../dialogs/dom";
 import { messageBox } from "../dialogs/sch-items";
 import { E, appState, api } from "../dialogs/editor";
 import { comboOf } from "../editor/hotkeys";
+import { keyName } from "../keys";
 import { fmtCoord, unitName, messageText, unitsMsg, gridChoiceText, loadUnits, saveUnits } from "../units";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
 import * as D from "./dialogs";
@@ -548,7 +549,7 @@ export class SymbolEditor {
     const mb = this.el.mb; mb.innerHTML = "";
     for (const [label, items] of this.menus()) {
       const b = h("div", { class: "se-mb", role: "menuitem", "data-menu": label }, label);
-      const openIt = () => { const r = b.getBoundingClientRect(); closeMenus(); b.classList.add("open"); showMenu(r.left, r.bottom, this.menus().find((m) => m[0] === label)![1]); };
+      const openIt = () => { const r = b.getBoundingClientRect(); closeMenus(); b.classList.add("open"); showMenu(r.left, r.bottom, this.menus().find((m) => m[0] === label)![1], 0, { below: r, gap: 0, noFlip: true }); };
       b.addEventListener("click", (ev) => { ev.stopPropagation(); if (b.classList.contains("open")) closeMenus(); else openIt(); });
       b.addEventListener("pointerenter", () => { if (document.querySelector(".se-mb.open") && !b.classList.contains("open")) openIt(); });
       mb.append(b);
@@ -562,11 +563,11 @@ export class SymbolEditor {
   private tbButton(id: string, onTool?: boolean): HTMLElement {
     const m = meta(id); const A = this.actions(); const run: (() => void) | undefined = A[id];
     const on = this.toggled(id);
-    const b = h("button", { class: "se-btn" + (on ? " on" : "") + (run ? "" : " dim"), "data-act": id, title: m.tip + (m.key ? ` (${m.key})` : "") + (run ? "" : " — runs in the KiCad desktop app"), "aria-label": m.label, "aria-pressed": onTool || on ? String(!!on) : undefined }, icon(m.icon));
+    const b = h("button", { class: "se-btn" + (on ? " on" : "") + (run ? "" : " dim"), "data-act": id, title: m.tip + (m.key ? ` (${keyName(m.key)})` : "") + (run ? "" : " — runs in the KiCad desktop app"), "aria-label": m.label, "aria-pressed": onTool || on ? String(!!on) : undefined }, icon(m.icon));
     if (run) b.addEventListener("click", () => { run(); }); else (b as HTMLButtonElement).disabled = true;
     if (run && !this.tbEnabled(id)) { (b as HTMLButtonElement).disabled = true; b.classList.add("dim"); }
     // the grid button's menu (toolbars_symbol_editor.cpp): Edit Grids...
-    if (id === "toggleGrid") b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom, [this.act("gridProperties", this.actions().gridProperties, { enabled: () => true })]); });
+    if (id === "toggleGrid") b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom, [this.act("gridProperties", this.actions().gridProperties, { enabled: () => true })], 0, { below: r, gap: 0 }); });
     return b;
   }
   /** ACTION_CONDITIONS::Enable of the toolbar buttons that have one. */

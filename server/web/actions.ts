@@ -7,6 +7,7 @@
 import { useMemo } from "react";
 import { actionMeta } from "./spec";
 import { hotkeyOwners, menuMeta, normKey } from "./menuspec";
+import { keyName } from "./keys";
 import { EDITOR_ONLY, EXTRA_TOOLS, LINKS, LOCAL_KEYS, LOCAL_LABELS, MODULE_ALIAS, PANE_ACTION, toolFor } from "./tables";
 import { anchorOf, dispatch, useApp, type Editor, type ModuleAction, type ModuleTool } from "./store";
 import { isPluginUiId, pluginUiKey, pluginUiLabel, runPluginUi } from "./plugins/host";
@@ -100,7 +101,7 @@ export function iconFor(a: Avail, id: string): string | null {
 
 export function titleFor(a: Avail, id: string): string {
   const m = menuMeta(a.editor, id) || actionMeta(id); const k = keyFor(a, id);
-  let t = (m ? m.label : labelFor(a, id)) + (k ? `  (${k})` : "");
+  let t = (m ? m.label : labelFor(a, id)) + (k ? `  (${keyName(k)})` : "");
   if (m && m.tip && m.tip !== m.label) t += "\n" + m.tip;
   const why = unavailable(a, id);
   if (why) t += "\n— " + why;

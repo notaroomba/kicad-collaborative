@@ -6,6 +6,8 @@ import { BACKGROUND_BOTTOM, BACKGROUND_TOP, BOARD_BODY, RGBA, SILKSCREEN, SOLDER
 import ICONS from "./icons.json";
 import { BoardStats, DEFAULT_VISIBILITY, Visibility } from "./scene";
 import { Viewer } from "./viewer";
+import { keyName, menuKey } from "../keys";
+import { fitMenu, type MenuAnchor } from "../menufit";
 
 export interface OpenOptions {
   /** the board document to show (window.KiCadCanvas doc); null when no board is open */
@@ -253,7 +255,7 @@ export class ViewerWindow {
       if (id === "-") { bar.appendChild(el("span", "sep")); continue; }
       const a = this.actions.get(id); if (!a) continue;
       const b = el("button"); b.dataset.action = id; b.appendChild(icon(a.icon));
-      b.title = a.disabled || ((a.tip || a.label) + (a.key ? "  (" + a.key + ")" : "")); b.setAttribute("aria-label", a.label);
+      b.title = a.disabled || ((a.tip || a.label) + (a.key ? "  (" + keyName(a.key) + ")" : "")); b.setAttribute("aria-label", a.label);
       if (a.disabled) b.classList.add("dis");
       b.addEventListener("click", () => { if (!a.disabled) a.run(); });
       this.toolButtons.set(id, b); bar.appendChild(b);
@@ -318,23 +320,23 @@ export class ViewerWindow {
 
   private openMenu(button: HTMLElement, items: MenuItem[]): void {
     this.closeMenu(); this.menuButton = button; button.classList.add("open");
-    const r = button.getBoundingClientRect(); this.showMenu(items, r.left, r.bottom, 0);
+    const r = button.getBoundingClientRect(); this.showMenu(items, { below: r, gap: 0, noFlip: true }, 0);
   }
 
-  private showMenu(items: MenuItem[], x: number, y: number, depth: number): void {
+  private showMenu(items: MenuItem[], anchor: MenuAnchor, depth: number): void {
     while (this.menu.length > depth) { const m = this.menu.pop(); if (m) m.remove(); }
-    const m = el("div", "v3d-menu"); m.style.left = x + "px"; m.style.top = y + "px";
+    const m = el("div", "v3d-menu");
     for (const it of items) {
       if (it === "-") { m.appendChild(el("hr")); continue; }
       const row = el("div", "v3d-mi");
       const ic = el("span"); const lab = el("span", undefined, it.label); const k = el("span", "k"); const arrow = el("span");
       if ("sub" in it) {
         ic.appendChild(icon(it.icon)); arrow.textContent = "▸";
-        row.addEventListener("pointerenter", () => { const rr = row.getBoundingClientRect(); this.showMenu(it.sub, rr.right - 2, rr.top - 4, depth + 1); });
+        row.addEventListener("pointerenter", () => { this.showMenu(it.sub, { row: row.getBoundingClientRect(), parent: m.getBoundingClientRect(), overlap: 2 }, depth + 1); });
       } else {
         row.dataset.action = it.id;
         if (it.checked) { ic.className = "chk"; ic.textContent = it.checked() ? "✓" : ""; } else ic.appendChild(icon(it.icon));
-        if (it.key) k.textContent = it.key;
+        if (it.key) k.textContent = menuKey(it.key);
         if (it.disabled) { row.classList.add("dis"); row.title = it.disabled; } else if (it.tip) row.title = it.tip;
         row.addEventListener("pointerenter", () => { while (this.menu.length > depth + 1) { const s = this.menu.pop(); if (s) s.remove(); } });
         row.addEventListener("click", () => { if (it.disabled) return; this.closeMenu(); it.run(); this.root.focus({ preventScroll: true }); });
@@ -342,10 +344,7 @@ export class ViewerWindow {
       row.append(ic, lab, k, arrow); m.appendChild(row);
     }
     document.body.appendChild(m); this.menu.push(m);
-    // keep it on screen
-    const r = m.getBoundingClientRect();
-    if (r.right > window.innerWidth - 4) m.style.left = Math.max(4, window.innerWidth - 4 - r.width) + "px";
-    if (r.bottom > window.innerHeight - 4) m.style.top = Math.max(4, window.innerHeight - 4 - r.height) + "px";
+    fitMenu(m, anchor);   // on screen: flipped, slid or cut to the window and scrolled (web/menufit.ts)
   }
 
   private closeMenu(): void {

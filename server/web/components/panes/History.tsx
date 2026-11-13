@@ -4,6 +4,7 @@
 import { dispatch, useApp } from "../../store";
 import type { HistoryRun, VersionInfo } from "../../store";
 import { cx } from "../../util";
+import { keyName } from "../../keys";
 
 const BODY = "kbody overflow-auto p-0 min-h-0 flex-auto bg-paper text-sm";
 const ROW = "group flex items-start gap-1.5 w-full px-2 py-1 border-0 border-b border-line-soft bg-transparent text-left text-ink cursor-default hover:bg-sel-soft sel:bg-sel";
@@ -118,7 +119,7 @@ export function HistoryButtons() {
   const editor = role === "editor";
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 border-t border-line bg-bench flex-none">
-      <button type="button" className={cx(BTN, "primary")} data-uiact="save" disabled={!editor} title={editor ? "Name the project as it is now (Ctrl+S)" : "Only editors can save versions"}
+      <button type="button" className={cx(BTN, "primary")} data-uiact="save" disabled={!editor} title={editor ? `Name the project as it is now (${keyName("Ctrl+S")})` : "Only editors can save versions"}
         onClick={() => dispatch({ type: "action", id: "save" })}>Save version...</button>
       <button type="button" className={BTN} data-uiact="branches" disabled={!me} title="Try something without touching the main line"
         onClick={() => dispatch({ type: "versions", cmd: "dialog", dialog: { kind: "branches" } })}>

@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { createPortal } from "react-dom";
 import type { PanelAction, PanelsApi, PanelsState } from "../../panels-api";
 import { cx } from "../../util";
+import { menuScroller, menuSize, placeMenu } from "../../menufit";
 
 const EMPTY: PanelsState = {
   appearance: { layers: [], active: "", objects: [], nets: [], netClasses: [], inactive: "normal", flip: false, netColorMode: "ratsnest", ratsnestMode: "all", presets: [], builtinPresets: [], preset: null, viewports: [], viewport: null },
@@ -24,11 +25,11 @@ export interface MenuAt { x: number; y: number; items: MenuItem[] }
 /** A wxMenu popped at the pointer: closes on a pick, an outside press or Escape; kept inside the window. */
 export function ContextMenu({ at, onClose }: { at: MenuAt | null; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const [pos, setPos] = useState<{ x: number; y: number; h: number } | null>(null);
   useLayoutEffect(() => {
     if (!at || !ref.current) { setPos(null); return; }
-    const r = ref.current.getBoundingClientRect();
-    setPos({ x: Math.max(2, Math.min(at.x, window.innerWidth - r.width - 4)), y: Math.max(2, Math.min(at.y, window.innerHeight - r.height - 4)) });
+    const p = placeMenu(menuSize(ref.current), { at });
+    setPos({ x: p.left, y: p.top, h: p.maxHeight }); menuScroller(ref.current);
   }, [at]);
   useEffect(() => {
     if (!at) return;
@@ -40,7 +41,7 @@ export function ContextMenu({ at, onClose }: { at: MenuAt | null; onClose: () =>
   if (!at) return null;
   return createPortal(
     <div ref={ref} className="kctx fixed z-[400] min-w-[180px] py-1 bg-panel border border-line rounded-md shadow-panel text-sm text-ink select-none" role="menu"
-      style={{ left: (pos || at).x, top: (pos || at).y, visibility: pos ? "visible" : "hidden" }} onContextMenu={(ev) => ev.preventDefault()}>
+      style={{ left: (pos || at).x, top: (pos || at).y, maxHeight: pos ? pos.h : undefined, overflowY: "auto", visibility: pos ? "visible" : "hidden" }} onContextMenu={(ev) => ev.preventDefault()}>
       {at.items.map((it, i) => it === "-"
         ? <div key={i} className="my-1 border-t border-line" />
         : <div key={i} role="menuitem" className={cx("px-3 py-[3px] whitespace-nowrap", it.disabled ? "text-ink-3" : "cursor-default hover:bg-accent hover:text-on-accent")}

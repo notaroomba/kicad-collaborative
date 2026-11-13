@@ -18,6 +18,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { FPEDIT_MENUS, HOME_MENUS, LINKS, MENUS, MENU_CHECKS, MODULE_ACTION_MENUS, MODULE_ALIAS, MODULE_DUPLICATES, NEEDS_SELECTION, READ_ONLY_OK, SUBMENU_ICONS, type MenuEntry } from "../tables";
 import { dispatch, useApp, type AppState, type Editor, type ModuleAction } from "../store";
 import { iconFor, isOn, keyFor, labelFor, runUiAction, unavailable, useAvail, type Avail } from "../actions";
+import { menuKey } from "../keys";
+import { fitMenu, menuScroller, menuSize, placeMenu } from "../menufit";
 import { cx } from "../util";
 import { usePluginMenus } from "../plugins/PluginUi";
 import { PRODUCT_VERSION } from "../generated/product-version";
@@ -152,6 +154,7 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
     return () => { document.removeEventListener("pointerdown", away, true); window.removeEventListener("keydown", key, true); };
   }, [open, sel, items, entries, run, close]);
   const r = open && btn.current ? btn.current.getBoundingClientRect() : null;
+  useLayoutEffect(() => { if (open && panel.current && btn.current) fitMenu(panel.current, { below: btn.current.getBoundingClientRect(), noFlip: true }); }, [open, entries]);
   return (
     <div className="brand relative flex flex-none items-center mr-3 max-[1100px]:mr-1.5">
       <button type="button" id="appMenuBtn" ref={btn} aria-haspopup="menu" aria-expanded={open} title="Junction menu"
@@ -163,7 +166,7 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
         <span className="text-2xs text-ink-3" aria-hidden="true">▾</span>
       </button>
       {open && r ? (
-        <div id="appMenu" role="menu" ref={panel} className={PANEL} style={{ left: r.left, top: r.bottom + 2, maxHeight: `calc(100vh - ${Math.round(r.bottom) + 12}px)` }}>
+        <div id="appMenu" role="menu" ref={panel} className={PANEL} style={{ left: r.left, top: r.bottom + 2 }}>
           {entries.map((e, i) => e === "-"
             ? <div key={"sep" + i} className="h-px bg-line my-1 mx-1" role="separator" />
             : (
@@ -200,21 +203,9 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
   const parentRef = useRef(parentPanel); parentRef.current = parentPanel;
   useLayoutEffect(() => {
     const el = ref.current, r = anchorRef.current(); if (!el || !r) return;
-    const vw = window.innerWidth, vh = window.innerHeight, pad = 4;
-    const w = el.offsetWidth, natural = el.scrollHeight + 2;   // scrollHeight: the full content, whatever max-height is in force
-    let left: number, top: number;
-    if (depth === 0) { left = Math.max(pad, Math.min(r.left, vw - w - pad)); top = r.bottom + 2; }
-    else {
-      const p = parentRef.current() || r;
-      left = p.right - 3;
-      if (left + w > vw - pad) left = p.left - w + 3;                 // flip to the other side of the parent
-      if (left < pad) left = Math.max(pad, vw - w - pad);
-      top = r.top - 5;
-    }
-    const h = Math.min(natural, vh - 2 * pad);
-    if (top + h > vh - pad) top = depth === 0 ? top : Math.max(pad, vh - pad - h);   // a sub-menu shifts up; a top-level menu scrolls
-    const maxHeight = vh - pad - top;
-    setStyle({ left, top, maxHeight, visibility: "visible" });
+    const place = depth === 0 ? placeMenu(menuSize(el), { below: r, noFlip: true }) : placeMenu(menuSize(el), { row: r, parent: parentRef.current() || r });
+    setStyle({ ...place, visibility: "visible" });
+    menuScroller(el);
   }, [nodes, depth]);
   // keep the highlighted row in view while the keyboard walks a scrolling menu
   const hi = sel.length > depth ? sel[depth] : -1;
@@ -249,7 +240,7 @@ function Panel({ nodes, depth, anchor, parentPanel, sel, open, c, onHover, onEnt
         const body: ReactNode = (
           <>
             <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center text-base leading-none" data-check={checkable ? (on ? "on" : "off") : undefined}>{on ? "✓" : icon ? <KIcon name={icon} size={16} /> : null}</span>
-            <span className="flex-1">{label}</span>{k ? <kbd className={cx(KBD, active && !off && "text-on-accent")}>{k}</kbd> : null}
+            <span className="flex-1">{label}</span>{k ? <kbd className={cx(KBD, active && !off && "text-on-accent")}>{menuKey(k)}</kbd> : null}
           </>
         );
         // (bg-transparent only when not highlighted: in the stylesheet it comes after bg-accent and would win)

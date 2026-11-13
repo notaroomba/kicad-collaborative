@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from "react-dom";
 import { dispatch, useApp } from "../store";
 import { cx } from "../util";
+import { menuScroller, menuSize, placeMenu } from "../menufit";
 import { Select, type SelectOption } from "./Select";
 
 const SEL = "ksel h-6 text-sm max-w-[320px]";
@@ -59,8 +60,10 @@ export function LayerSelect() {
   useEffect(() => { if (view !== "editor") setOpen(false); }, [view]);
   useLayoutEffect(() => {
     if (!open || !btn.current) return;
-    const r = btn.current.getBoundingClientRect(); const h = list.current ? list.current.offsetHeight : 300;
-    setStyle({ left: Math.max(4, Math.min(r.left, window.innerWidth - 230)) + "px", top: Math.min(r.bottom + 2, Math.max(4, window.innerHeight - h - 4)) + "px", minWidth: r.width + "px" });
+    const r = btn.current.getBoundingClientRect();
+    const p = placeMenu(list.current ? menuSize(list.current) : { w: 230, h: 300 }, { below: r });
+    setStyle({ left: p.left + "px", top: p.top + "px", maxHeight: Math.min(p.maxHeight, Math.round(window.innerHeight * 0.7)) + "px", minWidth: r.width + "px" });
+    if (list.current) menuScroller(list.current);
     const on = list.current && list.current.querySelector(".on"); if (on) on.scrollIntoView({ block: "nearest" });
   }, [open, layers.length]);
   useEffect(() => {
@@ -80,7 +83,7 @@ export function LayerSelect() {
         <svg className="w-2 h-2 flex-none text-ink-2" viewBox="0 0 8 8"><path d="M1 2.5h6L4 6z" fill="currentColor" /></svg>
       </button>
       {open ? createPortal(
-        <div ref={list} id="layerSelList" className="fixed z-70 bg-panel border border-line rounded-md shadow-panel py-0.5 max-h-[70vh] overflow-auto text-sm" style={style}>
+        <div ref={list} id="layerSelList" className="fixed z-70 bg-panel border border-line rounded-md shadow-panel py-0.5 overflow-auto text-sm" style={style}>
           {layers.map((l) => (
             <button type="button" key={l.name} data-layer={l.name}
               className={cx("flex items-center gap-2 w-full bg-transparent border-0 px-2 py-[3px] text-ink text-left whitespace-nowrap hover:bg-accent hover:text-on-accent on:bg-on", l.name === active && "on")}

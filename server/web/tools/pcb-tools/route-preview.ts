@@ -1,5 +1,6 @@
 // pcb-tools/route-preview.ts — the router's preview: the branch, the head, vias and the status note.
 import type { PcbCtx, Pt, TrackElem } from "./types";
+import { keysInText } from "../../keys";
 import type { Ratline } from "./route-fix";
 import { headVia, routeHaloClearance } from "./branch";
 import { settingsOf } from "./dialogs";
@@ -35,7 +36,7 @@ export function drawDragPreview(c: CanvasRenderingContext2D, ctx: PcbCtx, view: 
       c.globalAlpha = 0.8; c.strokeStyle = "rgb(179, 179, 179)"; c.lineWidth = Math.max((v.size - v.drill) / 2, px); ring(c, at!, (v.size + v.drill) / 4);   // COLOR4D( 0.7, 0.7, 0.7, 0.8 ) around the hole
     }
   }
-  if (D.subs.some((d) => d.forceMark && !d.status) && D.cursor) drawStatusNote(c, D.cursor, px * (view.dpr || 1), "Track violates DRC.", "(Ctrl+click to commit anyway.)");
+  if (D.subs.some((d) => d.forceMark && !d.status) && D.cursor) drawStatusNote(c, D.cursor, px * (view.dpr || 1), "Track violates DRC.", keysInText("(Ctrl+click to commit anyway.)"));
 }
 /** A track element (segment or arc) stroked at the current width. */
 export function strokeElem(c: CanvasRenderingContext2D, e: TrackElem) {

@@ -3,6 +3,7 @@
 // (panel_hotkeys_editor, read-only here); Schematic Editor > Display Options, Grids, Editing Options, Colors;
 // PCB Editor > Display Options, Grids.  Everything is kept in localStorage (prefs.ts) and applied on OK.
 import { E, toast } from "./editor";
+import { keyName } from "../keys";
 import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
 import { KD, checkbox, h, select, textInput } from "./dom";
 import { messageBox } from "../editor/pcbdialogs/ui";
@@ -104,7 +105,7 @@ export function openPreferences(page?: string): void {
       btn("🗑", "Remove", `${pre}-griddel`, () => { const i = list.selectedIndex; if (i < 0 || g.sizes.length <= 1) return; g.sizes.splice(i, 1); g.names!.splice(i, 1);
         g.fast1 = Math.min(g.fast1 > i ? g.fast1 - 1 : g.fast1, g.sizes.length - 1); g.fast2 = Math.min(g.fast2 > i ? g.fast2 - 1 : g.fast2, g.sizes.length - 1); fill(i !== 0 ? i - 1 : 0); })));
     const fb = KD().staticBox(R, "Fast Grid Switching");
-    fb.append(h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,240px) max-content;gap:6px 10px;align-items:center" }, h("label", null, "Grid 1:"), fast1, h("span", { class: "ro" }, "(Alt+1)"), h("label", null, "Grid 2:"), fast2, h("span", { class: "ro" }, "(Alt+2)")));
+    fb.append(h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,240px) max-content;gap:6px 10px;align-items:center" }, h("label", null, "Grid 1:"), fast1, h("span", { class: "ro" }, `(${keyName("Alt+1")})`), h("label", null, "Grid 2:"), fast2, h("span", { class: "ro" }, `(${keyName("Alt+2")})`)));
     const ob = KD().staticBox(R, "Grid Overrides"), og = h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,240px);gap:6px 10px;align-items:center" });
     const ov = (key: "connected" | "wires" | "vias" | "text" | "graphics", label: string) => { const s2 = select([], "", (v) => { (o as unknown as Record<string, number>)[key + "Mm"] = +v; }, { id: `${pre}-ov-${key}` }); ovSel[key] = s2;
       og.append(checkbox(label, o[key], (on) => { o[key] = on; }, { id: `${pre}-ovon-${key}` }), s2); };

@@ -14,6 +14,7 @@
 //   New Library      a <name>.pretty row in the project's fp-lib-table
 //   Insert into PCB  the board tab (BroadcastChannel "kc-fpedit") carries it on the cursor, as KiCad's placement
 import { setStatusBar, state, store } from "./appstore";
+import { keyName } from "../keys";
 import { E } from "./state";
 import { showPane } from "./panes";
 import { commitObservers, setTool, toolCtx, undoStack } from "./tools";
@@ -923,7 +924,7 @@ function editPad(): void {
   ctx.setSelection([]); const pcbSel = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string> }).sel; if (pcbSel) pcbSel.clear();
   FP.padEdit = id;
   const it = doc.items.get(id); if (it) E.activeLayer = PT().fpPads.principalLayer(it.node);
-  toast("Pad Edit Mode.  Press Ctrl+E again to exit.", 24 * 3600 * 1000);
+  toast(`Pad Edit Mode.  Press ${keyName("Ctrl+E")} again to exit.`, 24 * 3600 * 1000);
 }
 /** Somebody saved this footprint (the server's "saved" notice): the saved file is what this copy compares against,
  *  so the '*' goes when the copy here is that file (KiCad's library cache follows the file in the same way). */

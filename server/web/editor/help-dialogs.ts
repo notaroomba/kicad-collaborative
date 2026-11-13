@@ -6,6 +6,7 @@
 // not implement are listed greyed, as the desktop's.  About follows common/dialog_about: icon, name and
 // version, then the About / Version / License pages.
 import { hotkeyRows, hotkeyOwners, normKey, type HotkeyRow } from "../menuspec";
+import { keyName } from "../keys";
 import { PRODUCT_VERSION } from "../generated/product-version";
 import { EXTRA_TOOLS } from "../tables";
 import { state } from "./appstore";
@@ -57,7 +58,7 @@ export function openHotkeyList(): void {
       const isAvail = (r: HotkeyRow) => { if (r.section === "Junction" || !inEditor) return true; let v = avail.get(r.id); if (v === undefined) { v = kicadActionAvailable(r.id); avail.set(r.id, v); } return v; };
       const draw = () => {
         const words = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        const hit = (r: HotkeyRow) => { const hay = `${r.label} ${r.key} ${r.alt} ${r.tip}`.toLowerCase(); return words.every((w) => hay.includes(w)); };
+        const hit = (r: HotkeyRow) => { const hay = `${r.label} ${r.key} ${keyName(r.key)} ${r.alt} ${keyName(r.alt)} ${r.tip}`.toLowerCase(); return words.every((w) => hay.includes(w)); };
         const th = "position:sticky;top:0;background:var(--panel-2);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);font-weight:600";
         let html = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Command</th><th style="${th};width:110px">Hotkey</th><th style="${th};width:90px">Alternate</th><th style="${th}">Description</th></tr></thead><tbody>`;
         let section = "", n = 0;
@@ -65,7 +66,7 @@ export function openHotkeyList(): void {
           if (!hit(r)) continue;
           if (r.section !== section) { section = r.section; html += `<tr class="hk-sec"><td colspan="4" style="padding:5px 8px;font-weight:700;background:var(--bench)">${esc(section)}</td></tr>`; }
           const dim = isAvail(r) ? "" : "opacity:.5;";
-          html += `<tr data-hk="${esc(r.id)}" style="${dim}"><td style="padding:2px 8px 2px 22px">${esc(r.label)}</td><td style="padding:2px 8px;font-family:var(--mono)">${esc(r.key)}</td><td style="padding:2px 8px;font-family:var(--mono)">${esc(r.alt)}</td><td style="padding:2px 8px;color:var(--ink-2)">${esc(r.tip)}</td></tr>`;
+          html += `<tr data-hk="${esc(r.id)}" style="${dim}"><td style="padding:2px 8px 2px 22px">${esc(r.label)}</td><td style="padding:2px 8px;font-family:var(--mono)">${esc(keyName(r.key))}</td><td style="padding:2px 8px;font-family:var(--mono)">${esc(keyName(r.alt))}</td><td style="padding:2px 8px;color:var(--ink-2)">${esc(r.tip)}</td></tr>`;
           n++;
         }
         html += "</tbody></table>";

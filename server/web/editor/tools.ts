@@ -165,12 +165,15 @@ export function runModuleAction(id: string) {
 // Hotkeys in the spec's notation ("Ctrl+Shift+G", "Del", "Space"); Cmd counts as Ctrl on a Mac.
 export const KEY_NAMES: Record<string, string> = { Del: "Delete", Esc: "Escape", Space: " ", Ins: "Insert", PgUp: "PageUp", PgDn: "PageDown", Up: "ArrowUp", Down: "ArrowDown", Left: "ArrowLeft", Right: "ArrowRight" };
 
-export function hotkeyMatches(ev: { key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }, key: string | null | undefined) {
+export function hotkeyMatches(ev: { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }, key: string | null | undefined) {
   if (!key) return false;
   const parts = String(key).split("+"); const k = parts.pop()!;
   if (parts.includes("Ctrl") !== (ev.ctrlKey || ev.metaKey) || parts.includes("Shift") !== ev.shiftKey || parts.includes("Alt") !== ev.altKey) return false;
   const want = KEY_NAMES[k] || k;
-  return want.length === 1 ? ev.key.toUpperCase() === want.toUpperCase() : ev.key === want;
+  // Option (Alt) composes another character on a Mac (Option+S types "ß"): the physical key for letters and digits
+  const phys = ev.altKey && ev.code ? /^(?:Key|Digit)(.)$/.exec(ev.code) : null;
+  const got = phys ? phys[1] : ev.key;
+  return want.length === 1 ? got.toUpperCase() === want.toUpperCase() : ev.key === want;
 }
 
 export function runModuleHotkey(ev: KeyboardEvent) {

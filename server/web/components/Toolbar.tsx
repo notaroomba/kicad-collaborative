@@ -13,6 +13,8 @@ import { Select, type SelectOption } from "./Select";
 import { appState, dispatch, useApp, type Editor } from "../store";
 import { isOn, keyFor, runUiAction, titleFor, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
+import { keyName, menuKey } from "../keys";
+import { menuScroller, menuSize, menuViewport } from "../menufit";
 import { Glyph, KIcon } from "./Icon";
 import { LayerSelect, TrackWidthSelect, ViaSizeSelect, ViaStackSelect } from "./PcbControls";
 
@@ -91,10 +93,11 @@ function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElem
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
   useLayoutEffect(() => {
     const r = wrap.getBoundingClientRect(); const vertical = !!wrap.closest(".ktb-v"); const onRight = !!wrap.closest("#tbRight");
-    const w = ref.current ? ref.current.offsetWidth : 200;
+    const { w, h } = ref.current ? menuSize(ref.current) : { w: 200, h: 0 }, vp = menuViewport();
     const left = vertical ? (onRight ? r.left - w - 4 : r.right + 4) : r.left;
-    const top = vertical ? r.top : r.bottom + 2;
-    setStyle({ left: Math.max(4, Math.min(left, window.innerWidth - w - 4)) + "px", top: Math.max(4, Math.min(top, window.innerHeight - (ref.current ? ref.current.offsetHeight : 0) - 4)) + "px" });
+    const top = Math.max(4, Math.min(vertical ? r.top : r.bottom + 2, vp.h - h - 4));
+    setStyle({ left: Math.max(4, Math.min(left, vp.w - w - 4)) + "px", top: top + "px", maxHeight: vp.h - 4 - top + "px", overflowY: "auto" });
+    if (ref.current) menuScroller(ref.current);
   }, [wrap]);
   useEffect(() => {
     const down = (ev: PointerEvent) => { if (ref.current && !ref.current.contains(ev.target as Node)) onClose(); };
@@ -112,7 +115,7 @@ function Palette({ group, wrap, a, onClose }: { group: GroupItem; wrap: HTMLElem
             onClick={(ev) => { onClose(); if (ro) return; dispatch({ type: "setGroupCurrent", group: group.group, id: it.id }); runUiAction(a, it.id, ev.currentTarget); }}>
             <KIcon name={(actionMeta(it.id) || it).icon || "options_generic"} />
             <span className="flex-1">{paletteLabel(it, group)}</span>
-            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{k}</kbd> : null}
+            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{menuKey(k)}</kbd> : null}
           </button>
         );
       })}
@@ -238,11 +241,12 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
   useLayoutEffect(() => {
     const r = anchor.getBoundingClientRect();
-    const w = ref.current ? ref.current.offsetWidth : 220, h = ref.current ? ref.current.offsetHeight : 200;
+    const { w, h } = ref.current ? menuSize(ref.current) : { w: 220, h: 200 }, vp = menuViewport();
     // a side bar's menu opens beside the bar; a top bar's drops straight down from the chevron, right-aligned to it
     const left = vertical ? (onRight ? r.left - w - 4 : r.right + 4) : r.right - w;
-    const top = vertical ? Math.min(r.bottom - h, window.innerHeight - h - 4) : r.bottom + 2;
-    setStyle({ left: Math.max(4, Math.min(left, window.innerWidth - w - 4)) + "px", top: Math.max(4, Math.min(top, window.innerHeight - h - 4)) + "px" });
+    const top = Math.max(4, Math.min(vertical ? r.bottom - h : r.bottom + 2, vp.h - h - 4));
+    setStyle({ left: Math.max(4, Math.min(left, vp.w - w - 4)) + "px", top: top + "px", maxHeight: vp.h - 4 - top + "px", overflowY: "auto" });
+    if (ref.current) menuScroller(ref.current);
   }, [anchor, onRight, vertical, entries.length]);
   useEffect(() => {
     const down = (ev: PointerEvent) => { if (ref.current && !ref.current.contains(ev.target as Node) && !anchor.contains(ev.target as Node)) onClose(); };
@@ -263,7 +267,7 @@ function OverflowMenu({ entries, anchor, onRight, vertical, a, onClose }: { entr
             onClick={(ev) => { onClose(); if (!ro) runUiAction(a, m.id, ev.currentTarget); }}>
             {m.glyph ? <Glyph svg={m.glyph} /> : <KIcon name={m.icon || "options_generic"} />}
             <span className="flex-1">{m.label}</span>
-            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{k}</kbd> : null}
+            {k ? <kbd className="text-xs font-mono font-normal leading-[normal] text-ink-3 group-hover:text-on-accent">{menuKey(k)}</kbd> : null}
           </button>
         );
       })}
@@ -426,7 +430,7 @@ export function RightDrawToolbar() {
       key: e.id,
       node: (
         <button type="button" className={cx(KB, "glyph", !avail && "desk", tool === e.tool && "on")} data-uiact={e.id} data-ktool={e.tool}
-          title={e.name + (avail && e.key ? `  (${e.key})` : "")} onClick={(ev) => runUiAction(a, e.id, ev.currentTarget)}>
+          title={e.name + (avail && e.key ? `  (${keyName(e.key)})` : "")} onClick={(ev) => runUiAction(a, e.id, ev.currentTarget)}>
           <Glyph svg={e.glyph} />
         </button>
       ),

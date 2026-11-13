@@ -1,6 +1,7 @@
 // dialogs/dom.ts — small typed DOM helpers shared by the dialogs, and the typed face of kicad-dialogs.js's
 // shell and widgets (window.KDialogs: open, notebook, treebook, grid, staticBox).
 import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
+import { fitMenu } from "../menufit";
 
 export interface DlgButton { label: string; fn?: () => void; primary?: boolean; isDefault?: boolean; close?: boolean; id?: string }
 export interface DlgSpec {
@@ -104,7 +105,7 @@ export function popupMenu(x: number, y: number, items: PopItem[]): HTMLElement {
       const row = h("div", { class: "kd-pop-row", role: "menuitem", "aria-disabled": it.disabled ? "true" : undefined, style: `display:flex;gap:6px;align-items:center;padding:3px 12px 3px 6px;cursor:default;white-space:nowrap;${it.disabled ? "opacity:.45;" : ""}` },
         h("span", { style: "width:14px;display:inline-block;text-align:center" }, it.check ? (it.checked ? "✓" : "") : ""), h("span", { style: "flex:1" }, it.label || ""), it.sub ? h("span", null, "▸") : null);
       row.addEventListener("pointerenter", () => { row.style.background = "var(--accent)"; row.style.color = "var(--on-accent)"; for (const o of Array.from(document.querySelectorAll(".kd-pop"))) if (Number((o as HTMLElement).dataset.depth) > depth) o.remove();
-        if (it.sub && !it.disabled) { const r = row.getBoundingClientRect(); document.body.append(build(it.sub, r.right - 2, r.top - 3, depth + 1)); } });
+        if (it.sub && !it.disabled) { const r = row.getBoundingClientRect(), sub = build(it.sub, r.right - 2, r.top - 3, depth + 1); document.body.append(sub); fitMenu(sub, { row: r, parent: m.getBoundingClientRect(), overlap: 2 }); } });
       row.addEventListener("pointerleave", () => { row.style.background = ""; row.style.color = ""; });
       row.addEventListener("click", (ev) => { ev.stopPropagation(); if (it.disabled || it.sub) return; closeAll(); if (it.run) it.run(); });
       m.append(row);
@@ -114,7 +115,7 @@ export function popupMenu(x: number, y: number, items: PopItem[]): HTMLElement {
   const closeAll = (): void => { for (const o of Array.from(document.querySelectorAll(".kd-pop"))) o.remove(); document.removeEventListener("pointerdown", away, true); document.removeEventListener("keydown", esc, true); };
   const away = (ev: Event): void => { const t = ev.target as Element | null; if (t && t.closest && t.closest(".kd-pop")) return; closeAll(); };
   const esc = (ev: KeyboardEvent): void => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closeAll(); } };
-  const root = build(items, x, y, 0); document.body.append(root);
+  const root = build(items, x, y, 0); document.body.append(root); fitMenu(root, { at: { x, y } });
   setTimeout(() => { document.addEventListener("pointerdown", away, true); document.addEventListener("keydown", esc, true); }, 0);
   return root;
 }

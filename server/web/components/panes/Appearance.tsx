@@ -11,6 +11,7 @@ import { dispatch, useApp, type ItemSummary } from "../../store";
 import { cx } from "../../util";
 import { KIcon } from "../Icon";
 import { Collapsible, ColorPicker, ContextMenu, Swatch, pdispatch, useContextMenu, usePanels, type ColorAt, type MenuItem } from "./widgets";
+import { IS_MAC, keyName } from "../../keys";
 
 // A list row (`.layer`): flex, centred, 8px gap, 3px/4px padding, 2px radius; callers add the hover fill.
 const ROW = "layer flex items-center gap-2 py-[3px] px-1 rounded-xs";
@@ -226,6 +227,11 @@ function NetsTab({ pickColor }: { pickColor: (c: ColorAt) => void }) {
 }
 
 const SELECT = "w-full text-sm";
+// include/dialogs/eda_view_switcher.h: on macOS the physical Control key (WXK_RAW_CONTROL, Cmd+Tab is the system's
+// application switcher) and Option; elsewhere Ctrl and Shift.  APPEARANCE_CONTROLS::rebuildLayerPresetsWidget /
+// rebuildViewportsWidget write the labels with KeyNameFromKeyCode over the form's "Ctrl+Tab" / "Alt+Tab".
+const PRESET_SWITCH_KEY = IS_MAC ? "RawCtrl" : "Ctrl";
+const VIEWPORT_SWITCH_KEY = IS_MAC ? "Alt" : "Shift";
 function PresetsAndViewports() {
   const presets = usePanels((s) => s.appearance.presets);
   const builtin = usePanels((s) => s.appearance.builtinPresets);
@@ -235,12 +241,12 @@ function PresetsAndViewports() {
   const user = presets.filter((p) => !builtin.includes(p));
   return (
     <div className="flex-none px-1.5 py-1.5 border-t border-line bg-bench">
-      <div className="mb-0.5">Presets (Ctrl+Tab):</div>
+      <div className="mb-0.5" data-label="presets">Presets ({keyName(PRESET_SWITCH_KEY + "+Tab")}):</div>
       <Select id="presetSel" className={SELECT} title="Layer presets" value={preset || ""}
         options={[...(preset ? [] : [{ value: "", label: "(unsaved)" }]), ...builtin.map((p) => ({ value: p, label: p })), ...user.map((p) => ({ value: p, label: p })),
           { value: "\u0001sep", label: "---", sep: true }, { value: "\u0001save", label: "Save preset..." }, { value: "\u0001delete", label: "Delete preset...", disabled: !user.length }]}
         onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "presetSave" }); else if (v === "\u0001delete") pdispatch({ t: "presetDelete" }); else if (v) pdispatch({ t: "preset", name: v }); }} />
-      <div className="mt-1.5 mb-0.5">Viewports (Alt+Tab):</div>
+      <div className="mt-1.5 mb-0.5" data-label="viewports">Viewports ({keyName(VIEWPORT_SWITCH_KEY + "+Tab")}):</div>
       <Select id="viewportSel" className={SELECT} title="Viewports" value={viewport && viewports.includes(viewport) ? viewport : ""}
         options={[{ value: "", label: "(unsaved)" }, ...viewports.map((p) => ({ value: p, label: p })),
           { value: "\u0001sep", label: "---", sep: true }, { value: "\u0001save", label: "Save viewport..." }, { value: "\u0001delete", label: "Delete viewport...", disabled: !viewports.length }]}

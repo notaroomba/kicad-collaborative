@@ -5,6 +5,7 @@
 // Help > List Hotkeys need all of them, looked up per editor because eeschema and pcbnew reuse short ids
 // ("properties", "mirrorH", "highlightNet", …) for different actions.
 import bundled from "./generated/kicad-menu-spec.json";
+import { IS_MAC } from "./keys";
 
 // One copy of the table on the app page: editor.js (loaded first) carries it and publishes it; ui.js is built
 // with MENU_SPEC_SHARED=true (package.json), which drops its own copy and reads the published one.
@@ -16,7 +17,7 @@ export type EditorKind = "sch" | "pcb";
 export interface MenuActionMeta { id: string; label: string; tip: string | null; icon: string | null; key: string | null; alt?: string }
 
 /** KiCad gives a handful of actions another default on macOS (redo, the zoom keys, Add Filled Zone, Repeat Last Item). */
-export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || "");
+export { IS_MAC };
 const ACTIONS = (raw as unknown as { actions: Record<string, MenuActionMeta & { mac?: string }> }).actions;
 if (IS_MAC) for (const a of Object.values(ACTIONS)) if (a.mac !== undefined) a.key = a.mac || null;
 const CLASS: Record<EditorKind, string> = { sch: "SCH_ACTIONS", pcb: "PCB_ACTIONS" };

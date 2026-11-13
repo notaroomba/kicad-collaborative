@@ -8,6 +8,7 @@ import { netLabel } from "../review/names";
 // every client over the document's socket; the canvas pins are SVG in the overlay, the open thread is
 // the #cmtPanel card, and the Comments pane (components/panes/Comments.tsx) lists them from the store.
 import { state, store } from "./appstore";
+import { keyName } from "../keys";
 import { NS } from "./dom";
 import { clearAllSelection, selectItemId, selectionChanged } from "./gestures";
 import { E } from "./state";
@@ -344,7 +345,7 @@ export function startThread(mm: Mm, anchor: Anchor | null, body = ""): void {
   panel.appendChild(head(anchor, true, "new"));
   const form = el("div", "cmt-form"), ta = el("textarea"); ta.id = "newText"; ta.rows = 3; ta.value = body;
   ta.placeholder = anchor ? (anchor.kind === "net" ? `Say something about net ${anchor.label}…` : `Say something about ${anchor.label}…`) : "Say something about this spot…";
-  const row = el("div", "row"), post = el("button", "btn sm primary", "Post"), cancel = el("button", "btn sm", "Cancel"), hint = el("span", "hint grow", "Ctrl+Enter posts");
+  const row = el("div", "row"), post = el("button", "btn sm primary", "Post"), cancel = el("button", "btn sm", "Cancel"), hint = el("span", "hint grow", `${keyName("Ctrl+Enter")} posts`);
   post.type = "button"; post.id = "postBtn"; cancel.type = "button"; cancel.id = "cancelBtn";
   const send = async () => {
     const text = ta.value.trim(); if (!text) { ta.focus(); return; }

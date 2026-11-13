@@ -8,8 +8,10 @@ import { dispatch, useApp, type CtxItem } from "../store";
 import { hasIcon } from "../ctxspec";
 import { cx } from "../util";
 import { KIcon } from "./Icon";
+import { menuKey } from "../keys";
+import { menuScroller, menuSize, placeMenu } from "../menufit";
 
-const PANEL = "ctxmenu fixed min-w-[210px] max-h-[calc(100vh-8px)] overflow-y-auto bg-panel border border-line rounded-md p-1 shadow-panel text-ink text-sm select-none";
+const PANEL = "ctxmenu fixed min-w-[210px] overflow-y-auto bg-panel border border-line rounded-md p-1 shadow-panel text-ink text-sm select-none";
 const ROW = "group/row relative flex items-center gap-2 w-full text-left border-0 py-1 pl-1.5 pr-2 rounded-xs whitespace-nowrap";
 const KBD = "ml-6 text-xs font-mono font-normal leading-[normal] text-ink-3";
 
@@ -21,8 +23,9 @@ const selectable = (it: CtxItem | undefined): boolean => !!it && !it.sep;
 function itemsAt(items: CtxItem[], path: Path): CtxItem[] { let cur = items; for (const i of path) cur = (cur[i] && cur[i].sub) || []; return cur; }
 
 /**
- * Keep a panel inside the window.  The root menu opens at the click and moves up / left when it would
- * not fit; a sub-menu opens beside its row, on the other side when there is no room, and slides up.
+ * Keep a panel inside the window (web/menufit.ts).  The root menu opens at the click and flips above / to
+ * the left of it when it would not fit; a sub-menu opens beside its row, on the other side of its parent when
+ * there is no room, and slides up; a panel taller than the window is cut to it and scrolls.
  * Panels are position: fixed so a scrolling parent panel never clips its sub-menu.
  */
 function useClamp(root: boolean, x: number, y: number) {
@@ -30,12 +33,14 @@ function useClamp(root: boolean, x: number, y: number) {
   const [style, setStyle] = useState<CSSProperties>({ left: x, top: y, visibility: "hidden" });
   useLayoutEffect(() => {
     const el = ref.current; if (!el) return;
-    const w = el.offsetWidth, h = el.offsetHeight, vw = window.innerWidth, vh = window.innerHeight, m = 4;
-    const fitY = (top: number) => Math.max(m, Math.min(top, vh - h - m));
-    if (root) { setStyle({ left: Math.max(m, Math.min(x, vw - w - m)), top: y + h + m > vh && y - h >= m ? y - h : fitY(y) }); return; }
-    const row = el.parentElement ? el.parentElement.getBoundingClientRect() : new DOMRect(x, y, 0, 0);
-    const right = row.right + w + m <= vw || row.left - w < m;
-    setStyle({ left: right ? Math.min(row.right - 2, vw - w - m) : row.left - w + 2, top: fitY(row.top - 5) });
+    const size = menuSize(el);
+    if (root) setStyle({ ...placeMenu(size, { at: { x, y } }) });
+    else {
+      const row = el.parentElement ? el.parentElement.getBoundingClientRect() : new DOMRect(x, y, 0, 0);
+      const panel = el.parentElement && el.parentElement.closest(".ctxmenu");
+      setStyle({ ...placeMenu(size, { row, parent: panel ? panel.getBoundingClientRect() : row, overlap: 2 }) });
+    }
+    menuScroller(el);
   }, [root, x, y]);
   return { ref, style };
 }
@@ -45,6 +50,9 @@ interface PanelProps { items: CtxItem[]; path: Path; open: Path; active: Path; x
 function Panel({ items, path, open, active, x, y, onHover, onRun }: PanelProps) {
   const { ref, style } = useClamp(path.length === 0, x, y);
   const lead = items.some((it) => it.check || hasIcon(it.icon));
+  // keep the highlighted row in view while the keyboard walks a panel that scrolls
+  const hi = active.length === path.length + 1 && startsWith(active, path) ? active[path.length] : -1;
+  useEffect(() => { const row = hi >= 0 && ref.current ? ref.current.children[hi] as HTMLElement | undefined : undefined; if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" }); }, [hi, ref]);
   return (
     <div ref={ref} className={PANEL} style={style} role="menu" data-ctxdepth={path.length}>
       {items.map((it, i) => {
@@ -63,7 +71,7 @@ function Panel({ items, path, open, active, x, y, onHover, onRun }: PanelProps) 
                 </span>
               ) : null}
               <span className="flex-1">{it.label}</span>
-              {it.key ? <kbd className={cx(KBD, isActive && !dim && "text-on-accent")}>{it.key}</kbd> : null}
+              {it.key ? <kbd className={cx(KBD, isActive && !dim && "text-on-accent")}>{menuKey(it.key)}</kbd> : null}
               {it.sub ? <span className="ml-4 -mr-0.5" aria-hidden="true">›</span> : null}
             </button>
             {it.sub && startsWith(open, p) ? <Panel items={it.sub} path={p} open={open} active={active} x={0} y={0} onHover={onHover} onRun={onRun} /> : null}

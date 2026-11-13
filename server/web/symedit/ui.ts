@@ -2,6 +2,8 @@
 // KiCad's colours), KiCad's toolbar / menu icons (published by ui.js as window.KiCadIconFor) and a menu bar.
 import { h } from "../dialogs/dom";
 import { menuMeta } from "../menuspec";
+import { menuKey } from "../keys";
+import { fitMenu, type MenuAnchor } from "../menufit";
 
 interface IconSpec { vb?: string; light?: string; dark?: string }
 interface UiGlobals { KiCadIconFor?: (name: string) => IconSpec | undefined; KiCadIconsReady?: Promise<void>; KiCadUiToolbars?: Record<string, Record<string, unknown[]>> }
@@ -112,23 +114,22 @@ export interface MenuEntry { id?: string; label?: string; sep?: boolean; sub?: M
 let openMenu: HTMLElement[] = [];
 export function closeMenus(): void { for (const m of openMenu) m.remove(); openMenu = []; for (const b of Array.from(document.querySelectorAll(".se-mb.open"))) b.classList.remove("open"); }
 /** A dropdown (or context menu) at (x, y). */
-export function showMenu(x: number, y: number, items: MenuEntry[], depth = 0): HTMLElement {
+/** `anchor` places it as a drop-down or a sub-menu (web/menufit.ts); without one it opens at (x, y) like a context menu. */
+export function showMenu(x: number, y: number, items: MenuEntry[], depth = 0, anchor?: MenuAnchor): HTMLElement {
   if (depth === 0) closeMenus(); else { for (const m of openMenu.splice(depth)) m.remove(); }
   const m = h("div", { class: "se-menu", role: "menu", style: `left:${x}px;top:${y}px` });
   for (const it of items) {
     if (it.sep) { m.append(h("div", { class: "se-ms" })); continue; }
     const on = it.enabled ? it.enabled() : !!it.run || !!it.sub;
     const row = h("div", { class: "se-mi" + (on ? "" : " dim"), role: "menuitem", "data-id": it.id || undefined },
-      h("span", { class: "ck" }, it.check ? (it.check() ? "✓" : "") : ""), it.icon !== undefined ? icon(it.icon) : h("span", { style: "width:16px" }), h("span", null, it.label || ""), h("span", { class: "k" }, it.sub ? "▸" : it.key || ""));
+      h("span", { class: "ck" }, it.check ? (it.check() ? "✓" : "") : ""), it.icon !== undefined ? icon(it.icon) : h("span", { style: "width:16px" }), h("span", null, it.label || ""), h("span", { class: "k" }, it.sub ? "▸" : menuKey(it.key)));
     if (!on && it.id && !it.run) row.title = "Runs in the KiCad desktop app";
-    row.addEventListener("pointerenter", () => { if (it.sub) { const r = row.getBoundingClientRect(); showMenu(r.right - 2, r.top - 3, it.sub, depth + 1); } else { for (const o of openMenu.splice(depth + 1)) o.remove(); } });
+    row.addEventListener("pointerenter", () => { if (it.sub) { const r = row.getBoundingClientRect(); showMenu(r.right - 2, r.top - 3, it.sub, depth + 1, { row: r, parent: m.getBoundingClientRect(), overlap: 2 }); } else { for (const o of openMenu.splice(depth + 1)) o.remove(); } });
     row.addEventListener("click", (ev) => { ev.stopPropagation(); if (!on || it.sub) return; closeMenus(); if (it.run) it.run(); });
     m.append(row);
   }
   document.body.append(m); openMenu[depth] = m;
-  const r = m.getBoundingClientRect();
-  if (r.right > innerWidth) m.style.left = Math.max(0, innerWidth - r.width - 4) + "px";
-  if (r.bottom > innerHeight) m.style.top = Math.max(0, innerHeight - r.height - 4) + "px";
+  fitMenu(m, anchor || { at: { x, y } });
   if (depth === 0) setTimeout(() => document.addEventListener("pointerdown", away, true), 0);
   return m;
 }

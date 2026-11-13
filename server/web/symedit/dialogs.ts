@@ -9,6 +9,7 @@ import { E, appState, api } from "../dialogs/editor";
 import { saveTextDocument } from "../editor/projectfile";
 import { UNITS, unitName } from "../units";
 import { hotkeyRows } from "../menuspec";
+import { keyName } from "../keys";
 import type { SymbolEditor, Lib } from "./editor";
 import { nodeOf } from "./editor";
 import { icon } from "./ui";
@@ -887,5 +888,5 @@ export async function addToSchematic(se: SymbolEditor): Promise<void> {
 }
 export function hotkeys(): void {
   const rows = hotkeyRows("sch").filter((r) => r.key);
-  KD().open({ title: "Hotkey List", width: 560, okLabel: "Close", build(body) { const tb = h("table", { class: "kd-grid" }); for (const r of rows) tb.append(h("tr", null, h("td", null, r.label), h("td", null, r.key))); body.append(h("div", { style: "max-height:60vh;overflow:auto" }, tb)); } });
+  KD().open({ title: "Hotkey List", width: 560, okLabel: "Close", build(body) { const tb = h("table", { class: "kd-grid" }); for (const r of rows) tb.append(h("tr", null, h("td", null, r.label), h("td", null, keyName(r.key)))); body.append(h("div", { style: "max-height:60vh;overflow:auto" }, tb)); } });
 }

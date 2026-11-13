@@ -13,6 +13,7 @@
 // kicad-dialogs.js asks KDialogs.schItemDialog / schFieldDialog first (openItem / openNew / openField), so the
 // double-click, E and the tools' creation paths all reach these.  The document edits are in sch-items-logic.ts.
 import { schTableDialog } from "../editor/tabledialogs";
+import { keyName } from "../keys";
 import { E, toast, toolCtx } from "./editor";
 import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
 import { facesUsed, fontPicker, type FontPickerEl } from "./font-picker";
@@ -308,7 +309,7 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       body = b;
       const ta = h("textarea", { id: "kd-txt-text", rows: 5, style: "width:100%;font-family:var(--mono, monospace)", disabled: ro }) as HTMLTextAreaElement; ta.value = L.str(staged[1]); els.text = ta;
       b.append(h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, h("label", { style: "padding-top:4px" }, "Text:"), ta));
-      b.append(h("div", { style: "text-align:right" }, h("span", { class: "kd-note" }, "Ctrl+Enter or Shift+Enter: OK")));
+      b.append(h("div", { style: "text-align:right" }, h("span", { class: "kd-note" }, `${keyName("Ctrl+Enter")} or Shift+Enter: OK`)));
       const g = h("div", { class: "kd-fmt", style: "margin-top:6px" });
       const fontSel = fontPicker(doc, fx.font, { id: "kd-txt-font", style: "width:200px", disabled: ro }); els.font = fontSel;
       const bold = toggle("B", "Bold", fx.bold, "kd-txt-bold", "font-weight:700"), ital = toggle("I", "Italic", fx.italic, "kd-txt-italic", "font-style:italic"); els.bold = bold; els.italic = ital;

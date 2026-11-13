@@ -1,6 +1,7 @@
 // ui.tsx — the home view's small building blocks: glyphs, avatar, modal, menu, toasts.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { menuScroller } from "../menufit";
 
 // ---------------------------------------------------------------- glyphs (24×24 stroke, like the editor's)
 const PATHS: Record<string, string> = {
@@ -235,7 +236,10 @@ export function Menu({ items, at, title, onClose }: { items: MenuEntry[]; at: Me
     // No room below: open above the button (or the pointer), never on top of it.
     const up = top + r.height > innerHeight - 8;
     if (up) top = Math.max(8, (at.top !== undefined ? at.top - 4 : at.y) - r.height);
-    setPos({ left, top, transformOrigin: `${up ? "bottom" : "top"} ${at.right !== undefined ? "right" : "left"}` });
+    // Taller than the room it has: cut to the window and scrolled, as a native menu (web/menufit.ts).
+    const maxHeight = Math.max(80, innerHeight - 8 - top);
+    setPos({ left, top, maxHeight, overflowY: "auto", transformOrigin: `${up ? "bottom" : "top"} ${at.right !== undefined ? "right" : "left"}` });
+    menuScroller(ref.current);
   }, [phone, at.x, at.y, at.right, at.top]);
   useLayoutEffect(() => { const scrim = ref.current?.parentElement || null; return () => leaveGhost(scrim, 110); }, []);
   const close = useRef(onClose); close.current = onClose;
