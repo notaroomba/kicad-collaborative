@@ -371,6 +371,13 @@ How it works:
   https host names can be allowed: no IP addresses, no single-label names, no private suffixes
   such as `.local`, `.lan` or `.internal`.  Allowed addresses are listed in the Plugin Manager
   under *Addresses you allowed*, each with *Remove*; uninstalling the plugin forgets them.
+  One plugin may also reach a server on the user's own computer: traces (`com.github.usetraces.traces`), a client
+  for traces-serve, which the user installs and starts on `127.0.0.1:8000`.  This is the person's decision
+  (2026-11-13), limited to that plugin and that address (`LOCAL_SERVERS` in `web/plugins/host.ts`), and only for a
+  copy installed from KiCad's repository.  The user is asked once (*Reach a server on this computer?*); the
+  request then goes from the editor page straight to that port, never through Junction's server, so the browser's
+  own local-network prompt and the server's CORS rules apply too.  *Remove* in the Plugin Manager takes it back.
+  Every other plugin still cannot reach loopback or private addresses.
 
 - **Local ports and helper programs.**  A plugin that listens on `127.0.0.1` and starts a second
   Python program that connects to it (TraceForge's helper and panel) gets both inside the page:

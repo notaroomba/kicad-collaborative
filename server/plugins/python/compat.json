@@ -299,8 +299,8 @@
   "status": "works"
  },
  "com.github.usetraces.traces": {
-  "status": "unsupported",
-  "note": "It is a client for the traces server (traces-serve), which is installed separately from its own source and is not part of this package. A plugin here cannot reach a server on your own computer."
+  "status": "works",
+  "note": "It needs its own server, traces-serve, installed and started on your computer from the traces repository. The editor asks once before letting it reach that server at 127.0.0.1:8000, and the server must allow requests from this site (CORS). Tested against a stand-in traces server, not the real one."
  },
  "com.github.weirdgyn.viastitcher": {
   "status": "works",

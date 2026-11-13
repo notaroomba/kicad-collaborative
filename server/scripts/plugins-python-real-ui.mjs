@@ -581,6 +581,75 @@ if (only('localize')) {
   } catch (e) { check('Localize Dependencies runs', false, String(e).slice(0, 400) + ' ' + await logTail('com.github.jOaSbA.localize-dependencies', 12)); await shot('real-localize-fail'); }
 }
 
+if (only('traces')) {
+  // traces talks to its own server on the user's computer (127.0.0.1:8000).  It is the one plugin allowed to, after
+  // the user agrees; the request goes from this page straight to that port, never through Junction's server.
+  const ID = 'com.github.usetraces.traces';
+  const seen = [];
+  const http = await import('node:http');
+  const standIn = http.createServer((req, res) => {
+    let body = ''; req.on('data', (c) => { body += c; }); req.on('end', () => {
+      seen.push(`${req.method} ${req.url}${body ? ' ' + body : ''}`);
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
+      if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
+      const json = (o) => { res.writeHead(200, { ...cors, 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+      if (req.url === '/health') return json({ status: 'ok' });
+      if (req.url === '/jobs/jlcpcb/search' || req.url === '/jobs/jlcpcb/source') return json({ job_id: 'job-7' });
+      if (req.url === '/jobs/job-7') return json({ status: 'complete', result: { candidates: [{ part_number: 'C25744', name: 'Stand-in 10k 0402 resistor', manufacturer: 'UNI-ROYAL', price: 0.0011, qty: 4200 }] } });
+      res.writeHead(404, cors); res.end('{}');
+    });
+  });
+  await new Promise((ok) => standIn.listen(8000, '127.0.0.1', ok));
+  try {
+    await page.goto(`${BASE}${ecc83}`); await editorReady();
+    const actions = await install(ID);
+    await runAction(ID, actions[0]);
+    const up = await page.waitForSelector('#pluginPrompt', { timeout: 120000 });
+    const ask = await page.locator('#pluginPrompt').innerText();
+    check('traces: the user is asked before it reaches its server on this computer', /Reach a server on this computer\?/.test(ask) && /127\.0\.0\.1:8000/.test(ask) && seen.length === 0, ask.slice(0, 200) + ' seen ' + seen.join(','));
+    await shot('real-traces-ask');
+    await page.click('#pluginPrompt .btn.primary');
+    const f = await frameOf(ID);
+    await f.waitForSelector('text=Select a component', { timeout: 120000 });
+    await page.waitForTimeout(1500);
+    check('traces: after Allow it reaches the stand-in server from the page, and its window opens without the "could not reach" message', seen.some((x) => x.startsWith('GET /health')) && !(await page.locator('#pluginPrompt').count()), seen.join(' | ') + ' ' + await logTail(ID));
+    await shot('real-traces-window');
+    await f.locator('text=680nF').first().click();
+    await page.waitForTimeout(800);
+    const sup = f.locator('select').filter({ has: f.locator('option', { hasText: 'LCSC' }) }).last();
+    await sup.selectOption({ label: 'LCSC' }); await page.waitForTimeout(400);
+    await f.getByRole('button', { name: 'Source', exact: true }).click();
+    const t0 = Date.now(); while (!seen.some((x) => x.startsWith('GET /jobs/job-7')) && Date.now() - t0 < 30000) await page.waitForTimeout(300);
+    await page.waitForTimeout(1500);
+    const post = seen.find((x) => x.startsWith('POST /jobs/jlcpcb/')) || '';
+    const shown = await f.locator('text=Stand-in 10k 0402 resistor').count();
+    check('traces: Source sends the part to its server as JSON, follows the job, and shows the part it found', /"description":\s*"680nF"/.test(post) && /"footprint":\s*"[^"]*C_Disc_D4\.7mm/.test(post) && seen.some((x) => x.startsWith('GET /jobs/job-7')) && shown > 0, `shown ${shown}; ` + seen.join(' | ').slice(0, 600) + ' ' + await logTail(ID, 8));
+    await shot('real-traces-sourced');
+    const g = await frameOf(ID);
+    await g.getByRole('button', { name: 'Apply to selected', exact: true }).click();
+    await page.waitForTimeout(1500);
+    await shot('real-traces-after-apply');
+    // the plugin saves the sheet as it goes; the editor takes the rewritten sheet when its window closes
+    await (await frameOf(ID)).getByRole('button', { name: 'Close', exact: true }).last().click();
+    const asked = [];
+    for (let i = 0; i < 4; i++) {
+      const up = await page.waitForSelector('#pluginPrompt', { timeout: 20000 }).catch(() => null); if (!up) break;
+      const text = await page.locator('#pluginPrompt').innerText(); asked.push(text.split('\n').slice(0, 2).join(' ').slice(0, 120));
+      await page.click('#pluginPrompt .btn.primary');
+      await page.waitForFunction((t) => { const e = document.querySelector('#pluginPrompt'); return !e || e.innerText !== t; }, text, { timeout: 30000 }).catch(() => {});
+    }
+    await page.waitForTimeout(3000);
+    const pid = ecc83.split('/')[2];
+    const proj = await page.evaluate(async (p) => (await (await fetch(`/api/projects/${p}`)).json()), pid);
+    const sch = (proj.docs || proj.documents || []).find((d) => /\.kicad_sch$/.test(d.path));
+    const text = sch ? await page.evaluate(async (d) => (await fetch(`/api/docs/${d}/content`)).text(), sch.docId || sch.id) : '';
+    const c2 = text.slice(text.indexOf('"C2"') - 3000, text.indexOf('"C2"') + 3000);
+    check('traces: Apply to selected writes the found part into C2 of the schematic', /C25744/.test(text) && /C25744/.test(c2), `asked: ${asked.join(' | ')}; C25744 in schematic: ${/C25744/.test(text)} ` + await logTail(ID, 6));
+    await shot('real-traces-applied');
+  } catch (e) { check('traces runs', false, String(e).slice(0, 400) + ' ' + await logTail(ID, 12)); await shot('real-traces-fail'); }
+  standIn.close();
+}
+
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
 

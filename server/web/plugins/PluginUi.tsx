@@ -10,7 +10,7 @@ import { keyName } from "../keys";
 import {
   actionsFor, actionsOf, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, closeWindow, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
   installFromRegistry, installOfficial, loadOfficial, installRecommended, loadRegistry, lookupPublished, missingRecommended, moderate, report, openManager, originOf, panelsFor, publish, readLocalFiles, recommend,
-  recommendedPending, requestInstall, restart, runPluginUi, setEnabled, setFrameHost, setManager, setPanelWidth, showPanel, uninstall, unpublish, usePlugins,
+  recommendedPending, requestInstall, restart, localAllowed, localServersOf, forgetLocal, runPluginUi, setEnabled, setFrameHost, setManager, setPanelWidth, showPanel, uninstall, unpublish, usePlugins,
   type CatalogEntry, type Compat, type ModerationEntry, type OfficialEntry, type PluginWindowState, type ProjectPlugin, type PromptField, type PromptRequest, type RegistryEntry,
 } from "./host";
 import { describePermission, isPython, type InstalledPlugin, type PluginAction, type PluginManifest } from "./types";
@@ -277,18 +277,21 @@ function InstalledTab() {
   );
 }
 /** Web addresses the person let this plugin reach beyond those its code names (a server they run for it); each can be taken back. */
-function AllowedHosts({ identifier }: { identifier: string }) {
+function AllowedHosts({ p }: { p: InstalledPlugin }) {
+  const identifier = p.identifier;
   const [hosts, setHosts] = useState<string[] | null>(null);
+  const [local, setLocal] = useState(() => localAllowed(p));
   const base = `/api/plugins/pcm/${encodeURIComponent(identifier)}/hosts`;
   const load = () => { void fetch(base).then((r) => (r.ok ? r.json() : { hosts: [] })).then((j) => setHosts(Array.isArray(j.hosts) ? j.hosts.map(String) : [])).catch(() => setHosts([])); };
   useEffect(load, [identifier]);
-  if (!hosts || !hosts.length) return null;
+  const own = local ? localServersOf(p)[0] : null;
+  if ((!hosts || !hosts.length) && !own) return null;
   return (
     <div id="pluginHosts">
       <h3>Addresses you allowed</h3>
-      <ul className="plg-adds">{hosts.map((h) => (
+      <ul className="plg-adds">{(hosts || []).map((h) => (
         <li key={h} data-host={h}>{h} <button type="button" className="btn" onClick={() => { void fetch(`${base}/${encodeURIComponent(h)}`, { method: "DELETE" }).then(load); }}>Remove</button></li>
-      ))}</ul>
+      ))}{own ? <li data-host={own} id="pluginLocalServer">{own} (its server on this computer) <button type="button" className="btn" onClick={() => { forgetLocal(p); setLocal(false); }}>Remove</button></li> : null}</ul>
     </div>
   );
 }
@@ -314,7 +317,7 @@ function Detail({ p }: { p: InstalledPlugin }) {
       <p className="plg-muted">{m.identifier}{m.author ? ` · by ${m.author}` : ""}{scopesOf(m) ? ` · ${scopesOf(m)}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</p>
       <p>{m.description}</p>
       <h3>Permissions you granted</h3><Permissions perms={p.granted} m={p.manifest} />
-      {python && p.granted.includes("network") ? <AllowedHosts identifier={p.identifier} /> : null}
+      {python && p.granted.includes("network") ? <AllowedHosts p={p} /> : null}
       <h3>Adds</h3><Contributes m={m} actions={pyActs} />
       {python ? <p className="plg-muted" id="pluginPython">A KiCad Python plugin from {sourceLabel(p.source)}. Its interpreter starts the first time you use one of its commands in a project, which takes a few seconds; after that it stays ready.{run && run.error ? <><br /><span className="plg-err">It reported: {run.error}</span></> : null}</p> : null}
       {python || (p.source === "catalog" && !(s.project.id && s.project.canEdit)) ? null : (

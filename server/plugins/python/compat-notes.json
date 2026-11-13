@@ -42,8 +42,8 @@
       "note": "Its helper and its panel both run in the page and talk over a local port that stays inside the page. The first launch sets its net highlight shortcut and asks to be opened again, as on the desktop. Checked on a board with ground pours: signal path export, rotation, ground stitching on a grid, a via fence along a track and rounded track corners all land where the numbers say. Its other via and trace tools, net colours and manufacturing checks work. Teardrops drive KiCad's own Windows dialog, on the desktop too, and are not available here."
     },
     "com.github.usetraces.traces": {
-      "status": "unsupported",
-      "note": "It is a client for the traces server (traces-serve), which is installed separately from its own source and is not part of this package. A plugin here cannot reach a server on your own computer."
+      "status": "works",
+      "note": "It needs its own server, traces-serve, installed and started on your computer from the traces repository. The editor asks once before letting it reach that server at 127.0.0.1:8000, and the server must allow requests from this site (CORS). Tested against a stand-in traces server, not the real one."
     },
     "com.infernoembedded.vulcans-trials": {
       "status": "unsupported",

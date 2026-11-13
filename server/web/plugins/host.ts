@@ -351,7 +351,7 @@ async function startPython(p: InstalledPlugin) {
   const run: Run = { plugin: p, key: keyOf(p), sandbox: null as unknown as Sandbox, pending: new Map(), seq: 0, commits: [], actions: [] };
   runs.set(id, run);
   run.sandbox = createSandbox(p, frameHost, {
-    plugin: { identifier: id, name: p.manifest.name, version: p.manifest.version || "", pyodide: `${location.origin}/static/pyodide/`, hosts: has(p, "network") && p.manifest.network && Array.isArray(p.manifest.network.hosts) ? p.manifest.network.hosts.slice(0, 200) : [] }, granted: p.granted.slice(), theme: themeNow(),
+    plugin: { identifier: id, name: p.manifest.name, version: p.manifest.version || "", pyodide: `${location.origin}/static/pyodide/`, hosts: (has(p, "network") && p.manifest.network && Array.isArray(p.manifest.network.hosts) ? p.manifest.network.hosts.slice(0, 200) : []).concat(localServersOf(p)) }, granted: p.granted.slice(), theme: themeNow(),
     entry: `(${pythonRuntime.toString()})();`, entryName: "kicad-python.js", html: "", resources: files, defer: true,
     editor: editorState(has(p, "design:read")),
   }, (msg) => onMessage(run, msg));
@@ -456,6 +456,7 @@ const NEEDS: Record<string, string | null> = {
 async function netFetch(p: InstalledPlugin, a: any): Promise<unknown> {
   if (!isPython(p.manifest)) throw new ApiError("Network requests through the server are for KiCad's official Python plugins.", "permission_denied");
   const url = String(a.url || ""); let host = ""; try { host = new URL(url).host; } catch { throw new ApiError("That is not a web address.", "invalid"); }
+  if (localServerOf(p, url)) return localFetch(p, url, a);
   const method = String(a.method || "GET").toUpperCase();
   log(p.identifier, "host", `Network: ${method} ${host}`);
   const r = await fetch(`/api/plugins/pcm/${encodeURIComponent(p.identifier)}/fetch`, {
@@ -466,6 +467,56 @@ async function netFetch(p: InstalledPlugin, a: any): Promise<unknown> {
   if (!r.ok && j && j.error === "plugin_host_unapproved" && !a._asked && (await approveHost(p, url))) return netFetch(p, Object.assign({}, a, { _asked: true }));
   if (!r.ok) { const msg = (j && (j.message || j.error)) || `the server answered ${r.status}`; log(p.identifier, "warn", `Network: ${host}: ${msg}`); return { error: String(msg) }; }
   return j;
+}
+
+/**
+ * The one official plugin allowed to reach a server on the user's own computer, and the one address it may reach
+ * (the person's decision, 2026-11-13): traces is a client for traces-serve, which the user installs and starts
+ * themselves on 127.0.0.1:8000.  Only a copy installed from KiCad's repository counts, and the user is asked first.
+ * The request is made by this page, never by the server, which cannot reach anyone's computer.
+ */
+const LOCAL_SERVERS: Record<string, string[]> = { "com.github.usetraces.traces": ["127.0.0.1:8000", "localhost:8000"] };
+export function localServersOf(p: InstalledPlugin): string[] {
+  return isPython(p.manifest) && String(p.source || "").startsWith("kicad:") && has(p, "network") ? (LOCAL_SERVERS[p.identifier] || []) : [];
+}
+function localServerOf(p: InstalledPlugin, url: string): boolean {
+  let u: URL; try { u = new URL(url); } catch { return false; }
+  return u.protocol === "http:" && localServersOf(p).includes(u.host);
+}
+const localKey = (p: InstalledPlugin) => { const me = APP() ? APP().getState().me : null; return `kc.local-server.${me ? me.id : 0}.${p.identifier}`; };
+const localAsked = new Set<string>();
+async function allowLocal(p: InstalledPlugin, host: string): Promise<boolean> {
+  if (ls.get(localKey(p)) === "yes") return true;
+  if (localAsked.has(localKey(p))) return false;
+  localAsked.add(localKey(p));
+  const yes = await ask(p, { kind: "confirm", title: "Reach a server on this computer?", message: `${p.manifest.name} works with its own server, which you install and start yourself on this computer (${host}). Allow this plugin, and only this plugin, to send requests to it from this page?\n\nYour browser may also ask to let this site reach devices on your local network. You can take this back in the Plugin and Content Manager.`, fields: [], okLabel: "Allow" });
+  log(p.identifier, "host", yes ? `Network: allowed to reach ${host} on this computer` : `Network: not allowed to reach ${host}`);
+  if (yes) { ls.set(localKey(p), "yes"); localAsked.delete(localKey(p)); }
+  return !!yes;
+}
+export function localAllowed(p: InstalledPlugin): boolean { return ls.get(localKey(p)) === "yes"; }
+export function forgetLocal(p: InstalledPlugin) { ls.del(localKey(p)); localAsked.delete(localKey(p)); log(p.identifier, "host", "Network: no longer allowed to reach its server on this computer"); }
+const b64 = { enc(buf: Uint8Array) { let s = ""; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000)); return btoa(s); },
+  dec(t: string) { const s = atob(t); const out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; } };
+async function localFetch(p: InstalledPlugin, url: string, a: any): Promise<unknown> {
+  const u = new URL(url); const method = String(a.method || "GET").toUpperCase();
+  if (!(await allowLocal(p, u.host))) return { error: `not allowed to reach ${u.host} on this computer` };
+  log(p.identifier, "host", `Network: ${method} ${u.host}${u.pathname} (this computer)`);
+  const headers = new Headers();
+  for (const h of Array.isArray(a.headers) ? a.headers : []) if (Array.isArray(h) && h.length === 2 && /^(content-type|accept|authorization|x-[a-z0-9-]+)$/i.test(String(h[0]))) headers.set(String(h[0]), String(h[1]));
+  const body = typeof a.body === "string" && a.body && method !== "GET" && method !== "HEAD" ? b64.dec(a.body) : undefined;
+  if (body && body.length > 16 * 1024 * 1024) return { error: "the request is larger than 16 MB" };
+  const ctl = new AbortController(); const ms = Math.min(300, Math.max(1, Number(a.timeout) || 60)) * 1000; const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { method, headers, body, mode: "cors", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", cache: "no-store", signal: ctl.signal });
+    const data = new Uint8Array(await r.arrayBuffer());
+    if (data.length > 24 * 1024 * 1024) return { error: "the answer is larger than 24 MB" };
+    const out: [string, string][] = []; r.headers.forEach((v, k) => out.push([k, v]));
+    return { status: r.status, reason: r.statusText, headers: out, body: b64.enc(data) };
+  } catch (e) {
+    const msg = ctl.signal.aborted ? `${u.host} did not answer in time` : `${u.host} could not be reached from this page. Start the plugin's server on this computer; it must also allow requests from ${location.origin} (CORS), and your browser must allow this site to reach your local network.`;
+    log(p.identifier, "warn", `Network: ${msg}`); return { error: msg };
+  } finally { clearTimeout(timer); }
 }
 
 /** Host names the person said no to in this page, per plugin: asked once, not again on every request. */
@@ -670,7 +721,7 @@ function storage(id: string, fn: string, a: any): unknown {
   if (text.length > 512 * 1024) throw new ApiError("A plugin's storage holds 512 KB at most.", "too_large");
   ls.set(key, text); return null;
 }
-function storageClear(id: string) { const me = APP() ? APP().getState().me : null; ls.del(`kc.plugin.${me ? me.id : 0}.${id}`); }
+function storageClear(id: string) { const me = APP() ? APP().getState().me : null; ls.del(`kc.plugin.${me ? me.id : 0}.${id}`); ls.del(`kc.local-server.${me ? me.id : 0}.${id}`); }
 
 // ---------------------------------------------------------------- what plugins contribute to the chrome
 
