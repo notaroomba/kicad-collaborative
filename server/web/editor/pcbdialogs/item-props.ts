@@ -7,7 +7,7 @@
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
 import { KICAD_FONT, faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { trackViaDialog } from "./track-via";
-import { box, checkField, errorMessage, fmtLenU, form, grid, h, coordField, iconToggle, lenField, messageBox, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { box, checkField, errorMessage, fmtLenU, form, grid, gridButtons, h, coordField, iconToggle, lenField, messageBox, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { comboInput } from "../../dialogs/dom";
 import { E } from "../state";
 import { kicadActionAvailable, runKicadAction } from "../hotkeys";
@@ -762,12 +762,16 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const fieldText = (p: SNode): string => (variant ? VM.footprintFieldForVariant(node, variant, String(p[1])) : sval(p, 2));
     const rows: Record<string, CellValue>[] = props(node).map((p) => {
       const fx = FH().fieldEffects(p), a = FH().fieldAt(p), e = kid(p, "effects"), f = e ? kid(e, "font") : null, sz = f ? kid(f, "size") : null;
-      return { name: String(p[1]), label: label(String(p[1])), value: xref.toRefs(fieldText(p)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
+      return { name: String(p[1]), label: MAND.includes(String(p[1])) ? label(String(p[1])) : String(p[1]), value: xref.toRefs(fieldText(p)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
     });
-    const g = grid([{ label: "Name", key: "label", type: "ro", width: "130px" }, { label: "Value", key: "value" }, { label: "Show", key: "show", type: "check" }, { label: "Width", key: "w", type: "len" }, { label: "Height", key: "ht", type: "len" }, { label: "Thickness", key: "th", type: "len" },
+    const mandRow = (r: Record<string, CellValue>): boolean => MAND.includes(String(r.name));
+    const g = grid([{ label: "Name", key: "label", width: "130px", readOnly: (r) => mandRow(r) }, { label: "Value", key: "value" }, { label: "Show", key: "show", type: "check" }, { label: "Width", key: "w", type: "len" }, { label: "Height", key: "ht", type: "len" }, { label: "Thickness", key: "th", type: "len" },
       { label: "Italic", key: "italic", type: "check" }, { label: "Layer", key: "layer", type: "select", options: allLayers(doc), width: "120px" }, { label: "Orientation", key: "rot", type: "num" }, { label: "X Offset", key: "x", type: "len" }, { label: "Y Offset", key: "y", type: "len" }], rows, { ro, height: "170px" });
     const at = K().atOf(node), side0 = sval(kid(node, "layer")) || "F.Cu";
-    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
+    // OnAddField: "Field<n>", hidden, on the side's Fab layer at the footprint origin; OnDeleteField keeps the mandatory four
+    const gbar = gridButtons(g, () => ({ name: "", label: "Field" + (g.rows().length + MAND.filter((m) => !g.rows().some((r) => r.name === m)).length), value: "", show: false, w: 1, ht: 1, th: 0.15, italic: false, layer: side0 === "B.Cu" ? "B.Fab" : "F.Fab", rot: 0, x: 0, y: 0 }),
+      { ro, addTip: "Add field", delTip: "Delete field", canDelete: (r) => { if (!mandRow(r)) return true; messageBox("Error", `The first ${MAND.length} fields are mandatory.`); return false; } });
+    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = orientationField(at[2] || 0, ro, "orientation");
     const side = selectField<string>(side0, [["F.Cu", "Front"], ["B.Cu", "Back"]], { ro, key: "side" });
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const attrs = PH().footprintAttrs(node);
@@ -780,7 +784,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const ov = (key: string, k: string): Field<number> => lenField(kid(node, key) ? nval(kid(node, key)) : NaN, { ro, key: k, allowEmpty: true });
     const clr = ov("clearance", "padClearance"), mask = ov("solder_mask_margin", "maskExpansion"), paste = ov("solder_paste_margin", "pasteClearance");
     const zc = kid(node, "zone_connect"), zone = selectField<string>(zc ? String(zc[1]) : "", [["", "Use zone setting"], ["2", "Solid"], ["1", "Thermal relief"], ["0", "None"]], { ro, key: "zoneConnect" });
-    const general = h("div", null, box("Fields", g.el),
+    const general = h("div", null, box("Fields", g.el, gbar),
       h("div", { class: "pd-cols2" },
         box("Position", form([["X:", x.el, unitLabel()], ["Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")], ["Side:", side.el]]), locked.el),
         box("Fabrication Attributes", form([["Footprint type:", type.el]], true), ...flags.map((f) => f.f.el))),
@@ -790,7 +794,27 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
       box("Pad Connections", form([["Pad connection to zones:", zone.el]], true)));
     body.append(notebook([{ label: "General", build: (el) => el.append(general) }, { label: "Clearance Overrides & Pad Connections", build: (el) => el.append(clearances) }]).el);
     return (n) => {
-      const list = props(n); const variantFields: Record<string, string> = {};
+      const variantFields: Record<string, string> = {};
+      // field names: none empty, none twice (TransferDataFromWindow / OnGridCellChanging)
+      const names = new Set<string>();
+      for (const r of g.rows()) {
+        const nm = mandRow(r) ? String(r.name) : String(r.label).trim();
+        if (!nm) return "Fields must have a name.";
+        if (names.has(nm)) return `Field name '${nm}' already in use.`;
+        names.add(nm);
+      }
+      // deleted user fields go, renamed ones take their new name, added ones are written after the last field
+      for (const p of props(n)) if (!MAND.includes(String(p[1])) && !g.rows().some((r) => r.name === String(p[1]))) n.splice(n.indexOf(p), 1);
+      for (const r of g.rows()) {
+        if (mandRow(r)) continue;
+        const nm = String(r.label).trim();
+        if (!r.name) {
+          const all = K().kids(n, "property") as SNode[], last = all[all.length - 1];
+          const fresh = K().parse(`(property ${quote(nm)} "" (at 0 0 0) (layer ${quote(String(r.layer))}) (hide yes) (uuid ${quote(K().newUuid())}) (effects (font (size 1 1) (thickness 0.15))))`) as SNode;
+          n.splice(last ? n.indexOf(last) + 1 : 1, 0, fresh); r.name = nm;
+        } else if (nm !== r.name) { const p = props(n).find((q) => String(q[1]) === r.name); if (p) p[1] = nm; r.name = nm; }
+      }
+      const list = props(n);
       for (const r of g.rows()) {
         const p = list.find((q) => String(q[1]) === r.name); if (!p) continue;
         if (MAND.slice(0, 1).includes(String(r.name)) && !String(r.value).trim()) return "Reference designator cannot be empty.";
@@ -807,7 +831,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
       }
       if (side.get() !== side0) PH().setFootprintSide(n, side.get());
       const now = K().atOf(n);
-      if (rot.get() !== (side.get() !== side0 ? now[2] || 0 : at[2] || 0)) PH().setFootprintRotation(n, rot.get());
+      if (norm180(rot.get()) !== norm180(side.get() !== side0 ? now[2] || 0 : at[2] || 0)) PH().setFootprintRotation(n, norm180(rot.get()));
       if (x.get() !== at[0] || y.get() !== at[1]) PH().setFootprintPosition(n, x.get(), y.get());
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       const next: Record<string, unknown> = { type: type.get() };
