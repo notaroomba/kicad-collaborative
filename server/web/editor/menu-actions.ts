@@ -21,7 +21,8 @@ import { E } from "./state";
 import { startMove } from "./gestures";
 import { schKey } from "./tools";
 import { esc, toast } from "./util";
-import { applyView, fitBox, isSch, mmW, mmX0, mmY0, requestRender, stage, world, zoomBy } from "./view";
+import { applyView, fitBox, isSch, mmW, mmX0, mmY0, requestRender, stage, world, zoomBy, zoomStep } from "./view";
+import { fitMargin } from "./zoomlist";
 
 type Sx = (string | number | Sx)[];
 interface DocEntry { docId: string; path: string; docType: string }
@@ -147,7 +148,7 @@ function cursorPx(): [number, number] {
   const r = world.getBoundingClientRect(), s = stage.getBoundingClientRect(); const mm = E.lastCursorMm as number[];
   return [r.left - s.left + ((mm[0] - mmX0()) / mmW()) * r.width, r.top - s.top + ((mm[1] - mmY0()) / mmW()) * r.width];
 }
-function zoomAtCursor(f: number): void { const [x, y] = cursorPx(); zoomBy(f, x, y); }
+function zoomAtCursor(zoomIn: boolean): void { const [x, y] = cursorPx(); zoomStep(zoomIn, x, y); }   // doZoomInOut( dir, aCenterOnCursor ); the browser cannot warp the mouse, so the cursor point stays put
 function centreOnCursor(): void { const [x, y] = cursorPx(); E.viewTouched = true; E.panX += stage.clientWidth / 2 - x; E.panY += stage.clientHeight / 2 - y; applyView(); }
 /** Ids of everything selected: the app's selection, a selected field's owner and the tool module's own pick. */
 export function selectedIds(): string[] {
@@ -163,7 +164,7 @@ function zoomFitSelection(): void {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const id of selectedIds()) { const b = (E.kdoc.items.get(id) as Item | undefined)?.bbox; if (b) { x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); } }
   if (x0 === Infinity) { toast("Nothing selected"); return; }
-  E.viewTouched = true; fitBox([x0, y0, Math.max(x1 - x0, 1), Math.max(y1 - y0, 1)], 0.8);
+  E.viewTouched = true; fitBox([x0, y0, Math.max(x1 - x0, 1e-3), Math.max(y1 - y0, 1e-3)], fitMargin(stage.clientHeight, false));
 }
 
 /** COMMON_TOOLS::GridNext / GridPrev (N, Shift+N): the next or previous grid of the list, wrapping round. */
@@ -198,7 +199,7 @@ export const MENU_HANDLERS: Record<string, ActionHandler> = {
   saveCopy: () => saveDocCopy(), saveCurrSheetCopyAs: () => saveDocCopy(),
   exportNetlist: () => exportNetlist(), drawSheetOnClipboard: () => drawingToClipboard(),
   properties: () => { openSelectionProperties(); },
-  zoomFitSelection, zoomIn: () => zoomAtCursor(1.25), zoomOut: () => zoomAtCursor(0.8), zoomCenter: centreOnCursor,
+  zoomFitSelection, zoomIn: () => zoomAtCursor(true), zoomOut: () => zoomAtCursor(false), zoomCenter: centreOnCursor,
   panUp: () => panStep(0, 1), panDown: () => panStep(0, -1), panLeft: () => panStep(1, 0), panRight: () => panStep(-1, 0),
   cursorUp: () => cursorStep(0, -1, 1), cursorDown: () => cursorStep(0, 1, 1), cursorLeft: () => cursorStep(-1, 0, 1), cursorRight: () => cursorStep(1, 0, 1),
   cursorUpFast: () => cursorStep(0, -1, 10), cursorDownFast: () => cursorStep(0, 1, 10), cursorLeftFast: () => cursorStep(-1, 0, 10), cursorRightFast: () => cursorStep(1, 0, 10),

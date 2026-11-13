@@ -51,6 +51,8 @@ const COLLAB_FILE: MenuEntry[] = ["share", "collabCopyLink", "collabComments", "
 // KiCad's eeschema and pcbnew View menus have no grid or units entries: the units switch from the left toolbar's
 // Units group and Ctrl+U, the grid from the aux toolbar's choice, the grid button's menu, N / Shift+N and Preferences.
 const VIEW_WEB: MenuEntry[] = ["cursorFullCrosshairs", "togglePolarCoords", "resetLocalCoords"];
+// eeschema has no polar coordinates (only PCB_BASE_FRAME::UpdateStatusBar honours GetShowPolarCoords)
+const VIEW_WEB_SCH: MenuEntry[] = VIEW_WEB.filter((e) => e !== "togglePolarCoords");
 const HELP_MENU: MenuEntry[] = ["help", "gettingStarted", "listHotKeys", "getInvolved", "donate", "reportBug", "-", "downloadDesktop", "sourceCode", "-", "about"];
 const LANG_MENU: MenuEntry = ["Set Language", ["languageEnglish"]];
 // the UI theme (web/theme.ts): KiCad's Preferences > Common > "Appearance" choice, as a sub-menu
@@ -76,7 +78,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw",
       "-", "navigateBack", "navigateUp", "navigateForward", "navigatePrevious", "navigateNext",
       "-", "toggleHiddenPins", "toggleHiddenFields", "toggleDirectiveLabels", "toggleERCErrors", "toggleERCWarnings", "toggleERCExclusions", "markSimExclusions", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons",
-      "-", ...VIEW_WEB]],
+      "-", ...VIEW_WEB_SCH]],
     ["&Place", ["placeSymbol", "placePower", "drawWire", "drawBus", "placeBusWireEntry", "placeNoConnect", "placeJunction", "placeLabel", "placeGlobalLabel", "placeClassLabel", "drawRuleArea",
       "-", "placeHierLabel", "drawSheet", "placeSheetPin", "syncAllSheetsPins", "importSheet",
       "-", "placeSchematicText", "drawTextBox", "drawTable", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawArc", "drawBezier", "drawPolygon", "drawLines", "placeImage"]],

@@ -13,7 +13,7 @@ import { drawSelection, renderProps, setFilter } from "./selection";
 import { E } from "./state";
 import { activeModule, deleteAction, orientSelected, redoLast, runModuleAction, selectAll, setTool, toolCtx, undoLast } from "./tools";
 import { api, esc, setRadio, showPopover, toast } from "./util";
-import { applyView, fitView, isSch, kicadZoom, requestRender, zoomBy } from "./view";
+import { applyView, fitObjects, fitView, isSch, kicadZoom, requestRender, zoomBy, zoomStep } from "./view";
 import { show3DViewer } from "./viewer3d-loader";
 import { openFabOutputs } from "./fab-outputs";
 import { openPlotDialog } from "./pcbdialogs/plot";
@@ -94,7 +94,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   selectAll: () => selectAll(),
   save: (a) => runAction("checkpoint", a), refreshHistory: () => loadHistory(),
   undo: () => undoLast(), redo: () => redoLast(), find: (a) => findPopover(a), doDelete: () => deleteAction(),
-  zoomRedraw: () => requestRender(), zoomInCenter: () => zoomBy(1.25), zoomOutCenter: () => zoomBy(0.8), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitView(),
+  zoomRedraw: () => requestRender(), zoomInCenter: () => zoomStep(true), zoomOutCenter: () => zoomStep(false), zoomFitScreen: () => fitView(), zoomFitObjects: () => fitObjects(),
   navigateBack: () => navigateDocs(-1), navigateForward: () => navigateDocs(1), navigateUp: () => { const r = rootSchematic(); if (r && state.doc !== r) openDoc(r); else toast("Already at the root sheet"); },
   rotateCCW: () => orientSelected("ccw"), rotateCW: () => orientSelected("cw"), rotateCcw: () => orientSelected("ccw"), rotateCw: () => orientSelected("cw"),
   mirrorV: () => orientSelected("mv"), mirrorH: () => orientSelected("mh"),
@@ -148,7 +148,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   importGithub: () => runAction("importGithub"), openTrash: () => runAction("openTrash"),
   // the home view's menu entries
   share: (a) => runAction("share", a), checkpoint: (a) => runAction("checkpoint", a), kicad: (a) => runAction("kicad", a),
-  zoomin: () => zoomBy(1.25), zoomout: () => zoomBy(0.8), fit: () => fitView(), grid: () => runAction("grid"), snap: () => runAction("snap"), linemode: () => runAction("linemode"),
+  zoomin: () => zoomStep(true), zoomout: () => zoomStep(false), fit: () => fitView(), grid: () => runAction("grid"), snap: () => runAction("snap"), linemode: () => runAction("linemode"),
   "tab-appearance": () => showPane("appearance", true), "tab-props": () => showPane("props", true), "tab-peers": () => showPane("peers", true), "tab-comments": () => showPane("comments", true), "tab-history": () => showPane("history", true),
 };
 

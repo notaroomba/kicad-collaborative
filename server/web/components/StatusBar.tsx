@@ -10,7 +10,7 @@
 import { useApp, type Editor } from "../store";
 import { menuMeta } from "../menuspec";
 import { EXTRA_TOOLS, TOOL_MAP } from "../tables";
-import { fmtCoord, messageText, unitsMsg } from "../units";
+import { fmtCoord, gridMessageText, unitsMsg } from "../units";
 import { cx } from "../util";
 
 // One field of the bar: a vertically centred cell with a 1px rule on its left (KiCad's status panes).
@@ -36,10 +36,15 @@ export function StatusBar() {
   const tool = useApp((s) => s.tool.current);
   const moduleTools = useApp((s) => s.tool.moduleTools);
   const u = vp.units;
+  // MessageTextFromValue's short form on the schematic (sch_base_frame.cpp:264-272): "%.3f" mm / in, "%.0f" mils
+  const sch = editor === "sch", c = (v: number) => fmtCoord(v, u, sch);
   const dx = vp.cursor[0] - vp.origin[0], dy = vp.cursor[1] - vp.origin[1];
-  const delta = vp.polar
-    ? `r ${fmtCoord(Math.hypot(dx, dy), u)}  theta ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(3)}`
-    : `dx ${fmtCoord(dx, u)}  dy ${fmtCoord(dy, u)}  dist ${fmtCoord(Math.hypot(dx, dy), u)}`;
+  // only PCB_BASE_FRAME::UpdateStatusBar honours GetShowPolarCoords; eeschema always prints dx / dy / dist
+  const delta = vp.polar && !sch
+    ? `r ${c(Math.hypot(dx, dy))}  theta ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(3)}`
+    : `dx ${c(dx)}  dy ${c(dy)}  dist ${c(Math.hypot(dx, dy))}`;
+  // status field 7, DisplayConstraintsMsg: only pcbnew's DRAWING_TOOL::UpdateStatusBar writes it (by LEADER_MODE)
+  const constraint = sch ? "" : vp.lineMode === "45" ? "Constrain to H, V, 45" : vp.lineMode === "90" ? "Constrain to H, V" : "";
   const live = conn.status === "live";
   const err = conn.status === "error" || conn.status === "connecting";
   // the sheet path as the editor resolved it for the title block ("/" on the root sheet, "/Name/" below it)
@@ -70,13 +75,14 @@ export function StatusBar() {
         <>
           <span className={cx(cell, "max-[900px]:hidden")} id="sbWhere" title={editor === "sch" ? "Sheet path" : "Active layer"}>{where}</span>
           <span className={cx(cell, "min-w-[calc(9ch+20px)] max-[560px]:hidden")} id="sbZoom">Z {vp.kzoom.toFixed(2)}</span>
-          <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {fmtCoord(vp.cursor[0], u)}  Y {fmtCoord(vp.cursor[1], u)}</span>
+          <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {c(vp.cursor[0])}  Y {c(vp.cursor[1])}</span>
           <span className={cx(cell, "min-w-[calc(42ch+20px)] max-[1180px]:hidden")} id="sbDelta">{delta}</span>
-          {/* EDA_DRAW_FRAME::DisplayGridMsg and DisplayUnitsMsg: plain text; the units change from the left toolbar or Ctrl+U */}
-          <span className={cx(cell, "min-w-[calc(16ch+20px)]")} id="sbGrid">grid {messageText(vp.gridPitch, u, editor === "sch" ? "sch" : "pcb", false)}{vp.gridOn ? "" : " (hidden)"}</span>
+          {/* EDA_DRAW_FRAME::DisplayGridMsg ("grid %s", GRID::UserUnitsMessageText) and DisplayUnitsMsg: plain text; the
+              units change from the left toolbar or Ctrl+U */}
+          <span className={cx(cell, "min-w-[calc(16ch+20px)]")} id="sbGrid">grid {gridMessageText(vp.gridPitch, vp.gridPitch, u, sch ? "sch" : "pcb")}</span>
           <span className={cell} id="sbUnits">{unitsMsg(u)}</span>
           <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[640px]:hidden")} id="sbTool">{toolName(editor, tool, moduleTools.find((t) => t.id === tool)?.label)}</span>
-          {status.mode ? <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[1024px]:hidden")} id="sbMode">{status.mode}</span> : null}
+          {constraint ? <span className={cx(cell, "font-sans min-w-0 overflow-hidden text-ellipsis max-[1024px]:hidden")} id="sbMode">{constraint}</span> : null}
         </>
       ) : null}
     </div>

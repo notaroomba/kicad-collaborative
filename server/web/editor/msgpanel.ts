@@ -8,6 +8,7 @@ import { state, store } from "./appstore";
 import { E } from "./state";
 import { isSch } from "./view";
 import { selectionIds } from "./gestures";
+import { nameOfPick, netMap } from "./schnets";
 
 export interface MsgItem { title: string; value: string }
 type PcbApi = { msgPanelInfo?: (doc: KDoc, ids: string[], opts: Record<string, unknown>) => MsgItem[]; designSettings?: (src: unknown) => unknown };
@@ -31,7 +32,8 @@ export function updateMsgPanel(): void {
     const k = "hook§" + JSON.stringify(hi); if (k !== lastKey) { lastKey = k; store.set({ msgPanel: { items: hi } }); }
     return;
   }
-  if (!doc || isSch() || !P || !P.msgPanelInfo) { if (lastKey) { lastKey = ""; store.set({ msgPanel: { items: [] } }); } return; }
+  if (doc && isSch()) { updateSchMsgPanel(doc); return; }
+  if (!doc || !P || !P.msgPanelInfo) { if (lastKey) { lastKey = ""; store.set({ msgPanel: { items: [] } }); } return; }
   const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { route?: RouteState; sel?: Set<string>; padSel?: string | null; highlightNet?: string | null });
   const rt = pcb ? pcb.route || null : null;
   const pad = pcb && pcb.padSel ? pcb.padSel : null;
@@ -47,6 +49,69 @@ export function updateMsgPanel(): void {
   if (doc.fpEditor && !items.length) items = footprintMsgPanel(doc);
   store.set({ msgPanel: { items } });
 }
+
+type SchSel = { id: string; pin?: string; field?: string };
+type SchMsgApi = { msgPanelInfo?: (doc: KDoc, sel: SchSel, o: Record<string, unknown>) => MsgItem[] };
+
+/** The one selected schematic item (a pin, a field or an item), or null when nothing or several are selected. */
+function schSingleSelection(): SchSel | null {
+  const pins = E.selPins as { id: string; number: string }[];
+  if (pins.length) return pins.length === 1 ? { id: pins[0].id, pin: pins[0].number } : null;
+  const f = E.selField as { id: string; name: string } | null;
+  if (f) return { id: f.id, field: f.name };
+  const ids = selectionIds();
+  return ids.length === 1 ? { id: ids[0] } : null;
+}
+
+/** KIUI::EllipsizeStatusText: 30% of the first 800 px of the panel plus 60% of the rest, cut in the middle. */
+let measureCtx: CanvasRenderingContext2D | null = null;
+function ellipsize(s: string): string {
+  const el = typeof document !== "undefined" ? document.getElementById("msgpanel") : null;
+  const w = el ? el.clientWidth : (typeof window !== "undefined" ? window.innerWidth : 1200);
+  const limit = Math.min(w, 800) * 0.3 + Math.max(w - 800, 0) * 0.6;
+  if (!measureCtx && typeof document !== "undefined") { const c = document.createElement("canvas"); measureCtx = c.getContext("2d"); }
+  if (!measureCtx) return s;
+  measureCtx.font = el ? getComputedStyle(el).font : "12px sans-serif";
+  if (measureCtx.measureText(s).width <= limit) return s;
+  // wxControl::Ellipsize( wxELLIPSIZE_MIDDLE )
+  let lo = 0, hi = s.length;
+  while (lo < hi) { const k = Math.ceil((lo + hi) / 2), t = s.slice(0, Math.ceil(k / 2)) + "..." + s.slice(s.length - Math.floor(k / 2)); if (measureCtx.measureText(t).width <= limit) lo = k; else hi = k - 1; }
+  return s.slice(0, Math.ceil(lo / 2)) + "..." + s.slice(s.length - Math.floor(lo / 2));
+}
+
+/**
+ * SCH_INSPECTION_TOOL::UpdateMessagePanel: on every selection change, the one selected item's GetMsgPanelInfo
+ * (sch-tools msgpanel.ts), else ClearMsgPanel.  The connection rows come from the hierarchy's net map.
+ */
+function updateSchMsgPanel(doc: KDoc): void {
+  const M = CollabTools.sch as unknown as SchMsgApi | undefined;
+  const sel = schSingleSelection();
+  const ver = (store.get() as { document: { version: number } }).document.version;
+  const sheetPath = ((doc as KDoc & { sheetPath?: string }).sheetPath) || "/";
+  const key = ["sch", ver, E.units, sel ? `${sel.id}|${sel.pin ?? ""}|${sel.field ?? ""}` : "", sheetPath, E.proSettings ? E.proSettings.length : 0].join("§");
+  if (key === lastKey) return; lastKey = key;
+  let items: MsgItem[] = [];
+  if (sel && M && M.msgPanelInfo) {
+    try {
+      items = M.msgPanelInfo(doc, sel, { units: E.units, sheetPath, ellipsize, connection: (it: KItem, pin?: string) => connectionOf(it, pin) });
+    } catch (e) { console.warn(e); }
+  }
+  store.set({ msgPanel: { items } });
+}
+
+/** SCH_CONNECTIVITY::AppendConnectionInfo's data: the connection's name, bus or net, and the net's resolved netclass. */
+function connectionOf(it: KItem, pin?: string): { name: string; bus: boolean; netclass: string } | null {
+  const r = nameOfPick({ item: it, pin }); if (!r || !r.name) return null;
+  const c = netMap(); const e = c ? c.map.get(r.name) : null;
+  const bus = !!(e && e.bus);
+  let netclass = "Default";
+  if (!bus) {
+    const PS = (KiCadCanvas as unknown as { pcbSizes?: { boardSizes(src: unknown): unknown; effectiveNetclass(s: unknown, net: string): { name?: string } } }).pcbSizes;
+    if (PS) { try { if (sizesSrc !== E.proSettings) { sizesSrc = E.proSettings; sizes = PS.boardSizes(E.proSettings || null); } netclass = PS.effectiveNetclass(sizes, r.name).name || "Default"; } catch (e2) { /* no project */ } }
+  }
+  return { name: r.name, bus, netclass };
+}
+let sizesSrc: unknown = undefined, sizes: unknown = null;
 
 /**
  * FOOTPRINT::GetMsgPanelInfo in the Footprint Editor (nothing selected: the frame shows the footprint): reference /

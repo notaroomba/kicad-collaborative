@@ -85,9 +85,11 @@ export function drawAppOverlays(ctx: CanvasRenderingContext2D, view: OverlayView
   if (ms && ms.b) drawRuler(ctx, view, sch, ms.a, ms.b);
   const bs = E.boxSel as { start: Pt; cur: Pt; pts: Pt[]; lasso: boolean; mode?: string } | null;
   if (bs) {
-    const additive = bs.mode === "add", subtractive = bs.mode === "remove", exclusiveOr = bs.mode === "toggle";   // SELECTION_AREA's exclusiveOr fill: Ctrl without Shift
-    if (bs.lasso) drawSelectionArea(ctx, px, dark, { poly: bs.pts, inside: lassoArea(bs.pts) > 0, additive, subtractive, exclusiveOr });
-    else drawSelectionArea(ctx, px, dark, { rect: [bs.start, bs.cur], inside: bs.cur[0] >= bs.start[0], additive, subtractive, exclusiveOr });
+    // SELECTION_AREA::ViewDraw tests m_additive first; both tools set it from m_drag_additive (Ctrl || Shift), so a
+    // subtractive or toggling drag is green too, and SetExclusiveOr( false ) leaves the exclusive-or fill unused
+    const additive = bs.mode === "add" || bs.mode === "remove" || bs.mode === "toggle", subtractive = bs.mode === "remove";
+    if (bs.lasso) drawSelectionArea(ctx, px, dark, { poly: bs.pts, inside: lassoArea(bs.pts) > 0, additive, subtractive });
+    else drawSelectionArea(ctx, px, dark, { rect: [bs.start, bs.cur], inside: bs.cur[0] >= bs.start[0], additive, subtractive });
   }
   const zr = E.zoomRect as { a?: Pt; b?: Pt } | null;
   if (zr && zr.a && zr.b) drawSelectionArea(ctx, px, dark, { rect: [zr.a, zr.b], inside: true });

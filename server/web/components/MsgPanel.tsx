@@ -6,8 +6,8 @@ import { useApp } from "../store";
 
 export function MsgPanel() {
   const items = useApp((s) => s.msgPanel.items);
-  // eeschema's panel: only while something answers (a selected table cell, SCH_TABLECELL::GetMsgPanelInfo)
-  const show = useApp((s) => s.view === "editor" && (s.document.editor === "pcb" || (s.document.editor === "sch" && s.msgPanel.items.length > 0)));
+  // a permanent pane in both frames (sch_edit_frame.cpp AddPane MsgPanel), two text lines high even when empty
+  const show = useApp((s) => s.view === "editor" && (s.document.editor === "pcb" || s.document.editor === "sch"));
   if (!show) return null;
   return (
     <div

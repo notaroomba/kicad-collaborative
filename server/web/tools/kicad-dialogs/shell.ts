@@ -39,7 +39,7 @@ export function open(spec: DlgSpec): DlgApi {
   dlg.append(tt, body, foot); ov.appendChild(dlg); document.body.appendChild(ov);
   const finish = (apply: boolean): void => { if (apply) { const a = document.activeElement as HTMLElement | null; if (a && a !== document.body && dlg.contains(a)) a.blur(); if (spec.ok && spec.ok() === false) return; } close(); if (!apply && spec.cancel) spec.cancel(); };
   cancel.addEventListener("click", () => finish(false)); ok.addEventListener("click", () => finish(true)); tt.querySelector(".kd-x")!.addEventListener("click", () => finish(false));
-  ov.addEventListener("pointerdown", (ev) => { if (ev.target === ov && !spec.modeless) finish(false); });
+  // DIALOG_SHIM: a modal dialog ignores clicks on the frame behind it; only OK / Cancel / Esc / the close box end it
   ov.addEventListener("keydown", (ev) => {
     ev.stopPropagation();
     if (ev.key === "Escape") { ev.preventDefault(); finish(false); }

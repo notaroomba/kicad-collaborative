@@ -270,7 +270,7 @@ stage.addEventListener("pointerdown", (ev) => {
   const smode = selModifier(ev);
   if (!best) {
     if (!smode) { clearSelection(); drawSelection(); renderProps(); renderObjects(); }
-    if (E.tool === "select" && E.kdoc) { E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: !!smode, mode: smode, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
+    if (E.tool === "select" && E.kdoc) { { const dm = dragModifier(ev, isSch()); E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: !!dm, mode: dm, startClient: [ev.clientX, ev.clientY] }; } stage.setPointerCapture(ev.pointerId); ev.preventDefault(); }
     return;
   }
   if (smode) {                                         // KiCad: Shift+click adds, Ctrl+click toggles, Ctrl+Shift+click removes
@@ -316,9 +316,20 @@ function selModifier(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean
 /** PCB_SELECTION_TOOL::selectMultiple re-reads the modifiers on every event: Shift / Ctrl pressed or let go mid-drag change the mode. */
 function boxSelModifiers(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): void {
   const b = E.boxSel as { add?: boolean; mode?: string | null } | null; if (!b) return;
-  const m = selModifier(ev); b.mode = m; b.add = !!m;
+  const m = dragModifier(ev, isSch()); b.mode = m; b.add = !!m;
 }
 for (const t of ["keydown", "keyup"]) window.addEventListener(t, (ev) => { const k = (ev as KeyboardEvent).key; if (E.boxSel && (k === "Shift" || k === "Control" || k === "Meta")) { boxSelModifiers(ev as KeyboardEvent); drawBoxSel(); } });
+/**
+ * SELECTION_TOOL::setModifiersState for a box or lasso drag.  Eeschema calls SelectMultiple( area, m_drag_subtractive,
+ * false ) with m_drag_additive = Ctrl || Shift, so a Ctrl drag adds like Shift.  Pcbnew calls SelectMultiple( area,
+ * m_subtractive, m_exclusive_or ): Ctrl alone toggles (m_exclusive_or = Ctrl && !Shift), Ctrl+Shift removes.
+ */
+export function dragModifier(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean; altKey?: boolean }, sch = true): "add" | "remove" | "toggle" | null {
+  const c = ev.ctrlKey || ev.metaKey;
+  if (!sch) return c && ev.shiftKey ? "remove" : c ? "toggle" : ev.shiftKey ? "add" : null;
+  if (ev.altKey) return null;   // && !aAltState
+  return c && ev.shiftKey ? "remove" : c || ev.shiftKey ? "add" : null;
+}
 /** DRAG_SELECTED on an item that was not selected: the press picked it (the board module's own pick), a drag draws a box. */
 function startModuleBox(ev: PointerEvent, x: number, y: number): void {
   if (E.tool !== "select" || !E.kdoc) return;
@@ -343,7 +354,7 @@ function commitFieldDrag(): void {
 
 stage.addEventListener("pointermove", (ev) => {
   const mm = worldMm(ev);
-  E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY]; store.slice("viewport", { cursor: mm });
+  E.lastCursorMm = mm; E.lastClient = [ev.clientX, ev.clientY]; store.slice("viewport", { cursor: snapMm(mm) });   // GetCursorPosition(): the snapped cursor, where the crosshair is
   placeCrosshair(mm);
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); boxSelModifiers(ev); drawBoxSel(); return; }

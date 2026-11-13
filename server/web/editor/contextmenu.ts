@@ -19,7 +19,7 @@ import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState,
 import { E } from "./state";
 import { nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
-import { isSch, pxPerMm, requestRender } from "./view";
+import { isSch, kicadZoom, pxPerMm, requestRender } from "./view";
 /** The table cell selection's view for the menu, filled in by editor/tablecells.ts at install. */
 export const tableMenu: { state(): { n: number; block: boolean; merged: boolean; structure: boolean } | null; pick(mm: Mm): boolean; actions: Record<string, () => boolean> } = { state: () => null, pick: () => false, actions: {} };
 import { toast } from "./util";
@@ -196,8 +196,7 @@ let anchor: { x: number; y: number; mm: Mm } | null = null;
 const runRow = (fn: Run): number => { runners.set(++token, fn); return token; };
 
 function zoomRows(): CtxItem[] {
-  const view = { ppm: stage.clientWidth / (E.vb[2] / E.vbPerMm), zoom: E.zoom, panX: 0, panY: 0, x0: 0, y0: 0 };
-  const cur = (KiCadCanvas.zoomFactor as (v: KView) => number)(view);
+  const cur = kicadZoom();
   return ZOOM_LIST[editor()].map((f) => ({ label: `Zoom: ${f.toFixed(2)}`, check: true, checked: Math.abs(f - cur) / cur < 0.1, run: runRow(() => zoomBy(f / cur)) }));
 }
 function gridRows(c: MenuCtx): CtxItem[] {

@@ -13,6 +13,7 @@ import { paintConfig, paintDocument, settledFrame, stats as paintStats } from ".
 import { activeModule, toolCtx } from "./tools";
 import { drawAppOverlays } from "./overlays";
 import { toast } from "./util";
+import { ZOOM_LIST, fitMargin, nextZoomPreset } from "./zoomlist";
 import type { PeerEntry, PeerGhost } from "./types";
 // ================================================================ EDITOR
 export const stage = $("#stage"), world = $("#world"), base = $("#base"), overlay = $("#overlay");
@@ -201,7 +202,30 @@ export function contentBoxMm() {
   return [x0 / E.vbPerMm, y0 / E.vbPerMm, (x1 - x0) / E.vbPerMm, (y1 - y0) / E.vbPerMm];
 }
 
-export function fitView() { fitBox(contentBoxMm(), isSch() ? 0.97 : 0.85); }
+/** Zoom to Fit (COMMON_TOOLS::doZoomFit ZOOM_FIT_ALL) with EDA_DRAW_PANEL_GAL::ZoomToFit's margin. */
+export function fitView() { fitBox(contentBoxMm(), fitMargin(stage.clientHeight, libraryEditor())); }
+
+/** The footprint editor leaves a wider margin around Zoom to Fit (1.48; the Symbol Editor frame has its own canvas). */
+export function libraryEditor(): boolean { const d = E.kdoc as { fpEditor?: unknown } | null; return !!(d && d.fpEditor); }
+
+/**
+ * Zoom to Objects (ZOOM_FIT_OBJECTS): on the schematic GetDocumentExtents( false ), the items without the drawing
+ * sheet; the board's Zoom to Fit already fits its items.
+ */
+export function fitObjects() {
+  if (!isSch() || !E.kdoc) { fitView(); return; }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const it of (E.kdoc as KDoc).items.values()) { const b = (it as { bbox?: number[] }).bbox; if (!b || !(b[2] >= b[0])) continue; x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); }
+  if (x0 === Infinity) { fitView(); return; }
+  fitBox([x0, y0, Math.max(x1 - x0, 1e-3), Math.max(y1 - y0, 1e-3)], fitMargin(stage.clientHeight, false));
+}
+
+/** COMMON_TOOLS::doZoomInOut: to the next zoom-list preset at least 1.3× away, about the stage point (cx, cy) or the centre. */
+export function zoomStep(zoomIn: boolean, cx?: number, cy?: number) {
+  const cur = kicadZoom(); if (!(cur > 0)) return;
+  const next = nextZoomPreset(ZOOM_LIST[isSch() ? "sch" : "pcb"], cur, zoomIn);
+  zoomBy(next / cur, cx, cy);
+}
 
 export function fitBox(box: number[], margin?: number) {
   if (E.zoomAnim) { cancelAnimationFrame(E.zoomAnim.raf); E.zoomAnim = null; }

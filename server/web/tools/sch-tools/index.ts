@@ -53,6 +53,7 @@ import { itemSexpr, modChange, ruleAreaId, typeNameFor } from "./util";
 import { schArcDrawMode } from "./arcs";
 import { PIN_HELPERS, labelShapeForPin, pinAltFunction, pinAlternates, pinAt, pinBox, pinHelper, pinOf, pinProperties, setAltPinFunction, singleNetLabelForPin, swapPinLabels } from "./pins";
 import { autoRotateChanges, autoRotateNode, autoRotateOf, labelOrientationForPoint, setAutoRotate, setSpinOfNode, spinOfNode } from "./autorotate";
+import { msgPanelInfo } from "./msgpanel";
 import { computeBreakPoint, isTerminalPoint, mergeOverlap, simplify, simplifyWireList, sourceLine, startWire, switchPosture, undoSegment, wireClick, wireFollow, wirePoints } from "./wire";
 
 root.CollabTools = root.CollabTools || {};
@@ -67,6 +68,8 @@ const sch = {
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   // REMOVED changes (plus junction cleanup) for one item or a multi-selection; the net of an item on this sheet
   deleteChanges, netItems,
+  // SCH_*::GetMsgPanelInfo of one selected item (the message panel)
+  msgPanelInfo,
   // KiCad's non-tool commands: { id: { id, label, key, run(ctx, opts) -> handled } }; app.js binds menus and keys to them
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc

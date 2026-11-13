@@ -428,7 +428,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     $<HTMLElement>(".klib-cancel").addEventListener("click", () => close(null));
     $<HTMLElement>(".kd-x").addEventListener("click", () => close(null));
     okBtn.addEventListener("click", accept);
-    ov.addEventListener("pointerdown", (ev) => { if (ev.target === ov) close(null); });
+    // DIALOG_SHIM: a click on the frame behind a modal dialog does nothing (only OK / Cancel / Esc / the close box end it)
     function move(delta: number): void {
       if (!rows.length) return;
       let i = rows.findIndex((r) => r.key === selKey);
