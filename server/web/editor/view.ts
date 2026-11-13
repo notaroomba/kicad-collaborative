@@ -1,7 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 import { updateMsgPanel } from "./msgpanel";
 import { state, store } from "./appstore";
-import { drawCrosshair, refreshCrosshair } from "./crosshair";
+import { drawCursorLayer, refreshCrosshair } from "./crosshair";
 import { drawComments } from "./comments";
 import { loadBase } from "./doc";
 import { $, NS } from "./dom";
@@ -166,7 +166,7 @@ export function drawCanvas() {
     // their selection shadow is drawn by the canvas pass (boardSelected adds "id#pin:N")
   }
   if (E.selField) { const it = E.kdoc.items.get(E.selField.id); if (!it) E.selField = null; }   // its shadow and anchor come from the canvas pass
-  drawCrosshair(cctx);   // GAL draws the cursor last, over everything
+  drawCursorLayer();   // GAL draws the cursor last, over everything (its own layer: crosshair.ts)
 }
 
 

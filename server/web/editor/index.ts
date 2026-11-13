@@ -391,7 +391,7 @@ function stagePointerMove(ev: PointerEvent, mm: [number, number]): void {
   if (E.measure && E.measure.set) { measureMove(snapMm(mm), ev.shiftKey); }
   if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
   const modM = activeModule();
-  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } placeCrosshair(mm); sendPresence(mm, liveGhost(modM)); return; }
+  if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, liveGhost(modM)); return; }
   if (E.fdrag) {
     if (!E.fdrag.moved && (E.fdrag.sticky || Math.hypot(mm[0] - E.fdrag.startMm[0], mm[1] - E.fdrag.startMm[1]) > 0.4)) E.fdrag.moved = true;
     if (E.fdrag.moved) {

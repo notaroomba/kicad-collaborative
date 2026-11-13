@@ -44,6 +44,7 @@
   #stage:focus { outline: none; }
   #stage.pan { cursor: grab; } #stage.comment { cursor: cell; } #stage.zoomtool { cursor: zoom-in; } #stage.measure { cursor: crosshair; }
   #canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+  #cursorCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; pointer-events: none; }
   #world { transform-origin: 0 0; position: absolute; left: 0; top: 0; pointer-events: none; }
   #world svg#base { display: block; width: 100%; height: auto; }
   #overlay { position: absolute; inset: 0; pointer-events: none; overflow: visible; }   /* cursors, selection boxes and comments off the sheet are not clipped */
@@ -85,6 +86,7 @@
           <svg id="base" xmlns="http://www.w3.org/2000/svg"></svg>
           <svg id="overlay" xmlns="http://www.w3.org/2000/svg"><g id="ovRoot"><g id="peersG"></g><g id="selG"></g><g id="dragG"></g><g id="cmtG" style="pointer-events:auto"></g></g></svg>
         </div>
+        <canvas id="cursorCanvas"></canvas>
         <div id="cmtPanel"></div>
       </div>
       <div id="ui-tbRight"></div>

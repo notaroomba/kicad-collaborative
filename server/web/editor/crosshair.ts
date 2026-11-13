@@ -1,5 +1,8 @@
 // crosshair.ts — KiCad's canvas cursor, drawn over the canvas at the snapped cursor position.
 //
+// It has a canvas of its own (#cursorCanvas, over #canvas, the same size in device pixels): a pointer move that
+// only moves the cursor clears and strokes that layer, and never repaints the document.
+//
 // GAL::DrawCursor: the cursor sits on the grid point the tools will use (not under the mouse), in the
 // colour theme's cursor colour, as one of the three View > Crosshair modes:
 //  · small  — an 80 px cross ("cursorSize = 80");
@@ -10,7 +13,7 @@
 import { snapMm } from "./doc";
 import { E } from "./state";
 import { activeModule } from "./tools";
-import { applyView, isSch, mmH, mmW, mmX0, mmY0, requestRepaint, stage, world } from "./view";
+import { applyView, canvas, isSch, mmH, mmW, mmX0, mmY0, stage, world } from "./view";
 
 const SMALL = 80;   // OPENGL_GAL::blitCursor: cursorSize = 80 screen (device) pixels
 
@@ -40,11 +43,15 @@ export function placeCrosshair(mm: number[] | null, forced?: number[] | null): n
   forcedAt = !!(next && forced);
   if (!next && !at) return null;
   if (next && at && next[0] === at[0] && next[1] === at[1]) return next;
-  at = next; requestRepaint(); return next;
+  at = next; requestCursor(); return next;
 }
 
 /** Redraw at the last cursor position (after a pan / zoom or a mode change), if the cursor is on the canvas. */
-export function refreshCrosshair(): void { if (at && E.lastCursorMm && !forcedAt) { at = cursorPoint(E.lastCursorMm); requestRepaint(); } }
+export function refreshCrosshair(): void { if (at && E.lastCursorMm && !forcedAt) at = cursorPoint(E.lastCursorMm); requestCursor(); }
+
+let cursorReq = 0;
+/** Redraw the cursor layer on the next frame (several moves in one frame draw once). */
+function requestCursor(): void { if (!cursorReq) cursorReq = requestAnimationFrame(() => { cursorReq = 0; drawCursorLayer(); }); }
 
 /**
  * The colour theme's cursor colour: LAYER_SCHEMATIC_CURSOR (KiCad Default #0F0F0F, Classic black) on the
@@ -58,9 +65,20 @@ export function cursorColor(): string {
 }
 
 /**
- * GAL::DrawCursor (OPENGL_GAL::blitCursor): one device pixel wide, in the cursor colour, on the canvas after
- * everything else — an 80 px cross, full-window lines, or the two full-window diagonals.
+ * GAL::DrawCursor (OPENGL_GAL::blitCursor): one device pixel wide, in the cursor colour, over everything else — an
+ * 80 px cross, full-window lines, or the two full-window diagonals.  The document frame (drawCanvas) calls this too,
+ * so the cursor follows a pan or zoom in the same frame.
  */
+export function drawCursorLayer(): void {
+  const layer = document.getElementById("cursorCanvas") as HTMLCanvasElement | null; if (!layer) return;
+  const ctx = layer.getContext("2d"); if (!ctx) return;
+  if (layer.width !== canvas.width || layer.height !== canvas.height) { layer.width = canvas.width; layer.height = canvas.height; }
+  else ctx.clearRect(0, 0, layer.width, layer.height);
+  layer.style.display = E.kdoc ? "block" : "none";
+  if (at && E.kdoc) drawCrosshair(ctx);
+}
+
+/** The cursor stroked on `ctx` (a device-pixel canvas over the stage). */
 export function drawCrosshair(ctx: CanvasRenderingContext2D): void {
   if (!at || !E.kdoc) return;
   const wr = world.getBoundingClientRect(), sr = stage.getBoundingClientRect();
