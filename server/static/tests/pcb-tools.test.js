@@ -2270,3 +2270,35 @@ test("cleanup graphics: zero-size and duplicated shapes, lines into rectangles, 
   const only = P.graphicsCleanup(doc, { mergeRects: false, deleteRedundant: false, fixBoardOutlines: true, tolerance: 0.1 }, false);
   assert.equal(only.changes.length, 0, "a gap wider than the tolerance stays");
 });
+
+test("edit teardrops: pads and vias get the shape's defaults, specified values or none; orphaned teardrop zones go (DIALOG_GLOBAL_EDIT_TEARDROPS)", () => {
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (net 0 "") (net 1 "A")
+  (footprint "T:J" (layer "F.Cu") (uuid "fp-1") (at 10 10)
+    (pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (net 1 "A") (uuid "pad-1"))
+    (pad "2" smd rect (at 3 0) (size 1 2) (layers "F.Cu" "F.Mask") (net 1 "A") (uuid "pad-2")))
+  (via (at 20 20) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1 "A") (uuid "v-1"))
+  (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "td-1") (attr (teardrop (type padvia))) (hatch full 0.1) (connect_pads yes (clearance 0)) (min_thickness 0.0254) (filled_areas_thickness no) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1) (island_area_min 10))
+    (polygon (pts (xy 20.3 20) (xy 21 19.8) (xy 21 20.2)))))`, "kicad_pcb");
+  const td = P.teardropEditChanges, PM = K.padModel;
+  const round = { ...PM.TD_DEFAULTS, lenRatio: 0.4 }, rect = { ...PM.TD_DEFAULTS, lenRatio: 0.3 };
+  const base = { vias: true, pthPads: true, smdPads: true, trackToTrack: false, defaults: { round, rect } };
+  const add = td(doc, { ...base, action: "default" });
+  assert.deepEqual(add.map((c) => c.id).sort(), ["fp-1", "v-1"]);
+  const pads = K.kids(node(add.find((c) => c.id === "fp-1")), "pad");
+  assert.equal(PM.readTeardrops(pads[0]).lenRatio, 0.4, "a round pad takes TARGET_ROUND"); assert.equal(PM.readTeardrops(pads[1]).lenRatio, 0.3, "a rectangle TARGET_RECT");
+  assert.ok(PM.readTeardrops(pads[0]).enabled);
+  const via = node(add.find((c) => c.id === "v-1")); const vi = via.findIndex((c) => Array.isArray(c) && c[0] === "teardrops");
+  assert.equal(via[vi + 1][0], "net", "(teardrops) goes before the via's net");
+  for (const c of add) assert.ok(K.applyChange(doc, c, IU));
+  const smdOnly = td(doc, { ...base, vias: false, pthPads: false, action: "specified", specified: { maxLen: 3 } });
+  assert.equal(PM.readTeardrops(K.kids(node(smdOnly[0]), "pad")[1]).maxLen, 3); assert.equal(PM.readTeardrops(K.kids(node(smdOnly[0]), "pad")[0]).maxLen, 1, "PTH pads out of scope keep theirs");
+  const skipNet = td(doc, { ...base, action: "remove", skip: (i) => i.net === "A" });
+  assert.equal(skipNet.length, 0, "the net filter keeps every item");
+  const rm = td(doc, { ...base, pthPads: false, smdPads: false, action: "remove" });
+  assert.deepEqual(rm.map((c) => c.id).sort(), ["td-1", "v-1"], "the via's teardrop zone goes with it");
+  assert.ok(!PM.readTeardrops(node(rm.find((c) => c.id === "v-1"))).enabled);
+  const all = td(doc, { ...base, vias: false, pthPads: false, smdPads: false, action: "removeAll" });
+  assert.deepEqual(all.map((c) => c.id).sort(), ["fp-1", "td-1", "v-1"], "Remove all teardrops ignores the scope");
+});
