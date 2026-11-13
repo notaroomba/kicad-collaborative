@@ -98,6 +98,7 @@ import { newTracer, tracerFlip, tracerPosture, trailAdd } from "./tracer";
 import { graphicsCleanup } from "./graphics-cleaner";
 import { teardropEditChanges } from "./teardrop-edit";
 import { repairBoard } from "./repair";
+import { geomPages, setShapeGeom, shapeGeomOf } from "./shape-geom";
 import { geographicalReannotate, reannotateOrder } from "./reannotate";
 import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges, unusedPadLayerChanges } from "./track-edit";
 import { DRCET, DRC_RUN_TEXT, fixDrcEntry, inspectDrcAction, violatingRuleName, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions } from "./drc-exclusions";
@@ -556,7 +557,7 @@ root.PcbTools = { OffsetItemState, snapAnchors, textGraphics: textGraphicsApi, l
   // netTable, editPoints and editPointNode are listed above (the script named them twice, to the same values)
   shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netLengths, copperStack, stackupItems, layerDistance, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
   sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch, circleOutside, ovalOutside, circleApprox, ovalApprox, splitCollinearOutlines,
-  designSettings, netclassName, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges, unusedPadLayerChanges, graphicsCleanup, teardropEditChanges, repairBoard, geographicalReannotate, reannotateOrder,
+  designSettings, netclassName, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges, unusedPadLayerChanges, graphicsCleanup, teardropEditChanges, repairBoard, geomPages, shapeGeomOf, setShapeGeom, geographicalReannotate, reannotateOrder,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,
   adjustColor, courtyardConflicts, drawSnapIndicator, gridOriginColor, snapTypeOf, startLayerOf, groupBox, enteredGroupIds, withinEnteredGroup, drawGroupFrames, clearanceOutlines, drawClearanceOutlines, drawStatusNote, statusNoteDims,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

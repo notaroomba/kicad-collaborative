@@ -2342,3 +2342,28 @@ test("geographical reannotate: sort by rounded location, renumber per prefix, ex
   assert.ok(!front.renames.some((x) => x.from === "R1"), "Front only leaves the back side");
   assert.equal(K.str(K.kid(node(r.changes.find((c) => c.id === "u-R2-10")), "property")[2]), "R1", "the Reference field is rewritten");
 });
+
+test("shape geometry pages: each page reads the shape and writes it back (DIALOG_SHAPE_PROPERTIES GEOM_SYNCERs)", () => {
+  const near6 = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} ≈ ${b}`);
+  const rect = { kind: "rect", start: [10, 20], end: [30, 25] };
+  const rp = P.geomPages("rect");
+  assert.deepEqual(rp.map((p) => p.title), ["By Corners", "By Corner and Size", "By Center and Size"]);
+  assert.deepEqual(rp[2].get(rect), { mx: 20, my: 22.5, w: 20, h: 5 });
+  assert.deepEqual(rp[2].set({ mx: 0, my: 0, w: 4, h: 2 }), { kind: "rect", start: [-2, -1], end: [2, 1] });
+  assert.equal(rp[0].validate({ sx: 1, sy: 1, ex: 1, ey: 1 }), "Rectangle cannot be zero-sized.");
+  const lp = P.geomPages("line"), line = { kind: "line", start: [0, 0], end: [0, -10] };
+  const pol = lp[1].get(line); near6(pol.len, 10); near6(pol.ang, 90);   // straight up the screen is +90
+  const back = lp[1].set({ px: 0, py: 0, len: 10, ang: 90 }); near6(back.end[0], 0); near6(back.end[1], -10);
+  assert.deepEqual(lp[2].set({ qx: 0, qy: 0, mx: 5, my: 5 }).end, [10, 10], "start and midpoint give the end");
+  const ap = P.geomPages("arc"), arc = { kind: "arc", start: [10, 0], mid: [0, 10], end: [-10, 0] };
+  const csa = ap[0].get(arc); near6(csa.cx, 0); near6(csa.cy, 0); near6(csa.ang, 180);
+  const craa = ap[2].get(arc); near6(craa.rad, 10); near6(craa.sa, 0); near6(craa.ea, 180);
+  const a2 = ap[2].set({ rcx: 0, rcy: 0, rad: 5, sa: 0, ea: 90 }); near6(a2.start[0], 5); near6(a2.end[1], 5); near6(a2.mid[0], 5 * Math.SQRT1_2);
+  assert.equal(ap[1].set({ sx2: 0, sy2: 0, mx: 1, my: 1, ex: 2, ey: 2 }), null, "collinear points keep the old arc");
+  const cp = P.geomPages("circle");
+  assert.deepEqual(cp[0].set({ cx: 1, cy: 2, r: 3 }), { kind: "circle", center: [1, 2], end: [4, 2] });
+  const n = K.parse('(gr_arc (start 10 0) (mid 0 10) (end -10 0) (stroke (width 0.1) (type default)) (layer "F.SilkS"))');
+  assert.deepEqual(P.shapeGeomOf(n), arc);
+  P.setShapeGeom(n, { kind: "arc", start: [-10, 0], mid: [0, -10], end: [10, 0] });
+  assert.deepEqual(K.kid(n, "start").slice(1), [-10, 0], "an arc keeps its stored winding");
+});

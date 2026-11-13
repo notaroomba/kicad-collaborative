@@ -95,7 +95,7 @@ function itemDialog(ctx: ToolCtx, item: KItem, title: string, width: number, bui
     ok() {
       if (ctx.viewOnly) return true;
       const err = apply(staged);
-      if (err && (typeof err === "string" || err.msg)) { showApplyError(err); return false; }
+      if (err) { if (typeof err === "string" || err.msg) showApplyError(err); return false; }   // an empty message: the builder already said why
       if (create) { create(staged); return true; }
       if (K().serialize(staged) === before) return true;
       ctx.commit([K().replaceChange(doc, { ...item, node: staged, geom: [], bbox: null })], undo);
@@ -527,45 +527,137 @@ export function newTextDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | nu
 // ---------------------------------------------------------------- <Shape> Properties
 const SHAPE_NAMES: Record<string, string> = { gr_line: "Line", gr_rect: "Rectangle", gr_circle: "Circle", gr_arc: "Arc", gr_poly: "Polygon", gr_curve: "Bezier" };
 const LINE_STYLES: [string, string][] = [["default", "Default"], ["solid", "Solid"], ["dash", "Dashed"], ["dot", "Dotted"], ["dash_dot", "Dash-Dot"], ["dash_dot_dot", "Dash-Dot-Dot"]];
+// SEXPR_BOARD_FILE_VERSION: what an older board can't hold without a format bump
+const SHAPE_HATCH_VERSION = 20250222, ROUNDRECT_VERSION = 20250829, SHAPE_MASK_VERSION = 20241010;
+type Geom = { kind: string } & Record<string, unknown>;
+interface GeomGroup { title: string; x?: string; y?: string; size?: boolean; field?: string; kind?: "len" | "angle" }
+interface GeomPage { title: string; groups: GeomGroup[]; get(g: Geom): Record<string, number>; set(v: Record<string, number>, g: Geom): Geom | null; validate?(v: Record<string, number>): string | null }
+interface GeomApi { geomPages(kind: string): GeomPage[]; shapeGeomOf(n: SNode): Geom | null; setShapeGeom(n: SNode, g: Geom): void }
+const GT = (): GeomApi => (window as unknown as { PcbTools: GeomApi }).PcbTools;
+/** s_lastTabForShape */
+const lastShapeTab = new Map<string, number>();
+const isExtCopper = (l: string): boolean => l === "F.Cu" || l === "B.Cu";
 function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
-  const doc = ctx.doc as KDoc, kind = item.kind;
-  return itemDialog(ctx, item, `${SHAPE_NAMES[kind]} Properties`, 500, (node, body, ro) => {
-    const rows: ([string, HTMLElement, HTMLElement?] | HTMLElement)[] = [];
-    const pt = (key: string, label: string, fixed: boolean): { x: Field<number>; y: Field<number>; key: string } | null => {
-      const p = kid(node, key); if (!p) return null;
-      const x = coordField(nval(p, 1), "x", { ro: ro || fixed, key: key + "X" }), y = coordField(nval(p, 2), "y", { ro: ro || fixed, key: key + "Y" });
-      rows.push(xyRow(label, x, y)); return { x, y, key };
+  const doc = ctx.doc as KDoc, kind = item.kind, version = (doc as KDoc & { version?: number }).version || 0;
+  return itemDialog(ctx, item, `${SHAPE_NAMES[kind]} Properties`, 620, (node, body, ro) => {
+    // the geometry notebook: every page's fields, kept in step with one working geometry
+    let geom = GT().shapeGeomOf(node);
+    const pages = geom ? GT().geomPages(geom.kind) : [];
+    const fields = pages.map((pg, pi) => {
+      const v = pg.get(geom as Geom), out: Record<string, Field<number>> = {};
+      for (const g of pg.groups) {
+        if (g.field) out[g.field] = g.kind === "angle" ? numField(+(v[g.field] || 0).toFixed(6), { ro, key: `g${pi}-${g.field}`, digits: 3 }) : lenField(v[g.field] || 0, { ro, key: `g${pi}-${g.field}` });
+        else if (g.x && g.y) {
+          out[g.x] = g.size ? lenField(v[g.x], { ro, key: `g${pi}-${g.x}` }) : coordField(v[g.x], "x", { ro, key: `g${pi}-${g.x}` });
+          out[g.y] = g.size ? lenField(v[g.y], { ro, key: `g${pi}-${g.y}` }) : coordField(v[g.y], "y", { ro, key: `g${pi}-${g.y}` });
+        }
+      }
+      return out;
+    });
+    const read = (pi: number): Record<string, number> => { const o: Record<string, number> = {}; for (const [k, f] of Object.entries(fields[pi])) o[k] = f.get(); return o; };
+    const refresh = (except: number): void => { pages.forEach((pg, pi) => { if (pi === except) return; const v = pg.get(geom as Geom); for (const [k, f] of Object.entries(fields[pi])) f.set(+(+v[k]).toFixed(6)); }); };
+    const pageEl = (pi: number): HTMLElement => {
+      const wrap = h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;padding:6px 2px" });
+      for (const g of pages[pi].groups) {
+        if (g.field) { const f = fields[pi][g.field]; wrap.append(h("div", null, form([[g.title + ":", f.el, g.kind === "angle" ? unitLabel("deg") : unitLabel()]]))); continue; }
+        const fx = fields[pi][g.x as string], fy = fields[pi][g.y as string];
+        wrap.append(h("div", null, h("div", { class: "pd-lbl", style: "font-weight:600;margin-bottom:2px" }, g.title),
+          form([[g.size ? "Width:" : "X:", fx.el, unitLabel()], [g.size ? "Height:" : "Y:", fy.el, unitLabel()]])));
+      }
+      wrap.addEventListener("change", () => { const ng = pages[pi].set(read(pi), geom as Geom); if (ng) { geom = ng; refresh(pi); } });
+      return wrap;
     };
-    const pts: ({ x: Field<number>; y: Field<number>; key: string } | null)[] = [];
-    let radius: Field<number> | null = null;
-    if (kind === "gr_line") pts.push(pt("start", "Start X:", false), pt("end", "End X:", false));
-    else if (kind === "gr_rect") pts.push(pt("start", "Start X:", false), pt("end", "End X:", false));
-    else if (kind === "gr_circle") {
-      pts.push(pt("center", "Center X:", false));
-      const c = kid(node, "center"), e = kid(node, "end");
-      radius = lenField(Math.hypot(nval(e, 1) - nval(c, 1), nval(e, 2) - nval(c, 2)), { ro, key: "radius" }); rows.push(["Radius:", radius.el, unitLabel()]);
-    } else if (kind === "gr_arc") pts.push(pt("start", "Start X:", true), pt("mid", "Mid X:", true), pt("end", "End X:", true));
+    const nb = pages.length ? notebook(pages.map((pg, pi) => ({ label: pg.title, build: (el: HTMLElement) => { el.append(pageEl(pi)); } })),
+      { start: Math.min(lastShapeTab.get(kind) || 0, pages.length - 1) }) : null;
+    // the polygon has no syncer: its points are edited on the canvas
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
+    const r0 = kind === "gr_rect" ? nval(kid(node, "radius"), 1, 0) : 0;
+    const rrOk = version >= ROUNDRECT_VERSION || r0 > 0;
+    const roundRect = checkField(r0 > 0, "Rounded rectangle", { ro: ro || !rrOk, key: "roundRect" });
+    const cornerR = lenField(r0 > 0 ? r0 : NaN, { ro: ro || !rrOk, key: "cornerRadius", allowEmpty: true });
+    roundRect.input.addEventListener("change", () => { if (!roundRect.get()) (cornerR.input as HTMLInputElement).value = ""; });   // onRoundedRectChanged
+    cornerR.input.addEventListener("input", () => roundRect.set(true));   // onCornerRadius
+    if (!rrOk) roundRect.el.title = cornerR.input.title = "This board's file format has no rounded rectangles.";
     const stroke = kid(node, "stroke"), legacyW = kid(node, "width");
     const width = lenField(stroke ? nval(kid(stroke, "width")) : nval(legacyW), { ro, key: "lineWidth" });
     const style = selectField<string>(sval(stroke ? kid(stroke, "type") : null) || "default", LINE_STYLES, { ro: ro || !stroke, key: "lineStyle" });
     const closed = kind === "gr_rect" || kind === "gr_circle" || kind === "gr_poly";
-    const fk = kid(node, "fill"), fv = sval(fk), filled = fv === "solid" || fv === "yes";
-    const fill = selectField<string>(filled ? "solid" : "none", [["none", "None"], ["solid", "Solid"]], { ro: ro || !closed, key: "fill" });
-    const ly = sval(kid(node, "layer")), layer = selectField<string>(ly, withCurrent(allLayers(doc), ly), { ro, key: "layer" });
-    body.append(form(rows, true), h("div", { class: "pd-row", style: "margin:8px 0" }, locked.el),
-      form([["Line width:", width.el, unitLabel()], ["Line style:", style.el], ...(closed ? [["Fill:", fill.el] as [string, HTMLElement]] : []), ["Layer:", layer.el]], true));
+    const fk = kid(node, "fill"), fv = sval(fk);
+    const fill0 = fv === "solid" || fv === "yes" ? "solid" : fv === "hatch" || fv === "reverse_hatch" || fv === "cross_hatch" ? fv : "none";
+    const hatchOk = version >= SHAPE_HATCH_VERSION || fill0 !== "none" && fill0 !== "solid";
+    const fillOpts: [string, string][] = [["none", "None"], ["solid", "Solid"], ...(hatchOk ? [["hatch", "Hatch"], ["reverse_hatch", "Reverse Hatch"], ["cross_hatch", "Cross-hatch"]] as [string, string][] : [])];
+    const fill = selectField<string>(fill0, fillOpts, { ro: ro || !closed, key: "fill" });
+    const ly = sval(kid(node, "layer")) || (() => { const ls = kid(node, "layers"); return ls ? sval(ls) : ""; })();
+    const layer = selectField<string>(ly, withCurrent(allLayers(doc), ly), { ro, key: "layer" });
+    const net = netField(doc, node, ro);
+    const lsNode = kid(node, "layers"), mask0 = !!lsNode && lsNode.slice(1).some((x) => /\.Mask$/.test(String(x)));
+    const mm0 = kid(node, "solder_mask_margin");
+    const maskOk = version >= SHAPE_MASK_VERSION || mask0;
+    const hasMask = checkField(mask0, "Solder mask", { ro: ro || !maskOk, key: "solderMask" });
+    const maskMargin = lenField(mm0 ? nval(mm0) : NaN, { ro: ro || !maskOk, key: "maskMargin", allowEmpty: true });
+    maskMargin.input.title = "This is the local clearance between the shape and the solder mask opening.\nLeave blank to use the value defined in the Board Setup.";
+    const nowrap = "display:flex;align-items:center;gap:10px;white-space:nowrap";
+    const techEl = h("div", null, h("div", { class: "pd-lbl", style: "font-weight:600;margin:8px 0 2px" }, "Technical Layers"), h("hr", { class: "pd-sep" }),
+      h("div", { style: nowrap }, hasMask.el, h("label", null, "Expansion:"), h("span", { style: "flex:1" }, maskMargin.el), unitLabel()));
+    const netLabel = h("label", null, "Net:");
+    // enableNetInfo / enableTechLayers
+    const enable = (): void => {
+      const l = layer.get(), copper = doc.copper.includes(l), ext = isExtCopper(l);
+      (net.input as HTMLElement & { disabled: boolean }).disabled = ro || !copper; netLabel.classList.toggle("dim", !copper);
+      (hasMask.input as HTMLInputElement).disabled = ro || !ext || !maskOk; techEl.classList.toggle("dim", !ext);
+      (maskMargin.input as HTMLInputElement).disabled = ro || !ext || !hasMask.get() || !maskOk;
+    };
+    layer.input.addEventListener("change", enable); hasMask.input.addEventListener("change", enable);
+    const f = h("div", { class: "pd-form wide" });
+    const row = (label: HTMLElement | string, ctrl: HTMLElement, unit?: HTMLElement): void => { f.append(typeof label === "string" ? h("label", null, label) : label, ctrl, unit || h("span")); };
+    if (kind === "gr_rect") f.append(h("div", { class: "span", style: nowrap }, roundRect.el, h("label", { style: "margin-left:12px" }, "Corner radius:"), h("span", { style: "flex:1" }, cornerR.el), unitLabel()));
+    row("Line width:", width.el, unitLabel()); row("Line style:", style.el);
+    if (closed) row("Fill:", fill.el);
+    row(netLabel, net.el); row("Layer:", layer.el);
+    body.append(...(nb ? [nb.el] : []), h("div", { class: "pd-row", style: "margin:8px 0" }, locked.el), f, techEl);
+    enable();
     return (n) => {
-      if (width.get() < 0) return { msg: "Line width may not be negative.", focus: width };
-      if (!closed && !(width.get() > 0)) return { msg: "Line width must be greater than zero.", focus: width };
-      for (const p of pts) if (p && kind !== "gr_arc") put(n, p.key, `(${p.key} ${f6(p.x.get())} ${f6(p.y.get())})`);
-      if (radius && pts[0]) { if (!(radius.get() > 0)) return { msg: "Radius must be greater than zero.", focus: radius }; put(n, "end", `(end ${f6(pts[0].x.get() + radius.get())} ${f6(pts[0].y.get())})`); }
+      const errors: string[] = [];
+      if (nb) { const pi = nb.current(), pg = pages[pi], e = pg.validate ? pg.validate(read(pi)) : null; if (e) errors.push(e); }
+      const solid = fill.get() === "solid", w = width.get();
+      if ((kind === "gr_line" || kind === "gr_arc") && !(w > 0)) errors.push("Line width must be greater than zero.");
+      else if (kind === "gr_circle" && !solid && !(w > 0)) errors.push("Line width must be greater than zero for an unfilled circle.");
+      else if (kind === "gr_rect" && !solid && !(w > 0)) errors.push("Line width must be greater than zero for an unfilled rectangle.");
+      else if (kind === "gr_poly" && !solid && !(w > 0)) errors.push("Line width must be greater than zero for an unfilled polygon.");
+      else if (kind === "gr_curve" && !(w > 0)) errors.push("Line width must be greater than zero for an unfilled curve.");
+      if (kind === "gr_rect" && roundRect.get() && geom && geom.kind === "rect") {
+        const g = geom as unknown as { start: number[]; end: number[] }, shortSide = Math.min(Math.abs(g.end[0] - g.start[0]), Math.abs(g.end[1] - g.start[1]));
+        if (cornerR.get() * 2 > shortSide + 1e-9) { errors.push("Corner radius must be less than or equal to half the smaller side."); cornerR.set(+(shortSide / 2).toFixed(6)); }
+      }
+      if (errors.length) { messageBox("Error List", errors.join("\n")); return { msg: "" }; }
+      if (nb) lastShapeTab.set(kind, nb.current());
+      if (geom) GT().setShapeGeom(n, geom);
+      if (kind === "gr_rect") {
+        const r = roundRect.get() && isFinite(cornerR.get()) ? cornerR.get() : 0;
+        if (Math.abs(r - r0) > 1e-9) put(n, "radius", r > 0 ? `(radius ${f6(r)})` : null, ["stroke", "width", "fill", "layer"]);
+      }
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       const s = kid(n, "stroke");
-      if (s) { put(s, "width", `(width ${f6(width.get())})`, ["type"]); if (style.get() !== (sval(kid(s, "type")) || "default")) put(s, "type", `(type ${style.get()})`); }
-      else put(n, "width", `(width ${f6(width.get())})`, ["layer"]);
-      if (closed && (fill.get() === "solid") !== filled) { const yn = fv === "yes" || fv === "no" || (!fk && ((doc as KDoc & { version?: number }).version || 0) >= 20240000); put(n, "fill", `(fill ${fill.get() === "solid" ? (yn ? "yes" : "solid") : yn ? "no" : "none"})`, ["layer", "uuid"]); }
-      if (layer.get() !== ly) put(n, "layer", `(layer ${quote(layer.get())})`, ["net", "uuid", "tstamp"]);
+      if (s) { put(s, "width", `(width ${f6(w)})`, ["type"]); if (style.get() !== (sval(kid(s, "type")) || "default")) put(s, "type", `(type ${style.get()})`); }
+      else put(n, "width", `(width ${f6(w)})`, ["layer"]);
+      if (closed && fill.get() !== fill0) {
+        const yn = fv === "yes" || fv === "no" || (!fk && version >= 20240000);
+        const tok = fill.get() === "solid" ? (yn ? "yes" : "solid") : fill.get() === "none" ? (yn ? "no" : "none") : fill.get();
+        put(n, "fill", `(fill ${tok})`, ["locked", "layer", "layers", "uuid"]);
+      }
+      const L = layer.get(), ext = isExtCopper(L), mask = ext && hasMask.get();
+      if (L !== ly || mask !== mask0) {
+        put(n, "layer", null); put(n, "layers", null);
+        const maskLayer = L === "F.Cu" ? "F.Mask" : "B.Mask";
+        if (mask) put(n, "layers", `(layers ${quote(L)} ${quote(maskLayer)})`, ["solder_mask_margin", "net", "uuid", "tstamp"]);
+        else put(n, "layer", `(layer ${quote(L)})`, ["solder_mask_margin", "net", "uuid", "tstamp"]);
+      }
+      const mmv = maskMargin.get(), m0 = mm0 ? nval(mm0) : NaN;
+      if (!mask) { if (mm0) put(n, "solder_mask_margin", null); }
+      else if (!(isFinite(mmv) && isFinite(m0) && Math.abs(mmv - m0) < 1e-9)) put(n, "solder_mask_margin", isFinite(mmv) ? `(solder_mask_margin ${f6(mmv)})` : null, ["net", "uuid", "tstamp"]);
+      // SetNetCode: the net on copper, none elsewhere
+      const netName = doc.copper.includes(L) ? net.get() : "";
+      if (netName !== PH().netNameOf(doc, n)) setNet(doc, n, netName);
       return undefined;
     };
   }, undefined, "Edit Shape Properties");
