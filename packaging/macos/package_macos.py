@@ -21,7 +21,7 @@ import sys
 BREW_PREFIXES = ("/opt/homebrew/", "/usr/local/opt/", "/usr/local/Cellar/")
 
 APP_NAME = "Junction"
-BUNDLE_ID = "org.kicad-collaborative.kicad"
+BUNDLE_ID = "dev.notaroomba.junction"
 
 
 def run(*cmd, **kw):
