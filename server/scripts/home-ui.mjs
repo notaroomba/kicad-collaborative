@@ -557,6 +557,22 @@ await step('blank thumbnail + empty trash that fails part-way', async () => {
   await a.goto(BASE + '/'); await a.waitForSelector('.hp-item:not(.skel)');
 });
 
+await step('application menu in the editor', async () => {
+  const x = await open(ids.ta, undefined, `/p/${ids.p3}/edit`); await x.waitForSelector('#appMenuBtn'); await x.waitForTimeout(1500);
+  const pick = async (label) => { await x.click('#appMenuBtn'); await x.getByText(label, { exact: true }).click(); };
+  await pick('Trash'); await x.waitForURL(/\/trash$/);
+  check('the editor\'s application menu opens the Trash', await x.locator('.hp-head h1').textContent() === 'Trash');
+  await x.goBack(); await x.waitForSelector('#appMenuBtn'); await x.waitForTimeout(1000);
+  await pick('New Project...'); await x.waitForSelector('.hp-modes');
+  check('…and starts a new project from the projects page', new URL(x.url()).pathname === '/');
+  await x.keyboard.press('Escape');
+  await x.goto(`${BASE}/p/${ids.p3}/edit`); await x.waitForSelector('#appMenuBtn'); await x.waitForTimeout(1500);
+  await pick('Log Out');
+  await x.waitForFunction(() => location.pathname === '/' && !document.querySelector('#appMenuBtn') && document.readyState === 'complete');
+  check('Log Out in the editor ends the session and lands on the public home page', (await x.evaluate(() => fetch('/api/me').then((r) => r.status))) === 401);
+  await x.close();
+});
+
 await step('session expiry', async () => {
   const x = await open(ids.ta); await x.waitForSelector('.hp-item:not(.skel)');
   await x.context().clearCookies();

@@ -30,11 +30,18 @@ export async function runAction(act: string, el?: ActionAnchor) {
   switch (act) {
     case "home": navigate("/"); break;
     // the project manager's File menu: the same things the home sidebar offers
-    case "newProject": window.CollabHome?.newProject(); break;
-    case "joinLink": window.CollabHome?.join(); break;
+    // from the editor these lead back to the projects page first, where their dialogs live
+    case "newProject": if (state.view !== "home") navigate("/"); window.setTimeout(() => window.CollabHome?.newProject(), 0); break;
+    case "joinLink": if (state.view !== "home") navigate("/"); window.setTimeout(() => window.CollabHome?.join(), 0); break;
     case "importGithub": location.href = "/github"; break;
     case "openTrash": if (!state.me) { toast("Sign in to see your Trash"); break; } navigate("/trash"); break;
-    case "signOut": if (!state.me) { toast("You are not signed in"); break; } window.CollabHome?.signOut(); break;
+    // Log Out works from anywhere, the editor included: it must not depend on the projects page being
+    // on screen.  The server drops the session cookie; then the public home page.
+    case "signOut":
+      if (!state.me) { toast("You are not signed in"); break; }
+      try { await fetch("/auth/logout", { method: "POST", credentials: "same-origin" }); } catch { /* the reload decides */ }
+      location.href = "/";
+      break;
     case "zoomin": zoomBy(1.25); break;
     case "zoomout": zoomBy(0.8); break;
     case "fit": fitView(); break;
@@ -137,6 +144,9 @@ export const HANDLERS: Record<string, ActionHandler> = {
   symbolLibrary: () => { if (window.KiCadLibrary) window.KiCadLibrary.openChooser("symbol", { browser: true }); },
   footprintLibrary: () => { if (window.KiCadLibrary) window.KiCadLibrary.openChooser("footprint", { browser: true }); },
   pluginManager: () => { const P = (window as unknown as { KcPlugins?: { openManager?: () => void } }).KcPlugins; if (P && P.openManager) P.openManager(); else toast("Plugins are not loaded yet"); },
+  // the application menu's own entries (they were listed there but led nowhere)
+  signOut: () => runAction("signOut"), newProject: () => runAction("newProject"), joinLink: () => runAction("joinLink"),
+  importGithub: () => runAction("importGithub"), openTrash: () => runAction("openTrash"),
   // the home view's menu entries
   share: (a) => runAction("share", a), checkpoint: (a) => runAction("checkpoint", a), kicad: (a) => runAction("kicad", a),
   zoomin: () => zoomBy(1.25), zoomout: () => zoomBy(0.8), fit: () => fitView(), grid: () => runAction("grid"), snap: () => runAction("snap"), linemode: () => runAction("linemode"),
