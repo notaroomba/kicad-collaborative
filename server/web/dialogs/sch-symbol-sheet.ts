@@ -154,6 +154,13 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
           const button = (label: string, id: string, fn: (() => void) | null, why?: string) => { const x = h("button", { type: "button", class: "btn", id, disabled: ro || !fn, title: why }, label); if (fn) x.addEventListener("click", fn); btns.append(x); return x; };
           button("Update Symbol from Library...", "kd-sym-update", () => { (KDialogs as KDialogsApi).close(); openChangeSymbols("update"); });
           button("Change Symbol...", "kd-sym-change", () => { (KDialogs as KDialogsApi).close(); openChangeSymbols("change"); });
+          // OnClearVariantSymbol (shown only for a variant that holds a symbol override): apply the dialog, then clearVariantSymbol
+          if (variant && VM.symbolVariantOverride(item.node, variant, vpath)) button("Clear Variant Symbol", "kd-sym-clearvariant", () => {
+            if (!apply()) return;
+            const it = ctx.doc.items.get(item.id); if (!it) return;
+            const node = VM.clearSymbolVariantOverride(it.node, variant, vpath, ctx.doc.version);
+            if (JSON.stringify(node) !== JSON.stringify(it.node)) ctx.commit([KiCadCanvas.replaceChange(ctx.doc, { ...it, node, geom: [], bbox: null })], "Clear Variant Symbol");
+          });
           const ed = editors();
           button("Edit Symbol...", "kd-sym-editsch", ed ? () => { if (apply()) ed.editSchematicSymbol(item.id); } : null, ed ? undefined : "The Symbol Editor runs in the desktop app");
           btns.append(h("div", { style: "height:14px" }));

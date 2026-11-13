@@ -242,5 +242,17 @@ test("SCH_IO_KICAD_SEXPR::saveBitmap order for Image Properties: (at) (rotate) (
   assert.equal(ser(RI.applyRefImage(n, { ...v, rotation: 90, opacity: 0.5, scale: 1 }, true)).replace(/\s+/g, " "), '(image (at 10 20) (rotate 90) (opacity 0.5) (uuid "u") (locked yes) (data "AAAA"))');
   assert.equal(ser(RI.applyRefImage(n, { ...v, x: 1.23456 }, true)).replace(/\s+/g, " "), '(image (at 1.2346 20) (scale 2) (uuid "u") (locked yes) (data "AAAA"))');
 });
+const VM = load(["canvas", "variant-model.ts"]);
+test("Clear Variant Symbol: the override goes, the variant stays only while something else differs", () => {
+  const sym = (v) => K.parse(`(symbol (lib_id "D:R") (at 0 0 0) (dnp no) (uuid "s") (property "Value" "1k" (at 0 0 0)) (instances (project "p" (path "/root" (reference "R1") (unit 1) ${v}))))`);
+  const a = sym('(variant (name "V1") (field (name "Value") (value "2k")) (symbol_override "D:R_Small"))');
+  assert.equal(VM.symbolVariantOverride(a, "V1", "/root"), "D:R_Small");
+  assert.equal(VM.symbolVariantOverride(a, "V2", "/root"), "");
+  const c = VM.clearSymbolVariantOverride(a, "V1", "/root");
+  assert.equal(VM.symbolVariantOverride(c, "V1", "/root"), "");
+  assert.ok(/\(variant \(name "V1"\) \(field \(name "Value"\) \(value "2k"\)\)\)/.test(ser(c).replace(/\s+/g, " ")), ser(c));
+  const b = sym('(variant (name "V1") (symbol_override "D:R_Small"))');
+  assert.ok(!/variant/.test(ser(VM.clearSymbolVariantOverride(b, "V1", "/root"))), "a variant with nothing left is removed");
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

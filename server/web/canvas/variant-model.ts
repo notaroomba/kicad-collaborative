@@ -225,6 +225,20 @@ export function setSymbolVariant(sym: N, name: string, patch: SymVariantPatch, p
   return out;
 }
 
+/** The variant's (symbol_override "lib:id") on the instance, or "" (SCH_SYMBOL_VARIANT::m_SymbolOverride). */
+export function symbolVariantOverride(sym: N, name: string, path?: string | null): string {
+  if (isDefaultVariant(name)) return "";
+  const v = symVariantIn(symbolInstance(sym, path), name), o = v ? kid(v, "symbol_override") : null;
+  return o ? str(o[1]) : "";
+}
+/** SCH_SYMBOL::ClearVariantSymbolOverride: the override dropped (and the variant with it when nothing else differs). */
+export function clearSymbolVariantOverride(sym: N, name: string, path?: string | null, ver?: number | null): N {
+  const out = clone(sym), inst = symbolInstance(out, path), v = inst ? symVariantIn(inst, name) : null;
+  if (!v) return out;
+  for (let i = v.length - 1; i > 0; i--) { const c = v[i]; if (isList(c) && c[0] === "symbol_override") v.splice(i, 1); }
+  return setSymbolVariant(out, name, {}, inst ? str(inst[1]) : path, ver);
+}
+
 /** A copy of the symbol as the variant shows it on its instance: flags and field texts replaced.  Same node when
  *  nothing changes. */
 export function symbolViewForVariant(sym: N, variant: string | null | undefined, path?: string | null, ver?: number | null): N {
