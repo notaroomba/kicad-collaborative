@@ -9,9 +9,17 @@ import { applySeverities } from "./erc-rules";
 import { sheetList, type SheetInstance } from "./sch-hierarchy";
 
 export interface HierMarker { code: string; severity: string; x: number; y: number; text: string; ids: string[]; docId?: string; sheetPath?: string; sheetKey?: string; selected?: boolean; [k: string]: unknown }
-interface SchErc { ercCheck(doc: KDoc, opts: Record<string, unknown>): HierMarker[]; state: { markers?: unknown[]; markersDoc?: KDoc | null } }
+interface SchErc { ercCheck(doc: KDoc, opts: Record<string, unknown>): HierMarker[]; ercHierarchy?(docs: { doc: KDoc; key: string }[]): HierMarker[][]; state: { markers?: unknown[]; markersDoc?: KDoc | null } }
 const sch = (): SchErc | null => ((window as unknown as { CollabTools?: { sch?: SchErc } }).CollabTools || {}).sch || null;
 
+/** The project's ERC options for ercCheck: its Pin Conflicts Map, the connection grid (schematic.connection_grid_size,
+ *  mils) and the netclasses it defines (net_settings.classes) for undefined_netclass. */
+export function ercProjectOpts(): Record<string, unknown> {
+  const pro = projectJson(), erc = obj(pro.erc), sch = obj(pro.schematic), ns = obj(pro.net_settings);
+  const cg = typeof sch.connection_grid_size === "number" && sch.connection_grid_size > 0 ? sch.connection_grid_size * 0.0254 : 1.27;
+  const classes = Array.isArray(ns.classes) ? (ns.classes as unknown[]).map((c) => String(obj(c as never).name || "")).filter((n) => n) : null;
+  return { pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined, connectionGrid: cg, netclasses: classes, defaultNetclass: "Default" };
+}
 /** The markers of the last hierarchical run, by sheet instance (root first, then by page number). */
 let sheets: { docId: string; sheetPath: string; key: string; markers: HierMarker[] }[] = [], runPid: string | null = null;
 const pidNow = (): string | null => { const p = (appState as unknown as { project: { projectId: string } | null }).project; return p ? p.projectId : null; };
@@ -28,8 +36,8 @@ export async function runHierErc(opts: { showAllErrors?: boolean }, resolve: (l:
   try { list = await sheetList(); } catch (e) { list = []; }
   const here = (appState as unknown as { docId: string | null }).docId;
   if (!list.length || !list.some((x) => x.docId === here)) return null;   // a sheet outside the hierarchy: the caller checks it alone
-  const erc = obj(projectJson().erc), sev = obj(erc.rule_severities) as Record<string, unknown>, pinMap = Array.isArray(erc.pin_map) ? erc.pin_map : undefined;
-  const out: typeof sheets = [];
+  const erc = obj(projectJson().erc), sev = obj(erc.rule_severities) as Record<string, unknown>, base = ercProjectOpts();
+  const out: typeof sheets = [], docs: { doc: KDoc; key: string }[] = [], raw: HierMarker[][] = [];
   for (const inst of list) {
     // the sub-sheets this instance's sheet symbols name, and the pins of the sheet symbol that names it
     const subDocs = new Map<string, KDoc>();
@@ -44,12 +52,19 @@ export async function runHierErc(opts: { showAllErrors?: boolean }, resolve: (l:
     }
     const doc = inst.docId === here && E.kdoc ? E.kdoc : inst.doc;
     let ms: HierMarker[] = [];
-    try { ms = s.ercCheck(doc, { pinMap, sheetDocs: subDocs, parentPins, showAllErrors: !!opts.showAllErrors }); } catch (e) { ms = []; }
-    const key = inst.uuidPath.join("/");
-    ms = resolve(applySeverities(ms, sev) as HierMarker[]);
+    // the tests across sheets (units, local / global and similar names, single global labels) run once below
+    try { ms = s.ercCheck(doc, Object.assign({}, base, { sheetDocs: subDocs, parentPins, showAllErrors: !!opts.showAllErrors, crossSheet: !s.ercHierarchy ? true : false })); } catch (e) { ms = []; }
+    docs.push({ doc, key: inst.uuidPath.join("/") }); raw.push(ms);
+  }
+  let cross: HierMarker[][] = [];
+  try { cross = s.ercHierarchy ? s.ercHierarchy(docs) : []; } catch (e) { cross = []; }
+  list.forEach((inst, i) => {
+    const key = docs[i].key, all = raw[i].concat(cross[i] || []);
+    all.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1) || a.y - b.y || a.x - b.x);
+    const ms = resolve(applySeverities(all, sev) as HierMarker[]);
     for (const m of ms) { m.docId = inst.docId; m.sheetPath = inst.sheetPath; m.sheetKey = key; }
     out.push({ docId: inst.docId, sheetPath: inst.sheetPath, key, markers: ms });
-  }
+  });
   sheets = out; runPid = pidNow();
   const mine = out.find((x) => x.docId === here);
   return mine ? mine.markers : [];

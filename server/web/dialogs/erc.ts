@@ -20,7 +20,7 @@ import { messageBox, textEntryBox } from "../editor/pcbdialogs/ui";
 import type { Units } from "../store";
 import { ercTextReport, sevOf, shownBy } from "./erc-report";
 import { sheetList, type SheetInstance } from "./sch-hierarchy";
-import { allMarkers, distribute, forgetHierErc, onSheetOpened, runHierErc, type HierMarker } from "./erc-hier";
+import { allMarkers, distribute, ercProjectOpts, forgetHierErc, onSheetOpened, runHierErc, type HierMarker } from "./erc-hier";
 export { ercTextReport, sevOf, shownBy };
 
 export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean; items?: { x: number; y: number; desc: string; len?: number }[] }
@@ -260,7 +260,7 @@ export function openErc(): void {
     const runBtn = api && api.body.ownerDocument.querySelector<HTMLButtonElement>("[data-btn=\"kd-erc-run\"]"); if (runBtn) runBtn.disabled = true;
     try {
       const live = await runHierErc({ showAllErrors: opts.showAllErrors }, (l) => withExclusions(l as unknown as ErcViolation[]) as unknown as HierMarker[]);
-      if (!live) { forgetHierErc(); a.run(toolCtx(), { showAllErrors: opts.showAllErrors }); }
+      if (!live) { forgetHierErc(); a.run(toolCtx(), Object.assign(ercProjectOpts(), { showAllErrors: opts.showAllErrors })); }
       else {
         onSheetOpened();   // the canvas: this sheet's own markers (the others stay with their sheets)
         const all = markers(), e = all.filter((m) => m.severity === "error").length, w = all.filter((m) => m.severity === "warning").length;

@@ -9,6 +9,7 @@ import { sheetPinNode } from "./nodes";
 import { baseName } from "./sheets";
 import { K, S, atOf, kid, kids, num, ptsOf, str } from "./state";
 import { deep, modChange, onSegMid, r4, segs } from "./util";
+import { hierarchyTests, sheetTests } from "./erc-tests";
 
 // ---------------------------------------------------------------- ERC (eeschema/erc/erc.cpp subset)
 export const PIN_TYPES = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"];
@@ -58,7 +59,12 @@ export interface ErcTerm { item: KItem; p: Pt; net: string; key?: string; pin?: 
 /** An ERC net: its terminals and the ids of the items they belong to. */
 export interface ErcNet { terms: ErcTerm[]; ids: Set<string> }
 /** ercCheck's options: the project's Pin Conflicts Map, the sub-sheet docs, the parent sheet's pin names, and the ERC dialog's 'Show all errors' (ERC_TESTER's m_showAllErrors). */
-export interface ErcOpts { pinMap?: number[][]; sheetDocs?: SheetDocs | null; parentPins?: Iterable<string> | null; showAllErrors?: boolean }
+export interface ErcOpts {
+  pinMap?: number[][]; sheetDocs?: SheetDocs | null; parentPins?: Iterable<string> | null; showAllErrors?: boolean;
+  /** SCHEMATIC_SETTINGS m_ConnectionGridSize in mm (default 50 mil) */ connectionGrid?: number;
+  /** the project's netclass names (net_settings.classes); undefined_netclass runs only when given */ netclasses?: Iterable<string> | null; defaultNetclass?: string;
+  /** false: the caller runs the hierarchy-wide tests itself (hierarchyTests over every sheet) */ crossSheet?: boolean;
+}
 /** ctx.sheetDocs: Sheetfile (or docId / path) -> parsed doc or its text. */
 export type SheetDocs = NonNullable<SchCtx["sheetDocs"]>;
 // Every terminal on the sheet joined into nets (the rules of netItems, evaluated once with union-find).
@@ -224,10 +230,9 @@ export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
     if (it.kind === "no_connect") { const [x, y] = atOf(it.node); if (!pinsAt(doc, x, y).length && !K.wireEndsAt(doc, x, y, 1e-3).length) mark("no_connect_dangling", "warning", [x, y], 'Unconnected "no connection" flag', [it.id]); }
     if (it.kind === "junction") { const [x, y] = atOf(it.node); if (lineEndsAt(doc, x, y, "wire").length >= 4) mark("four_way_junction", "warning", [x, y], "Four connection points are joined together", [it.id]); }
   }
-  // similar labels (case-insensitive twins)
-  const names = new Map<string, Map<string, KItem>>();
-  for (const it of doc.items.values()) if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") { const t = str(it.node[1]); const k = t.toLowerCase(); if (!names.has(k)) names.set(k, new Map()); names.get(k)!.set(t, it); }
-  for (const m of names.values()) if (m.size > 1) { const its = Array.from(m.values()); mark("similar_labels", "warning", atOf(its[0].node), `Labels are similar: ${Array.from(m.keys()).join(", ")}`, its.map((x) => x.id)); }
+  // the ERC_TESTER tests of one sheet, and (alone on this sheet unless the caller checks the hierarchy) the ones across sheets
+  sheetTests(doc, nets, mark, itemRef, pinItemRef, opts);
+  if (opts.crossSheet !== false) markers.push(...hierarchyTests([{ doc, key: "", nets }], itemRef, pinItemRef)[0]);
   // sheet pins vs the sub-sheet's hierarchical labels (when the sub-sheet document is known)
   const sheetDocs = opts.sheetDocs || null;
   for (const it of doc.items.values()) {

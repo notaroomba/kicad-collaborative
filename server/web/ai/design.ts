@@ -256,8 +256,10 @@ export async function geometry(input: { doc?: string; silk?: boolean }): Promise
 /** The ERC as the editor's Run ERC runs it: the project's Pin Conflicts Map and rule severities (Schematic Setup > Electrical Rules). */
 export function projectErc(doc: any, extra?: Record<string, unknown>): any[] {
   const s = SCH(); if (!s || !s.ercCheck) throw new ToolError("The ERC is not available.");
-  let erc: any = {}; try { const pro = ED().proSettings ? JSON.parse(ED().proSettings) : null; erc = (pro && pro.erc) || {}; } catch { erc = {}; }
-  const marks = s.ercCheck(doc, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined }, extra || {}));
+  let pro: any = {}; try { pro = (ED().proSettings ? JSON.parse(ED().proSettings) : null) || {}; } catch { pro = {}; }
+  const erc = pro.erc || {}, ns = pro.net_settings || {}, cg = pro.schematic && pro.schematic.connection_grid_size;
+  const classes = Array.isArray(ns.classes) ? ns.classes.map((c: any) => String((c && c.name) || "")).filter(Boolean) : null;
+  const marks = s.ercCheck(doc, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined, netclasses: classes, connectionGrid: typeof cg === "number" && cg > 0 ? cg * 0.0254 : 1.27 }, extra || {}));
   return applySeverities(marks, erc.rule_severities && typeof erc.rule_severities === "object" ? erc.rule_severities : null);
 }
 

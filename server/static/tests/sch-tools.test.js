@@ -1242,7 +1242,7 @@ test("ERC on the embedded sheet: unconnected pins, dangling wires, then the fixe
   const w = K.createItem(d, _.lineNode("wire", [76.2, 123.19], [88.9, 123.19])); K.createItem(d, _.labelNode("label", "ONEPIN", [88.9, 123.19], 0));   // q's pin 1
   ms = sch.ercCheck(d);
   assert.ok(ms.some((m) => m.code === "label_dangling" && m.text === "Label not connected: LONELY"));
-  assert.ok(ms.some((m) => m.code === "similar_labels" && /LONELY, lonely|lonely, LONELY/.test(m.text)));
+  { const sl = ms.find((m) => m.code === "similar_labels"); assert.ok(sl && sl.text === "Labels are similar" && sl.items.length === 2 && sl.items.map((r) => r.desc).join(" ").includes("LONELY") && sl.items.map((r) => r.desc).join(" ").includes("lonely"), JSON.stringify(sl)); }
   assert.ok(ms.some((m) => m.code === "empty_label_name" && m.severity === "error"));
   assert.ok(ms.some((m) => m.code === "isolated_pin_label" && /ONEPIN/.test(m.text) && m.severity === "warning"), texts().join("|"));
   assert.ok(ms.some((m) => m.code === "label_multiple_wires") === false); K.createItem(d, _.lineNode("wire", [88.9, 123.19], [88.9, 110])); ms = sch.ercCheck(d); assert.ok(ms.some((m) => m.code === "label_multiple_wires" && /ONEPIN/.test(m.text)));

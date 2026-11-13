@@ -147,5 +147,111 @@ test("inter-sheet references: ${INTERSHEET_REFS} resolves from the page refs map
   K.setIntersheetRefs(R({ show: false }), d); assert.deepStrictEqual(refText(), []);
 });
 
+// ---- ERC_TESTER tests beyond connectivity
+const lab = (d, kind, text, at) => K.createItem(d, _.labelNode(kind, text, at, 0));
+const POWER_LIB = (name, pinName) => `(symbol "${name}" (power) (pin_names (offset 0)) (in_bom yes) (on_board yes)
+  (property "Reference" "#PWR" (at 0 -2.54 0) (effects (font (size 1.27 1.27)))) (property "Value" "${name.split(":")[1]}" (at 0 2.54 0) (effects (font (size 1.27 1.27))))
+  (symbol "${name.split(":")[1]}_1_1" ${PIN("power_in", pinName, "1", 0, 0, true)}))`;
+const codes = (ms, code) => ms.filter((m) => m.code === code);
+
+test("ERC helpers: isGround, stacked pin notation, LetterSubReference, similar-name normalisation", () => {
+  for (const n of ["GND", "AGND", "gnd_iso", "EARTH", "EARTH_1", "VSS", "vssa"]) assert.ok(_.isGroundName(n), n);
+  for (const n of ["VCC", "EARTHX", "VSSD", ""]) assert.ok(!_.isGroundName(n), n);
+  for (const n of ["1", "A1", "[1,2,3]", "[1-4]", "[A1-A4,B2]", "[1\\-2]"]) assert.ok(_.stackedPinNotationValid(n), n);
+  for (const n of ["1]", "[1", "A[1]", "[4-1]", "[A1-B4]", "[]", "[A-B]"]) assert.ok(!_.stackedPinNotationValid(n), n);
+  assert.deepStrictEqual([1, 2, 26, 27, 52, 53].map(_.letterSubReference), ["A", "B", "Z", "AA", "AZ", "BA"]);
+  assert.strictEqual(_.normalizeSimilar(" +5V "), "5v"); assert.strictEqual(_.normalizeSimilar("10µF"), "10uf");
+  assert.strictEqual(_.normalizeSimilar("10μF"), "10uf"); assert.strictEqual(_.normalizeSimilar("Net"), "net");
+});
+
+test("ERC: duplicate sheet names, field name whitespace, empty power value, undefined netclass", () => {
+  const { d, c } = fresh();
+  const sh = (name, x) => K.createItem(d, K.parse(`(sheet (at ${x} 25.4) (size 12.7 12.7) (uuid "${name}-${x}") (property "Sheetname" "${name}" (at ${x} 24.4 0) (effects (font (size 1.27 1.27)))) (property "Sheetfile" "${x}.kicad_sch" (at ${x} 39 0) (effects (font (size 1.27 1.27)))))`));
+  sh("Power", 25.4); sh("power", 50.8);
+  d.lib.set("T:R", K.parse(LIB("T:R", "R", PIN("passive", "~", "1", 0, 0))));
+  const r = place(c, "T:R", [101.6, 101.6], "R1");
+  r.node.push(K.parse('(property " MPN" "x" (at 104 104 0) (effects (font (size 1.27 1.27)) (hide yes)))'));
+  d.lib.set("power:VBUS", K.parse(POWER_LIB("power:VBUS", "VBUS")));
+  const p = place(c, "power:VBUS", [127, 76.2], "#PWR1");
+  K.kids(p.node, "property").find((q) => K.str(q[1]) === "Value")[2] = "";
+  const nc = K.createItem(d, K.parse('(netclass_flag "" (length 2.54) (shape round) (at 152.4 76.2 0) (uuid "nc1") (property "Netclass" "HighSpeed" (at 153 74 0) (effects (font (size 1.27 1.27)))))'));
+  let ms = sch.ercCheck(d, { netclasses: ["Default", "Power"] });
+  const dup = codes(ms, "duplicate_sheet_names"); assert.strictEqual(dup.length, 1); assert.strictEqual(dup[0].text, "Duplicate sheet names within a given sheet");
+  const ws = codes(ms, "field_name_whitespace"); assert.strictEqual(ws.length, 1); assert.strictEqual(ws[0].text, "Field name has leading or trailing whitespace: ' MPN'"); assert.deepStrictEqual([ws[0].x, ws[0].y], [104, 104]);
+  const ep = codes(ms, "empty_power_value"); assert.strictEqual(ep.length, 1); assert.deepStrictEqual([ep[0].x, ep[0].y], [127, 76.2]);
+  const un = codes(ms, "undefined_netclass"); assert.deepStrictEqual(un.map((m) => m.text), ["Netclass HighSpeed is not defined"]); assert.deepStrictEqual(un[0].ids, [nc.id]);
+  // without the project's netclasses the test is not run; a defined class passes
+  assert.strictEqual(codes(sch.ercCheck(d), "undefined_netclass").length, 0);
+  assert.strictEqual(codes(sch.ercCheck(d, { netclasses: ["HighSpeed"] }), "undefined_netclass").length, 0);
+});
+
+test("ERC: ground pins, stacked pin syntax and endpoints off the connection grid", () => {
+  const { d, c } = fresh();
+  d.lib.set("T:REG", K.parse(LIB("T:REG", "U", PIN("power_in", "GND", "1", 0, 0) + " " + PIN("power_in", "AGND", "2", 0, 2.54) + " " + PIN("passive", "X", "[3-1]", 0, 5.08))));
+  d.lib.set("power:GND", K.parse(POWER_LIB("power:GND", "GND")));
+  const u = place(c, "T:REG", [50.8, 50.8], "U1");
+  // pin 1 on GND, pin 2 (named AGND) on net SIG: pin 2 is a ground pin off ground
+  place(c, "power:GND", [45.72, 50.8], "#PWR1"); wire(d, [45.72, 50.8], [50.8, 50.8]);
+  wire(d, [50.8, 48.26], [40.64, 48.26]); lab(d, "label", "SIG", [40.64, 48.26]);
+  let ms = sch.ercCheck(d);
+  const g = codes(ms, "ground_pin_not_ground"); assert.deepStrictEqual(g.map((m) => m.text), ["Pin AGND not connected to ground net"]); assert.deepStrictEqual([g[0].x, g[0].y], [50.8, 48.26]);
+  assert.strictEqual(codes(ms, "stacked_pin_name").length, 1, "[3-1] counts down");
+  assert.strictEqual(codes(ms, "endpoint_off_grid").length, 0);
+  // a wire end off the 50 mil grid (its start is checked first), and a symbol with an off-grid pin (one marker)
+  const w = wire(d, [60.96, 60.96], [61.5, 60.96]);
+  const v = place(c, "T:REG", [80.3, 80.01], "U2");
+  ms = sch.ercCheck(d);
+  const og = codes(ms, "endpoint_off_grid"); assert.strictEqual(og.length, 2);
+  assert.ok(og.some((m) => m.ids[0] === w.id && m.x === 61.5)); assert.ok(og.some((m) => m.ids[0] === v.id && m.x === 80.3 && m.y === 80.01));
+  // a coarser connection grid (100 mil) moves the wire off it too
+  const w2 = wire(d, [3.81, 3.81], [6.35, 3.81]);
+  assert.ok(!codes(sch.ercCheck(d), "endpoint_off_grid").some((m) => m.ids[0] === w2.id));
+  assert.deepStrictEqual(codes(sch.ercCheck(d, { connectionGrid: 2.54 }), "endpoint_off_grid").filter((m) => m.ids[0] === w2.id).map((m) => [m.x, m.y]), [[3.81, 3.81]]);
+});
+
+test("ERC: similar names, local vs global names, single global labels (TestSimilarLabels / TestSameLocalGlobalLabel)", () => {
+  const { d, c } = fresh();
+  lab(d, "label", "Data", [25.4, 25.4]); lab(d, "label", "DATA", [50.8, 25.4]);
+  lab(d, "global_label", "CLK", [25.4, 50.8]); lab(d, "label", "CLK", [50.8, 50.8]);
+  d.lib.set("power:+5V", K.parse(POWER_LIB("power:+5V", "+5V"))); d.lib.set("power:5v", K.parse(POWER_LIB("power:5v", "5v")));
+  place(c, "power:+5V", [76.2, 76.2], "#PWR1"); place(c, "power:5v", [101.6, 76.2], "#PWR2");
+  const ms = sch.ercCheck(d);
+  assert.strictEqual(codes(ms, "similar_labels").length, 1); assert.strictEqual(codes(ms, "similar_labels")[0].text, "Labels are similar");
+  assert.strictEqual(codes(ms, "similar_power").length, 1, "+5V and 5v are the same once the + prefix and case go");
+  const sg = codes(ms, "same_local_global_label"); assert.strictEqual(sg.length, 1); assert.strictEqual(sg[0].text, "Local and global labels have same name");
+  assert.deepStrictEqual([sg[0].x, sg[0].y], [25.4, 50.8], "on the global one");
+  const single = codes(ms, "single_global_label"); assert.strictEqual(single.length, 1, "reported; ERC_SETTINGS ignores it by default");
+  // across sheets: local labels on different sheets are fine, a global label used on two sheets is not single
+  const a = fresh().d, b = fresh().d;
+  lab(a, "label", "net1", [25.4, 25.4]); lab(b, "label", "NET1", [25.4, 25.4]);
+  lab(a, "global_label", "BUS", [50.8, 25.4]); lab(b, "global_label", "BUS", [50.8, 25.4]);
+  const per = sch.ercHierarchy([{ doc: a, key: "a" }, { doc: b, key: "b" }]);
+  assert.strictEqual(per.flat().filter((m) => m.code === "similar_labels").length, 0);
+  assert.strictEqual(per.flat().filter((m) => m.code === "single_global_label").length, 0);
+});
+
+test("ERC: multi-unit symbols: missing units, different footprints and values across units", () => {
+  const { d, c } = fresh();
+  const unit = (u, pins) => `(symbol "OPA_${u}_1" ${pins})`;
+  d.lib.set("T:OPA", K.parse(`(symbol "T:OPA" (in_bom yes) (on_board yes) (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "Value" "OPA" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    ${unit(1, PIN("output", "O", "1", 0, 0))} ${unit(2, PIN("input", "I", "2", 0, 0))} ${unit(3, PIN("power_in", "V", "3", 0, 0))} (symbol "OPA_4_1" (unit_name "Bias") ${PIN("bidirectional", "B", "4", 0, 0)}))`));
+  const fp = (it, f) => { const p = K.kids(it.node, "property").find((q) => K.str(q[1]) === "Footprint"); if (p) p[2] = f; else it.node.push(K.parse(`(property "Footprint" "${f}" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))`)); };
+  const a = place(c, "T:OPA", [50.8, 50.8], "U1");
+  fp(a, "Package_SO:SOIC-8");
+  const ms = sch.ercCheck(d);
+  assert.deepStrictEqual(codes(ms, "missing_unit").map((m) => m.text), ["Symbol U1 has unplaced units [ B, C, Bias ]"]);
+  assert.deepStrictEqual(codes(ms, "missing_input_pin").map((m) => m.text), ["Symbol U1 has input pins in units [ B ] that are not placed"]);
+  assert.deepStrictEqual(codes(ms, "missing_power_pin").map((m) => m.text), ["Symbol U1 has input power pins in units [ C ] that are not placed"]);
+  assert.deepStrictEqual(codes(ms, "missing_bidi_pin").map((m) => m.text), ["Symbol U1 has bidirectional pins in units [ Bias ] that are not placed"]);
+  // unit B with another footprint and value on a second sheet
+  const { d: d2, c: c2 } = fresh(); d2.lib.set("T:OPA", d.lib.get("T:OPA"));
+  const b = place(c2, "T:OPA", [50.8, 50.8], "U1"); b.node.splice(b.node.findIndex((x) => Array.isArray(x) && x[0] === "unit"), 1, ["unit", 2]);
+  fp(b, "Package_SO:SOIC-14"); K.kids(b.node, "property").find((q) => K.str(q[1]) === "Value")[2] = "OPA2";
+  const per = sch.ercHierarchy([{ doc: d, key: "root" }, { doc: d2, key: "sub" }]);
+  const dfp = per[1].filter((m) => m.code === "different_unit_footprint"); assert.deepStrictEqual(dfp.map((m) => m.text), ["Different footprints assigned to U1A and U1B"]);
+  assert.deepStrictEqual(per[0].filter((m) => m.code === "unit_value_mismatch").map((m) => m.text), ["Different values for U1A (OPA) and U1B (OPA2)"]);
+  assert.deepStrictEqual(per[0].filter((m) => m.code === "missing_unit").map((m) => m.text), ["Symbol U1 has unplaced units [ C, Bias ]"]);
+});
+
 console.log(`sch-sweep9: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
