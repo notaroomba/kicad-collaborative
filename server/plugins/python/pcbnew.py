@@ -1720,7 +1720,19 @@ class PCB_ARC(PCB_TRACK):
         return abs(self.GetAngle().AsRadians()) * self.GetRadius()
 
     def IsCCW(self):
-        return self.GetAngle().AsDegrees() < 0
+        # PCB_ARC::IsCCW: (end - start) x (mid - start) < 0, which is a positive GetAngle
+        s, m, e = self.GetStart(), self.GetMid(), self.GetEnd()
+        return (e.x - s.x) * (m.y - s.y) - (e.y - s.y) * (m.x - s.x) < 0
+
+    def _end_angle(self, p):
+        c = self.GetCenter()
+        return EDA_ANGLE(_math.degrees(_math.atan2(p.y - c.y, p.x - c.x)) % 360.0)
+
+    def GetArcAngleStart(self):
+        return self._end_angle(self.GetStart())
+
+    def GetArcAngleEnd(self):
+        return self._end_angle(self.GetEnd())
 
 
 def _circle3(a, b, c):
