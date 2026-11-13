@@ -635,7 +635,7 @@ class BOX2I:
         return f"BOX2I(({self._x}, {self._y}), ({self._w}, {self._h}))"
 
 
-EDA_RECT = BOX2I
+# no EDA_RECT, TRACK, MODULE and the like: see _GONE at the end of this file
 wxRect = BOX2I
 
 
@@ -1646,7 +1646,6 @@ class PCB_TRACK(BOARD_CONNECTED_ITEM):
         return False
 
 
-TRACK = PCB_TRACK
 
 
 class PCB_ARC(PCB_TRACK):
@@ -1850,7 +1849,6 @@ class PCB_VIA(PCB_TRACK):
         pass
 
 
-VIA = PCB_VIA
 
 
 class EDA_TEXT:
@@ -2158,9 +2156,6 @@ class PCB_TEXT(BOARD_ITEM, EDA_TEXT):
         return self.HitTest(*a)
 
 
-FP_TEXT = PCB_TEXT
-TEXTE_PCB = PCB_TEXT
-TEXTE_MODULE = PCB_TEXT
 
 
 class PCB_TEXTBOX(PCB_TEXT):
@@ -2978,9 +2973,6 @@ class PCB_SHAPE(BOARD_CONNECTED_ITEM):
         return self.ShowShape()
 
 
-DRAWSEGMENT = PCB_SHAPE
-FP_SHAPE = PCB_SHAPE
-EDGE_MODULE = PCB_SHAPE
 
 
 LINE_STYLE_DEFAULT, LINE_STYLE_SOLID, LINE_STYLE_DASH, LINE_STYLE_DOT, LINE_STYLE_DASHDOT, LINE_STYLE_DASHDOTDOT = range(6)
@@ -3193,7 +3185,37 @@ class PAD(BOARD_CONNECTED_ITEM):
         prim.append(poly)
         self._touch()
 
+    def _add_primitive(self, node):
+        prim = _kid(self._node, "primitives")
+        if prim is None:
+            prim = [Sym("primitives")]
+            self._node.append(prim)
+        prim.append(node)
+        self._touch()
+
     def AddPrimitive(self, *a):
+        """KiCad's own Python spellings: (points, width) a polygon; (start, end, width) a segment; (centre, radius,
+        width) a circle; (centre, start, angle, width) an arc; (start, end, control 1, control 2, width) a curve."""
+        import math
+        xy = lambda name, p: [Sym(name), _n(ToMM(VECTOR2I(p).x)), _n(ToMM(VECTOR2I(p).y))]
+        width = lambda w: [Sym("width"), _n(ToMM(int(w)))]
+        if len(a) == 3 and isinstance(a[1], VECTOR2I):
+            return self._add_primitive([Sym("gr_line"), xy("start", a[0]), xy("end", a[1]), width(a[2])])
+        if len(a) == 3 and isinstance(a[0], VECTOR2I) and isinstance(a[1], (int, float)):
+            c = VECTOR2I(a[0])
+            return self._add_primitive([Sym("gr_circle"), xy("center", c), xy("end", VECTOR2I(c.x + int(a[1]), c.y)), width(a[2]), [Sym("fill"), Sym("no")]])
+        if len(a) == 4 and isinstance(a[0], VECTOR2I) and isinstance(a[1], VECTOR2I):
+            c, start = VECTOR2I(a[0]), VECTOR2I(a[1])
+            deg = a[2].AsDegrees() if isinstance(a[2], EDA_ANGLE) else float(a[2]) / 10.0
+
+            def turned(by):                      # as PCB_SHAPE.SetArcAngleAndEnd turns the start about the centre
+                r = math.radians(by)
+                dx, dy = start.x - c.x, start.y - c.y
+                return VECTOR2I(int(round(c.x + dx * math.cos(r) - dy * math.sin(r))), int(round(c.y + dy * math.cos(r) + dx * math.sin(r))))
+            first, last = (start, turned(deg)) if deg >= 0 else (turned(deg), start)
+            return self._add_primitive([Sym("gr_arc"), xy("start", first), xy("mid", turned(deg / 2)), xy("end", last), width(a[3])])
+        if len(a) == 5 and all(isinstance(p, VECTOR2I) for p in a[:4]):
+            return self._add_primitive([Sym("gr_curve"), [Sym("pts")] + [xy("xy", p) for p in (a[0], a[2], a[3], a[1])], width(a[4])])
         self.AddPrimitivePoly(*a)
 
     def GetPrimitives(self):
@@ -3398,7 +3420,6 @@ class PAD(BOARD_CONNECTED_ITEM):
         _unsupported("PAD.Flip")
 
 
-D_PAD = PAD
 
 
 class FP_3DMODEL:
@@ -3585,6 +3606,12 @@ class FOOTPRINT(BOARD_ITEM):
     def GetFirstPad(self):
         pads = self._kids()["pads"]
         return pads[0] if pads else None
+
+    def MoveAnchorPosition(self, *a):
+        """Shift everything the footprint holds by this much, so its own origin lands elsewhere on it."""
+        d = VECTOR2I(*a)
+        for item in list(self.Pads()) + list(self.GraphicalItems()) + list(self.GetFields()):
+            item.Move(d)
 
     def GraphicalItems(self):
         k = self._kids()
@@ -3961,7 +3988,6 @@ class FOOTPRINT(BOARD_ITEM):
         return f"<FOOTPRINT {self.GetReference()}>"
 
 
-MODULE = FOOTPRINT
 
 
 class ZONE(BOARD_CONNECTED_ITEM):
@@ -4405,7 +4431,6 @@ class ZONE(BOARD_CONNECTED_ITEM):
         self.SetOutline(SHAPE_POLY_SET())
 
 
-ZONE_CONTAINER = ZONE
 
 
 class PCB_GROUP(BOARD_ITEM):
@@ -7246,8 +7271,16 @@ class PCB_IO_MGR:
     KICAD_SEXP, LEGACY, EAGLE = 1, 0, 2
 
     @staticmethod
-    def PluginFind(*_):
-        _unsupported("Footprint library plugins")
+    def PluginFind(kind=1, *_):
+        if kind != PCB_IO_MGR.KICAD_SEXP:
+            _unsupported("Footprint libraries of other programs' formats")
+        return PCB_IO_KICAD_SEXPR()
+
+    @staticmethod
+    def GuessPluginTypeFromLibPath(path, *_):
+        return PCB_IO_MGR.KICAD_SEXP
+
+    FindPluginTypeFromBoardPath = GuessPluginTypeFromLibPath
 
     @staticmethod
     def Load(*_):
@@ -7258,6 +7291,11 @@ class PCB_IO_MGR:
 
 
 IO_MGR = PCB_IO_MGR
+
+
+def GetPluginForPath(libname):
+    """The reader for a footprint library folder, as KiCad's own helper of this name gives."""
+    return PCB_IO_MGR.PluginFind(PCB_IO_MGR.GuessPluginTypeFromLibPath(libname))
 
 
 class PCB_IO_KICAD_SEXPR:
@@ -8558,8 +8596,14 @@ class _Placeholder:
         return (object,)
 
 
+# Names plugins look for with hasattr() to tell an old KiCad from a current one.  KiCad 10 has none of them, so
+# neither has this module: answering with a placeholder would send such a plugin down its KiCad 5 or 6 code.
+_GONE = frozenset(("EDA_RECT", "TRACK", "VIA", "MODULE", "D_PAD", "DRAWSEGMENT", "ZONE_CONTAINER", "TEXTE_PCB", "TEXTE_MODULE",
+                   "EDGE_MODULE", "FP_TEXT", "FP_SHAPE", "MOD_VIRTUAL", "MOD_CMS", "MOD_DEFAULT"))
+
+
 def __getattr__(name):
-    if name.startswith("__"):
+    if name.startswith("__") or name in _GONE or not name.isidentifier():
         raise AttributeError(name)
     _missing.add(name)
     return _Placeholder(name)

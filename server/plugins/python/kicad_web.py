@@ -977,7 +977,7 @@ def needed_packages(files, lock):
                 if top and top not in local and top in by_import:
                     wanted.add(by_import[top])
     # polygon set operations of pcbnew (Inflate, BooleanSubtract, …) are done with shapely
-    if "shapely" in packages and any(isinstance(body, str) and str(path).endswith(".py") and _CLIPPER.search(body) for path, body in files.items()):
+    if "shapely" in packages and any(isinstance(body, str) and str(path).endswith(".py") and (_CLIPPER.search(body) or "import pyclipper" in body) for path, body in files.items()):
         wanted.add("shapely")
     # a package's own requirements come first (shapely needs numpy)
     out, seen = [], set()
@@ -1052,6 +1052,7 @@ def boot(identifier, files, bridge=None, name=""):
         os.environ.setdefault("KICAD%s_3DMODEL_DIR" % v, "/usr/share/kicad/3dmodels")
     if bridge is not None:
         pcbnew._Host.library = _library
+        _install_library_files()
         _install_fabrication()
     import kicad_net
     kicad_net.install((lambda request: _call("net.fetch", request)) if bridge is not None else None)
@@ -1200,6 +1201,56 @@ def _call(method, args=None):
         return None
     out = _bridge(method, json.dumps(args or {}))
     return json.loads(out) if isinstance(out, str) and out else out
+
+
+def _install_library_files():
+    """KiCad's footprint libraries as the files a desktop installation has under its footprints folder.  A plugin
+    that looks for <library>.pretty or for a .kicad_mod file in it there finds it: the folder, or the file with
+    the footprint's own text, is fetched from the editor's libraries the first time it is asked about."""
+    root = pcbnew.FOOTPRINT_DIR
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError:
+        return
+    real = {name: getattr(os.path, name) for name in ("isdir", "isfile", "exists")}
+    libraries, missing = {}, set()
+
+    def fetch(path):
+        try:
+            p = os.fspath(path)
+        except TypeError:
+            return
+        if not isinstance(p, str) or not p.startswith(root + "/") or p in missing or real["exists"](p):
+            return
+        parts = p[len(root) + 1:].rstrip("/").split("/")
+        if not parts[0].endswith(".pretty") or len(parts) > 2:
+            return
+        nick = parts[0][:-len(".pretty")]
+        try:
+            if nick not in libraries:
+                libraries[nick] = bool(_library("footprints", {"lib": nick}).get("footprints"))
+                if libraries[nick]:
+                    os.makedirs(os.path.join(root, parts[0]), exist_ok=True)
+            if libraries[nick] and len(parts) == 2 and parts[1].endswith(".kicad_mod"):
+                text = _library("footprint", {"lib": nick, "name": parts[1][:-len(".kicad_mod")]}).get("footprint")
+                if text:
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    return
+            elif libraries[nick] and len(parts) == 1:
+                return
+        except Exception as e:                       # the libraries cannot be reached: the file is not there
+            log.warning("footprint library files: %s", e)
+        missing.add(p)
+
+    def looking(name):
+        def check(path):
+            fetch(path)
+            return real[name](path)
+        check.__name__ = name
+        return check
+    for name in real:
+        setattr(os.path, name, looking(name))
 
 
 def _library(what, args):

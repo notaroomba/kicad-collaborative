@@ -156,12 +156,15 @@ async function one(dir, boardPath, boardGiven) {
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
     calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75) } : undefined });
-    // After a commit the stand-in editor's board is what the plugin's own copy now says, as the real editor's would be.
+    // After a commit the stand-in editor's board is what the plugin's own copy now says, as the real editor's would be,
+    // and what was selected stays selected while it is still on the board.
     if (method === "design.commit") edited = true;
+    // a plugin selecting its result, or a drive clicking an item, moves the selection
+    if (method === "view.select" && Array.isArray(a.ids)) startSelection.splice(0, startSelection.length, ...a.ids);
     if (method === "design.board") {
       let text = board;
       if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
-      return JSON.stringify({ path: path.basename(boardPath), text, selection: edited ? [] : startSelection, version: "10.0.0", files: siblings });
+      return JSON.stringify({ path: path.basename(boardPath), text, selection: edited ? startSelection.filter((id) => text.includes(id)) : startSelection, version: "10.0.0", files: siblings });
     }
     // The editors' copy buffer.  "# copied: <path from the repository root>" in a drive: what Copy took before the run.
     if (method === "design.copied") return JSON.stringify({ text: copied });
