@@ -550,6 +550,9 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
       }
       b.append(g);
       if (kind === "lines") { ends = endingsBlock(items.map((i) => i.node), ro, Number((ctx.doc as KDoc & { version?: number }).version) || 0); b.append(ends.el); }
+      // the two help labels under the controls (dialog_wire_bus_properties_base / dialog_line_properties_base)
+      b.append(h("p", { class: "kd-note", style: "margin:8px 0 0" }, kind === "lines" ? "Set width to 0 to use schematic's default line width." : "Set width to 0 to use netclass's wire/bus widths."),
+        h("p", { class: "kd-note", style: "margin:2px 0 0" }, "Clear color to use Schematic Editor colors."));
     },
     ok() {
       if (ro) return;
@@ -561,7 +564,9 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
         else { L.writeStroke(n, { width: nw, style: ns, color: colTouched && col ? col.get() : undefined }); if (ends) ends.apply(n); }
         if (JSON.stringify(n) !== JSON.stringify(it.node)) changes.push(KiCadCanvas.replaceChange(ctx.doc, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem));
       }
-      if (changes.length) ctx.commit(changes, kind === "lines" ? "Edit Line Properties" : "Edit Wire/Bus Properties");
+      // DIALOG_LINE_PROPERTIES: "Edit Line" / "Edit Lines"; DIALOG_WIRE_BUS_PROPERTIES: "Edit Wire/Bus" / "Edit Wires/Buses"
+      const many = items.length !== 1;
+      if (changes.length) ctx.commit(changes, kind === "lines" ? (many ? "Edit Lines" : "Edit Line") : (many ? "Edit Wires/Buses" : "Edit Wire/Bus"));
       return undefined;
     },
   });
