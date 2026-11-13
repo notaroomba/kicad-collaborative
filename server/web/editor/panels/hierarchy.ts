@@ -132,10 +132,28 @@ async function rename(path: string): Promise<void> {
 async function editPage(path: string): Promise<void> {
   const node = find(path); if (!node) return;
   if (!node.sheetId) { toast("The root sheet's page number is set in the desktop app"); return; }
-  const human = "/" + namesTo(path).join("/");
-  const page = await textEntry("Edit Sheet Page Number", `Enter page number for sheet path ${human}`, node.page); if (page === null) return;
+  // SCH_SHEET_PATH::PathHumanReadable( false ): the root file's stem, then each sheet name, each closed by '/'
+  const root = panelStore.get().hierarchy.root, stem = root ? root.file.replace(/\.kicad_sch$/, "") : "";
+  const human = stem + "/" + namesTo(path).map((n) => n + "/").join("");
+  const page = await textEntry("Edit Sheet Page Number", `Enter page number for sheet path${human.length > 20 ? "\n" + human : " " + human}`, node.page); if (page === null) return;
   const pg = page.trim(); if (!pg || pg === node.page) return;
   await editSheetSymbol(node, "change sheet page number", (n) => setSheetPage(n, pg));
+}
+/**
+ * SCH_EDIT_TOOL::EditPageNumber (Edit > Edit Sheet Page Number..., the sheet context menu): the selected sheet's
+ * instance under the sheet on screen, else the sheet on screen itself; nothing for more than one selected item.
+ */
+export function editPageNumber(): boolean {
+  const doc = kdoc(); if (!doc || !isSchDoc()) return false;
+  const ids = new Set<string>(E.selection as Set<string>); if (E.selected) ids.add(E.selected.id);
+  if (ids.size > 1) return true;
+  const cur = currentDocId(), sel = [...ids].map((id) => doc.items.get(id)).find((it) => it && it.kind === "sheet");
+  if (ids.size === 1 && !sel) return true;
+  const walk = (n: HierNode | null, ok: (x: HierNode) => boolean): HierNode | null => { if (!n) return null; if (ok(n)) return n; for (const c of n.children) { const r = walk(c, ok); if (r) return r; } return null; };
+  const root = panelStore.get().hierarchy.root;
+  const node = sel ? walk(root, (x) => x.sheetId === sel.id && x.parentDocId === cur) : walk(root, (x) => x.current);
+  if (node) void editPage(node.path);
+  return true;
 }
 function namesTo(path: string): string[] {
   const out: string[] = [];

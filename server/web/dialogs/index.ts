@@ -24,6 +24,7 @@ import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp }
 import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { openSyncSheetPins } from "./sync-pins";
 import { openFabOutputs } from "../editor/fab-outputs";
+import { editPageNumber } from "../editor/panels/hierarchy";
 
 type Handler = import("../editor/types").ActionHandler;
 interface Marker { code: string; severity: string }
@@ -82,6 +83,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     runERC: needDoc(openErc, true),
     prevMarker: ercPrevMarker as Handler, nextMarker: ercNextMarker as Handler,   // the schematic's; the board's are the module's (EDITOR_ONLY)
     excludeMarker: (() => { if (E.kdoc && isSch()) ercExcludeMarker(); }) as Handler,
+    editPageNumber: needDoc(() => { editPageNumber(); }, true),   // SCH_EDIT_TOOL::EditPageNumber
     annotate: needDoc(openAnnotate, true),
     // DIALOG_CHANGE_SYMBOLS: Edit > Change Symbols…, Tools > Update Symbols from Library…, the symbol context menu
     changeSymbols: needDoc(() => openChangeSymbols("change"), true), changeSymbol: needDoc(() => openChangeSymbols("change"), true),

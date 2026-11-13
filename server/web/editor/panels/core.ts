@@ -67,10 +67,10 @@ function esc(s: string): string { return s.replace(/&/g, "&amp;").replace(/</g, 
 export function textEntry(title: string, message: string, value: string): Promise<string | null> {
   return new Promise((resolve) => {
     const D = window.KDialogs;
-    if (!D) { resolve(window.prompt(message, value)); return; }
+    if (!D) { resolve(null); return; }   // never the browser's prompt()
     let done = false; const finish = (v: string | null) => { if (!done) { done = true; resolve(v); } };
     D.open({ title, width: 360,
-      build(body: HTMLElement) { body.innerHTML = `<p style="margin:0 0 8px">${esc(message)}</p><input id="kd-entry" type="text" value="${esc(value)}" style="width:100%">`; },
+      build(body: HTMLElement) { body.innerHTML = `<p style="margin:0 0 8px;white-space:pre-line">${esc(message)}</p><input id="kd-entry" type="text" value="${esc(value)}" style="width:100%">`; },
       ok() { const inp = document.querySelector<HTMLInputElement>("#kd-entry"); finish(inp ? inp.value : null); },
       cancel() { finish(null); } });
   });

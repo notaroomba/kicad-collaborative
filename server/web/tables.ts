@@ -269,7 +269,7 @@ export const KICAD_KEY_WINS: Record<Editor, Record<string, string>> = {
 export const EDITOR_ONLY: Record<string, Editor> = { move: "sch", drag: "sch", exportNetlist: "sch", saveCurrSheetCopyAs: "sch", drawSheetOnClipboard: "sch", saveCopy: "pcb",
   navigatePrevious: "sch", navigateNext: "sch", navigateBack: "sch", navigateForward: "sch", navigateUp: "sch", leaveSheet: "sch", toggleHiddenPins: "sch", toggleHiddenFields: "sch", toggleERCErrors: "sch", toggleERCWarnings: "sch", toggleERCExclusions: "sch", prevMarker: "sch", nextMarker: "sch",
   layerNext: "pcb", layerPrev: "pcb", layerTop: "pcb", layerBottom: "pcb", highContrastModeCycle: "pcb", highContrastMode: "pcb", showPcbNew: "sch", showEeschema: "pcb",
-  showSymbolEditor: "sch", editWithLibEdit: "sch", editLibSymbolWithLibEdit: "sch" };
+  showSymbolEditor: "sch", editPageNumber: "sch", editWithLibEdit: "sch", editLibSymbolWithLibEdit: "sch" };
 /** The menus that take a module action no entry above places (kept reachable in a trailing "Other Commands" sub-menu). */
 export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect"];
 
