@@ -225,6 +225,7 @@ export interface RenderOpts {
   selected?: Set<string> | null; highlight?: Set<string> | null; lockedIds?: Set<string> | null;
   showHiddenPins?: boolean; showHiddenText?: boolean; /** eeschema's View > Show Hidden Fields (not pcbnew's hidden text) */ showHiddenFields?: boolean; zoneOutline?: boolean; padNumbers?: boolean;
   /** GetShowPageLimits (m_ShowPageLimits / eeschema's show_page_limits): the paper outline; on unless false */ pageLimits?: boolean;
+  /** PCB_VIEWERS_SETTINGS_BASE m_ViewersDisplay.m_DisplayGraphicsFill / m_DisplayTextFill off (View > Sketch Graphic Items, Sketch Text Items) */ sketchGraphics?: boolean; sketchText?: boolean;
   /** PCB_DISPLAY_OPTIONS m_RatsnestThickness: the ratsnest line width in pixels (0.5) */ ratsnestThickness?: number;
   outlinePads?: boolean; outlineTracks?: boolean; outlineVias?: boolean;
   highContrast?: boolean; activeLayer?: string | null; inactiveHide?: boolean;

@@ -81,7 +81,7 @@ export function setupEditorChrome() {
   setRadio("Selection modes", E.selMode === "lasso" ? "selectSetLasso" : "selectSetRect");
   setRadio("Crosshair modes", E.crosshairMode === "full" ? "cursorFullCrosshairs" : E.crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
   setToggles({ toggleGrid: E.gridOn, togglePolarCoords: E.polarCoords, toggleHiddenPins: !!E.renderOpts.showHiddenPins, highContrastMode: !!E.renderOpts.highContrast,
-    padDisplayMode: !!E.renderOpts.outlinePads, viaDisplayMode: !!E.renderOpts.outlineVias, trackDisplayMode: !!E.renderOpts.outlineTracks,
+    padDisplayMode: !!E.renderOpts.outlinePads, viaDisplayMode: !!E.renderOpts.outlineVias, trackDisplayMode: !!E.renderOpts.outlineTracks, graphicsOutlines: !!E.renderOpts.sketchGraphics, textOutlines: !!E.renderOpts.sketchText,
     zoneDisplayFilled: !E.renderOpts.zoneOutline, zoneDisplayOutline: !!E.renderOpts.zoneOutline });
   syncSchModes();
   store.slice("viewport", { units: E.units, lastImperial: E.lastImperial || "mil", selMode: E.selMode, crosshair: E.crosshairMode, polar: E.polarCoords, renderOpts: Object.assign({}, E.renderOpts), gridPitch: E.gridPitch, zoom: E.zoom, cursor: [0, 0], origin: E.localOrigin.slice() });

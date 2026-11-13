@@ -320,6 +320,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   // eeschema's View-menu options: mark_sim_exclusions and show_directive_labels (both on by default)
   const noSimMarks = !isPcb && opts.markSimExclusions === false, noDirectives = !isPcb && opts.showDirectiveLabels === false;
   const sketchPads = isPcb && !!opts.outlinePads, sketchTracks = isPcb && !!opts.outlineTracks, sketchVias = isPcb && !!opts.outlineVias;
+  // PCB_PAINTER with m_sketchGraphics / m_sketchText: board and footprint graphic shapes, and texts, drawn as outlines
+  const sketchGfx = isPcb && !!opts.sketchGraphics, sketchTxt = isPcb && !!opts.sketchText;
+  const sketched: Set<Geom> | null = sketchGfx || sketchTxt ? new Set() : null;
   const hcLayer = isPcb && opts.highContrast && opts.activeLayer ? String(opts.activeLayer) : null;
   const hl = opts.highlight && opts.highlight.size ? opts.highlight : null;
   const hlGeoms = hl ? new Set<Geom>() : null;   // geometry of the highlighted items
@@ -545,6 +548,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
         if (hcHide && hcLayer && g.layer !== hcLayer && g.layer !== "holes" && g.layer !== "Edge.Cuts") continue;   // inactive layers: Hide (Edge.Cuts is mixed, not hidden)
       }
       if (noSimMarks && g.simMarker) continue;
+      if (sketched && !g.hole && !g.zoneFill && !g.track && !g.via && !g.pad && g.padIndex === undefined && !g.padText && g.t !== "image" && (it.kind === "footprint" || /^gr_|^fp_/.test(it.kind))) {
+        if (g.t === "text" ? sketchTxt : sketchGfx && it.kind !== "gr_text" && it.kind !== "gr_text_box") sketched.add(g);
+      }
       if (busTint && busPinTint(it, g)) (schTint || (schTint = new Map())).set(g, SCH.bus);
       if (objHide) {
         const oc = objectClass(g);
@@ -645,7 +651,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       // SCH_PAINTER: a rolled-over text with a link definition is drawn whole in LAYER_HOVERED, underlined
       const roll = rollGeoms !== null && rollGeoms.has(g), run = roll && opts.rolloverRun ? opts.rolloverRun : null;
       if (roll && !run) color = SCH.hovered;
-      drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG);
+      drawText(ctx, sketched && sketched.has(g) ? Object.assign({}, g, { w: minW }) : g, s, doc.type, minW, color, base, flip, bg || PCB_BG);   // sketch text: the strokes as hairlines
       if (roll && !run) drawUnderline(ctx, g, color!, minW, base);
       else if (run && base) drawRunHover(ctx, g, run, s, doc.type, minW, base, bg || PCB_BG);
       curStroke = curFill = null; curWidth = -1; curCap = "round"; return;
@@ -679,6 +685,14 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       setStroke(color); setWidth(minW); setCap("butt"); strokeG(g); return;
     }
     if (sketchTracks && g.track) { setStroke(color); setWidth(minW); setCap("butt"); ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); return; }
+    if (sketched && sketched.has(g)) {   // sketch graphics: a stroked line or arc as its outline, any other shape's edge in a hairline, unfilled
+      setStroke(color); setWidth(minW); setCap("butt");
+      if ((t === "line" || t === "arc") && (g.w || 0) > 0) { ctx.beginPath(); traceTrackOutline(ctx, g); ctx.stroke(); return; }
+      if (t === "circle" && (g.w || 0) > 0 && !g.fill) { const c = g as CircleGeom; ctx.beginPath(); ctx.arc(c.x, c.y, c.r + g.w / 2, 0, Math.PI * 2); ctx.moveTo(c.x + Math.max(0, c.r - g.w / 2), c.y); ctx.arc(c.x, c.y, Math.max(0, c.r - g.w / 2), 0, Math.PI * 2); ctx.stroke(); return; }
+      if (t === "rect") { ctx.strokeRect(g.x, g.y, g.w, g.h); return; }
+      if (t === "poly" && g.pts.length < 2) return;
+      strokeG(g); return;
+    }
     if (t === "rect") {
       if (fill) { setFill(fill); ctx.fillRect(g.x, g.y, g.w, g.h); }
       if (!g.noStroke) {

@@ -101,6 +101,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   toggleHiddenPins: () => toggleRenderOpt("showHiddenPins", "toggleHiddenPins"),
   highContrastMode: () => toggleRenderOpt("highContrast", "highContrastMode"),
   padDisplayMode: () => toggleRenderOpt("outlinePads", "padDisplayMode"), viaDisplayMode: () => toggleRenderOpt("outlineVias", "viaDisplayMode"), trackDisplayMode: () => toggleRenderOpt("outlineTracks", "trackDisplayMode"),
+  graphicsOutlines: () => toggleRenderOpt("sketchGraphics", "graphicsOutlines"), textOutlines: () => toggleRenderOpt("sketchText", "textOutlines"),
   zoneDisplayFilled: () => { E.renderOpts.zoneOutline = false; setToggles({ zoneDisplayFilled: true, zoneDisplayOutline: false }); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); },
   zoneDisplayOutline: () => { E.renderOpts.zoneOutline = true; setToggles({ zoneDisplayFilled: false, zoneDisplayOutline: true }); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); },
   // on by default (render(): netNames !== false), so the first toggle turns them off
