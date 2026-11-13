@@ -1,6 +1,6 @@
 // node server/scripts/landing-ai/record.mjs
 //
-// Runs the AI's two scripts for the ESP32-C3 devboard (../demo-video/design: the schematic, then
+// Runs the AI's two scripts for the ESP32-C3 devboard (./design: the schematic, then
 // the board) through the real MCP endpoint of a local server, exactly as the AI did, and keeps
 // what came out for the home page's AI chapter: the finished schematic and board, and the order
 // in which every item was added (the documents' op logs).  Server and library mirror as in
@@ -34,7 +34,7 @@ else {
   const runs = {};
   for (const [file, title] of [['design.py', 'ESP32-C3 battery devboard schematic'], ['board.py', 'Place and route the board']]) {
     const t = Date.now();
-    let r = await mcp(jwt, 'run_python', { project, code: fs.readFileSync(path.join(here, '..', 'demo-video', 'design', file), 'utf8'), title, live: true, timeout_s: 400 });
+    let r = await mcp(jwt, 'run_python', { project, code: fs.readFileSync(path.join(here, 'design', file), 'utf8'), title, live: true, timeout_s: 400 });
     while (r.data && r.data.running) { await new Promise((ok) => setTimeout(ok, 1000)); r = await mcp(jwt, 'get_run', { run_id: r.data.run_id }); }
     if (r.isError || !r.data || !r.data.ok) throw new Error(`${file}: ${r.text.slice(0, 900)}`);
     runs[file] = { seconds: +((Date.now() - t) / 1000).toFixed(1), calls: r.data.calls, output: String(r.data.output) };
@@ -54,7 +54,8 @@ const [parts, nets] = num(so, /'placed': (\d+), 'nets': (\d+)/), [ercErrors] = n
 const [routed, connections, vias, length] = num(bo, /'routed': (\d+), 'connections': (\d+), 'vias': (\d+), 'length_mm': ([\d.]+)/);
 const [width, height] = num(bo, /'width': ([\d.]+), 'height': ([\d.]+)/), [drcErrors] = num(bo, /\ndrc (\d+) /);
 const layers = /'copper_layers': \[([^\]]*)\]/.exec(bo)[1].split(',').length;
-const unrouted = [...(/'unrouted': \[([^\]]*)\]/.exec(bo) || ['', ''])[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+// what is still open after every retry: the script's last line
+const unrouted = [...(/final unrouted \[([^\]]*)\]/.exec(bo) || ['', ''])[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
 const stats = { parts, nets, ercErrors, routed, connections, vias, length: Math.round(length), width, height, layers, drcErrors, unrouted };
 console.log(stats);
 const out = { stats, runs: Object.fromEntries(Object.entries(runs).map(([k, v]) => [k, { seconds: v.seconds, calls: v.calls }])) };
@@ -80,6 +81,12 @@ for (const type of ['kicad_sch', 'kicad_pcb']) {
   const text = await (await api(`/api/docs/${d}/content`)).text();
   if (K.parseDoc(text).items.size !== doc.items.size) throw new Error(`${type}: the folded file and the replayed ops differ`);
   fs.writeFileSync(path.join(OUT, 'esp32.' + type), text);
+  if (type === 'kicad_pcb') {
+    // vias and copper length of the finished board (the first route call's numbers predate the retries and hand-drawn lines)
+    let v = 0, len = 0;
+    for (const it of K.parseDoc(text).items.values()) { const g = it.geom[0]; if (it.kind === 'via') v++; else if (it.kind === 'segment' && g) len += Math.hypot(g.x2 - g.x1, g.y2 - g.y1); }
+    Object.assign(stats, { vias: v, length: Math.round(len), routed: stats.connections - unrouted.length });
+  }
   // Items of the final document in the order they first appeared (anything already in the base first).
   const ids = [...doc.items.keys()].sort((a, b) => (first.has(a) ? first.get(a) : -1) - (first.has(b) ? first.get(b) : -1));
   out[type] = { ops: ops.length, order: ids.map((x) => [x, first.has(x) ? first.get(x) : -1]), from: Object.fromEntries([...from].filter(([k]) => doc.items.has(k))) };
