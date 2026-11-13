@@ -20,7 +20,7 @@ import { installGroups } from "./groups";
 import * as logic from "./logic";
 import { commitPageSettings, openPageSettings } from "./page-settings";
 import { openPreferences } from "./preferences";
-import { GRID_PAGE, applyPrefs, defaultGrid, editorId, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
+import { GRID_PAGE, applyPcbToolPrefs, applyPrefs, defaultGrid, editorId, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
 import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp } from "./project";
 import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { autoplaceAllSheetPins, openSyncSheetPins } from "./sync-pins";
@@ -151,6 +151,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   E.gridDefault = () => defaultGrid();
   E.gridPicked = (mm: number) => rememberGrid(mm);
   applyPrefs(true);
+  window.addEventListener("kc-pcb-tools", () => applyPcbToolPrefs());   // the board tools load lazily
   setToggle("toggleGridOverrides", prefs().grids[editorId()].overrides.enabled);
   // for tests and other modules
   E.dialogs = { logic, openPageSettings, commitPageSettings, openFind, openFieldsTable, openAssignFootprints, openSchematicSetup, openSyncSheetPins, openPreferences, prefs, readDoc, submitDocOp, saveProject, applyProjectSettings, toolCtx };

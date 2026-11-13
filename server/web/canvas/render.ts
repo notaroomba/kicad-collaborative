@@ -459,7 +459,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   // even if the view is flipped" (ds_proxy_view_item.cpp:114-128) — so it is drawn unflipped here.
   if (opts.frame !== false && !(doc as { fpEditor?: boolean }).fpEditor) {   // the Footprint Editor has no drawing sheet
     if (flip) ctx.setTransform(s, 0, 0, s, tx, ty);
-    drawDrawingSheet(ctx, doc, s, Math.max(1, dpr) / s);
+    drawDrawingSheet(ctx, doc, s, Math.max(1, dpr) / s, opts.pageLimits !== false);
     if (flip) ctx.setTransform(A, 0, 0, s, E, ty);
   }
   // LAYER_BOARD_OUTLINE_AREA (Board Area Shadow, off by default): the board outline filled, under the board items
@@ -703,7 +703,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   };
   for (const z of ZS) {
     // overlay passes that sit at this depth
-    if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); ratsDone = true; dirty(); }
+    if (!ratsDone && zRats <= z) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect, opts.ratsnestThickness); ratsDone = true; dirty(); }
     if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY, previewXf(pg)); dirty(); }
     const arr = BUCKETS.get(z);
     if (arr) for (const g of arr) drawOne(g, false);
@@ -719,7 +719,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       dirty();
     }
   }
-  if (!ratsDone) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect); }
+  if (!ratsDone) { drawRatsnest(ctx, rats!, ratsNets, netColors, s, dpr, viewRect, opts.ratsnestThickness); }
   if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY, previewXf(pg)); }
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
@@ -1084,8 +1084,8 @@ function shadowGeom(t: Ctx2D, g: Geom, margin: number, base: Mat | null): void {
 }
 
 /** RATSNEST_VIEW_ITEM::ViewDraw: hairlines in LAYER_RATSNEST (or the net colour), a cross where both ends coincide. */
-export function drawRatsnest(ctx: Ctx2D, lines: RatsLine[], nets: Set<number> | null, netColors: Map<number, string> | null, s: number, dpr: number, vr: number[]): void {
-  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.lineWidth = RATSNEST_PX * Math.max(1, dpr) / s;
+export function drawRatsnest(ctx: Ctx2D, lines: RatsLine[], nets: Set<number> | null, netColors: Map<number, string> | null, s: number, dpr: number, vr: number[], thickness?: number): void {
+  ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.lineWidth = (thickness && thickness > 0 ? thickness : RATSNEST_PX) * Math.max(1, dpr) / s;
   let cur: string | null = null; const c = RATSNEST_CROSS;
   const flush = () => { if (cur !== null) ctx.stroke(); };
   for (const l of lines) {
@@ -1643,7 +1643,7 @@ export function drawText(ctx: Ctx2D, g: DrawTextG, s: number, docType: string, m
  * drew nothing else.  Colours: eeschema LAYER_SCHEMATIC_DRAWINGSHEET / _PAGE_LIMITS, pcbnew
  * LAYER_DRAWINGSHEET / LAYER_PAGE_LIMITS (ds_proxy_view_item.cpp:130-148, sch_view.cpp:137-138).
  */
-export function drawDrawingSheet(ctx: Ctx2D, doc: Doc, s: number, minW: number): void {
+export function drawDrawingSheet(ctx: Ctx2D, doc: Doc, s: number, minW: number, pageLimits = true): void {
   const isPcb = doc.type === "pcb";
   const ink = isPcb ? PCB_SHEET : SCH.frame;
   const items = documentDrawingSheet(doc);
@@ -1669,7 +1669,7 @@ export function drawDrawingSheet(ctx: Ctx2D, doc: Doc, s: number, minW: number):
       rot: it.rot, h: it.h, v: it.v, bold: it.bold, italic: it.italic, multiline: it.multiline, minPx: 3 }, s, doc.type, minW, null, null, false, null);
   }
   // DS_PAINTER::DrawBorder (ds_painter.cpp:383-396): the paper outline, last, in the page-limits colour (not plotted)
-  if ((ctx as unknown as { __plot?: boolean }).__plot) return;
+  if ((ctx as unknown as { __plot?: boolean }).__plot || !pageLimits) return;   // DS_PROXY_VIEW_ITEM::ViewDraw: settings->GetShowPageLimits()
   ctx.strokeStyle = isPcb ? PCB_PAGE_LIMITS : SCH.pageLimits;
   ctx.lineWidth = minW;
   ctx.strokeRect(0, 0, doc.page[0], doc.page[1]);

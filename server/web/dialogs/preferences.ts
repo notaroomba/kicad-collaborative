@@ -4,10 +4,10 @@
 // PCB Editor > Display Options, Grids, Origins & Axes, Editing Options.  Everything is kept in localStorage (prefs.ts) and applied on OK.
 import { trapTab } from "../tools/kicad-dialogs/shell";
 import { E, toast } from "./editor";
-import { keyName, modName } from "../keys";
+import { IS_MAC, keyName, modName } from "../keys";
 import { hotkeysPanel } from "./hotkeys-panel";
 import type { UserHotkeys } from "../menuspec";
-import { KD, checkbox, h, select } from "./dom";
+import { KD, checkbox, h, select, textInput } from "./dom";
 import { lenField, messageBox } from "../editor/pcbdialogs/ui";
 import { loadUnits, messageText, unitName } from "../units";
 import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, editorId, gridLabel, savePrefs, scaleOf, type EditorId, type Prefs, type SchThemeId } from "./prefs";
@@ -58,11 +58,13 @@ export function gridSettingsDialog(grid: { mm: number; name: string } | null, ed
 }
 
 /** pcb-tools.js's arc editing mode (APP_SETTINGS m_ArcEditMode, also switched from the Arc toolbar group and Ctrl+Space). */
-type ArcEditTools = { arcEditMode(): number; setArcEditMode(m: number): void };
+type ArcEditTools = { arcEditMode(): number; setArcEditMode(m: number): void; angleSnapMode?(): string; setAngleSnap?(ctx: null, mode: string): string };
+/** The board's curved ratsnest flag (PCB_DISPLAY_OPTIONS m_DisplayRatsnestLinesCurved, also View > Curved Ratsnest Lines). */
+const ratsnestState = (): { curvedRatsnest: boolean; setCurvedRatsnest(on: boolean): void } | null => { const k = (window as unknown as { KiCadCanvas?: { pcbSizes?: { state?: { curvedRatsnest: boolean; setCurvedRatsnest(on: boolean): void } } } }).KiCadCanvas; return (k && k.pcbSizes && k.pcbSizes.state) || null; };
 const pcbTools = (): ArcEditTools | null => { const t = (window as unknown as { PcbTools?: Partial<ArcEditTools> }).PcbTools; return t && t.arcEditMode && t.setArcEditMode ? (t as ArcEditTools) : null; };
 
 /** The edits of an open Preferences dialog, kept when a page is reset (the dialog is rebuilt around them). */
-interface Staged { p: Prefs; uiMode: ThemeMode; arcEdit: number; contrast: ReturnType<typeof getInactiveMode>; hotkeys?: UserHotkeys }
+interface Staged { p: Prefs; uiMode: ThemeMode; arcEdit: number; hv45?: boolean; curved?: boolean; contrast: ReturnType<typeof getInactiveMode>; hotkeys?: UserHotkeys }
 /** PAGED_DIALOG's g_lastPage: the page the dialog was last closed on, for the next opening in this session. */
 let lastPage: string | null = null;
 /** The defaults a page's Reset to Defaults puts back (RESETTABLE_PANEL::ResetPanel of that page only). */
@@ -80,7 +82,7 @@ export function resetPage(key: string, st: Staged): void {
     case "PCB Editor/Display Options": st.p.pcbDisplay = d.pcbDisplay; break;
     case "PCB Editor/Grids": st.p.grids.pcb = d.grids.pcb; break;
     case "PCB Editor/Origins & Axes": st.p.pcbOrigin = d.pcbOrigin; break;
-    case "PCB Editor/Editing Options": st.p.pcbEditing = d.pcbEditing; st.arcEdit = 0; break;
+    case "PCB Editor/Editing Options": st.p.pcbEditing = d.pcbEditing; st.p.pcbDisplay.showPageLimits = d.pcbDisplay.showPageLimits; st.arcEdit = 0; st.hv45 = true; st.curved = false; break;
     default: break;
   }
 }
@@ -90,6 +92,11 @@ export function openPreferences(page?: string, staged?: Staged): void {
   const p: Prefs = staged ? staged.p : clonePrefs();
   let uiMode: ThemeMode = staged ? staged.uiMode : getThemeMode();
   let arcEdit = staged ? staged.arcEdit : pcbTools() ? pcbTools()!.arcEditMode() : 0;
+  // m_AngleSnapMode != LEADER_MODE::DIRECT, and the curved ratsnest: the board tools' live state, written back on OK when changed
+  const snap0 = pcbTools() && pcbTools()!.angleSnapMode ? pcbTools()!.angleSnapMode!() : "45";
+  let hv45 = staged && staged.hv45 !== undefined ? staged.hv45 : snap0 !== "free";
+  const curved0 = !!(ratsnestState() && ratsnestState()!.curvedRatsnest);
+  let curved = staged && staged.curved !== undefined ? staged.curved : curved0;
   // the inactive layer mode is the open board's project setting (.kicad_prl "board.high_contrast_mode"), not a user preference
   let contrast = staged ? staged.contrast : getInactiveMode();
   let waka: WakaPage | null = null;
@@ -152,7 +159,7 @@ export function openPreferences(page?: string, staged?: Staged): void {
       const key = pageKey();
       if (key === "Common/Hotkeys") { if (hk) hk.resetToDefaults(); return; }
       if (key === "Common/WakaTime") return;   // nothing local to reset: the key is removed with Remove Key
-      const st: Staged = { p, uiMode, arcEdit, contrast, hotkeys: hk ? hk.staged() : undefined };
+      const st: Staged = { p, uiMode, arcEdit, hv45, curved, contrast, hotkeys: hk ? hk.staged() : undefined };
       resetPage(key, st); KD().close(); openPreferences(key, st);
     } }],
     cancel() { lastPage = pageKey() || lastPage; },
@@ -253,12 +260,39 @@ export function openPreferences(page?: string, staged?: Staged): void {
             group("Y Axis", "yaxis", [["up", "Increases up"], ["down", "Increases down"]], o.invertY ? "up" : "down", (v) => { o.invertY = v === "up"; });
           } },
           { label: "Editing Options", build(pg) {
-            // panel_edit_options (PCB): the arc editing mode, and the Miscellaneous box's zone refill
-            const ed = KD().staticBox(pg, "Editing Options");
-            ed.append(h("div", { class: "kd-row", style: "margin-bottom:6px" }, h("label", { style: "color:var(--ink-2)" }, "Arc editing mode:"),
-              select([["0", "Keep center, adjust radius"], ["1", "Keep endpoints or direction of starting point"], ["2", "Keep center and radius, adjust endpoints"]], String(arcEdit), (v) => { arcEdit = +v; }, { id: "kd-pref-arcedit", style: "width:300px" })));
-            const misc = KD().staticBox(pg, "Miscellaneous");
-            misc.append(checkbox("Automatically refill zones", p.pcbEditing.autoRefillZones, (on) => { p.pcbEditing.autoRefillZones = on; }, { id: "kd-pref-autorefill", title: "If checked, zones will be re-filled after each edit operation" }));
+            // panel_edit_options (PCB): Editing Options and Left Click Mouse Commands on the left, Ratsnest and
+            // Miscellaneous on the right (the board page of m_optionsBook)
+            const e = p.pcbEditing;
+            const L = h("div", { style: "flex:1 1 360px;min-width:0" }), R = h("div", { style: "flex:1 1 260px;min-width:0" });
+            pg.append(h("div", { style: "display:flex;gap:16px;flex-wrap:wrap" }, L, R));
+            const row = (label: string, ...ctl: Node[]) => h("div", { class: "kd-row", style: "margin-bottom:6px;gap:6px" }, h("label", { style: "color:var(--ink-2)" }, label), ...ctl);
+            const ed = KD().staticBox(L, "Editing Options");
+            const rot = textInput(String(e.rotationAngle), (v) => { const n = parseFloat(v); if (isFinite(n) && n > 0 && n <= 360) e.rotationAngle = n; }, { id: "kd-pref-rotstep", style: "width:80px" });
+            rot.title = "Set increment (in degrees) for context menu and hotkey rotation.";
+            const grid = (...rows: [string, Node][]) => h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 8px;align-items:center;margin-top:6px" },
+              ...rows.flatMap(([l, c]) => [h("label", { style: "color:var(--ink-2);white-space:nowrap" }, l), c]));
+            ed.append(checkbox("Constrain actions to H, V, 45 degrees", hv45, (on) => { hv45 = on; }, { id: "kd-pref-hv45" }),
+              grid(["Step for rotate commands:", h("div", { class: "kd-row", style: "gap:6px" }, rot, h("span", null, "deg"))],
+                ["Arc editing mode:", select([["0", "Keep center, adjust radius"], ["1", "Keep endpoints or direction of starting point"], ["2", "Keep center and radius, adjust endpoints"]], String(arcEdit), (v) => { arcEdit = +v; }, { id: "kd-pref-arcedit", style: "width:100%" })],
+                ["Track mouse-drag mode:", select([["move", "Move"], ["drag", "Drag (45 degree mode)"], ["dragFree", "Drag (free angle)"]], e.trackDragAction, (v) => { e.trackDragAction = v as typeof e.trackDragAction; }, { id: "kd-pref-trackdrag", style: "width:100%" })]));
+            // Left Click Mouse Commands (m_mouseCmdsWinLin / m_mouseCmdsOSX): fixed rows, and Ctrl's choice
+            const mod = IS_MAC ? "Cmd" : "Ctrl";
+            const lc = KD().staticBox(L, "Left Click Mouse Commands");
+            const radio = (v: boolean, label: string) => { const r = h("input", { type: "radio", name: "kd-pref-ctrlclick", id: `kd-pref-ctrlclick-${v ? "hl" : "toggle"}` }) as HTMLInputElement; r.checked = e.ctrlClickHighlight === v; r.addEventListener("change", () => { if (r.checked) e.ctrlClickHighlight = v; }); return h("label", { class: "kd-row", style: "gap:6px" }, r, label); };
+            const cmds: [string, Node | string][] = [["Click:", "Select item(s)"], ["Long Click:", "Clarify selection from menu"], ["Shift:", "Add item(s) to selection"],
+              [IS_MAC ? "Shift+Cmd:" : "Ctrl+Shift:", "Remove item(s) from selection"], [mod + ":", h("div", null, radio(false, "Toggle selection"), radio(true, "Highlight net (for pads/tracks)"))]];
+            if (IS_MAC) cmds.push(["Option:", "Clarify selection from menu"]);
+            lc.append(h("div", { style: "font-style:italic;color:var(--ink-3);font-size:var(--fs-sm);margin-bottom:6px;white-space:pre-line" }, IS_MAC ? "Left click (and drag) actions depend on 3 modifier keys:\nOption, Shift and Cmd" : "Left click (and drag) actions depend on 2 modifier keys:\nShift and Ctrl"),
+              h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;align-items:start" }, ...cmds.flatMap(([k, v]) => [h("span", null, k), typeof v === "string" ? h("span", null, v) : v])));
+            const rb = KD().staticBox(R, "Ratsnest");
+            const thick = h("input", { type: "number", min: "0.5", max: "100", step: "0.5", value: String(e.ratsnestThickness), id: "kd-pref-ratsthick", style: "width:80px" }) as HTMLInputElement;
+            thick.addEventListener("change", () => { const n = parseFloat(thick.value); if (isFinite(n) && n > 0) e.ratsnestThickness = n; });
+            rb.append(checkbox("Show ratsnest with curved lines", curved, (on) => { curved = on; }, { id: "kd-pref-curvedrats" }), row("Ratsnest line thickness:", thick));
+            const misc = KD().staticBox(R, "Miscellaneous");
+            misc.append(checkbox("<ESC> clears net highlighting", e.escClearsNetHighlight, (on) => { e.escClearsNetHighlight = on; }, { id: "kd-pref-escclears" }),
+              checkbox("Show page limits", p.pcbDisplay.showPageLimits, (on) => { p.pcbDisplay.showPageLimits = on; }, { id: "kd-pref-pagelimits", title: "Draw an outline to show the sheet size." }),
+              checkbox("Show courtyard collisions when moving/dragging", e.showCourtyardCollisions, (on) => { e.showCourtyardCollisions = on; }, { id: "kd-pref-courtyard" }),
+              checkbox("Automatically refill zones", e.autoRefillZones, (on) => { e.autoRefillZones = on; }, { id: "kd-pref-autorefill", title: "If checked, zones will be re-filled after each edit operation" }));
           } },
         ] },
       ], { selected: page || lastPage || "Mouse and Touchpad" });
@@ -266,7 +300,10 @@ export function openPreferences(page?: string, staged?: Staged): void {
     ok() {
       // PANEL_MOUSE_SETTINGS::TransferDataFromWindow: one modifier per vertical scroll action
       if (!scrollModsValid(p.mouse)) { toast("Only one action can be assigned to each vertical scroll setting", 4000); return false; }
-      lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved");
+      lastPage = pageKey() || lastPage; if (hk) hk.apply(); if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit);
+      // PANEL_EDIT_OPTIONS::TransferDataFromWindow: m_AngleSnapMode = checked ? DEG45 : DIRECT (only when the box changed, so a 90 degree mode stays)
+      const t = pcbTools(); if (t && t.setAngleSnap && hv45 !== (snap0 !== "free")) t.setAngleSnap(null, hv45 ? "45" : "free");
+      const rs = ratsnestState(); if (rs && curved !== curved0) rs.setCurvedRatsnest(curved); toast("Preferences saved");
       if (waka) waka.apply().catch((e) => toast(`WakaTime settings were not saved: ${e instanceof Error ? e.message : String(e)}`)); } });
 }
 

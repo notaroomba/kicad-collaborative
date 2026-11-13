@@ -76,6 +76,8 @@ export const E: any = {
   selMode: "rect",
   boxSel: null,
   highlightIds: null,
+  escClearsHighlight: true,     // PCBNEW_SETTINGS m_ESCClearsNetHighlight (Preferences > PCB Editor > Editing Options)
+  ctrlClickHighlight: false,    // PCBNEW_SETTINGS m_CtrlClickHighlight: Ctrl+click highlights the net instead of toggling the selection
   selField: null,
   selPins: [],    // bare symbol pins [{id, number}] (SCH_PIN_T selected on their own; Shift / Ctrl+click adds and toggles)
   fdrag: null,

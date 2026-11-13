@@ -333,8 +333,10 @@ export function rotateBy(ctx: PcbCtx, deg: number) {
   const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg); if (ch.length) ctx.commit(ch, "rotate");
   endHover(ctx, sel); ctx.requestRender(); return true;
 }
-act("rotateSelection", "Rotate Counterclockwise", "R", (ctx: PcbCtx) => rotateBy(ctx, 90)); alias("rotateCcw", "rotateSelection");
-act("rotateSelectionCw", "Rotate Clockwise", "", (ctx: PcbCtx) => rotateBy(ctx, -90)); alias("rotateCw", "rotateSelectionCw");
+/** EDIT_TOOL::Rotate: TOOL_EVT_UTILS::GetEventRotationAngle, the Editing Options' rotation step (90 by default). */
+export const rotationStep = () => (typeof S.rotationAngle === "number" && S.rotationAngle > 0 ? S.rotationAngle : 90);
+act("rotateSelection", "Rotate Counterclockwise", "R", (ctx: PcbCtx) => rotateBy(ctx, rotationStep())); alias("rotateCcw", "rotateSelection");
+act("rotateSelectionCw", "Rotate Clockwise", "", (ctx: PcbCtx) => rotateBy(ctx, -rotationStep())); alias("rotateCw", "rotateSelectionCw");
 /**
  * EDIT_TOOL::Flip ("Change Side / Flip"): a lone item about its own position (a rectangle or table about its centre),
  * several about the middle of their box; nothing is said afterwards.
@@ -590,13 +592,16 @@ act("showRatsnest", "Show Ratsnest", "", (ctx: PcbCtx) => { S.showRatsnest = !S.
 act("localRatsnestTool", "Local Ratsnest (selected footprints only)", "", (ctx: PcbCtx) => { S.localRatsnest = !S.localRatsnest; ctx.toast(S.localRatsnest ? "Ratsnest: selected footprints only" : "Ratsnest: whole board"); ctx.requestRender(); return true; }, { toggle: () => !!S.localRatsnest });
 act("hideNetInRatsnest", "Hide Net in Ratsnest", "", (ctx: PcbCtx) => { const nl = netlist(ctx.doc); const keys = selectionNets(ctx, nl); for (const k of keys) S.hiddenNets.add(k); ctx.toast(keys.size ? `Hidden: ${Array.from(keys).join(", ")}` : "Select something on a net"); ctx.requestRender(); return true; });
 act("showNetInRatsnest", "Show Net in Ratsnest", "", (ctx: PcbCtx) => { const nl = netlist(ctx.doc); const keys = selectionNets(ctx, nl); if (!keys.size) S.hiddenNets.clear(); else for (const k of keys) S.hiddenNets.delete(k); ctx.requestRender(); return true; });
-act("highlightNet", "Highlight Net", "`", (ctx: PcbCtx) => {
-  const nl = netlist(ctx.doc); let keys = selectionNets(ctx, nl);
-  if (!keys.size) { const p = cursorPoint(ctx); const k = nl.table.key(netUnder(ctx.doc, p[0], p[1], null)); if (k) keys = new Set([k]); }
+/** BOARD_INSPECTION_TOOL::highlightNet: the selection's nets, else (or with a position, aUseSelection false) the net under the point. */
+export function highlightNetAt(ctx: PcbCtx, at?: Pt | null) {
+  bind(ctx);
+  const nl = netlist(ctx.doc); let keys = at ? new Set<string>() : selectionNets(ctx, nl);
+  if (!keys.size) { const p = at || cursorPoint(ctx); const k = nl.table.key(netUnder(ctx.doc, p[0], p[1], null)); if (k) keys = new Set([k]); }
   if (!keys.size) { highlightIds(ctx, null); S.highlightNet = null; return true; }
   const key = keys.values().next().value; if (S.highlightNet === key) { S.highlightNet = null; highlightIds(ctx, null); return true; }
   S.highlightNet = key!; const ids = new Set<string>(); for (const k of keys) for (const id of netHighlightIds(ctx.doc, k, nl)) ids.add(id); highlightIds(ctx, ids); return true;   // no infobar: the net shows in the message panel
-});
+}
+act("highlightNet", "Highlight Net", "`", (ctx: PcbCtx) => highlightNetAt(ctx));
 act("clearHighlight", "Clear Net Highlighting", "~", (ctx: PcbCtx) => { S.highlightNet = null; highlightIds(ctx, null); return true; });
 alias("toggleNetHighlight", "highlightNet", "Toggle Last Net Highlight", "Alt+`"); alias("highlightNetSelection", "highlightNet", "Highlight Net of Selection", "");
 // groups and locks
@@ -717,16 +722,16 @@ act("autoplace", "Auto Place Footprints…", "", (ctx: PcbCtx) => { const r = ro
 export const libraryAction = (opts?: Record<string, unknown>) => (ctx: PcbCtx) => { const L = root.KiCadLibrary; if (!L || !L.chooseAndPlace) { ctx.toast("The library module is not loaded"); return true; } L.chooseAndPlace("footprint", opts); return true; };
 act("placeFootprint", "Place Footprints", "A", libraryAction());
 act("showFootprintBrowser", "Footprint Library Browser", "", libraryAction({ browser: true }));
-Object.freeze(ACTIONS);
-/** pcb.setRoutingDialogs: the routing dialogs the editor bundle hands over. */
-export function setRoutingDialogsImpl(d: RoutingDialogs) { routingDialogs = d; }
-
-/** The Grid Origin dialog; exported for the tests (the units come from the toolbar's size units). */
 // EDIT_TOOL::Drag: the module's D / G handling (index.ts dragKey), so the menu bar and the hotkey list reach it too
 let dragImpl: ((ctx: PcbCtx, free: boolean) => boolean) | null = null;
 export function setDragImpl(f: (ctx: PcbCtx, free: boolean) => boolean) { dragImpl = f; }
 act("drag45Degree", "Drag 45 Degree Mode", "D", (ctx: PcbCtx) => !!dragImpl && dragImpl(ctx, false), { tip: "Drags a track segment, or a mixed selection as one block, keeping connected tracks at 45 degrees." });
 act("dragFreeAngle", "Drag Free Angle", "G", (ctx: PcbCtx) => !!dragImpl && dragImpl(ctx, true), { tip: "Drags the nearest joint in the track without restricting the track angle." });
+Object.freeze(ACTIONS);
+/** pcb.setRoutingDialogs: the routing dialogs the editor bundle hands over. */
+export function setRoutingDialogsImpl(d: RoutingDialogs) { routingDialogs = d; }
+
+/** The Grid Origin dialog; exported for the tests (the units come from the toolbar's size units). */
 export function openGridOrigin(ctx: PcbCtx) {
   const R = sizesOf(ctx), u = sizeUnits(), per = u === "mil" ? 0.0254 : u === "in" ? 25.4 : 1, dp = u === "mil" ? 2 : u === "in" ? 5 : 4;
   const show = (mm: number) => +(mm / per).toFixed(dp), back = (v: number) => Math.round(v * per * 1e6) / 1e6;

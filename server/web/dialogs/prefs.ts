@@ -48,8 +48,13 @@ export interface Prefs {
   common: { hcDimming: number };
   /** PCB Editor > Origins & Axes (PCBNEW_SETTINGS m_Display.m_DisplayOrigin, m_DisplayInvertXAxis / YAxis) */
   pcbOrigin: { origin: "page" | "aux" | "grid"; invertX: boolean; invertY: boolean };
-  /** PCB Editor > Editing Options (PCBNEW_SETTINGS): m_AutoRefillZones */
-  pcbEditing: { autoRefillZones: boolean };
+  /**
+   * PCB Editor > Editing Options (PCBNEW_SETTINGS): m_RotationAngle (degrees), m_TrackDragAction, m_CtrlClickHighlight,
+   * m_Display.m_RatsnestThickness (pixels), m_ESCClearsNetHighlight, m_ShowCourtyardCollisions, m_AutoRefillZones.  The
+   * angle snap mode, the arc editing mode and curved ratsnest lines are the board tools' own (toolbar and View menu too).
+   */
+  pcbEditing: { rotationAngle: number; trackDragAction: "move" | "drag" | "dragFree"; ctrlClickHighlight: boolean; ratsnestThickness: number;
+    escClearsNetHighlight: boolean; showCourtyardCollisions: boolean; autoRefillZones: boolean };
   grids: Record<EditorId, GridPrefs>;
 }
 const MIL = 0.0254;
@@ -68,7 +73,7 @@ export const DEFAULT_PREFS: Prefs = {
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, trackClearance: 2, padClearance: true },
   common: { hcDimming: 0.8 },
   pcbOrigin: { origin: "page", invertX: false, invertY: false },
-  pcbEditing: { autoRefillZones: false },
+  pcbEditing: { rotationAngle: 90, trackDragAction: "drag", ctrlClickHighlight: false, ratsnestThickness: 0.5, escClearsNetHighlight: true, showCourtyardCollisions: true, autoRefillZones: false },
   grids: {
     // APP_SETTINGS_BASE::DefaultGridSizeList and addParamsForWindow's defaultGridIdx (common/settings/app_settings.cpp):
     // eeschema / symbol_editor 100, 50, 25, 10 mil on 50 mil (index 1); pcbnew / footprint editor the 22 grids from
@@ -184,6 +189,13 @@ export function activeGridPitch(): number {
  * modes (after OK in the dialog, and once when the page's first document opens) — otherwise a toolbar toggle made
  * since would be undone every time a sheet is entered.
  */
+type PcbToolPrefState = { trackClearance?: number; padClearance?: boolean; rotationAngle?: number; trackDragAction?: string; showCourtyardConflicts?: boolean };
+/** The board tools' copies of the preferences (they load lazily: dialogs/index.ts calls this again on "kc-pcb-tools"). */
+export function applyPcbToolPrefs(p: Prefs = prefs()): void {
+  const pcbS = CollabTools.pcb && (CollabTools.pcb.state as PcbToolPrefState); if (!pcbS) return;
+  pcbS.trackClearance = p.pcbDisplay.trackClearance; pcbS.padClearance = p.pcbDisplay.padClearance !== false;
+  pcbS.rotationAngle = p.pcbEditing.rotationAngle; pcbS.trackDragAction = p.pcbEditing.trackDragAction; pcbS.showCourtyardConflicts = p.pcbEditing.showCourtyardCollisions;
+}
 export function applyPrefs(full = true): void {
   const p = prefs();
   // WX_VIEW_CONTROLS::LoadSettings: the wheel routing and the zoom controller (editor/wheel-model.ts) read these
@@ -214,7 +226,9 @@ export function applyPrefs(full = true): void {
     } else {
       E.renderOpts.padNumbers = p.pcbDisplay.showPadNumbers; E.renderOpts.netNames = p.pcbDisplay.showNetNames; E.renderOpts.pageLimits = p.pcbDisplay.showPageLimits;
       (E.renderOpts as { hcDimming?: number }).hcDimming = p.common.hcDimming;
-      const pcbS = CollabTools.pcb && (CollabTools.pcb.state as { trackClearance?: number; padClearance?: boolean }); if (pcbS) { pcbS.trackClearance = p.pcbDisplay.trackClearance; pcbS.padClearance = p.pcbDisplay.padClearance !== false; }
+      E.renderOpts.ratsnestThickness = p.pcbEditing.ratsnestThickness;
+      E.escClearsHighlight = p.pcbEditing.escClearsNetHighlight; E.ctrlClickHighlight = p.pcbEditing.ctrlClickHighlight;
+      applyPcbToolPrefs(p);
       setToggles({ showPadNumbers: p.pcbDisplay.showPadNumbers, showNetNames: p.pcbDisplay.showNetNames });
     }
     if (full) store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) });

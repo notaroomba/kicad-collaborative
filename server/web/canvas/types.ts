@@ -224,6 +224,8 @@ export interface RenderOpts {
   subgrids?: boolean; gridItemColor?: string;
   selected?: Set<string> | null; highlight?: Set<string> | null; lockedIds?: Set<string> | null;
   showHiddenPins?: boolean; showHiddenText?: boolean; /** eeschema's View > Show Hidden Fields (not pcbnew's hidden text) */ showHiddenFields?: boolean; zoneOutline?: boolean; padNumbers?: boolean;
+  /** GetShowPageLimits (m_ShowPageLimits / eeschema's show_page_limits): the paper outline; on unless false */ pageLimits?: boolean;
+  /** PCB_DISPLAY_OPTIONS m_RatsnestThickness: the ratsnest line width in pixels (0.5) */ ratsnestThickness?: number;
   outlinePads?: boolean; outlineTracks?: boolean; outlineVias?: boolean;
   highContrast?: boolean; activeLayer?: string | null; inactiveHide?: boolean;
   /** board: Preferences ▸ Display ▸ "dimming factor for high contrast mode" (appearance.hicontrast_dimming_factor, 0.8) */

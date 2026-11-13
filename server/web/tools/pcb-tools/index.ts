@@ -28,7 +28,7 @@ import type { PickerFn, PromptFn } from "./dom";
 import type { LayerPicker } from "./route-tool";
 import type { RouterSettings } from "./router-settings";
 import { root } from "../root";
-import { setDragImpl, footprintByRef, footprintRefChoices, ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
+import { highlightNetAt, setDragImpl, footprintByRef, footprintRefChoices, ACTIONS, LOCKED_WARNING, VIA_SIZES, applyTuneSettings, modificationPoint, requestSelection, routingDialogs, runAction, setRoutingDialogsImpl, tuneSettingsView, tunerProperties, unfillChanges, unlockedIds } from "./actions";
 import { hoverPoint, liveSelected, netNameOf, nextWidth, sizesOf } from "./app-state";
 import { ArcGeom, arcBackup, arcDrawMode, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, arcMove, arcTangentSeedAt, arcTangentSeedNear, finishArc, setArcDrawMode, showArcMode } from "./arcs";
 import { arrayChanges, arrayOrigin, arraySize, arrayStacked, arrayTransform } from "./array";
@@ -498,6 +498,8 @@ export const pcb = {
     return rows;
   },
   /** PCB_ACTIONS::trackViaSizeChanged: a route in progress takes the new sizes. */
+  /** PCB_SELECTION_TOOL with m_CtrlClickHighlight: a Ctrl+click runs highlightNet at the click (not the selection). */
+  highlightNetAt(ctx: PcbCtx, at: Pt) { return highlightNetAt(ctx, at); },
   trackViaSizeChanged(ctx: PcbCtx) { ctx = ctx || lastCtx; if (!ctx) return; bind(ctx); const rt = S.route; if (rt) { rt.width = sizesOf(ctx).routeWidth(netNameOf(ctx, rt.net), rt.connected); updateHead(ctx); } ctx.requestRender(); },
   /** The net being routed (the first of a pair), "" with none: what the size dialogs resolve the netclass of. */
   routedNet() { return S.route && S.route.net ? S.route.net.name || "" : ""; },

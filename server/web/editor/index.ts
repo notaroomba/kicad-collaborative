@@ -233,6 +233,12 @@ stage.addEventListener("pointerdown", (ev) => {
   const [x, y] = worldMm(ev);
   const mod = activeModule();
   if (mod && moduleTool(E.tool) && mod.onPointerDown) { if (E.viewOnly && E.tool !== "highlight") { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
+  // PCB_SELECTION_TOOL::Main: with "Ctrl+click highlights net" (m_CtrlClickHighlight, not in the Footprint Editor) a
+  // Ctrl+click (no Shift) runs highlightNet at the click instead of toggling the selection
+  if (selModifier(ev) === "toggle" && !isSch() && E.ctrlClickHighlight && E.DOC_TYPE !== "footprint" && E.tool === "select") {
+    const pm = CollabTools.pcb as unknown as { highlightNetAt?: (c: unknown, at: number[]) => unknown } | undefined;
+    if (pm && pm.highlightNetAt) { pm.highlightNetAt(toolCtx(), [x, y]); const pst = CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev; requestRender(); ev.preventDefault(); return; }
+  }
   if (E.tool === "select" && E.kdoc && !ev.shiftKey && window.KDialogs) {   // KiCad: a click on a field selects (and drags) the field, not its symbol
     const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
     if (f && (isSch() || !E.hooks.fieldWins || E.hooks.fieldWins([x, y], f.item.id, f.name))) {
@@ -646,7 +652,7 @@ document.addEventListener("keydown", (ev) => {
     if (!isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup && !selectionIds().length && !E.selField && !(CollabTools.pcb.state && (CollabTools.pcb.state.padSel || (CollabTools.pcb.state as { escCleared?: unknown }).escCleared === ev))) CollabTools.pcb.exitGroup(toolCtx());
     // a schematic's net highlighting belongs to the module's Esc (SCH_SELECTION_TOOL: cleared only with nothing selected)
     const schNetHl = isSch() && !!(CollabTools.sch && (CollabTools.sch.state as { highlight?: unknown }).highlight);
-    clearAllSelection(false); if (E.highlightIds && !schNetHl) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
+    clearAllSelection(false); if (E.highlightIds && !schNetHl && (isSch() || E.escClearsHighlight)) { E.highlightIds = null; if (CollabTools.pcb && CollabTools.pcb.state) (CollabTools.pcb.state as { highlightNet?: unknown }).highlightNet = null; } dragG.replaceChildren(); selectionChanged(); return; }   // m_ESCClearsNetHighlight
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   // a schematic field selected on its own: Delete hides it, M / G carry it (SCH_EDIT_TOOL::DoDelete, SCH_MOVE_TOOL); a board
   // field goes on to the board module (Delete: "Hide Field") and the Move action (gestures.ts startFieldMove)

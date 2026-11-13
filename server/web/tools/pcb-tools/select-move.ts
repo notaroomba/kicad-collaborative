@@ -246,12 +246,14 @@ export function onStickyPointerDown(ev: PointerEvent) {
 export const DRAG_PX = 5;
 /**
  * PCB_SELECTION_TOOL::Main on a left-drag that started on the selection: a routable selection (tracks, or one via) runs
- * the router's drag (drag45Degree, TRACK_DRAG_ACTION::DRAG), anything else is moved.
+ * the router's drag (drag45Degree or dragFreeAngle, per the Editing Options' track mouse-drag mode), anything else is moved.
  */
 export function startPendingDrag(ctx: PcbCtx, pd: PendingDrag) {
   const ids = pd.ids.filter((id: string) => ctx.doc.items.has(id)); if (!ids.length) return false;
-  const its = routableItems(ctx.doc, ids);
-  if (its) return beginInlineDrag(ctx, its, pd.mm, false, pd.app ? "app" : "select");
+  // m_TrackDragAction: DRAG -> drag45Degree, DRAG_FREE_ANGLE -> dragFreeAngle, MOVE -> the move tool
+  const mode = S.trackDragAction || "drag";
+  const its = mode === "move" ? null : routableItems(ctx.doc, ids);
+  if (its) return beginInlineDrag(ctx, its, pd.mm, mode === "dragFree", pd.app ? "app" : "select");
   if (ids.length > 1) return beginCarryMove(ctx, { at: pd.mm, sticky: false });
   return beginSelectDrag(ctx, ctx.doc.items.get(ids[0])!, pd.mm);
 }

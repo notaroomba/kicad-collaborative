@@ -153,7 +153,9 @@ export type PcbState = {
   shoveDoc?: BoardDoc | null;
   move?: SelectMove | null; pending?: PendingDrag | null; sworld?: { doc: BoardDoc; ver: number; key: string; w: ShoveWorld } | null;
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
-  drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; netColorMode?: string; trackClearance?: number; padClearance?: boolean; showCourtyardConflicts?: boolean; enteredGroup?: string | null; hiddenSeverities?: Set<string> | null;
+  drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; netColorMode?: string; trackClearance?: number; padClearance?: boolean; showCourtyardConflicts?: boolean;
+  /** PCBNEW_SETTINGS m_RotationAngle (Preferences > Editing Options > Step for rotate commands, degrees; 90) */ rotationAngle?: number;
+  /** PCBNEW_SETTINGS m_TrackDragAction: what a left-drag of tracks does ("move", "drag" = 45 degree, "dragFree"; "drag") */ trackDragAction?: "move" | "drag" | "dragFree"; enteredGroup?: string | null; hiddenSeverities?: Set<string> | null;
   arcMode?: number; arcEditMode?: number; angleSnap?: string; stickyUp?: boolean; startWithVia?: { from: string } | null;
   forceHover?: boolean; dragFree?: boolean; downHandled?: unknown; escCleared?: unknown;
   /** DRAWING_TOOL::DrawZone's ZONE_MODE for the zone tool: a cutout of / a zone similar to the source zone (zone-modes.ts); next: what the next activation takes */
