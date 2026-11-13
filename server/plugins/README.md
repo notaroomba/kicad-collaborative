@@ -248,6 +248,12 @@ How it works:
 - **The clipboard is the editors' copy buffer.** `wx.TheClipboard` reads what Copy in this project's schematic or
   board editor took and writes KiCad items for its Paste (`kicad.design.copied()` / `kicad.design.copy({ text })`).
   The buffer is shared between this browser's editor tabs. The computer's clipboard is never read.
+- **Library files a plugin writes go to the project.** When a plugin leaves a `.kicad_sym` symbol library or a
+  `.pretty/*.kicad_mod` footprint behind, the editor asks to add them to the project's libraries
+  (`project.addLibraryFiles`, needs `design:write`) instead of handing them over as downloads. 3D models written
+  with them are added too.
+- **Files can be dropped on a plugin's window.** `wx.FileDropTarget` and `DragAcceptFiles` receive files dropped
+  from the computer; the plugin sees them under `/tmp/dropped`.
 - The project file and the schematics are beside the board, so net classes, design rules and
   plugins that read the schematic work.
 - The interpreter starts the first time one of the plugin's commands is used in a project

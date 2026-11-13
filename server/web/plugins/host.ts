@@ -442,7 +442,7 @@ const NEEDS: Record<string, string | null> = {
   "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
-  "fab.svg": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write",
+  "fab.svg": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write", "project.addLibraryFiles": "design:write",
   "libs.libraries": null, "libs.footprints": null, "libs.footprint": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,
@@ -490,6 +490,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   if (ns === "view") return views[fn](a);
   if (ns === "fab") return fab[fn](a);
   if (ns === "libs") return libs[fn](a);
+  if (ns === "project" && fn === "addLibraryFiles") return addLibraryFiles(p, a);
   if (ns === "project") { if (fn === "saveVersion") log(p.identifier, "host", a && a.name ? `Saved a version: ${String(a.name).slice(0, 80)}` : "Opened the Save Version dialog"); return project[fn](a); }
   if (ns === "net") return netFetch(p, a);
   if (ns === "storage") return storage(p.identifier, fn, a);
@@ -518,6 +519,36 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
     case "prompt": return ask(p, { kind: "form", title: String(a.title || name).slice(0, 120), message: a.message ? String(a.message).slice(0, 2000) : undefined, fields: cleanFields(a.fields).filter((f) => f.type !== "file" || has(p, "files:import")), okLabel: a.okLabel ? String(a.okLabel).slice(0, 40) : undefined });
     default: return null;
   }
+}
+
+// ---------------------------------------------------------------- libraries a plugin imports
+
+const LIBRARY_FILE = /^(?:[^/]+\/)*(?:[^/]+\.kicad_sym|[^/]+\.pretty\/[^/]+\.kicad_mod|[^/]+\.3dshapes\/[^/]+\.(?:step|stp|wrl))$/i;
+/**
+ * A plugin that imports parts writes symbol libraries, footprints and 3D models into the project folder.  On the
+ * desktop they are then in the project; here the person is asked, and on a yes they become documents of the project
+ * and rows of its library tables (everyone in the project gets them).  What is refused or fails is left to the
+ * plugin, which hands it over as a download.
+ */
+async function addLibraryFiles(p: InstalledPlugin, a: any): Promise<unknown> {
+  const files: { path: string; text: string }[] = [];
+  for (const f of Array.isArray(a.files) ? a.files.slice(0, 200) : []) {
+    const path = String((f && f.path) || "").replace(/\\/g, "/"); const text = typeof (f && f.text) === "string" ? f.text : "";
+    if (LIBRARY_FILE.test(path) && !path.split("/").some((part) => part === ".." || part.startsWith(".")) && text && text.length <= 8_000_000) files.push({ path, text });
+  }
+  const none = { added: [], updated: [], failed: (Array.isArray(a.files) ? a.files : []).map((f: any) => String((f && f.path) || "")) };
+  if (!files.length) return none;
+  let ed: any; try { ed = ED(); } catch { return none; }
+  if (!ed || !ed.api || !ed.api.importLibraryFiles || ed.viewOnly) return none;
+  const libs = files.filter((f) => /\.kicad_sym$/i.test(f.path)).length, fps = files.filter((f) => /\.kicad_mod$/i.test(f.path)).length, models = files.length - libs - fps;
+  const what = [libs ? `${libs} symbol ${libs === 1 ? "library" : "libraries"}` : "", fps ? `${fps} footprint${fps === 1 ? "" : "s"}` : "", models ? `${models} 3D model${models === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+  const names = files.slice(0, 8).map((f) => f.path).join("\n") + (files.length > 8 ? `\n… and ${files.length - 8} more` : "");
+  const yes = await ask(p, { kind: "confirm", title: "Add to the project's libraries", message: `${p.manifest.name} made ${what}. Add them to this project's libraries? Everyone in the project gets them.\n\n${names}`, fields: [], okLabel: "Add to project" });
+  if (!yes) return none;
+  const out = await ed.api.importLibraryFiles(files);
+  log(p.identifier, "host", `Added to the project's libraries: ${[...out.added, ...out.updated].join(", ") || "nothing"}${out.failed.length ? `; failed: ${out.failed.join(", ")}` : ""}`);
+  if (out.added.length || out.updated.length) toast(`${p.manifest.name}: ${out.added.length + out.updated.length} library file${out.added.length + out.updated.length === 1 ? "" : "s"} added to the project`, 4000);
+  return out;
 }
 
 // ---------------------------------------------------------------- dialogs the host draws for a plugin

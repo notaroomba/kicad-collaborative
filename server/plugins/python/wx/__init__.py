@@ -2184,6 +2184,46 @@ class Window(EvtHandler):
     SetFocusFromKbd = SetFocus
     HasFocus = lambda self: False
 
+    # files dragged from the computer onto the window: wx.FileDropTarget.OnDropFiles gets them as files of this
+    # interpreter (under /tmp/dropped), where the plugin opens them as it would the originals
+    def SetDropTarget(self, target):
+        self._wx_drop = target
+        if target is None or not _DOM or getattr(self, "_wx_drop_bound", False):
+            return
+        self._wx_drop_bound = True
+
+        def over(e):
+            e.preventDefault()
+
+        def drop(e):
+            e.preventDefault()
+            t = getattr(self, "_wx_drop", None)
+            files = e.dataTransfer.files if e.dataTransfer else None
+            if t is None or files is None or not hasattr(t, "OnDropFiles"):
+                return
+            import os as _os
+            paths = []
+            _os.makedirs("/tmp/dropped", exist_ok=True)
+            for i in range(min(int(files.length), 40)):
+                f = files.item(i)
+                if f.size > 64 * 1024 * 1024:
+                    continue
+                data = _wait(f.arrayBuffer()).to_py()
+                path = _os.path.join("/tmp/dropped", _os.path.basename(str(f.name)) or "file")
+                with open(path, "wb") as out:
+                    out.write(bytes(data))
+                paths.append(path)
+            if paths:
+                t.OnDropFiles(int(getattr(e, "offsetX", 0) or 0), int(getattr(e, "offsetY", 0) or 0), paths)
+
+        self.el.addEventListener("dragover", __import__("pyodide.ffi", fromlist=["create_proxy"]).create_proxy(over))
+        _listen(self.el, "drop", drop)
+
+    def GetDropTarget(self):
+        return getattr(self, "_wx_drop", None)
+
+    DragAcceptFiles = lambda self, accept=True: None
+
     def SetToolTip(self, tip):
         self._wx_tooltip = tip if isinstance(tip, str) else getattr(tip, "_text", "")
         self.el.title = self._wx_tooltip
@@ -5859,6 +5899,33 @@ class _Clipboard:
         return self
 
     def __exit__(self, *a):
+        return False
+
+
+class DropTarget:
+    def __init__(self, data=None):
+        self._data = data
+
+    OnDrop = lambda self, x, y: True
+    OnData = lambda self, x, y, default=None: default
+    OnDragOver = OnEnter = lambda self, x, y, default=None: default
+    OnLeave = lambda self: None
+    SetDataObject = GetDataObject = SetDefaultAction = lambda self, *a: None
+
+
+class FileDropTarget(DropTarget):
+    def __init__(self):
+        DropTarget.__init__(self)
+
+    def OnDropFiles(self, x, y, filenames):
+        return False
+
+
+class TextDropTarget(DropTarget):
+    def __init__(self):
+        DropTarget.__init__(self)
+
+    def OnDropText(self, x, y, text):
         return False
 
 

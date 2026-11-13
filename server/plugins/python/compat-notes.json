@@ -87,15 +87,15 @@
     },
     "com.github.z2labs.eagle-exhumer": {
       "status": "unsupported",
-      "note": "It drives KiCad's project manager window to import an Eagle project. The web editor has no such window."
+      "note": "It imports an Eagle project by starting the KiCad desktop program and pressing its menus through the computer's window system. A browser page cannot start or steer another program."
     },
     "com.github.heronitec-solutions.kicomlib": {
       "status": "limited",
       "note": "It opens. It keeps library folders on a computer in step with a KiComLib server you run yourself; the web editor has no such folders and a plugin here can only reach the web addresses its own package names."
     },
     "com.github.Steffen-W.impartGUI": {
-      "status": "limited",
-      "note": "It opens, but it imports parts into library folders on the computer, which the web editor does not read. Use the editor's own part search to add vendor parts."
+      "status": "works",
+      "note": "Runs here. A part imported by its LCSC number comes as a symbol library and a footprint, which the editor offers to add to the project's libraries. A vendor's part ZIP is imported by dropping it on the plugin's window, since there is no Downloads folder to watch. Checked with a recorded answer from EasyEDA, not the live service; the 3D model was not in that recording. Needs network access granted."
     },
     "com.github.pcbway.PCBWay-Plug-in-for-Kicad": {
       "status": "works",

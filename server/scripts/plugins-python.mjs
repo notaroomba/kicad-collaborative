@@ -149,10 +149,12 @@ async function one(dir, boardPath, boardGiven) {
   const again = !!driveSrc && /^# again$/m.test(driveSrc);
   if (again && !process.env.KC_AGAIN) { process.env.STATE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "kc-state-")), "state.json"); }
   const store = process.env.STATE && fs.existsSync(process.env.STATE) ? JSON.parse(fs.readFileSync(process.env.STATE, "utf8")) : {};
+  // "# file: <path from the repository root>": a fixture the drive reads from /kicad/drive/files/<name>
   // "# sibling: <path from the repository root>": another file of the project, beside the board (a board to panelize, …)
   if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
   let copied = ""; { const m = driveSrc && /^# copied: (\S+)$/m.exec(driveSrc); if (m) copied = fs.readFileSync(path.resolve(server, "..", m[1]), "utf8"); }
+  const libraryFiles = [];
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
     calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75) } : undefined });
@@ -166,6 +168,8 @@ async function one(dir, boardPath, boardGiven) {
       if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
       return JSON.stringify({ path: path.basename(boardPath), text, selection: edited ? startSelection.filter((id) => text.includes(id)) : startSelection, version: "10.0.0", files: siblings });
     }
+    // Library files offered to the project: the stand-in editor takes what a project takes and remembers it.
+    if (method === "project.addLibraryFiles") { const added = (a.files || []).filter((f) => typeof f.text === "string" && f.text.trim().startsWith("(") || /\.(step|stp|wrl)$/i.test(f.path)).map((f) => f.path); libraryFiles.push(...(a.files || []).filter((f) => added.includes(f.path))); return JSON.stringify({ added, updated: [], failed: (a.files || []).map((f) => f.path).filter((x) => !added.includes(x)) }); }
     // The editors' copy buffer.  "# copied: <path from the repository root>" in a drive: what Copy took before the run.
     if (method === "design.copied") return JSON.stringify({ text: copied });
     if (method === "design.copy") { copied = String(a.text || ""); return JSON.stringify({ copied: copied.length }); }
@@ -224,7 +228,7 @@ _kj.dumps(_ko)
     if (method === "project.saveVersion") return JSON.stringify({ saved: !!a.name, dialog: !a.name });
     return "null";
   };
-  if (driveSrc) { py.FS.mkdirTree("/kicad/drive"); py.FS.writeFile("/kicad/drive/kc_drive.py", driveSrc); py.FS.writeFile("/kicad/drive/kc_run.py", `RUN = ${process.env.KC_AGAIN ? 2 : 1}\n`); py.FS.writeFile("/kicad/drive/drive_util.py", fs.readFileSync(path.join(here, "plugin-drives", "drive_util.py"))); }
+  if (driveSrc) { py.FS.mkdirTree("/kicad/drive"); py.FS.writeFile("/kicad/drive/kc_drive.py", driveSrc); for (const m of driveSrc.matchAll(/^# file: (\S+)$/gm)) { py.FS.mkdirTree("/kicad/drive/files"); py.FS.writeFile("/kicad/drive/files/" + path.basename(m[1]), fs.readFileSync(path.resolve(server, "..", m[1]))); } py.FS.writeFile("/kicad/drive/kc_run.py", `RUN = ${process.env.KC_AGAIN ? 2 : 1}\n`); py.FS.writeFile("/kicad/drive/drive_util.py", fs.readFileSync(path.join(here, "plugin-drives", "drive_util.py"))); }
   py.globals.set("_kc_files", py.toPy(readPackage(dir)));
   // cairosvg.svg2png is drawn by the browser the plugin runs in; without one, a real browser is started for the picture.
   globalThis.__kcSvgPng = (svg, w, h, background, negate) => {
@@ -253,6 +257,8 @@ sys.path.insert(0, "/kicad/lib")
 import wx, kicad_web
 wx._headless_modal = lambda dlg: wx.ID_OK
 _kc_drove = []
+_kc_modal_failed = []
+_kc_modal_said = []
 def _kc_main():
     import json
     if ${driveSrc ? "True" : "False"}:
@@ -271,7 +277,15 @@ if ${driveSrc ? "True" : "False"}:
     import kc_drive
     def _kc_modal(dlg):
         # a dialog the plugin waits on: the drive works it while it is open (modal(dialog)), then it closes with OK
-        r = kc_drive.modal(dlg) if hasattr(kc_drive, "modal") else None
+        # (a plugin may catch what its dialog raises: what the drive found wrong is kept and fails the run all the same)
+        try:
+            r = kc_drive.modal(dlg) if hasattr(kc_drive, "modal") else None
+        except BaseException as e:
+            _kc_modal_failed.append("%s: %s" % (type(e).__name__, e))
+            raise
+        if isinstance(r, dict):
+            _kc_modal_said.append(r)
+            return wx.ID_OK
         return wx.ID_OK if r is None else r
     wx._headless_modal = _kc_modal
 else:
@@ -306,7 +320,9 @@ if "/kicad/drive" not in sys.path: sys.path.append("/kicad/drive")
 import kc_drive, kicad_web
 kicad_web._running[0] += 1
 try:
-    _kc_r = {"result": _kc_drove.pop() if _kc_drove else kc_drive.after_run(_kc_action)}
+    if _kc_modal_failed:
+        raise AssertionError(_kc_modal_failed.pop(0).split(": ", 1)[-1])
+    _kc_r = {"result": _kc_drove.pop() if _kc_drove else (kc_drive.after_run(_kc_action) if hasattr(kc_drive, "after_run") else (_kc_modal_said[-1] if _kc_modal_said else None))}
     kicad_web.flush(); kicad_web._export_outputs()
 except BaseException as e:
     traceback.print_exc()
@@ -320,6 +336,7 @@ json.dumps(_kc_r, default=str)`)); if (d.error) out = { ok: false, error: "drive
   }
   const after = JSON.parse(py.runPython("import json, kicad_web; json.dumps(kicad_web.describe()['missing'])"));
   result.missing = after; result.messages = py.runPython("import json, wx; json.dumps(wx._messages[-6:])");
+  result.libraries = libraryFiles.map((f) => f.path);
   result.log = logs.slice(-40); result.said = said.slice(-12); result.net = calls.filter((c) => c.method === "net.fetch").length;
   if (again && !process.env.KC_AGAIN && result.actions.every((x) => x.ok)) {
     const r = spawnSync(process.execPath, process.argv.slice(1), { env: { ...process.env, KC_AGAIN: "1" }, encoding: "utf8", maxBuffer: 1 << 28, timeout: 600000 });

@@ -478,6 +478,50 @@ async function overwriteFootprintDoc(docId: string, text: string, label: string)
   openFootprintDoc(docId);
   return true;
 }
+/**
+ * Footprint files made outside the editors (a plugin's part import): each `<library>.pretty/<name>.kicad_mod` becomes
+ * a document of the project (an existing one takes the new content as one op, so other clients follow), and a library
+ * that is new gets its row in the project's fp-lib-table.  Nothing is opened.
+ */
+export async function importFootprintFiles(files: { path: string; text: string }[]): Promise<{ added: string[]; updated: string[]; failed: string[] }> {
+  const out = { added: [] as string[], updated: [] as string[], failed: [] as string[] };
+  const project = state.project;
+  if (!project || E.viewOnly) { out.failed = files.map((f) => f.path); return out; }
+  const rows = await libTableRows(true); const libs = new Set<string>();
+  for (const f of files) {
+    const m = /^((?:[^/]+\/)*)([^/]+)\.pretty\/([^/]+)\.kicad_mod$/i.exec(f.path);
+    if (!m || !/^\s*\((footprint|module)\b/.test(f.text)) { out.failed.push(f.path); continue; }
+    const have = project.docs.find((d) => d.path === f.path);
+    try {
+      if (have) {
+        const live = await liveDocument(have.docId);
+        const fd = KiCadCanvas.parseDoc(live.file, "footprint");
+        let seq = live.seq;
+        for (const op of live.ops) { seq = Math.max(seq, op.seq || 0); for (const c of op.changes || []) { try { KiCadCanvas.applyChange(fd, c, 1e6); } catch { /* skipped */ } } }
+        const ch = changesBetween(fd, f.text);
+        if (ch.length) { seq = await sendDocOps(have.docId, ch); for (const c of ch) KiCadCanvas.applyChange(fd, c, 1e6); }
+        const r = await fetch(`/api/docs/${have.docId}/snapshots?seq=${seq}&saved=true`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: FD().serializeFootprintDoc(fd) });
+        if (!r.ok) throw new Error(String(r.status));
+        out.updated.push(f.path);
+      } else {
+        const res = await api(`/api/projects/${project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: f.path, docType: "footprint" }) }) as { docId?: string; path?: string };
+        if (!res.docId) throw new Error("no document");
+        const r = await fetch(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: f.text });
+        if (!r.ok) throw new Error(String(r.status));
+        if (!project.docs.some((d) => d.docId === res.docId)) project.docs.push({ docId: res.docId, path: res.path || f.path, docType: "footprint" });
+        out.added.push(f.path);
+      }
+      libs.add(m[1] + m[2]);
+    } catch (e) { console.warn(e); out.failed.push(f.path); }
+  }
+  for (const lib of libs) {
+    const nick = lib.split("/").pop() as string;
+    if (!rows.some((r) => r.name === nick)) await newLibraryRow(nick, "${KIPRJMOD}/" + lib + ".pretty");
+  }
+  if (out.added.length) store.set({ project: Object.assign({}, project) });
+  publishLibs();
+  return out;
+}
 function openFootprintDoc(docId: string): void {
   const url = `/p/${state.project!.projectId}/edit?fp=${encodeURIComponent(docId)}`;
   if (location.pathname + location.search === url) return;

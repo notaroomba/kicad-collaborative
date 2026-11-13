@@ -523,6 +523,37 @@ async function createProjectLibrary(se: SymbolEditor, nick: string, seed?: strin
   se.treeSel = { lib: nick }; se.renderAll();
   return lib;
 }
+/**
+ * Symbol libraries made outside the editors (a plugin's part import): each `<name>.kicad_sym` becomes a project
+ * library (an existing file takes the new content), with its row in the project's sym-lib-table.
+ */
+export async function importSymbolLibraries(files: { path: string; text: string }[]): Promise<{ added: string[]; updated: string[]; failed: string[] }> {
+  const out = { added: [] as string[], updated: [] as string[], failed: [] as string[] };
+  const proj = appState.project;
+  if (!proj || E.viewOnly) { out.failed = files.map((f) => f.path); return out; }
+  for (const f of files) {
+    const m = /^(?:[^/]+\/)*([^/]+)\.kicad_sym$/i.exec(f.path);
+    let ok = !!m && /^\s*\(kicad_symbol_lib\b/.test(f.text);
+    if (ok) { try { M.parseLibrary(f.text); } catch (e) { ok = false; } }
+    if (!m || !ok) { out.failed.push(f.path); continue; }
+    const have = proj.docs.find((d) => d.path === f.path);
+    try {
+      if (have) {
+        if (!(await saveTextDocument(have.docId, f.text, { id: "lib", kind: "MODIFIED", typeName: "LIB_SAVED", properties: [] } as unknown as KChange))) throw new Error("not saved");
+        out.updated.push(f.path);
+      } else {
+        const doc = await api(`/api/projects/${proj.projectId}/docs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: f.path, docType: "symbol_lib" }) }) as { docId: string; path: string; docType: string };
+        if (!(await firstSnapshot(doc.docId, f.text))) throw new Error("not written");
+        if (!proj.docs.some((d) => d.docId === doc.docId)) proj.docs.push({ docId: doc.docId, path: doc.path, docType: doc.docType || "symbol_lib" });
+        out.added.push(f.path);
+      }
+      const table = proj.docs.find((d) => d.path === "sym-lib-table"); let listed = false;
+      if (table) { try { const r = await fetch(`/api/docs/${table.docId}/content?v=${Date.now()}`, { credentials: "same-origin" }); listed = r.ok && M.parseLibTable(await r.text()).some((row) => row.nickname === m[1]); } catch (e) { /* add the row */ } }
+      if (!listed) await addToLibTable(m[1], f.path);
+    } catch (e) { console.warn(e); out.failed.push(f.path); }
+  }
+  return out;
+}
 /** A document just created holds nothing the server can join yet: its first content is the snapshot at sequence 0. */
 async function firstSnapshot(docId: string, text: string): Promise<boolean> {
   try { const r = await fetch(`/api/docs/${docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text }); if (r.ok) return true; } catch (e) { /* fall through */ }

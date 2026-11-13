@@ -37,13 +37,15 @@ import { clearSelection, selectedSet, drawBoxSel, drawSelection, fieldLocalDelta
 import { E } from "./state";
 import "./panels/index";
 import { activeModule, commitChanges, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack, unlockedForEdit } from "./tools";
-import { closePopover, toast } from "./util";
+import { api, closePopover, toast } from "./util";
+import { saveTextDocument } from "./projectfile";
 import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
 import type { ItemSummary, SheetEntry } from "./types";
 /** The schematic module's drag in flight (sch-tools S.drag), as far as the app reads it. */
 type SchDrag = { moved?: boolean; last: number[]; kind?: string };
 import { installLibrary } from "./library";
-import { installFpEditHandlers } from "./fpedit";
+import { importFootprintFiles, installFpEditHandlers } from "./fpedit";
+import { importSymbolLibraries } from "../symedit/dialogs";
 import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
 import { installTableCells } from "./tablecells";   // last: its imports must not reorder the modules above
@@ -560,4 +562,34 @@ applyTheme();
 
 // exposed for tests and tooling (window.CollabEditor.api)
 E.hotkeys = { comboOf, runKicadAction, kicadActionAvailable };
-E.api = { HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, state, store, toolCtx, undoLast, worldMm };
+/**
+ * Library files made outside the editors (a plugin that imports vendor parts): symbol libraries and footprints become
+ * documents of the project and rows of its library tables.  Paths are relative to the project folder.
+ */
+async function importLibraryFiles(files: { path: string; text: string }[]): Promise<{ added: string[]; updated: string[]; failed: string[] }> {
+  const sym = await importSymbolLibraries(files.filter((f) => /\.kicad_sym$/i.test(f.path)));
+  const fp = await importFootprintFiles(files.filter((f) => /\.kicad_mod$/i.test(f.path)));
+  // 3D models the footprints name (${KIPRJMOD}/<library>.3dshapes/…): text files (STEP, VRML) kept as project documents
+  const models = { added: [] as string[], updated: [] as string[], failed: [] as string[] };
+  const project = state.project;
+  for (const f of files.filter((x) => /\.(step|stp|wrl)$/i.test(x.path))) {
+    if (!project || E.viewOnly) { models.failed.push(f.path); continue; }
+    try {
+      const have = project.docs.find((d) => d.path === f.path);
+      if (have) {
+        if (!(await saveTextDocument(have.docId, f.text, { id: "model", kind: "MODIFIED", typeName: "MODEL_FILE", properties: [] } as unknown as KChange))) throw new Error("not saved");
+        models.updated.push(f.path);
+      } else {
+        const res = await api(`/api/projects/${project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: f.path, docType: "model3d" }) }) as { docId?: string; path?: string };
+        if (!res.docId) throw new Error("no document");
+        const r = await fetch(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: f.text });
+        if (!r.ok) throw new Error(String(r.status));
+        if (!project.docs.some((d) => d.docId === res.docId)) project.docs.push({ docId: res.docId, path: res.path || f.path, docType: "model3d" });
+        models.added.push(f.path);
+      }
+    } catch (e) { console.warn(e); models.failed.push(f.path); }
+  }
+  if (models.added.length && project) store.set({ project: Object.assign({}, project) });
+  return { added: [...sym.added, ...fp.added, ...models.added], updated: [...sym.updated, ...fp.updated, ...models.updated], failed: [...sym.failed, ...fp.failed, ...models.failed] };
+}
+E.api = { importLibraryFiles, HANDLERS, applyChanges, applyView, clearSelection, commitChanges, dispatchAction, drawSelection, enterSheet, fitView, hitOpts, nearestFootprint, openDoc, redoLast, renderProps, requestRender, setTool, snapMm, state, store, toolCtx, undoLast, worldMm };

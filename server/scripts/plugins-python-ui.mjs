@@ -102,6 +102,22 @@ class Ask(wx.Dialog):
         box.Add(self.via, 0, wx.ALL, 8)
         box.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(box)
+        self.SetDropTarget(Dropped(self))
+
+
+class Dropped(wx.FileDropTarget):
+    def __init__(self, dlg):
+        wx.FileDropTarget.__init__(self)
+        self.dlg = dlg
+
+    def OnDropFiles(self, x, y, names):
+        with open(names[0], "rb") as f:
+            self.dlg.text.SetValue("dropped %s: %s" % (os.path.basename(names[0]), f.read().decode()))
+        return True
+
+
+SYMBOLS = '(kicad_symbol_lib (version 20241209) (generator "pytool") (symbol "PyPart" (property "Reference" "U" (at 0 0 0)) (property "Value" "PyPart" (at 0 0 0)) (symbol "PyPart_1_1" (pin input line (at -2.54 0 0) (length 2.54) (name "A") (number "1")))))\n'
+FOOTPRINT = '(footprint "PyPad" (layer "F.Cu") (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste")))\n'
 
 
 class Dialog(pcbnew.ActionPlugin):
@@ -116,6 +132,17 @@ class Dialog(pcbnew.ActionPlugin):
         code = dlg.ShowModal()
         if code != wx.ID_OK:
             print("PYTOOL cancelled")
+            dlg.Destroy()
+            return
+        if dlg.text.GetValue().startswith("lib:"):
+            # a part import: a symbol library and a footprint written into the project folder
+            name = dlg.text.GetValue()[4:]
+            here = os.path.dirname(board.GetFileName())
+            os.makedirs(os.path.join(here, name + ".pretty"), exist_ok=True)
+            with open(os.path.join(here, name + ".kicad_sym"), "w") as f:
+                f.write(SYMBOLS)
+            with open(os.path.join(here, name + ".pretty", "PyPad.kicad_mod"), "w") as f:
+                f.write(FOOTPRINT)
             dlg.Destroy()
             return
         t = pcbnew.PCB_TEXT(board)
@@ -886,10 +913,39 @@ check('the second person sees the text and the via', (await hasText(b, 'PY-LABEL
 // cancelling
 await run(a, await act(a, 'Py: dialog'));
 await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+{
+  const d2 = inner(a); await d2.waitForSelector('input[type="text"]');
+  await d2.locator('input[type="text"]').evaluate((el) => { const dt = new DataTransfer(); dt.items.add(new File(['zip bytes'], 'part.zip')); el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt })); });
+  await a.waitForTimeout(800);
+  check('a file dropped on a plugin\'s window reaches its wx.FileDropTarget as a file it can open', (await d2.locator('input[type="text"]').inputValue()) === 'dropped part.zip: zip bytes', await d2.locator('input[type="text"]').inputValue());
+}
 await a.click('#pluginWindow .kd-x');
 await waitLog(a, ID, /PYTOOL cancelled/);
 check('closing the dialog cancels it', (await a.locator('#pluginWindow').count()) === 0 && (await count(a, 'gr_text')) === texts + 1);
 await idle(a, ID);
+
+// ---- a part import: library files written into the project folder become the project's libraries
+{
+  const docsOf = async () => (await (await a.request.get(`${BASE}/api/projects/${projectId}`)).json());
+  await run(a, await act(a, 'Py: dialog'));
+  await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+  const d3 = inner(a); await d3.waitForSelector('input[type="text"]');
+  await d3.fill('input[type="text"]', 'lib:PyLib');
+  await d3.locator('button', { hasText: /^OK$/ }).click();
+  await a.waitForSelector('#pluginPrompt', { timeout: 30000 });
+  const asked = await a.locator('#pluginPrompt').innerText();
+  check('the person is asked before a plugin\'s libraries join the project', /1 symbol library, 1 footprint/.test(asked) && /PyLib\.kicad_sym/.test(asked) && /PyLib\.pretty\/PyPad\.kicad_mod/.test(asked), asked.slice(0, 300));
+  const noDownload = []; a.on('download', (d) => noDownload.push(d.suggestedFilename()));
+  await a.click('#pluginPromptOk');
+  await idle(a, ID);
+  const docs = (await a.evaluate(() => window.CollabEditor.api.state.project.docs.map((d) => d.path)));
+  check('the symbol library and the footprint are documents of the project', docs.includes('PyLib.kicad_sym') && docs.includes('PyLib.pretty/PyPad.kicad_mod'), docs.join());
+  const content = async (p) => { const d = (await a.evaluate(() => window.CollabEditor.api.state.project.docs)).find((x) => x.path === p); return d ? await (await a.request.get(`${BASE}/api/docs/${d.docId}/content?v=${Date.now()}`)).text() : ''; };
+  check('with the content the plugin wrote', (await content('PyLib.kicad_sym')).includes('"PyPart"') && (await content('PyLib.pretty/PyPad.kicad_mod')).includes('"PyPad"'));
+  check('and both libraries are in the project\'s library tables', /\(name "PyLib"\)/.test(await content('sym-lib-table')) && /\(name "PyLib"\)/.test(await content('fp-lib-table')), (await content('sym-lib-table')).slice(0, 200) + ' | ' + (await content('fp-lib-table')).slice(0, 200));
+  check('nothing was handed over as a download instead', noDownload.length === 0, noDownload.join());
+  void docsOf;
+}
 
 // ---- what the plugin reads
 await a.evaluate(() => { const ed = window.CollabEditor; const id = Array.from(ed.kdoc.items.values()).find((it) => it.kind === 'footprint' && it.ref === 'C1').id; ed.api.toolCtx().setSelection([id]); });

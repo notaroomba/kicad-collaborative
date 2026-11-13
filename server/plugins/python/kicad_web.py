@@ -11,6 +11,7 @@
 # blocks the Python stack until the editor answers); the test harness passes a stand-in.
 
 import base64
+import re
 import importlib
 import importlib.abc
 import importlib.machinery
@@ -1719,6 +1720,38 @@ def _export_outputs():
     return _hand_over_outputs()
 
 
+_LIBRARY_FILE = re.compile(r"^(?:[^/]+/)*(?:[^/]+\.kicad_sym|[^/]+\.pretty/[^/]+\.kicad_mod|[^/]+\.3dshapes/[^/]+\.(?:step|stp|wrl))$", re.I)
+
+
+def _offer_libraries(fresh):
+    """Symbol libraries, footprints and 3D models a plugin wrote into the project folder (a part import) are offered to
+    the project's own libraries, as they would simply be part of the project on the desktop.  Returns the files that
+    were not taken (the person said no, a viewer, a file that is not text), which are handed over as a download."""
+    offer = []
+    for p in fresh:
+        rel = os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/")
+        if not _LIBRARY_FILE.match(rel):
+            continue
+        try:
+            with open(p, "rb") as fh:
+                data = fh.read(8_000_001)
+            if len(data) <= 8_000_000:
+                offer.append((p, {"path": rel, "text": data.decode("utf-8")}))
+        except (OSError, UnicodeDecodeError):
+            pass
+    if not any(f["path"].lower().endswith((".kicad_sym", ".kicad_mod")) for _p, f in offer):
+        return fresh                              # models alone are an output, not a library
+    try:
+        out = _call("project.addLibraryFiles", {"files": [f for _p, f in offer]}) or {}
+    except Exception as e:
+        log.warning("The libraries could not be added to the project: %s", e)
+        return fresh
+    taken = set(out.get("added") or []) | set(out.get("updated") or [])
+    if taken:
+        log.info("Added to the project's libraries: %s", ", ".join(sorted(taken)))
+    return [p for p in fresh if os.path.relpath(p, PROJECT_DIR).replace(os.sep, "/") not in taken]
+
+
 def _hand_over_outputs():
     global _seen_files
     now = _tree(PROJECT_DIR)
@@ -1729,6 +1762,9 @@ def _hand_over_outputs():
     _seen_files = now
     if not fresh or _bridge is None:
         return fresh
+    fresh = _offer_libraries(fresh)
+    if not fresh:
+        return []
     if len(fresh) == 1:
         with open(fresh[0], "rb") as fh:
             data = fh.read()
