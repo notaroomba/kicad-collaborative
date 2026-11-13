@@ -676,17 +676,22 @@ def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0
     return out
 
 
-def _ground_pads(self, net: str = "GND", size: float | None = None, drill: float | None = None, width: float = 0.25, rounds: int = 8) -> dict:
+def _ground_pads(self, net: str = "GND", size: float | None = None, drill: float | None = None, width: float = 0.25, rounds: int = 12, max_pads: int | None = None) -> dict:
     """Give every ground pad that reaches the plane only through the pour on its own layer (review rule
     ground.pour_only) its own via beside it, joined by one short straight track.  A pad on a pour hangs on that piece
     of copper; a track routed past it, or a pour not refilled, cuts it off and leaves ratsnest lines to ground.  Each
-    via is tried in eight directions at a few distances; any the rules check finds at fault is taken out again and the
-    next spot tried.  Call it after routing (finish() does).  Returns {"vias": n, "pads": [...], "left": [...]}."""
+    via is tried in eight directions, those pointing away from the part's middle first (where its other pins' tracks
+    do not run), at 0.8 to 2.1 mm; any the rules check finds at fault is taken out again and the next spot tried.
+    route() calls it before laying signal tracks for the pads of small parts (max_pads=4), so the signals route round
+    those vias instead of filling the room; finish() calls it again after routing for every pad.
+    Returns {"vias": n, "pads": [...], "left": [...]}."""
     name = self._net(net)
     done: list = []
     state: dict = {}        # pad -> index of the next spot to try
     left: list = []
-    steps = [(dx, dy) for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))]
+    steps0 = [(dx, dy) for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))]
+    dists = (0.8, 1.05, 1.35, 1.7, 2.1)
+    order: dict = {}         # pad -> its directions, outward first
     for _ in range(rounds):
         try:
             self.fill()
@@ -695,17 +700,23 @@ def _ground_pads(self, net: str = "GND", size: float | None = None, drill: float
         r = self._call("review_design", rule="ground.pour_only")
         items = [i for f in r.get("findings", []) if f.get("rule") == "ground.pour_only" for i in f.get("items") or []]
         pads = [m.group(1) for m in (re.match(r"^(\S+\.\S+) at ", i) for i in items) if m]
-        left = [p for p in pads if p not in done]
+        g = self.geometry()
+        size_of = {p["ref"]: len(p["pads"]) for p in g["parts"]}
+        left = [p for p in pads if p not in done and (max_pads is None or size_of.get(p.split(".")[0], 0) <= max_pads)]
         if not left:
             break
-        g = self.geometry()
         tried: dict = {}
         for spec in left:
             q = self.pad(spec)
+            if spec not in order:
+                part = next((p for p in g["parts"] if p["ref"] == spec.split(".")[0]), None)
+                ox, oy = (q["x"] - part["x"], q["y"] - part["y"]) if part else (0.0, 0.0)
+                order[spec] = sorted(steps0, key=lambda d: -((d[0] * ox + d[1] * oy) / math.hypot(*d)))
+            steps = order[spec]
             k = state.get(spec, 0)
-            while k < len(steps) * 3:
+            while k < len(steps) * len(dists):
                 dx, dy = steps[k % len(steps)]
-                dist = (0.8, 1.05, 1.35)[k // len(steps)]
+                dist = dists[k // len(steps)]
                 n = math.hypot(dx, dy)
                 at = (_r(q["x"] + dx / n * dist), _r(q["y"] + dy / n * dist))
                 k += 1

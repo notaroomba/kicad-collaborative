@@ -80415,8 +80415,10 @@ var Router = class _Router {
     const want = this.opts.nets ? new Set(this.opts.nets) : null;
     const useZones = this.opts.zones !== false;
     this.sizeForImpedance(Array.from(nl.nets.values()).map((n2) => n2.key).filter((k) => k && (!want || want.has(k))));
+    const poured = new Set(useZones ? zones.map((z) => z.net).filter(Boolean) : []);
     for (const net of nl.nets.values()) {
-      if (!net.key || want && !want.has(net.key)) continue;
+      if (!net.key || want && !want.has(net.key) && !poured.has(net.key)) continue;
+      const watchOnly = !!want && !want.has(net.key);
       const clusters = [];
       for (const cl of net.clusters) {
         const anchors2 = [];
@@ -80472,6 +80474,7 @@ var Router = class _Router {
       clusters.forEach((cl, i) => cl.forEach((a) => {
         a.cluster = i;
       }));
+      if (watchOnly && !pour) continue;
       const cls = this.classFor(net.key);
       const info = { key: net.key, obj: nl.table.byName.get(net.key) || { code: net.code, name: net.name }, cls, conns: [], clusters: clusters.length, zoneCells, zoneCluster, guide: this.guideFor(net.key), anchors, pour };
       const near = (i, j) => {
@@ -80493,7 +80496,7 @@ var Router = class _Router {
       };
       inTree[0] = true;
       update(0);
-      for (let n2 = 1; n2 < clusters.length; n2++) {
+      for (let n2 = 1; n2 < (watchOnly ? 0 : clusters.length); n2++) {
         let j = -1;
         for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestTo[i][0] < bestTo[j][0])) j = i;
         inTree[j] = true;
@@ -81886,6 +81889,7 @@ ${p[0].toFixed(3)},${p[1].toFixed(3)}`;
       this.stitch(timeUp);
     }
     if (this.opts.matchLengths !== false && !this.stopped) this.tune();
+    if (this.opts.zones !== false && !this.stopped && this.opts.matchLengths !== false) this.stitch(timeUp);
     this.unsquare();
     this.validate();
     if (this.opts.fence !== false && !this.stopped) this.fence();
@@ -100052,7 +100056,76 @@ function survey(doc, P, k) {
     e.push(p);
   }
   const lengthOf = (net) => (tracksOf.get(net) || []).reduce((a, t) => a + t.length, 0);
-  return { copper, conds, fps, keepouts, zoneOutlines, zones, filled, outline, tracks, vias, stitches, pourAt, gndLayersAt, refLayers, nearestStitch, walk, tracksOf, viasOf, padsOf, lengthOf };
+  const pathLengthOf = (net) => {
+    const ts = tracksOf.get(net) || [];
+    const pads = padsOf.get(net) || [];
+    const parts = Array.from(new Set(pads.map((p) => p.fp)));
+    if (!ts.length || parts.length < 2) return lengthOf(net);
+    const id = /* @__PURE__ */ new Map();
+    const pts = [];
+    const node = (q) => {
+      const k2 = q[0].toFixed(3) + "," + q[1].toFixed(3);
+      let i = id.get(k2);
+      if (i === void 0) {
+        id.set(k2, i = pts.length);
+        pts.push(q);
+      }
+      return i;
+    };
+    const adj = [];
+    const link = (a, b, w) => {
+      (adj[a] = adj[a] || []).push([b, w]);
+      (adj[b] = adj[b] || []).push([a, w]);
+    };
+    for (const t of ts) {
+      const q = t.shape.t === "seg" ? [t.shape.a, t.shape.b] : t.shape.pts;
+      if (!q || q.length < 2) continue;
+      let prev = node(q[0]);
+      for (let i = 1; i < q.length; i++) {
+        const cur2 = node(q[i]);
+        link(prev, cur2, Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]));
+        prev = cur2;
+      }
+    }
+    const n0 = pts.length;
+    const ends = parts.map(() => []);
+    pts.forEach((q, i) => parts.forEach((f2, j) => {
+      if (pads.some((p) => p.fp === f2 && inBox(p.box, q[0], q[1]))) {
+        ends[j].push(i);
+        link(n0 + j, i, 0);
+      }
+    }));
+    if (ends.some((e) => !e.length)) return lengthOf(net);
+    let best = 0;
+    for (let j = 0; j < parts.length; j++) {
+      const dist = /* @__PURE__ */ new Map([[n0 + j, 0]]);
+      const open2 = [n0 + j];
+      while (open2.length) {
+        open2.sort((a, b) => dist.get(b) - dist.get(a));
+        const u = open2.pop();
+        const du = dist.get(u);
+        for (const [v, w] of adj[u] || []) {
+          if (v >= n0 && v !== n0 + j) {
+            const dv2 = dist.get(v);
+            if (dv2 === void 0 || du + w < dv2) dist.set(v, du + w);
+            continue;
+          }
+          const dv = dist.get(v);
+          if (dv === void 0 || du + w < dv - 1e-9) {
+            dist.set(v, du + w);
+            open2.push(v);
+          }
+        }
+      }
+      for (let k2 = 0; k2 < parts.length; k2++) if (k2 !== j) {
+        const d = dist.get(n0 + k2);
+        if (d === void 0) return lengthOf(net);
+        best = Math.max(best, d);
+      }
+    }
+    return best;
+  };
+  return { copper, conds, fps, keepouts, zoneOutlines, zones, filled, outline, tracks, vias, stitches, pourAt, gndLayersAt, refLayers, nearestStitch, walk, tracksOf, viasOf, padsOf, lengthOf, pathLengthOf };
 }
 var isConnector = (f2) => /^(J|P|CN|X|USB)\d/i.test(f2.ref) || /^Connector/i.test(f2.lib);
 var isAntenna = (f2) => (/^(AE|ANT)\d/i.test(f2.ref) || /antenna/i.test(f2.lib + " " + f2.value)) && !isConnector(f2) && !/u\.?fl|sma|ipex|mmcx|coax/i.test(f2.lib + " " + f2.value);
@@ -100308,7 +100381,7 @@ function reviewPhysics(doc, P, k, settings, add) {
       if (!tp.length || !tn.length) continue;
       if (/^(XTAL|XTL|OSC|XIN|XOUT|XI\b|XO\b)/i.test(bare(e.p))) continue;
       const name = bare(base).replace(/[_\-]$/, "") || bare(e.p);
-      const lp = S2.lengthOf(e.p), ln = S2.lengthOf(e.n);
+      const lp = S2.pathLengthOf(e.p), ln = S2.pathLengthOf(e.n);
       const ifc = pairInterface(bare(e.p));
       const rule = ifc ? INTERFACES[ifc] : null;
       const label = ifc ? `${name} (${ifc})` : name;

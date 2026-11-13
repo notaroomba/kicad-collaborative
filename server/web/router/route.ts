@@ -264,8 +264,13 @@ export class Router {
     // ---- what to connect: per net, a spanning tree over its islands of copper
     const want = this.opts.nets ? new Set(this.opts.nets) : null; const useZones = this.opts.zones !== false;
     this.sizeForImpedance(Array.from(nl.nets.values() as Iterable<any>).map((n: any) => n.key).filter((k: string) => k && (!want || want.has(k))));
+    // Routing only some nets still watches every poured net (the ground plane above all): a new track that cuts a
+    // pad of it off its pour, or closes a loop round one, is answered by stitch() with a track of that net, so a
+    // later route call never leaves a ground pad stranded.  Such a net gets no connections of its own here.
+    const poured = new Set<string>(useZones ? zones.map((z: any) => z.net).filter(Boolean) : []);
     for (const net of nl.nets.values()) {
-      if (!net.key || (want && !want.has(net.key))) continue;
+      if (!net.key || (want && !want.has(net.key) && !poured.has(net.key))) continue;
+      const watchOnly = !!want && !want.has(net.key);
       const clusters: Anchor[][] = [];
       for (const cl of net.clusters) {
         const anchors: Anchor[] = [];
@@ -297,6 +302,7 @@ export class Router {
       }
       if (clusters.length < 2 && !pour) continue;
       clusters.forEach((cl, i) => cl.forEach((a) => { a.cluster = i; }));
+      if (watchOnly && !pour) continue;
       const cls = this.classFor(net.key);
       const info: NetInfo = { key: net.key, obj: nl.table.byName.get(net.key) || { code: net.code, name: net.name }, cls, conns: [], clusters: clusters.length, zoneCells, zoneCluster, guide: this.guideFor(net.key), anchors, pour };
       // Prim's tree over the islands through their nearest anchors (the ratsnest)
@@ -304,7 +310,7 @@ export class Router {
       const inTree = clusters.map(() => false); const bestTo: ([number, Anchor, Anchor] | null)[] = clusters.map(() => null);
       const update = (k: number) => { for (let j = 0; j < clusters.length; j++) { if (inTree[j]) continue; const e = near(k, j); if (!bestTo[j] || e[0] < bestTo[j]![0]) bestTo[j] = e; } };
       inTree[0] = true; update(0);
-      for (let n = 1; n < clusters.length; n++) {
+      for (let n = 1; n < (watchOnly ? 0 : clusters.length); n++) {
         let j = -1; for (let i = 0; i < clusters.length; i++) if (!inTree[i] && (j < 0 || bestTo[i]![0] < bestTo[j]![0])) j = i;
         inTree[j] = true; const e = bestTo[j]!;
         const room = Math.min(this.roomAt(e[1], net.key), this.roomAt(e[2], net.key));
@@ -1033,6 +1039,8 @@ export class Router {
     if (this.opts.zones !== false && !this.stopped) this.stitch(timeUp);   // what the last two steps moved may have cut a pour again
     if (ripUp && this.opts.zones !== false && !this.stopped && conns.some((c) => !c.nodes && !c.moot && c.stitch)) { this.repair(timeUp); this.stitch(timeUp); }   // a cut-off pad still not joined: let it push others aside
     if (this.opts.matchLengths !== false && !this.stopped) this.tune();
+    // a serpentine laid by tune() can close a loop round a ground pad and cut it off the pour: join it up again
+    if (this.opts.zones !== false && !this.stopped && this.opts.matchLengths !== false) this.stitch(timeUp);
     this.unsquare();
     this.validate();
     if (this.opts.fence !== false && !this.stopped) this.fence();

@@ -254,7 +254,31 @@ function survey(doc: any, P: any, k: any) {
   const viasOf = new Map<string, any[]>(); for (const v of vias) { if (!v.net) continue; const e = viasOf.get(v.net) || []; viasOf.set(v.net, e); e.push(v); }
   const padsOf = new Map<string, Pad[]>(); for (const f of fps) for (const p of f.pads) { if (!p.net) continue; const e = padsOf.get(p.net) || []; padsOf.set(p.net, e); e.push(p); }
   const lengthOf = (net: string) => (tracksOf.get(net) || []).reduce((a, t) => a + t.length, 0);
-  return { copper, conds, fps, keepouts, zoneOutlines, zones, filled, outline, tracks, vias, stitches, pourAt, gndLayersAt, refLayers, nearestStitch, walk, tracksOf, viasOf, padsOf, lengthOf };
+  /**
+   * The length a signal travels on a net: the longest of the shortest track paths between its parts.  The pads one
+   * part has on the net count as one end (USB-C carries D+ on A6 and B6: the bridge between them is a stub the
+   * signal does not run along end to end), so a stub does not count towards a pair's skew.  Falls back to the sum
+   * of the net's tracks when the tracks do not join the pads up.
+   */
+  const pathLengthOf = (net: string): number => {
+    const ts = tracksOf.get(net) || []; const pads = padsOf.get(net) || []; const parts = Array.from(new Set(pads.map((p) => p.fp)));
+    if (!ts.length || parts.length < 2) return lengthOf(net);
+    const id = new Map<string, number>(); const pts: Pt[] = []; const node = (q: Pt) => { const k = q[0].toFixed(3) + "," + q[1].toFixed(3); let i = id.get(k); if (i === undefined) { id.set(k, i = pts.length); pts.push(q); } return i; };
+    const adj: [number, number][][] = []; const link = (a: number, b: number, w: number) => { (adj[a] = adj[a] || []).push([b, w]); (adj[b] = adj[b] || []).push([a, w]); };
+    for (const t of ts) { const q: Pt[] = t.shape.t === "seg" ? [t.shape.a, t.shape.b] : t.shape.pts; if (!q || q.length < 2) continue; let prev = node(q[0]); for (let i = 1; i < q.length; i++) { const cur = node(q[i]); link(prev, cur, Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1])); prev = cur; } }
+    // each part is one extra node, joined at no length to every track end that lands on one of its pads
+    const n0 = pts.length; const ends: number[][] = parts.map(() => []);
+    pts.forEach((q, i) => parts.forEach((f, j) => { if (pads.some((p) => p.fp === f && inBox(p.box, q[0], q[1]))) { ends[j].push(i); link(n0 + j, i, 0); } }));
+    if (ends.some((e) => !e.length)) return lengthOf(net);
+    let best = 0;
+    for (let j = 0; j < parts.length; j++) {
+      const dist = new Map<number, number>([[n0 + j, 0]]); const open = [n0 + j];
+      while (open.length) { open.sort((a, b) => dist.get(b)! - dist.get(a)!); const u = open.pop()!; const du = dist.get(u)!; for (const [v, w] of adj[u] || []) { if (v >= n0 && v !== n0 + j) { const dv = dist.get(v); if (dv === undefined || du + w < dv) dist.set(v, du + w); continue; } const dv = dist.get(v); if (dv === undefined || du + w < dv - 1e-9) { dist.set(v, du + w); open.push(v); } } }
+      for (let k = 0; k < parts.length; k++) if (k !== j) { const d = dist.get(n0 + k); if (d === undefined) return lengthOf(net); best = Math.max(best, d); }
+    }
+    return best;
+  };
+  return { copper, conds, fps, keepouts, zoneOutlines, zones, filled, outline, tracks, vias, stitches, pourAt, gndLayersAt, refLayers, nearestStitch, walk, tracksOf, viasOf, padsOf, lengthOf, pathLengthOf };
 }
 type Survey = ReturnType<typeof survey>;
 
@@ -401,7 +425,7 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
       if (!e.p || !e.n) continue; const tp = tracksOf.get(e.p) || [], tn = tracksOf.get(e.n) || []; if (!tp.length || !tn.length) continue;
       // a crystal's two nodes are named like a pair (XTAL_P, XTAL_N) but are not one: the crystal rule covers them
       if (/^(XTAL|XTL|OSC|XIN|XOUT|XI\b|XO\b)/i.test(bare(e.p))) continue;
-      const name = bare(base).replace(/[_\-]$/, "") || bare(e.p); const lp = S.lengthOf(e.p), ln = S.lengthOf(e.n);
+      const name = bare(base).replace(/[_\-]$/, "") || bare(e.p); const lp = S.pathLengthOf(e.p), ln = S.pathLengthOf(e.n);
       const ifc = pairInterface(bare(e.p)); const rule = ifc ? INTERFACES[ifc] : null; const label = ifc ? `${name} (${ifc})` : name;
       const limit = rule && rule.skew ? rule.skew : LIMITS.pairSkew;
       if (Math.abs(lp - ln) > limit + 1e-6) skew.push(`${label}: ${r2(lp)} mm and ${r2(ln)} mm, ${r2(Math.abs(lp - ln))} mm apart (limit ${limit} mm)`);

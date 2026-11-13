@@ -1886,7 +1886,8 @@ class Board(_Doc):
 
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
-              fill: bool = True, max_vias: int | None = None, kinds: dict | None = None, separate=None, fence=None) -> dict:
+              fill: bool = True, max_vias: int | None = None, kinds: dict | None = None, separate=None, fence=None,
+              ground_vias: bool = True) -> dict:
         """Autoroute the missing connections (every unrouted net by default) and report what was done.
 
         order: the few nets to lay first (USB pair, crystal); widths: {net: mm} for supply nets; net_options and
@@ -1907,6 +1908,10 @@ class Board(_Doc):
         On a board with copper zones the zones are then filled, what the real fill leaves open is routed again
         (twice at most) and the zones are filled once more, so the result counts a pour the way KiCad does.
         `left` is the connections still open at the end, by net.  Net names are the schematic's ("SW" finds "/SW").
+
+        ground_vias: before a whole-board route, the ground pads of small parts (resistors, capacitors, diodes) that
+        would hang on the pour alone get their own via to the plane first, so the signal tracks are laid round them
+        instead of taking the room (board.ground_pads(max_pads=4)).  False skips it.
         """
         self.flush()
         fix = self._net
@@ -1948,7 +1953,15 @@ class Board(_Doc):
             e["separate"] = separate
         if fence is not None:
             e["fence"] = dict(fence, nets=[fix(n) for n in fence["nets"]]) if isinstance(fence, dict) and fence.get("nets") else fence
+        pre = None
+        if ground_vias and not nets:
+            try:
+                pre = self.ground_pads(max_pads=4, rounds=6)
+            except HarnessError:
+                pre = None
         out = self._autoroute(e)
+        if pre and pre.get("vias"):
+            out["ground_vias_first"] = pre["vias"]
         if fill:
             f = self.fill()
             if f.get("zones"):
