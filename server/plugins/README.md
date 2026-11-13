@@ -217,7 +217,8 @@ loop can stall the tab there. WebRTC is not covered by the frame's policy.
 
 The plugins in KiCad's Plugin and Content Manager are Python programs written for the desktop's
 `pcbnew` and `wx` modules.  The web editor runs them as they are: the Plugin Manager's
-**KiCad plugins** tab lists KiCad's repository, and installing one stores the package with your
+**Catalog** lists KiCad's repository beside the built-in and community plugins (each card says
+where it comes from, with each plugin's own icon), and installing one stores the package with your
 account like any other plugin.
 
 How it works:
@@ -335,7 +336,7 @@ and covers the manager, every extension point, the collaborative path of a plugi
 sandbox. Its header says how to run it.
 
 `scripts/plugins-python-ui.mjs` does the same for Python plugins: it serves a PCM package of its
-own, installs it through the KiCad plugins tab and drives it with two people, then does the same
+own, installs it through the Catalog and drives it with two people, then does the same
 with a plugin for the IPC interface and with requests to a web service of its own (start the
 server with `KC_PCM_REPOSITORY=http://127.0.0.1:8096/repository.json KC_PLUGIN_NETWORK=test`;
 `test` lets an address on this machine stand in for one on the internet and is for tests only).

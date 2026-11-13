@@ -62,6 +62,7 @@ fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(60))
             .user_agent("kicad-collab-server (plugin repository)")
             .build()
@@ -69,12 +70,29 @@ fn http() -> &'static reqwest::Client {
     })
 }
 
+/// For the one large download (the repository's icons), which may take minutes.
+fn slow_http() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(300))
+            .user_agent("kicad-collab-server (plugin repository)")
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 async fn fetch(url: &str, limit: usize) -> AppResult<Vec<u8>> {
+    fetch_with(http(), url, limit).await
+}
+
+async fn fetch_with(client: &reqwest::Client, url: &str, limit: usize) -> AppResult<Vec<u8>> {
     let local = url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
     if !url.starts_with("https://") && !(local && std::env::var("KC_PCM_REPOSITORY").is_ok()) {
         return Err(bad("the plugin repository named an address that is not https"));
     }
-    let resp = http().get(url).send().await.map_err(|e| bad(format!("could not reach {}: {e}", host_of(url))))?;
+    let resp = client.get(url).send().await.map_err(|e| bad(format!("could not reach {}: {e}", host_of(url))))?;
     if !resp.status().is_success() {
         return Err(bad(format!("{} answered {}", host_of(url), resp.status().as_u16())));
     }
@@ -89,27 +107,32 @@ fn host_of(url: &str) -> &str {
     url.split("//").nth(1).and_then(|r| r.split('/').next()).unwrap_or(url)
 }
 
-/// The repository's plugin packages and the icons from its resources archive.
+/// The repository's plugin packages.
 pub struct Repo {
     packages: Vec<Value>,
-    icons: HashMap<String, Arc<Vec<u8>>>,
 }
 type Index = Arc<Repo>;
+type Icons = Arc<HashMap<String, Arc<Vec<u8>>>>;
 
 const MAX_ICON_BYTES: usize = 256 * 1024;
+const MAX_RESOURCES_BYTES: usize = 96 * 1024 * 1024;
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-/// The icons KiCad's Plugin and Content Manager shows: `<identifier>/icon.png` in the repository's resources archive.
-/// An archive that is missing or broken leaves the list without icons rather than failing it.
-async fn icons_of(repo: &Value) -> HashMap<String, Arc<Vec<u8>>> {
+/// The icons KiCad's Plugin and Content Manager shows, by plugin identifier.  They come from the repository's resources
+/// archive, a large download that is fetched in the background so that it never holds the list back.
+fn icon_store() -> &'static std::sync::RwLock<Icons> {
+    static ICONS: OnceLock<std::sync::RwLock<Icons>> = OnceLock::new();
+    ICONS.get_or_init(|| std::sync::RwLock::new(Arc::new(HashMap::new())))
+}
+static ICONS_LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn icons() -> Icons {
+    icon_store().read().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Read `<identifier>/icon.png` out of the resources archive.  Only real PNG files of a sane size are kept.
+fn icons_in(raw: Vec<u8>) -> HashMap<String, Arc<Vec<u8>>> {
     let mut out = HashMap::new();
-    let Some(url) = repo.pointer("/resources/url").and_then(Value::as_str) else { return out };
-    let Ok(raw) = fetch(url, MAX_ZIP_BYTES * 2).await else { return out };
-    if let Some(want) = repo.pointer("/resources/sha256").and_then(Value::as_str) {
-        if !want.eq_ignore_ascii_case(&hex(&Sha256::digest(&raw))) {
-            return out;
-        }
-    }
     let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(raw)) else { return out };
     for i in 0..archive.len() {
         let Ok(mut entry) = archive.by_index(i) else { continue };
@@ -127,40 +150,86 @@ async fn icons_of(repo: &Value) -> HashMap<String, Arc<Vec<u8>>> {
     out
 }
 
-/// The repository's plugin packages, cached for an hour.
-async fn index() -> AppResult<Index> {
-    static CACHE: OnceLock<tokio::sync::Mutex<Option<(Instant, Index)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    let mut slot = cache.lock().await;
-    if let Some((at, idx)) = slot.as_ref() {
-        if at.elapsed() < INDEX_TTL {
-            return Ok(idx.clone());
-        }
+/// Fetch the icons in the background.  An archive that is missing, broken or does not match its checksum leaves the
+/// icons as they were.
+fn load_icons(repo: &Value) {
+    use std::sync::atomic::Ordering;
+    let Some(url) = repo.pointer("/resources/url").and_then(Value::as_str).map(str::to_string) else { return };
+    let want = repo.pointer("/resources/sha256").and_then(Value::as_str).map(str::to_string);
+    if ICONS_LOADING.swap(true, Ordering::SeqCst) {
+        return;
     }
-    let repo_url = std::env::var("KC_PCM_REPOSITORY").unwrap_or_else(|_| DEFAULT_REPOSITORY.to_string());
-    let loaded: AppResult<Index> = async {
-        let repo: Value = serde_json::from_slice(&fetch(&repo_url, MAX_INDEX_BYTES).await?).map_err(|_| bad("KiCad's plugin repository sent something that is not JSON"))?;
-        let packages_url = repo.pointer("/packages/url").and_then(Value::as_str).ok_or_else(|| bad("KiCad's plugin repository names no package list"))?;
-        let raw = fetch(packages_url, MAX_INDEX_BYTES).await?;
-        if let Some(want) = repo.pointer("/packages/sha256").and_then(Value::as_str) {
-            if !want.eq_ignore_ascii_case(&hex(&Sha256::digest(&raw))) {
-                return Err(bad("KiCad's package list does not match its checksum"));
+    tokio::spawn(async move {
+        let got = tokio::time::timeout(Duration::from_secs(300), fetch_with(slow_http(), &url, MAX_RESOURCES_BYTES)).await;
+        if let Ok(Ok(raw)) = got {
+            if want.map_or(true, |w| w.eq_ignore_ascii_case(&hex(&Sha256::digest(&raw)))) {
+                if let Ok(found) = tokio::task::spawn_blocking(move || icons_in(raw)).await {
+                    if !found.is_empty() {
+                        if let Ok(mut slot) = icon_store().write() {
+                            *slot = Arc::new(found);
+                        }
+                    }
+                }
+            } else {
+                tracing::warn!("the plugin repository's resources archive does not match its checksum");
             }
+        } else {
+            tracing::warn!("the plugin repository's icons could not be downloaded");
         }
-        let list: Value = serde_json::from_slice(&raw).map_err(|_| bad("KiCad's package list is not JSON"))?;
-        let packages = list.get("packages").and_then(Value::as_array).cloned().unwrap_or_default();
-        let packages = packages.into_iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("plugin")).collect();
-        Ok(Arc::new(Repo { packages, icons: icons_of(&repo).await }))
-    }
-    .await;
-    match loaded {
-        Ok(idx) => {
-            *slot = Some((Instant::now(), idx.clone()));
-            Ok(idx)
+        ICONS_LOADING.store(false, Ordering::SeqCst);
+    });
+}
+
+async fn load_index() -> AppResult<Index> {
+    let repo_url = std::env::var("KC_PCM_REPOSITORY").unwrap_or_else(|_| DEFAULT_REPOSITORY.to_string());
+    let repo: Value = serde_json::from_slice(&fetch(&repo_url, MAX_INDEX_BYTES).await?).map_err(|_| bad("KiCad's plugin repository sent something that is not JSON"))?;
+    let packages_url = repo.pointer("/packages/url").and_then(Value::as_str).ok_or_else(|| bad("KiCad's plugin repository names no package list"))?;
+    let raw = fetch(packages_url, MAX_INDEX_BYTES).await?;
+    if let Some(want) = repo.pointer("/packages/sha256").and_then(Value::as_str) {
+        if !want.eq_ignore_ascii_case(&hex(&Sha256::digest(&raw))) {
+            return Err(bad("KiCad's package list does not match its checksum"));
         }
-        // A repository that is briefly unreachable does not take the list away.
-        Err(e) => slot.as_ref().map(|(_, idx)| idx.clone()).ok_or(e),
     }
+    let list: Value = serde_json::from_slice(&raw).map_err(|_| bad("KiCad's package list is not JSON"))?;
+    let packages = list.get("packages").and_then(Value::as_array).cloned().unwrap_or_default();
+    let packages = packages.into_iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("plugin")).collect();
+    load_icons(&repo);
+    Ok(Arc::new(Repo { packages }))
+}
+
+fn index_cache() -> &'static tokio::sync::Mutex<Option<(Instant, Index)>> {
+    static CACHE: OnceLock<tokio::sync::Mutex<Option<(Instant, Index)>>> = OnceLock::new();
+    CACHE.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+/// The repository's plugin packages, cached for an hour.  Once there is a list, it is always answered at once: a list
+/// that has grown old is refreshed in the background, and a repository that is briefly unreachable does not take it away.
+async fn index() -> AppResult<Index> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static REFRESHING: AtomicBool = AtomicBool::new(false);
+    let mut slot = index_cache().lock().await;
+    if let Some((at, idx)) = slot.as_ref() {
+        if at.elapsed() >= INDEX_TTL && !REFRESHING.swap(true, Ordering::SeqCst) {
+            tokio::spawn(async {
+                let loaded = tokio::time::timeout(Duration::from_secs(60), load_index()).await;
+                let mut slot = index_cache().lock().await;
+                match loaded {
+                    Ok(Ok(idx)) => *slot = Some((Instant::now(), idx)),
+                    // try again in five minutes, not on every request
+                    _ => {
+                        if let Some((at, _)) = slot.as_mut() {
+                            *at = Instant::now() - INDEX_TTL + Duration::from_secs(300);
+                        }
+                    }
+                }
+                REFRESHING.store(false, Ordering::SeqCst);
+            });
+        }
+        return Ok(idx.clone());
+    }
+    let idx = tokio::time::timeout(Duration::from_secs(40), load_index()).await.map_err(|_| bad("KiCad's plugin repository did not answer in time"))??;
+    *slot = Some((Instant::now(), idx.clone()));
+    Ok(idx)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -216,6 +285,7 @@ fn manifest_of(pkg: &Value, version: &Value) -> Value {
 /// `GET /api/plugins/pcm` — KiCad's official plugins, with how each fares in the web editor.
 pub async fn list() -> AppResult<Json<Value>> {
     let idx = index().await?;
+    let have = icons();
     let mut out = Vec::with_capacity(idx.packages.len());
     for pkg in idx.packages.iter() {
         let Some(version) = pick_version(pkg) else { continue };
@@ -229,20 +299,20 @@ pub async fn list() -> AppResult<Json<Value>> {
             "details": clip(pkg.get("description_full").and_then(Value::as_str).unwrap_or(""), 1500),
             "size": version.get("download_size").and_then(Value::as_u64).unwrap_or(0),
             "compat": compat_of(identifier),
-            "icon": idx.icons.contains_key(identifier),
+            "icon": have.contains_key(identifier),
         }));
     }
     out.sort_by(|a, b| {
         let name = |v: &Value| v.pointer("/manifest/name").and_then(Value::as_str).unwrap_or("").to_lowercase();
         name(a).cmp(&name(b))
     });
-    Ok(Json(json!({ "plugins": out })))
+    // "iconsPending": the icons are still being downloaded; the list is worth asking for again shortly
+    Ok(Json(json!({ "plugins": out, "iconsPending": ICONS_LOADING.load(std::sync::atomic::Ordering::SeqCst) })))
 }
 
 /// `GET /api/plugins/pcm/{identifier}/icon` — the plugin's icon from KiCad's repository, a PNG.
 pub async fn icon(Path(identifier): Path<String>) -> Response {
-    let Ok(idx) = index().await else { return StatusCode::NOT_FOUND.into_response() };
-    match idx.icons.get(&identifier) {
+    match icons().get(&identifier) {
         Some(bytes) => (
             [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=3600"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
             bytes.as_ref().clone(),

@@ -181,7 +181,7 @@ check('manager opens from Tools → External Plugins', await a.locator('#pluginM
 check('nothing installed yet', (await a.locator('#pluginManager .plg-empty').count()) === 1);
 await a.click('#pluginManager [data-tab="catalog"]');
 await a.waitForSelector('#pluginCatalog .plg-card');
-check('catalog lists the built-in plugins', (await a.locator('#pluginCatalog .plg-card').count()) === 5);
+check('catalog lists the built-in plugins', (await a.locator('#pluginCatalog .plg-card[data-source="builtin"]').count()) === 5);
 await shot(a, '01-catalog');
 
 // ---- consent, install, the toolbar button and an export
@@ -449,17 +449,17 @@ check('consent says who published it and that it is not reviewed', /published by
 await shot(c, '19-registry-consent');
 await accept(c, WRITER);
 check('installed from the registry for that person only', (await stored(c)).sources[WRITER] === 'registry:plug-dana' && (await frames(c)) === 1);
-await c.click('#pluginManager [data-tab="catalog"]'); await c.waitForSelector('#pluginRegistry .plg-card');
-await c.waitForFunction(() => /1 install\b/.test(document.querySelector('#pluginRegistry')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
-const card = await c.locator(`#pluginRegistry [data-plugin="${WRITER}"]`).innerText();
+await c.click('#pluginManager [data-tab="catalog"]'); await c.waitForSelector('#pluginCatalog .plg-card[data-source="community"]');
+await c.waitForFunction(() => /1 install\b/.test(document.querySelector('#pluginCatalog')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+const card = await c.locator(`#pluginCatalog [data-source="community"][data-plugin="${WRITER}"]`).innerText();
 check('the catalog has a community section with publisher and installs', /by plug-dana/.test(card) && /1 install\b/.test(card) && /Installed/.test(card), card);
-await c.fill('#pluginSearch', 'nothing-like-this'); await c.waitForSelector('#pluginRegistryEmpty');
-await c.fill('#pluginSearch', 'writer'); await c.waitForSelector('#pluginRegistry .plg-card');
-check('searching the community section filters it', (await c.locator('#pluginRegistry .plg-card').count()) === 1);
-await c.locator('#pluginRegistry').evaluate((el) => el.scrollIntoView({ block: 'start' })); await c.waitForTimeout(200);
+await c.fill('#pluginSearch', 'nothing-like-this'); await c.waitForSelector('#pluginCatalogEmpty');
+await c.fill('#pluginSearch', 'writer'); await c.waitForSelector('#pluginCatalog .plg-card[data-source="community"]');
+check('searching the community section filters it', (await c.locator('#pluginCatalog .plg-card[data-source="community"]').count()) === 1);
+await c.locator('#pluginCatalog .plg-card[data-source="community"]').first().evaluate((el) => el.scrollIntoView({ block: 'start' })); await c.waitForTimeout(200);
 await shot(c, '20-community');
 check('a new version is offered as an update', (await call('PUT', `/api/plugins/registry/${WRITER}`, as(dana, 'plug-dana'), { manifest: { ...wm, version: '0.2.0' }, files: { 'main.js': 'console.log("v2")' } })).status === 200
-  && (await c.fill('#pluginSearch', ''), await c.waitForFunction(() => /Update…/.test(document.querySelector('#pluginRegistry')?.textContent || ''), null, { timeout: 5000 }).then(() => true, () => false)));
+  && (await c.fill('#pluginSearch', ''), await c.waitForFunction(() => /Update…/.test(document.querySelector('#pluginCatalog')?.textContent || ''), null, { timeout: 5000 }).then(() => true, () => false)));
 await closeManager(c);
 check('the notice counts only what is still missing', /recommends a plugin/.test(await c.locator('#pluginRecommended').innerText()));
 await c.click('#pluginRecommendedDismiss');
@@ -468,8 +468,8 @@ await c.reload(); await editorReady(c); await running(c, WRITER); await c.waitFo
 check('and stays dismissed', (await c.locator('#pluginRecommended').count()) === 0 && (await stored(c)).project.plugins.length === 2);
 
 // ---- reports and moderation: anyone can report, the administrators (KC_ADMINS) decide
-await c.evaluate(() => window.KcPlugins.openManager('catalog')); await c.waitForSelector(`#pluginRegistry [data-report="${WRITER}"]`);
-await c.click(`#pluginRegistry [data-report="${WRITER}"]`);
+await c.evaluate(() => window.KcPlugins.openManager('catalog')); await c.waitForSelector(`#pluginCatalog [data-report="${WRITER}"]`);
+await c.click(`#pluginCatalog [data-report="${WRITER}"]`);
 await c.fill(`[data-report-reason="${WRITER}"]`, 'It moved my resistors without asking and I do not trust it.');
 await c.click(`[data-report-send="${WRITER}"]`); await c.waitForSelector(`[data-reported="${WRITER}"]`);
 check('a collaborator can report a published plugin', (await db.query('SELECT count(*)::int AS n FROM plugin_reports WHERE identifier = $1 AND reporter_id = $2 AND resolved_at IS NULL', [WRITER, lee])).rows[0].n === 1);

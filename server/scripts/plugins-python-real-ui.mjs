@@ -109,9 +109,9 @@ const download = async (after, timeout = 240000) => { const t0 = Date.now(); whi
 async function install(id) {
   await page.evaluate(() => window.KcPlugins.runUi('pluginManager'));
   await page.waitForSelector('#pluginManager');
-  await page.click('#pluginManager [data-tab="kicad"]');
-  await page.waitForSelector(`#pluginKicad [data-plugin="${id}"]`, { timeout: 30000 });
-  await page.click(`#pluginKicad [data-install="${id}"]`);
+  await page.click('#pluginManager [data-tab="catalog"]');
+  await page.waitForSelector(`#pluginCatalog [data-source="kicad"][data-plugin="${id}"]`, { timeout: 30000 });
+  await page.click(`#pluginCatalog [data-install="${id}"]`);
   await page.waitForSelector('#pluginConsent', { timeout: 30000 });
   await page.click('#pluginConsentOk');
   await page.waitForFunction((i) => window.KcPlugins.store.get().installed.some((p) => p.identifier === i), id, { timeout: 30000 });

@@ -50,7 +50,7 @@ export interface PluginState {
   admin: boolean; moderation: ModerationEntry[] | null;
   /** What the open project recommends, and whether this person may change that. */
   project: { id: string | null; plugins: ProjectPlugin[]; canEdit: boolean; dismissed: string };
-  manager: { open: boolean; tab: "installed" | "catalog" | "kicad" | "project" | "develop" | "moderation"; selected: string | null };
+  manager: { open: boolean; tab: "installed" | "catalog" | "project" | "develop" | "moderation"; selected: string | null };
   panel: { open: boolean; active: string | null; width: number };
   prompt: PromptRequest | null; consent: Consent | null;
   editor: string | null;
@@ -207,10 +207,21 @@ export function installRecommended(r: ProjectPlugin): string | null {
 
 // ---- KiCad's own plugins
 
-export async function loadOfficial(force = false): Promise<void> {
-  if (S.official && !force) return;
-  try { const j = await api("/api/plugins/pcm"); set({ official: j.plugins || [], officialError: null }); }
-  catch (e) { set({ official: S.official || [], officialError: msg(e) }); }
+let officialBusy: Promise<void> | null = null; let iconRetries = 0;
+/** KiCad's repository, as the server lists it.  The answer is waited for at most 45 seconds, so the catalog never
+ *  sits on "Loading"; while the server is still fetching the icons the list is asked for again a little later. */
+export function loadOfficial(force = false): Promise<void> {
+  if (S.official && !S.officialError && !force) return Promise.resolve();
+  if (officialBusy) return officialBusy;
+  officialBusy = (async () => {
+    const stop = new AbortController(); const timer = setTimeout(() => stop.abort(), 45000);
+    try {
+      const j = await api("/api/plugins/pcm", { signal: stop.signal }); set({ official: j.plugins || [], officialError: null });
+      if (j.iconsPending && iconRetries < 6) { iconRetries++; setTimeout(() => void loadOfficial(true), 6000 * iconRetries); }
+    } catch (e) { set({ official: S.official || [], officialError: stop.signal.aborted ? "it did not answer in time" : msg(e) }); }
+    finally { clearTimeout(timer); officialBusy = null; }
+  })();
+  return officialBusy;
 }
 /** Download one of KiCad's plugins (the server fetches and unpacks it) and put it in front of the person on the consent sheet. */
 export async function installOfficial(identifier: string): Promise<string | null> {
