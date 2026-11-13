@@ -26,8 +26,8 @@
       "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
     },
     "com.github.bbenchoff.orthoroute": {
-      "status": "partly",
-      "note": "Its button runs, but its window is built with PyQt6, which the web editor does not have, so the router window does not open."
+      "status": "works",
+      "note": "Its router runs on the processor here, in the page: the graphics card acceleration it uses on the desktop (CUDA) is not available in a browser, so large boards route slowly."
     },
     "com.github.danielboston38.prefab-gate": {
       "status": "partly",

@@ -351,6 +351,46 @@ if (only('Parasitics')) {
   } catch (e) { check('Parasitics runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.Steffen-W.KiCad-Parasitics', 30)); await shot('real-parasitics-fail'); }
 }
 
+// ---- OrthoRoute: a PyQt6 window over KiCad's IPC interface; its own numpy router routes a six-layer board, and Apply to
+// KiCad puts the tracks and blind vias on the board
+if (only('orthoroute')) {
+  const ID = 'com.github.bbenchoff.orthoroute';
+  try {
+    const six = await project('six-layer-unrouted', 'server/scripts/plugin-drives/boards', 'six-layer-unrouted');
+    await page.goto(`${BASE}${six}`); await editorReady();
+    const count = () => page.evaluate(() => { const its = Array.from(window.CollabEditor.kdoc.items.values()); return { tracks: its.filter((it) => it.kind === 'segment').length, vias: its.filter((it) => it.kind === 'via').length }; });
+    const c0 = await count();
+    check('OrthoRoute: the test board starts unrouted', c0.tracks === 0 && c0.vias === 0, JSON.stringify(c0));
+    const actions = await install(ID);
+    await runAction(ID, actions[0]);
+    const f = await frameOf(ID);
+    await f.waitForSelector('text=Begin Autorouting', { timeout: 240000 });
+    await page.waitForTimeout(1500);
+    await shot('real-orthoroute-window');
+    await f.click('text=Begin Autorouting');
+    await page.waitForSelector('#pluginPrompt', { timeout: 420000 });
+    const routed = await page.locator('#pluginPrompt').innerText();
+    check('OrthoRoute: its router converges with every net routed', /Converged/.test(routed) && /zero overuse/.test(routed), routed.slice(0, 300) + ' ' + await logTail(ID, 8));
+    await page.click('#pluginPrompt .btn.primary');
+    await page.waitForTimeout(1500);
+    await shot('real-orthoroute-routed');
+    const c1 = await count();
+    check('OrthoRoute: the routes are a preview until they are applied', c1.tracks === 0, JSON.stringify(c1));
+    await f.click('text=Apply to KiCad');
+    await page.waitForSelector('#pluginPrompt', { timeout: 120000 });
+    const applied = await page.locator('#pluginPrompt').innerText();
+    await page.click('#pluginPrompt .btn.primary');
+    const said = /(\d+) tracks[\s\S]*?(\d+) vias/.exec(applied) || [];
+    const c2 = await count();
+    check('OrthoRoute: Apply to KiCad puts the tracks and vias it reports on the board', /Successfully applied/.test(applied) && c2.tracks === +said[1] && c2.vias === +said[2] && c2.tracks >= 16, `${applied.slice(0, 200)} board: ${JSON.stringify(c2)}`);
+    const inner = await page.evaluate(() => Array.from(window.CollabEditor.kdoc.items.values()).filter((it) => it.kind === 'segment' && /In\d+\.Cu/.test(JSON.stringify(it.node))).length);
+    check('OrthoRoute: it routes on the inner layers', inner >= 4, `${inner} inner-layer tracks`);
+    console.log(`      (${c2.tracks} tracks, ${c2.vias} vias, ${inner} on inner layers)`);
+    await page.keyboard.press('Escape').catch(() => {});
+    await shot('real-orthoroute-applied');
+  } catch (e) { check('OrthoRoute runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.bbenchoff.orthoroute', 30)); await shot('real-orthoroute-fail'); }
+}
+
 // ---- Board2Pdf: PLOT_CONTROLLER plots each layer of each template to a PDF with the editor's File → Plot writer; the plugin's
 // own PyPDF4 recolours and merges them into one assembly document
 if (only('Board2Pdf')) {

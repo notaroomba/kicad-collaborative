@@ -121,8 +121,8 @@
   "status": "works"
  },
  "com.github.bbenchoff.orthoroute": {
-  "status": "partly",
-  "note": "Its button runs, but its window is built with PyQt6, which the web editor does not have, so the router window does not open."
+  "status": "works",
+  "note": "Its router runs on the processor here, in the page: the graphics card acceleration it uses on the desktop (CUDA) is not available in a browser, so large boards route slowly."
  },
  "com.github.bennymeg.JLC-Plugin-for-KiCad": {
   "status": "works"
