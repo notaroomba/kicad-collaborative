@@ -670,9 +670,11 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           pcbOnly(e.op);
           const plan = planSilk(doc, { size: typeof e.size === "number" ? e.size : undefined, minSize: typeof e.min_size === "number" ? e.min_size : undefined,
             refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, unhide: e.unhide === true, keepRefs: e.references === false,
-            pinLabels: e.pin_labels === true ? true : Array.isArray(e.pin_labels) ? e.pin_labels.map(String) : false });
+            pinLabels: e.pin_labels === true ? true : Array.isArray(e.pin_labels) ? e.pin_labels.map(String) : false,
+            mark: Array.isArray(e.mark) && e.mark.every((l: unknown) => Array.isArray(l)) ? { shapes: e.mark.map((l: unknown[]) => l.map(String)), size: typeof e.mark_size === "number" ? e.mark_size : undefined, layer: typeof e.layer === "string" ? e.layer : undefined } : undefined });
           const ids: string[] = [];
           for (const [id, node] of plan.nodes) { const it = doc.items.get(id); if (!it || touched.has(id)) continue; touch(it, e.op); changes.push(modified(doc, it, node)); ids.push(id); }
+          for (const node of plan.adds) { const c = added(doc, node); changes.push(c); ids.push(c.id); }
           const rp = plan.report; const nl = Object.values(rp.pin_labels).reduce((n, l) => n + l.length, 0);
           lines.push({ kind: "modify", text: `Silkscreen: ${rp.references} reference${rp.references === 1 ? "" : "s"} placed clear of pads, other silkscreen, other parts and the edge (${Object.keys(rp.resized).length} made smaller, ${rp.turned.length} turned, ${rp.hidden.length} hidden)${nl ? `, ${nl} pin name${nl === 1 ? "" : "s"} printed` : ""}`, ids });
           details.push({ silkscreen: rp });

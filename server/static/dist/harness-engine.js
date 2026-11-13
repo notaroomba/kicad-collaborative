@@ -52747,7 +52747,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
+// node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -53406,7 +53406,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
+// node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -56271,7 +56271,7 @@ var Clipper = {
   }
 };
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
+// node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -56887,7 +56887,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
+// node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
   if (typeof clipOrFillRule === "number") {
@@ -63090,7 +63090,7 @@ function planSilk(doc, opts = {}) {
   const sizes = [top, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4].filter((s, i) => i === 0 || s < top && s >= low - 1e-9);
   if (low < top && !sizes.some((s) => Math.abs(s - low) < 1e-9)) sizes.push(low);
   const want = opts.refs && opts.refs.length ? new Set(opts.refs.map((r) => r.toLowerCase())) : null;
-  const report3 = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], pin_labels: {}, pin_labels_skipped: {}, smallest: null, min_size: low };
+  const report3 = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], pin_labels: {}, pin_labels_skipped: {}, pin_labels_other_side: [], smallest: null, min_size: low };
   const nodes = /* @__PURE__ */ new Map();
   const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
   const refProp = (fp) => k.kids(fp.node, "property").find((p) => k.str(p[1]) === "Reference");
@@ -63191,8 +63191,7 @@ function planSilk(doc, opts = {}) {
     const ref = String(fp.ref || "");
     const pads = P.padsOf(fp).filter((p) => p.number !== "" && p.type !== "np_thru_hole");
     if (labelled ? !labelled.has(ref.toLowerCase()) : !/^(J|P|CN|X|BT)\d/.test(ref) || pads.length < 2 || pads.length > 48) continue;
-    const side = fp.layer === "B.Cu" ? "B" : "F";
-    const layer = side + ".SilkS";
+    const own = fp.layer === "B.Cu" ? "B" : "F";
     const cb = court.get(fp.id);
     if (!cb) continue;
     const xs = pads.map((p) => p.x), ys = pads.map((p) => p.y);
@@ -63207,32 +63206,31 @@ function planSilk(doc, opts = {}) {
       if (d > 0.2) pitch = Math.min(pitch, d);
     }
     if (!isFinite(pitch)) pitch = 2.54;
+    if (!labelled && pitch < 1.9) continue;
     const rows = Array.from(new Set(pads.map((p) => Math.round(across(p) * 10) / 10))).sort((a, b) => a - b);
-    const base = k.cloneNode(fp.node);
-    const body = [];
+    if (rows.length > 2) {
+      if (labelled) report3.pin_labels_skipped[ref] = ["more than two rows of pins: the inner rows have nowhere to print"];
+      continue;
+    }
+    const base = k.cloneNode(nodeOf(fp));
     for (let i = base.length - 1; i >= 2; i--) if (Array.isArray(base[i]) && isOldLabel(fp, base[i])) base.splice(i, 1);
-    const proto = k.parseAll(`(fp_text user "X" (at 0 0 0) (layer "${layer}") (uuid "${k.newUuid()}") (effects (font (size 1 1) (thickness 0.15))${side === "B" ? " (justify mirror)" : ""}))`)[0];
     const fpNow = Object.assign({}, fp, { node: base });
-    const horiz = [0, 90].find((a) => {
-      const f = new Frame(doc, fpNow, proto, a, 1, "MMMM");
-      return f.ok && f.w > f.h;
-    }) ?? 0;
-    const ang = rowAlongX ? horiz === 0 ? 90 : 0 : horiz;
-    const done = [], skipped = [];
-    const placedBoxes = [];
-    const tryRows = (dirs) => {
+    const named = pads.map((p) => ({ p, name: shortNet(NT.key(p.net) || "") })).filter((x) => x.name);
+    if (!named.length) continue;
+    const through = pads.some((p) => p.type === "thru_hole");
+    const tryRow = (side, dir1) => {
+      const proto = k.parseAll(`(fp_text user "X" (at 0 0 0) (layer "${side}.SilkS") (uuid "${k.newUuid()}") (effects (font (size 1 1) (thickness 0.15))${side === "B" ? " (justify mirror)" : ""}))`)[0];
+      const horiz = [0, 90].find((a) => {
+        const f = new Frame(doc, fpNow, proto, a, 1, "MMMM");
+        return f.ok && f.w > f.h;
+      }) ?? 0;
+      const ang = rowAlongX ? horiz === 0 ? 90 : 0 : horiz;
       let best = null;
       for (const size of sizes.filter((s) => s <= Math.max(0.8, low) + 1e-9 && s + 0.25 <= pitch || s === sizes[sizes.length - 1])) {
-        const out = [], boxes = [], names = [], miss2 = [];
-        for (const p of pads) {
-          const name = shortNet(NT.key(p.net) || "");
-          if (!name) continue;
+        const out = [], boxes = [], miss2 = [];
+        for (const { p, name } of named) {
           const row2 = rows.indexOf(Math.round(across(p) * 10) / 10);
-          const dir = rows.length > 1 ? row2 < rows.length / 2 ? -1 : 1 : dirs[0];
-          if (rows.length > 2 && row2 > 0 && row2 < rows.length - 1) {
-            miss2.push(`${p.number} ${name}`);
-            continue;
-          }
+          const dir = rows.length > 1 ? row2 === 0 ? -1 : 1 : dir1;
           const f = new Frame(doc, fpNow, proto, ang, size, name);
           if (!f.ok) {
             miss2.push(`${p.number} ${name}`);
@@ -63251,16 +63249,15 @@ function planSilk(doc, opts = {}) {
           k.kid(nd, "uuid")[1] = k.newUuid();
           out.push(nd);
           boxes.push(b);
-          names.push(`${p.number} ${name}`);
         }
-        const res = { nodes: out, boxes, names, miss: miss2, size };
-        if (!best || names.length > best.names.length) best = res;
+        const res = { nodes: out, boxes, miss: miss2, size, side };
+        if (!best || miss2.length < best.miss.length) best = res;
         if (!miss2.length) break;
       }
-      return best;
+      return best || { nodes: [], boxes: [], miss: named.map((x) => `${x.p.number} ${x.name}`), size: 0, side };
     };
-    const tries = rows.length > 1 ? [tryRows([0])] : [tryRows([-1]), tryRows([1])];
-    const inward = outline ? (() => {
+    let inward = -1;
+    if (outline) {
       let ox = 0, oy = 0;
       for (const q of outline) {
         ox += q[0];
@@ -63268,28 +63265,63 @@ function planSilk(doc, opts = {}) {
       }
       ox /= outline.length;
       oy /= outline.length;
-      return rowAlongX ? oy < cy ? 0 : 1 : ox < cx ? 0 : 1;
-    })() : 0;
-    let pick = tries[0];
-    if (tries.length > 1 && tries[1] && (!pick || tries[1].names.length > pick.names.length || tries[1].names.length === pick.names.length && inward === 1)) pick = tries[1];
-    if (!pick || !pick.names.length) {
-      if (pick && pick.miss.length) report3.pin_labels_skipped[ref] = pick.miss;
+      inward = rowAlongX ? oy < cy ? -1 : 1 : ox < cx ? -1 : 1;
+    }
+    const dirs = rows.length > 1 ? [0] : [inward, -inward];
+    const sides = through ? [own, own === "F" ? "B" : "F"] : [own];
+    let pick = null, nearest = null;
+    for (const side of sides) {
+      for (const d of dirs) {
+        const r = tryRow(side, d);
+        if (!r.miss.length) {
+          pick = r;
+          break;
+        }
+        if (!nearest || r.miss.length < nearest.miss.length) nearest = r;
+      }
+      if (pick) break;
+    }
+    if (!pick) {
+      report3.pin_labels_skipped[ref] = [`no clear row for all ${named.length} names on ${through ? "either side of the board" : "its side"}; in the way at: ${(nearest ? nearest.miss : []).slice(0, 12).join(", ")}`];
+      if (k.serialize(base) !== k.serialize(nodeOf(fp))) working.set(fp.id, base);
       continue;
     }
-    for (const nd of pick.nodes) {
-      base.push(nd);
-      body.push(nd);
-    }
-    for (const b of pick.boxes) {
-      placedBoxes.push(b);
-      obs[side].push({ box: grow2(b, 0.12), fp: fp.id, key: "pinlabel:" + fp.id + ":" + placedBoxes.length });
-    }
-    done.push(...pick.names);
-    skipped.push(...pick.miss);
+    for (const nd of pick.nodes) base.push(nd);
+    pick.boxes.forEach((b, i) => obs[pick.side].push({ box: grow2(b, 0.12), fp: fp.id, key: "pinlabel:" + fp.id + ":" + i }));
     working.set(fp.id, base);
-    report3.pin_labels[ref] = done;
-    if (skipped.length) report3.pin_labels_skipped[ref] = skipped;
+    report3.pin_labels[ref] = named.map((x) => `${x.p.number} ${x.name}`);
+    if (pick.side !== own) report3.pin_labels_other_side.push(ref);
   }
+  const adds = [];
+  const hasText = Array.from(doc.items.values()).some((it) => (it.kind === "gr_text" || it.kind === "gr_text_box") && /SilkS$/.test(layerOfNode(it.node)));
+  const wantMark = !!(opts.mark && opts.mark.shapes.length && !hasText);
+  const placeMark = () => {
+    if (!opts.mark) return false;
+    const want2 = opts.mark.layer && opts.mark.layer.startsWith("B.") ? "B" : "F";
+    const msize = Math.max(low, opts.mark.size || 1);
+    let ob = null;
+    if (outline) {
+      ob = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const q of outline) ob = [Math.min(ob[0], q[0]), Math.min(ob[1], q[1]), Math.max(ob[2], q[0]), Math.max(ob[3], q[1])];
+    }
+    let placed = false;
+    if (ob) search: for (const side of [want2, want2 === "F" ? "B" : "F"]) for (const sz of [msize, 0.8, low].filter((s, i, a) => s <= msize + 1e-9 && s >= low - 1e-9 && a.indexOf(s) === i)) for (const lines of opts.mark.shapes) {
+      const tw = Math.max(...lines.map((l) => l.length)) * sz * 0.9, w = tw + 0.4, h = lines.length * sz * 1.65 + 0.3;
+      if (w > ob[2] - ob[0] - 1.6 || h > ob[3] - ob[1] - 1.6) continue;
+      for (let y = ob[3] - 0.8 - h; y >= ob[1] + 0.8; y -= 0.5) for (let x = ob[0] + 0.8; x + w <= ob[2] - 0.8; x += 0.5) {
+        const b = [x, y, x + w, y + h];
+        if (!clear(b, side)) continue;
+        const ax = side === "B" ? x + 0.2 + tw : x + 0.2, ay = y + 0.15;
+        const text2 = lines.join("\\n").replace(/"/g, "'");
+        adds.push(k.parseAll(`(gr_text "${text2}" (at ${r42(ax)} ${r42(ay)}) (layer "${side}.SilkS") (uuid "${k.newUuid()}") (effects (font (size ${sz} ${sz}) (thickness ${Math.max(0.1, Math.round(sz * 15) / 100)})) (justify left top${side === "B" ? " mirror" : ""})))`)[0]);
+        obs[side].push({ box: grow2(b, 0.12), fp: null, key: "mark" });
+        report3.mark = { text: lines.join(" / "), at: [r42(ax), r42(ay)], layer: side + ".SilkS", size: sz };
+        placed = true;
+        break search;
+      }
+    }
+    return placed;
+  };
   const jobs = [];
   for (const [id, prop2] of mine) {
     const fp = doc.items.get(id);
@@ -63362,34 +63394,47 @@ function planSilk(doc, opts = {}) {
     return n2;
   };
   const order = jobs.map((j) => ({ j, n: room(j) })).sort((a, b) => a.n - b.n || a.j.ref.localeCompare(b.j.ref, void 0, { numeric: true })).map((x) => x.j);
-  for (const j of order) {
-    report3.references++;
-    const got = find(j, sizes, [0, 0.4]) || find(j, [sizes[sizes.length - 1]], [-0.1, 0.9, 1.5, 2.2, 3]);
-    const before = k.serialize(j.prop);
-    let next;
-    if (!got) {
-      next = k.cloneNode(j.prop);
-      if (!hiddenText(next)) next.push(["hide", "yes"]);
-      report3.hidden.push(j.ref);
-    } else {
-      next = got.f.node(got.x, got.y);
-      const b = got.f.box(got.x, got.y);
-      obs[j.side].push({ box: grow2(b, 0.2), fp: j.fp.id, key: "ref:" + j.fp.id });
-      if (got.size < sizes[0] - 1e-9) report3.resized[j.ref] = got.size;
-      if (got.turned) report3.turned.push(j.ref);
-      if (hiddenText(j.prop)) report3.shown.push(j.ref);
-      report3.smallest = report3.smallest === null ? got.size : Math.min(report3.smallest, got.size);
+  const placeRefs = () => {
+    for (const j of order) {
+      report3.references++;
+      const got = find(j, sizes, [0, 0.4]) || find(j, [sizes[sizes.length - 1]], [-0.1, 0.9, 1.5, 2.2, 3]);
+      const before = k.serialize(j.prop);
+      let next;
+      if (!got) {
+        next = k.cloneNode(j.prop);
+        if (!hiddenText(next)) next.push(["hide", "yes"]);
+        report3.hidden.push(j.ref);
+      } else {
+        next = got.f.node(got.x, got.y);
+        const b = got.f.box(got.x, got.y);
+        obs[j.side].push({ box: grow2(b, 0.2), fp: j.fp.id, key: "ref:" + j.fp.id });
+        if (got.size < sizes[0] - 1e-9) report3.resized[j.ref] = got.size;
+        if (got.turned) report3.turned.push(j.ref);
+        if (hiddenText(j.prop)) report3.shown.push(j.ref);
+        report3.smallest = report3.smallest === null ? got.size : Math.min(report3.smallest, got.size);
+      }
+      if (k.serialize(next) === before) {
+        report3.kept++;
+        continue;
+      }
+      if (got) report3.moved++;
+      const node = k.cloneNode(nodeOf(j.fp));
+      const i = node.findIndex((g2) => Array.isArray(g2) && g2[0] === "property" && k.str(g2[1]) === "Reference");
+      if (i < 0) continue;
+      node[i] = next;
+      working.set(j.fp.id, node);
     }
-    if (k.serialize(next) === before) {
-      report3.kept++;
-      continue;
-    }
-    if (got) report3.moved++;
-    const node = k.cloneNode(nodeOf(j.fp));
-    const i = node.findIndex((g2) => Array.isArray(g2) && g2[0] === "property" && k.str(g2[1]) === "Reference");
-    if (i < 0) continue;
-    node[i] = next;
-    working.set(j.fp.id, node);
+  };
+  const mark0 = { F: obs.F.length, B: obs.B.length }, work0 = new Map(working), rep0 = JSON.stringify(report3);
+  placeRefs();
+  if (wantMark && !placeMark()) {
+    obs.F.length = mark0.F;
+    obs.B.length = mark0.B;
+    working.clear();
+    for (const [id, n2] of work0) working.set(id, n2);
+    Object.assign(report3, JSON.parse(rep0));
+    if (!placeMark()) report3.mark = { problem: outline ? `no free room for "${opts.mark.shapes[0].join(" ")}" on either side, even at ${low} mm in ${opts.mark.shapes[opts.mark.shapes.length - 1].length} lines: board.mark(name, at=(x, y)) puts it where you say` : "the board has no outline yet" };
+    placeRefs();
   }
   for (const [id, node] of working) {
     const it = doc.items.get(id);
@@ -63397,7 +63442,7 @@ function planSilk(doc, opts = {}) {
   }
   report3.hidden.sort();
   report3.turned.sort();
-  return { nodes, report: report3 };
+  return { nodes, adds, report: report3 };
 }
 function silkBoxes(doc) {
   const P = PCB2();
@@ -66467,7 +66512,8 @@ function build(input) {
             refs: Array.isArray(e.refs) ? e.refs.map(String) : void 0,
             unhide: e.unhide === true,
             keepRefs: e.references === false,
-            pinLabels: e.pin_labels === true ? true : Array.isArray(e.pin_labels) ? e.pin_labels.map(String) : false
+            pinLabels: e.pin_labels === true ? true : Array.isArray(e.pin_labels) ? e.pin_labels.map(String) : false,
+            mark: Array.isArray(e.mark) && e.mark.every((l) => Array.isArray(l)) ? { shapes: e.mark.map((l) => l.map(String)), size: typeof e.mark_size === "number" ? e.mark_size : void 0, layer: typeof e.layer === "string" ? e.layer : void 0 } : void 0
           });
           const ids = [];
           for (const [id, node] of plan.nodes) {
@@ -66476,6 +66522,11 @@ function build(input) {
             touch(it, e.op);
             changes.push(modified(doc, it, node));
             ids.push(id);
+          }
+          for (const node of plan.adds) {
+            const c = added(doc, node);
+            changes.push(c);
+            ids.push(c.id);
           }
           const rp = plan.report;
           const nl = Object.values(rp.pin_labels).reduce((n2, l) => n2 + l.length, 0);

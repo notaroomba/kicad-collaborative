@@ -241,7 +241,7 @@ class Blinker(unittest.TestCase):
         done = board.silkscreen(rev="v1")
         self.assertEqual(done["references"], 8)
         self.assertEqual(done["hidden"], [])
-        self.assertEqual(done["pin_labels"], {"J1": ["1 +5V", "2 GND"]})
+        self.assertEqual(done["pin_labels"], {"J1": 2})
         self.assertIn("v1", done["mark"]["text"])
         self.assertEqual(silk(), {})
         self.assertEqual(board.check()["errors"], 0)

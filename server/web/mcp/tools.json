@@ -300,7 +300,8 @@
       "type": "object",
       "properties": {
         "project": {"type": "string", "description": "Project id or exact name."},
-        "document": {"type": "string", "description": "Which document: its path, or \"board\" for the board."}
+        "document": {"type": "string", "description": "Which document: its path, or \"board\" for the board."},
+        "silk": {"type": "boolean", "description": "Board only: also list the boxes of everything printed on the silkscreen, as [x0, y0, x1, y1, layer]."}
       },
       "required": ["project", "document"],
       "additionalProperties": false

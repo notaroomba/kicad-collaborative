@@ -30,12 +30,14 @@ export interface SilkOptions {
   pinLabels?: boolean | string[];
   /** leave the references alone (pin labels only) */
   keepRefs?: boolean;
+  /** the board's identity to print in free room when the silkscreen has no text of its own yet: each entry is one way to break it into lines, the first that fits wins */
+  mark?: { shapes: string[][]; size?: number; layer?: string };
 }
 export interface SilkReport {
   references: number; kept: number; moved: number; resized: Record<string, number>; turned: string[]; hidden: string[]; shown: string[];
-  pin_labels: Record<string, string[]>; pin_labels_skipped: Record<string, string[]>; smallest: number | null; min_size: number;
+  pin_labels: Record<string, string[]>; pin_labels_skipped: Record<string, string[]>; pin_labels_other_side: string[]; mark?: { text: string; at: number[]; layer: string; size: number } | { problem: string }; smallest: number | null; min_size: number;
 }
-export interface SilkPlan { nodes: Map<string, any>; report: SilkReport }
+export interface SilkPlan { nodes: Map<string, any>; adds: any[]; report: SilkReport }
 
 interface Obstacle { box: Box; fp: string | null; key: string }
 
@@ -139,7 +141,7 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
   const sizes = [top, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4].filter((s, i) => i === 0 || (s < top && s >= low - 1e-9));
   if (low < top && !sizes.some((s) => Math.abs(s - low) < 1e-9)) sizes.push(low);
   const want = opts.refs && opts.refs.length ? new Set(opts.refs.map((r) => r.toLowerCase())) : null;
-  const report: SilkReport = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], pin_labels: {}, pin_labels_skipped: {}, smallest: null, min_size: low };
+  const report: SilkReport = { references: 0, kept: 0, moved: 0, resized: {}, turned: [], hidden: [], shown: [], pin_labels: {}, pin_labels_skipped: {}, pin_labels_other_side: [], smallest: null, min_size: low };
   const nodes = new Map<string, any>();
   const fps: any[] = Array.from(doc.items.values()).filter((it: any) => it.kind === "footprint");
   const refProp = (fp: any) => k.kids(fp.node, "property").find((p: any) => k.str(p[1]) === "Reference");
@@ -202,60 +204,93 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
   };
 
   // ---- net names beside connector pins (fixed by where the pins are, so they go first)
+  // A connector is labelled whole or not at all: a row with some pins named reads worse than a bare one.  The names
+  // go on the part's own side, toward the inside of the board or away from it; a through-hole connector whose own
+  // side has no clear row for all of them gets them on the other side of the board, where its pins also are.
   const labelled = opts.pinLabels === true ? null : Array.isArray(opts.pinLabels) ? new Set(opts.pinLabels.map((r) => r.toLowerCase())) : undefined;
   const working = new Map<string, any>();      // footprint id → its node as edited so far
   const nodeOf = (fp: any) => working.get(fp.id) || fp.node;
   if (labelled !== undefined) for (const fp of fps) {
     const ref = String(fp.ref || ""); const pads: any[] = P.padsOf(fp).filter((p: any) => p.number !== "" && p.type !== "np_thru_hole");
     if (labelled ? !labelled.has(ref.toLowerCase()) : !/^(J|P|CN|X|BT)\d/.test(ref) || pads.length < 2 || pads.length > 48) continue;
-    const side = fp.layer === "B.Cu" ? "B" : "F"; const layer = side + ".SilkS"; const cb = court.get(fp.id); if (!cb) continue;
-    // one label per pin number (a shield or a doubled supply pin is printed once per pad position all the same)
+    const own = fp.layer === "B.Cu" ? "B" : "F"; const cb = court.get(fp.id); if (!cb) continue;
     const xs = pads.map((p) => p.x), ys = pads.map((p) => p.y); const spanX = Math.max(...xs) - Math.min(...xs), spanY = Math.max(...ys) - Math.min(...ys);
     const rowAlongX = spanX >= spanY; const cx = (cb[0] + cb[2]) / 2, cy = (cb[1] + cb[3]) / 2;
     const along = (p: any) => (rowAlongX ? p.x : p.y), across = (p: any) => (rowAlongX ? p.y : p.x);
     const sorted = pads.slice().sort((a, b) => along(a) - along(b)); let pitch = Infinity;
     for (let i = 1; i < sorted.length; i++) { const d = along(sorted[i]) - along(sorted[i - 1]); if (d > 0.2) pitch = Math.min(pitch, d); }
     if (!isFinite(pitch)) pitch = 2.54;
+    // a fine-pitch connector (USB-C, FFC) has no room for names and needs none; one asked for by reference is still tried
+    if (!labelled && pitch < 1.9) continue;
     const rows = Array.from(new Set(pads.map((p) => Math.round(across(p) * 10) / 10))).sort((a, b) => a - b);
-    const base = k.cloneNode(fp.node); const body: any[] = [];
+    if (rows.length > 2) { if (labelled) report.pin_labels_skipped[ref] = ["more than two rows of pins: the inner rows have nowhere to print"]; continue; }
+    const base = k.cloneNode(nodeOf(fp));
     for (let i = base.length - 1; i >= 2; i--) if (Array.isArray(base[i]) && isOldLabel(fp, base[i])) base.splice(i, 1);
-    const proto = k.parseAll(`(fp_text user "X" (at 0 0 0) (layer "${layer}") (uuid "${k.newUuid()}") (effects (font (size 1 1) (thickness 0.15))${side === "B" ? " (justify mirror)" : ""}))`)[0];
     const fpNow = Object.assign({}, fp, { node: base });
-    // text runs away from the row: turned when the row runs along X
-    const horiz = [0, 90].find((a) => { const f = new Frame(doc, fpNow, proto, a, 1, "MMMM"); return f.ok && f.w > f.h; }) ?? 0;
-    const ang = rowAlongX ? (horiz === 0 ? 90 : 0) : horiz;
-    const done: string[] = [], skipped: string[] = []; const placedBoxes: Box[] = [];
-    const tryRows = (dirs: number[]): { nodes: any[]; boxes: Box[]; names: string[]; miss: string[]; size: number } | null => {
-      let best: any = null;
-      // pin names are small print: they start at 0.8 mm (or the board's minimum) so more of them fit beside their pins
+    const named = pads.map((p) => ({ p, name: shortNet(NT.key(p.net) || "") })).filter((x) => x.name);
+    if (!named.length) continue;
+    const through = pads.some((p) => p.type === "thru_hole");
+    interface Row { nodes: any[]; boxes: Box[]; miss: string[]; size: number; side: string }
+    const tryRow = (side: string, dir1: number): Row => {
+      const proto = k.parseAll(`(fp_text user "X" (at 0 0 0) (layer "${side}.SilkS") (uuid "${k.newUuid()}") (effects (font (size 1 1) (thickness 0.15))${side === "B" ? " (justify mirror)" : ""}))`)[0];
+      // text runs away from the row: turned when the row runs along X
+      const horiz = [0, 90].find((a) => { const f = new Frame(doc, fpNow, proto, a, 1, "MMMM"); return f.ok && f.w > f.h; }) ?? 0;
+      const ang = rowAlongX ? (horiz === 0 ? 90 : 0) : horiz;
+      let best: Row | null = null;
+      // pin names are small print: they start at 0.8 mm (or the board's minimum) and shrink to the minimum
       for (const size of sizes.filter((s) => (s <= Math.max(0.8, low) + 1e-9 && s + 0.25 <= pitch) || s === sizes[sizes.length - 1])) {
-        const out: any[] = [], boxes: Box[] = [], names: string[] = [], miss: string[] = [];
-        for (const p of pads) {
-          const name = shortNet(NT.key(p.net) || ""); if (!name) continue;
-          const row = rows.indexOf(Math.round(across(p) * 10) / 10); const dir = rows.length > 1 ? (row < rows.length / 2 ? -1 : 1) : dirs[0];
-          if (rows.length > 2 && row > 0 && row < rows.length - 1) { miss.push(`${p.number} ${name}`); continue; }
+        const out: any[] = [], boxes: Box[] = [], miss: string[] = [];
+        for (const { p, name } of named) {
+          const row = rows.indexOf(Math.round(across(p) * 10) / 10); const dir = rows.length > 1 ? (row === 0 ? -1 : 1) : dir1;
           const f = new Frame(doc, fpNow, proto, ang, size, name); if (!f.ok) { miss.push(`${p.number} ${name}`); continue; }
           const len = rowAlongX ? f.h : f.w; const edge = rowAlongX ? (dir < 0 ? cb[1] : cb[3]) : (dir < 0 ? cb[0] : cb[2]);
           const off = edge + dir * (0.3 + len / 2); const x = rowAlongX ? p.x : off, y = rowAlongX ? off : p.y; const b = f.box(x, y);
           if (!clear(grow(b, 0.05), side, "courtyard:" + fp.id) || hit(b, cb, 0.05) || boxes.some((o) => hit(b, o, 0.1))) { miss.push(`${p.number} ${name}`); continue; }
-          const nd = f.node(x, y); k.kid(nd, "uuid")[1] = k.newUuid(); out.push(nd); boxes.push(b); names.push(`${p.number} ${name}`);
+          const nd = f.node(x, y); k.kid(nd, "uuid")[1] = k.newUuid(); out.push(nd); boxes.push(b);
         }
-        const res = { nodes: out, boxes, names, miss, size };
-        if (!best || names.length > best.names.length) best = res;
+        const res: Row = { nodes: out, boxes, miss, size, side };
+        if (!best || miss.length < best.miss.length) best = res;
         if (!miss.length) break;
       }
-      return best;
+      return best || { nodes: [], boxes: [], miss: named.map((x) => `${x.p.number} ${x.name}`), size: 0, side };
     };
-    const tries = rows.length > 1 ? [tryRows([0])] : [tryRows([-1]), tryRows([1])];
-    // a single row prints toward the inside of the board when both sides take as many
-    const inward = outline ? (() => { let ox = 0, oy = 0; for (const q of outline!) { ox += q[0]; oy += q[1]; } ox /= outline!.length; oy /= outline!.length; return rowAlongX ? (oy < cy ? 0 : 1) : (ox < cx ? 0 : 1); })() : 0;
-    let pick = tries[0]; if (tries.length > 1 && tries[1] && (!pick || tries[1].names.length > pick.names.length || (tries[1].names.length === pick.names.length && inward === 1))) pick = tries[1];
-    if (!pick || !pick.names.length) { if (pick && pick.miss.length) report.pin_labels_skipped[ref] = pick.miss; continue; }
-    for (const nd of pick.nodes) { base.push(nd); body.push(nd); }
-    for (const b of pick.boxes) { placedBoxes.push(b); obs[side].push({ box: grow(b, 0.12), fp: fp.id, key: "pinlabel:" + fp.id + ":" + placedBoxes.length }); }
-    done.push(...pick.names); skipped.push(...pick.miss);
-    working.set(fp.id, base); report.pin_labels[ref] = done; if (skipped.length) report.pin_labels_skipped[ref] = skipped;
+    // a single row prints toward the inside of the board first
+    let inward = -1;
+    if (outline) { let ox = 0, oy = 0; for (const q of outline) { ox += q[0]; oy += q[1]; } ox /= outline.length; oy /= outline.length; inward = rowAlongX ? (oy < cy ? -1 : 1) : (ox < cx ? -1 : 1); }
+    const dirs = rows.length > 1 ? [0] : [inward, -inward];
+    const sides = through ? [own, own === "F" ? "B" : "F"] : [own];
+    let pick: Row | null = null, nearest: Row | null = null;
+    for (const side of sides) { for (const d of dirs) { const r = tryRow(side, d); if (!r.miss.length) { pick = r; break; } if (!nearest || r.miss.length < nearest.miss.length) nearest = r; } if (pick) break; }
+    if (!pick) { report.pin_labels_skipped[ref] = [`no clear row for all ${named.length} names on ${through ? "either side of the board" : "its side"}; in the way at: ${(nearest ? nearest.miss : []).slice(0, 12).join(", ")}`]; if (k.serialize(base) !== k.serialize(nodeOf(fp))) working.set(fp.id, base); continue; }
+    for (const nd of pick.nodes) base.push(nd);
+    pick.boxes.forEach((b, i) => obs[pick!.side].push({ box: grow(b, 0.12), fp: fp.id, key: "pinlabel:" + fp.id + ":" + i }));
+    working.set(fp.id, base); report.pin_labels[ref] = named.map((x) => `${x.p.number} ${x.name}`);
+    if (pick.side !== own) report.pin_labels_other_side.push(ref);
   }
+
+  // ---- the board's name (placed below, together with the references)
+  const adds: any[] = [];
+  const hasText = Array.from(doc.items.values()).some((it: any) => (it.kind === "gr_text" || it.kind === "gr_text_box") && /SilkS$/.test(layerOfNode(it.node)));
+  const wantMark = !!(opts.mark && opts.mark.shapes.length && !hasText);
+  const placeMark = (): boolean => {
+    if (!opts.mark) return false;
+    const want = opts.mark.layer && opts.mark.layer.startsWith("B.") ? "B" : "F"; const msize = Math.max(low, opts.mark.size || 1.0);
+    let ob: Box | null = null; if (outline) { ob = [Infinity, Infinity, -Infinity, -Infinity]; for (const q of outline) ob = [Math.min(ob[0], q[0]), Math.min(ob[1], q[1]), Math.max(ob[2], q[0]), Math.max(ob[3], q[1])]; }
+    let placed = false;
+    if (ob) search: for (const side of [want, want === "F" ? "B" : "F"]) for (const sz of [msize, 0.8, low].filter((s, i, a) => s <= msize + 1e-9 && s >= low - 1e-9 && a.indexOf(s) === i)) for (const lines of opts.mark.shapes) {
+      const tw = Math.max(...lines.map((l) => l.length)) * sz * 0.9, w = tw + 0.4, h = lines.length * sz * 1.65 + 0.3;
+      if (w > ob[2] - ob[0] - 1.6 || h > ob[3] - ob[1] - 1.6) continue;
+      for (let y = ob[3] - 0.8 - h; y >= ob[1] + 0.8; y -= 0.5) for (let x = ob[0] + 0.8; x + w <= ob[2] - 0.8; x += 0.5) {
+        const b: Box = [x, y, x + w, y + h]; if (!clear(b, side)) continue;
+        // mirrored text runs toward smaller x from where it starts: it starts at the right end of its room
+        const ax = side === "B" ? x + 0.2 + tw : x + 0.2, ay = y + 0.15; const text = lines.join("\\n").replace(/"/g, "'");
+        adds.push(k.parseAll(`(gr_text "${text}" (at ${r4(ax)} ${r4(ay)}) (layer "${side}.SilkS") (uuid "${k.newUuid()}") (effects (font (size ${sz} ${sz}) (thickness ${Math.max(0.1, Math.round(sz * 15) / 100)})) (justify left top${side === "B" ? " mirror" : ""})))`)[0]);
+        obs[side].push({ box: grow(b, 0.12), fp: null, key: "mark" });
+        report.mark = { text: lines.join(" / "), at: [r4(ax), r4(ay)], layer: side + ".SilkS", size: sz }; placed = true; break search;
+      }
+    }
+    return placed;
+  };
 
   // ---- the references
   interface Job { fp: any; prop: any; ref: string; side: string; body: Box; frames: Map<string, Frame>; horiz: number }
@@ -300,7 +335,7 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
   // the parts with the fewest places go first
   const room = (j: Job) => { let n = 0; for (const turned of [false, true]) { const f = frame(j, sizes[0], turned); if (f.ok) for (const s of spots(j.body, f.w, f.h, 0, turned)) if (clear(f.box(s.x, s.y), j.side)) n++; } return n; };
   const order = jobs.map((j) => ({ j, n: room(j) })).sort((a, b) => a.n - b.n || a.j.ref.localeCompare(b.j.ref, undefined, { numeric: true })).map((x) => x.j);
-  for (const j of order) {
+  const placeRefs = () => { for (const j of order) {
     report.references++;
     const got = find(j, sizes, [0, 0.4]) || find(j, [sizes[sizes.length - 1]], [-0.1, 0.9, 1.5, 2.2, 3.0]);
     const before = k.serialize(j.prop); let next: any;
@@ -319,10 +354,20 @@ export function planSilk(doc: any, opts: SilkOptions = {}): SilkPlan {
     if (got) report.moved++;
     const node = k.cloneNode(nodeOf(j.fp)); const i = node.findIndex((g: any) => Array.isArray(g) && g[0] === "property" && k.str(g[1]) === "Reference");
     if (i < 0) continue; node[i] = next; working.set(j.fp.id, node);
+  } };
+  // The name is planned around the references when there is room for both, since a reference that had to hide is the
+  // worse loss; only when the references leave no block for it does the name go first and the references around it.
+  const mark0 = { F: obs.F.length, B: obs.B.length }, work0 = new Map(working), rep0 = JSON.stringify(report);
+  placeRefs();
+  if (wantMark && !placeMark()) {
+    obs.F.length = mark0.F; obs.B.length = mark0.B; working.clear(); for (const [id, n] of work0) working.set(id, n);
+    Object.assign(report, JSON.parse(rep0));
+    if (!placeMark()) report.mark = { problem: outline ? `no free room for "${opts.mark!.shapes[0].join(" ")}" on either side, even at ${low} mm in ${opts.mark!.shapes[opts.mark!.shapes.length - 1].length} lines: board.mark(name, at=(x, y)) puts it where you say` : "the board has no outline yet" };
+    placeRefs();
   }
   for (const [id, node] of working) { const it = doc.items.get(id); if (it && k.serialize(node) !== k.serialize(it.node)) nodes.set(id, node); }
   report.hidden.sort(); report.turned.sort();
-  return { nodes, report };
+  return { nodes, adds, report };
 }
 
 /** The boxes of what is printed on the silkscreen, for placing something new clear of it: [x0, y0, x1, y1, layer]. */

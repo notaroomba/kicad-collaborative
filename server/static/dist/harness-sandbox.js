@@ -3689,39 +3689,43 @@ def _silkscreen(self, name: str | bool | None = None, rev: str | None = None, da
       board.rules(min_text_height=...) says otherwise); 0.6 mm with a 0.1 mm pen is what most board houses still
       print, so on a crowded board set board.rules(min_text_height=0.6) first.  \`refs\` limits the pass to those parts, \`unhide=True\` also brings
       back references that are hidden now.
-    - \`pin_labels\`: each connector pin's net name is printed beside it (True for every connector J/P/CN/X/BT, or a list
-      of references; False for none).
+    - \`pin_labels\`: each connector pin's net name is printed beside it (True for every connector J/P/CN/X/BT with
+      pins 1.9 mm or more apart, or a list of references; False for none).  A connector is labelled whole or not at
+      all: if its own side has no clear row for every name, a through-hole connector gets them on the other side of
+      the board (\`pin_labels_other_side\`), and one with no room on either is listed in \`pin_labels_skipped\` with the
+      pins that are in the way.
     - The board's name, version and date are printed in free space (board.mark()) when the board has no such text yet;
       \`name=False\` leaves that out, and name / rev / date / org are passed on.
 
-    Returns what it did: {"references", "moved", "resized": {ref: size}, "turned", "hidden", "pin_labels", "mark"}."""
+    All of it is planned together and written as one edit: the pin names first (their place is fixed by the pins),
+    then the name (it needs the biggest free block), then the references around both, so nothing lands on anything
+    and one call finishes the job.
+
+    Returns what it did, short: {"references", "moved", "resized": {ref: size}, "turned", "hidden", "pin_labels": {ref:
+    pins named}, "pin_labels_skipped", "mark"}.  Only what did not fit needs reading: \`hidden\` and \`pin_labels_skipped\`."""
     self.flush()
-    out = {}
-    if pin_labels:      # fixed by where the pins are, so they go first; then the name block, which needs the most room
-        self._edit({"op": "silkscreen", "references": False, "pin_labels": True if pin_labels is True else list(pin_labels), "size": size, **({"min_size": min_size} if min_size else {})})
-        res = self.flush() or {}
-        d = next((x["silkscreen"] for x in res.get("details") or [] if "silkscreen" in x), {})
-        out["pin_labels"] = d.get("pin_labels", {})
-        if d.get("pin_labels_skipped"):
-            out["pin_labels_skipped"] = d["pin_labels_skipped"]
-    if name is not False:
-        have = [it for it in self._call("get_items", kinds=["gr_text"]).get("items", []) if "SilkS" in it.get("sexpr", "")]
-        if not have:
-            try:
-                out["mark"] = self.mark(name=name or None, rev=rev, date=date, org=org)
-            except HarnessError as e:
-                out["mark"] = {"problem": str(e)}
-    e = {"op": "silkscreen", "size": size, "unhide": bool(unhide), **({"min_size": min_size} if min_size else {})}
+    e = {"op": "silkscreen", "size": size, "unhide": bool(unhide), "pin_labels": True if pin_labels is True else list(pin_labels) if pin_labels else False}
+    if min_size:
+        e["min_size"] = min_size
     if refs:
         e["refs"] = list(refs)
+    if name is not False:      # the ways to break the name into lines, widest first; the engine takes the first that fits
+        date = date or _dt.date.today().isoformat()
+        title = name or self.project.name
+        tail = " ".join(x for x in (rev, date) if x)
+        shapes = [[" ".join(x for x in (org, title, tail) if x)]]
+        if org:
+            shapes.append([org, " ".join(x for x in (title, tail) if x)])
+        shapes.append([x for x in (org, title, tail) if x])
+        e["mark"] = shapes
     self._edit(e)
     res = self.flush() or {}
     d = next((x["silkscreen"] for x in res.get("details") or [] if "silkscreen" in x), {})
-    for key in ("references", "moved", "resized", "turned", "hidden", "shown", "smallest", "min_size"):
+    out = {"references": d.get("references", 0), "hidden": d.get("hidden", [])}
+    for key in ("moved", "resized", "turned", "shown", "smallest", "min_size", "pin_labels_skipped", "pin_labels_other_side", "mark"):
         if d.get(key) not in (None, [], {}):
             out[key] = d[key]
-    out.setdefault("references", 0)
-    out.setdefault("hidden", [])
+    out["pin_labels"] = {ref: len(names) for ref, names in (d.get("pin_labels") or {}).items()}      # how many pins of each connector were named
     return out
 
 
