@@ -4,7 +4,8 @@
 // shape properties and the import / export commands.
 import * as M from "./model";
 import { KD, h, checkbox, select, textInput, form, promptText, confirmBox, download, type GridColumn, type GridApi, type NotebookApi } from "../dialogs/dom";
-import { messageBox } from "../dialogs/sch-items";
+import { messageBox, fieldsGrid, openFieldDialog, openTextDialog } from "../dialogs/sch-items";
+import * as L from "../dialogs/sch-items-logic";
 import { E, appState, api } from "../dialogs/editor";
 import { saveTextDocument } from "../editor/projectfile";
 import { UNITS, unitName } from "../units";   // a dialog's unit label (EDA_UNIT_UTILS::GetLabel: "mm", "in", "mils")
@@ -128,70 +129,95 @@ export async function editPin(se: SymbolEditor, id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------- fields / texts / shapes
+/**
+ * A library item's node in the schematic dialogs' terms: internal coordinates (Y down, as the frame's units provider
+ * shows them) and, for a library text, its angle in degrees (the file keeps tenths).  schToLib undoes it.
+ */
+const neg = (v: unknown): number => { const n = Number(v) || 0; return n === 0 ? 0 : -n; };
+export function libToSch(n: M.Node, tenths = false): SNode {
+  const c = M.clone(n) as unknown as SNode; const a = K().kid(c, "at");
+  if (a) { a[2] = neg(a[2]); if (tenths && a.length > 3) a[3] = (Number(a[3]) || 0) / 10; }
+  return c;
+}
+export function schToLib(n: SNode, tenths = false): M.Node {
+  const c = M.clone(n as unknown as M.Node); const a = K().kid(c as unknown as SNode, "at");
+  if (a) { a[2] = neg(a[2]); if (tenths && a.length > 3) a[3] = Math.round((Number(a[3]) || 0) * 10); }
+  return c;
+}
+const ROW_KEYS: (keyof L.FieldRow)[] = ["name", "value", "show", "showName", "h", "v", "italic", "bold", "size", "orient", "x", "y", "font", "color", "autoplace"];
+const sameRow = (a: L.FieldRow, b: L.FieldRow): boolean => ROW_KEYS.every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+/** The schematic dialogs' context for the Symbol Editor: its canvas document (font faces), read-only state, no commit. */
+const dlgCtx = (se: SymbolEditor) => ({ doc: se.kdoc(), viewOnly: se.readOnly(), commit() { /* the editor commits (se.edit) */ } }) as unknown as Parameters<typeof openTextDialog>[0];
+/** SYMBOL_EDITOR_EDIT_TOOL::editFieldProperties: DIALOG_FIELD_PROPERTIES on a library field. */
 export async function editField(se: SymbolEditor, id: string): Promise<void> {
   const sym = se.symbol(); if (!sym) return; const f = nodeOf(sym, id); if (!f) return;
-  const name = String(f[1]); const at = K().kid(f as unknown as SNode, "at"); const ef = K().kid(f as unknown as SNode, "effects"); const font = ef ? K().kid(ef, "font") : null; const sz = font ? K().kid(font, "size") : null;
-  const hidden = isHidden(f);
-  const sn = K().kid(f as unknown as SNode, "show_name"); const showName = !!sn && K().str(sn[1]) !== "no";
-  const val = textInput(String(f[2]), undefined, { id: "fld-value" }); const x = lenInput(at ? Number(at[1]) : 0, "fld-x"), y = lenInput(at ? -Number(at[2]) : 0, "fld-y"), size = lenInput(sz ? Number(sz[1]) : 1.27, "fld-size");
-  const ang = select([["0", "Horizontal"], ["90", "Vertical"]], String(at ? Number(at[3]) || 0 : 0), undefined, { id: "fld-angle" });
-  const vis = checkbox("Visible", !hidden, undefined, { id: "fld-visible" }), shn = checkbox("Show field name", showName, undefined, { id: "fld-showname" });
-  const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
-  KD().open({
-    title: `${name} Properties`, width: 420, readOnly: se.readOnly(),
-    build(body) { body.append(form([[`${name}:`, val], ["X position:", x, unitName(units())], ["Y position:", y, unitName(units())], ["Text size:", size, unitName(units())], ["Orientation:", ang, ""]], 3), h("div", { style: "display:flex;gap:14px;margin-top:8px" }, vis, shn)); val.focus(); val.select(); },
-    ok() {
-      if (name === "Reference" && !val.value.trim()) { void messageBox("References must start with a letter."); return false; }
-      se.edit(`Edit ${name}`, (s) => {
-        const g = M.fieldOf(s, name); if (!g) return false;
-        g[2] = val.value; const a = K().kid(g as unknown as SNode, "at"); if (a) { a[1] = lenOf(x, 0); a[2] = -lenOf(y, 0); a[3] = Number(ang.value); }
-        setBool(g, "show_name", cb(shn)); setHide(g, !cb(vis));
-        const e2 = K().kid(g as unknown as SNode, "effects"); const fo = e2 ? K().kid(e2, "font") : null; const s2 = fo ? K().kid(fo, "size") : null; if (s2) { s2[1] = lenOf(size, 1.27); s2[2] = lenOf(size, 1.27); }
-        if (name === "Value" && !M.isPower(se.rootSym(s))) { /* the Value of a library symbol is its name: kept as typed */ }
-        return [g];
-      });
-    },
+  const name = L.fieldName(f as unknown as SNode);
+  const item = { id: "lib", kind: "lib_symbol", node: ["lib_symbol", libToSch(f)] } as unknown as KItem;
+  openFieldDialog(dlgCtx(se) as never, item, name, (np) => {
+    if (se.readOnly()) return;
+    const label = M.MANDATORY_FIELDS.includes(name) ? `Edit ${name} Field` : `Edit '${name}' Field`;
+    se.edit(label, (s) => {
+      const g = M.fieldOf(s, name); if (!g) return false;
+      const next = schToLib(np); if (M.text(next) === M.text(g)) return false;
+      g.splice(0, g.length, ...next); return [g];
+    });
+  });
+}
+/** A library text / text box: "private" moves out of the node for the dialog, which edits (text "…" …). */
+function textForDialog(n: M.Node): { node: SNode; priv: boolean } {
+  const priv = n[1] === "private" && n.length > 2 && !Array.isArray(n[2]);
+  const c = M.clone(n); if (priv) c.splice(1, 1);
+  return { node: libToSch(c, c[0] === "text"), priv };
+}
+function textFromDialog(n: SNode, priv: boolean): M.Node {
+  const c = schToLib(n, n[0] === "text"); if (priv) c.splice(1, 0, "private"); return c;
+}
+function textDialogFor(se: SymbolEditor, n: M.Node, unit: number, body: number, title: string | undefined, apply: (node: M.Node, o: { allUnits: boolean; allBodies: boolean }) => void, cancel?: () => void): void {
+  const sym = se.symbol()!; const root = se.rootSym(sym);
+  const { node, priv } = textForDialog(n);
+  const item = { id: "lib-text", kind: String(node[0]), node } as unknown as KItem;
+  openTextDialog(dlgCtx(se) as never, item, { title, cancel, symbolEditor: {
+    private: priv, multiUnit: M.unitCount(root) > 1, allUnits: unit === 0, multiBody: M.bodyStyles(root).count > 1, allBodies: body === 0,
+    apply: (out, o) => apply(textFromDialog(out, o.private), o),
+  } });
+}
+/** SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace for text: DIALOG_TEXT_PROPERTIES, then the text follows the cursor. */
+export async function newText(se: SymbolEditor, x: number, y: number): Promise<void> {
+  const t = se.tab; if (!t) return;
+  const n = M.textNode("", x, y, M.DEFAULTS.textSize, se.lastTextAngle);
+  // GetDrawSpecificUnit() is off and GetDrawSpecificBodyStyle() on: all units, this body style
+  textDialogFor(se, n, 0, t.body, "Text Properties", (out, o) => {
+    if (!L.str(out[1] === "private" ? out[2] : out[1]).trim()) return;   // NoPrintableChars: nothing is placed
+    const a = K().kid(out as unknown as SNode, "at"); se.lastTextAngle = a ? (Number(a[3]) || 0) / 10 : 0;
+    se.startFloating({ kind: "text", node: out, body: o.allBodies ? 0 : t.body, unit: o.allUnits ? 0 : t.unit });
+  });
+}
+export async function newTextBox(se: SymbolEditor, a: number[], b: number[]): Promise<void> {
+  const t = se.tab; if (!t) return;
+  const x0 = Math.min(a[0], b[0]), yTop = Math.max(a[1], b[1]);
+  const n = M.textBoxNode("", x0, yTop, Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]), M.DEFAULTS.textSize);
+  textDialogFor(se, n, 0, t.body, "Text Box Properties", (out, o) => {
+    se.edit("Draw Text Box", (s) => { M.addDrawItem(s, o.allUnits ? 0 : t.unit, o.allBodies ? 0 : t.body, out); return [out]; });
+  });
+}
+/** SYMBOL_EDITOR_EDIT_TOOL::editTextProperties / editTextBoxProperties. */
+export async function editText(se: SymbolEditor, id: string): Promise<void> {
+  const sym = se.symbol(); if (!sym) return; const n = nodeOf(sym, id); if (!n) return; const t = se.tab!;
+  const ref = M.findRef(sym, n)!; const isText = n[0] === "text";
+  textDialogFor(se, n, ref.unit, ref.body, undefined, (out, o) => {
+    if (se.readOnly()) return;
+    se.edit(isText ? "Edit Text" : "Edit Text Box", (s) => {
+      const m = nodeOf(s, id); if (!m) return false;
+      const changed = M.text(out) !== M.text(m); m.splice(0, m.length, ...out);
+      const r2 = M.findRef(s, m)!; const u = o.allUnits ? 0 : t.unit, b = o.allBodies ? 0 : t.body;
+      if (r2.unit !== u || r2.body !== b) { M.removeDrawItem(s, r2); M.addDrawItem(s, u, b, m); }
+      else if (!changed) return false;
+      return [m];
+    });
   });
 }
 const setBool = M.setBool, setHide = M.setHide;
 export const isHidden = M.isHidden;
-function textDialog(title: string, initial: string, sizeMm: number, angle: number, multiline: boolean): Promise<{ text: string; size: number; angle: number } | null> {
-  return new Promise((resolve) => {
-    const ta = h(multiline ? "textarea" : "input", { id: "txt-text", style: "width:100%;min-height:" + (multiline ? "80px" : "auto") }) as HTMLInputElement; ta.value = initial;
-    const size = lenInput(sizeMm, "txt-size"); const ang = select([["0", "Horizontal"], ["90", "Vertical"]], String(angle), undefined, { id: "txt-angle" });
-    KD().open({
-      title, width: 440,
-      build(body) { body.append(form([["Text:", ta], ["Text size:", size, unitName(units())], ["Orientation:", ang, ""]], 3)); ta.focus(); },
-      ok() { if (!ta.value.trim()) { resolve(null); return true; } resolve({ text: ta.value, size: lenOf(size, sizeMm), angle: Number(ang.value) }); return true; },
-      cancel() { resolve(null); },
-    });
-  });
-}
-export async function newText(se: SymbolEditor, x: number, y: number): Promise<void> {
-  const t = se.tab; if (!t) return;
-  const r = await textDialog("Text Properties", "", M.DEFAULTS.textSize, se.lastTextAngle, false); if (!r) return;
-  se.lastTextAngle = r.angle;
-  if (!r.text.trim()) return;   // NoPrintableChars: nothing is placed
-  se.startFloating({ kind: "text", node: M.textNode(r.text, x, y, r.size, r.angle), body: t.body });   // TwoClickPlace: the text follows the cursor until a click
-}
-export async function newTextBox(se: SymbolEditor, a: number[], b: number[]): Promise<void> {
-  const t = se.tab; if (!t) return;
-  const r = await textDialog("Text Box Properties", "", M.DEFAULTS.textSize, 0, true); if (!r) return;
-  const x0 = Math.min(a[0], b[0]), yTop = Math.max(a[1], b[1]);
-  se.edit("Draw Text Box", (s) => { const n = M.textBoxNode(r.text, x0, yTop, Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]), r.size); M.addDrawItem(s, 0, t.body, n); return [n]; });
-}
-export async function editText(se: SymbolEditor, id: string): Promise<void> {
-  const sym = se.symbol(); if (!sym) return; const n = nodeOf(sym, id); if (!n) return;
-  const at = K().kid(n as unknown as SNode, "at"); const ef = K().kid(n as unknown as SNode, "effects"); const fo = ef ? K().kid(ef, "font") : null; const sz = fo ? K().kid(fo, "size") : null;
-  const isText = n[0] === "text"; const ang = at ? Number(at[3]) / (isText ? 10 : 1) : 0;
-  const r = await textDialog(isText ? "Text Properties" : "Text Box Properties", String(n[1]), sz ? Number(sz[1]) : 1.27, ang === 90 ? 90 : 0, !isText); if (!r) return;
-  se.edit(isText ? "Edit Text" : "Edit Text Box", (s) => {
-    const m = nodeOf(s, id); if (!m) return false; m[1] = r.text;
-    const a2 = K().kid(m as unknown as SNode, "at"); if (a2) a2[3] = isText ? r.angle * 10 : r.angle;
-    const e2 = K().kid(m as unknown as SNode, "effects"); const f2 = e2 ? K().kid(e2, "font") : null; const s2 = f2 ? K().kid(f2, "size") : null; if (s2) { s2[1] = r.size; s2[2] = r.size; }
-    return [m];
-  });
-}
 const FILLS: [string, string][] = [["none", "Do not fill"], ["outline", "Fill with body outline color"], ["background", "Fill with body background color"]];
 export function editShape(se: SymbolEditor, id: string): void {
   const sym = se.symbol(); if (!sym) return; const n = nodeOf(sym, id); if (!n) return;
@@ -223,11 +249,14 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
   const pinMaps = pinMapState(sym, M.flatten(se.libMap(se.libs.get(t.lib) || null), sym));
   const derived = M.isDerived(sym); const root = se.rootSym(sym);
   const hd = M.symHeader(root);
-  interface FRow { name: string; value: string; show: boolean; showName: boolean; x: number; y: number; mandatory: boolean; node: M.Node | null }
-  const rows: FRow[] = K().kids(sym as unknown as SNode, "property").filter((p) => !K().str(p[1]).startsWith("ki_")).map((p) => {
-    const n = p as unknown as M.Node; const a = K().kid(p, "at"); const sn = K().kid(p, "show_name");
-    return { name: K().str(p[1]), value: K().str(p[2]), show: !isHidden(n), showName: !!sn && K().str(sn[1]) !== "no", x: a ? Number(a[1]) : 0, y: a ? Number(a[2]) : 0, mandatory: M.MANDATORY_FIELDS.includes(K().str(p[1])), node: n };
+  // FIELDS_GRID_TABLE over the library fields, in internal coordinates (Y down) as the frame's units provider shows them
+  const fieldSrc = new Map<SNode, M.Node>();
+  const rows: L.FieldRow[] = K().kids(sym as unknown as SNode, "property").filter((p) => !K().str(p[1]).startsWith("ki_")).map((p) => {
+    const flipped = libToSch(p as unknown as M.Node); fieldSrc.set(flipped, p as unknown as M.Node);
+    return L.rowFromField(flipped, [0, 0], M.MANDATORY_FIELDS.includes(K().str(p[1])));
   });
+  let fgrid: { rows(): L.FieldRow[]; setRows(r: L.FieldRow[]): void } | null = null;
+  const curRows = (): L.FieldRow[] => (fgrid ? fgrid.rows() : rows);
   const name = textInput(M.unescapeLibId(M.symName(sym)), undefined, { id: "sp-name" });
   const keywords = textInput(M.fieldValue(sym, "ki_keywords"), undefined, { id: "sp-keywords" });
   const filters = h("textarea", { id: "sp-fpfilters", style: "width:100%;min-height:70px" }) as HTMLTextAreaElement; filters.value = M.fieldValue(sym, "ki_fp_filters").split(/\s+/).filter(Boolean).join("\n");
@@ -256,22 +285,17 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
   const jumpers = checkbox("All pins with duplicate numbers are jumpers", hd.jumpers, undefined, { id: "sp-jumpers" });
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
   const ro = se.readOnly();
-  let confirmed = false; let api: { finish(apply: boolean): void } | null = null; let fieldGrid: { refresh(): void } | null = null;
+  let confirmed = false; let api: { finish(apply: boolean): void } | null = null;
   KD().open({
-    title: `Library Symbol Properties`, width: 760, readOnly: ro,
+    title: `Library Symbol Properties`, width: 1000, readOnly: ro,
     build(body, a) {
       api = a;
       KD().notebook(body, [
         { label: "General", build(pg) {
           const box = KD().staticBox(pg, "Fields");
-          fieldGrid = KD().grid(box, [
-            { key: "name", label: "Name", width: 110, ro: (r: FRow) => r.mandatory },
-            { key: "value", label: "Value", width: 220 },
-            { key: "show", label: "Show", type: "bool", width: 46 },
-            { key: "showName", label: "Show Name", type: "bool", width: 72 },
-            { key: "x", label: "X Position", width: 80, format: (v) => toUser(Number(v)) },
-            { key: "y", label: "Y Position", width: 80, format: (v) => toUser(-Number(v) || 0) },   // internal coordinates: Y down
-          ], rows, { readOnly: ro, height: 190, onChange(r, key, v) { if ((key === "x" || key === "y") && typeof v === "string") { const n = parseLen(v); (r as unknown as Record<string, number>)[key] = n === null ? 0 : key === "y" ? -n || 0 : n; } }, buttons: { add: () => ({ name: `Field${rows.length - 4}`, value: "", show: false, showName: false, x: 0, y: 0, mandatory: false, node: null }), remove: true, canRemove: (r: FRow) => !r.mandatory } });
+          // dialog_lib_symbol_properties_base.cpp: Name … Font (the table's Color and Allow Autoplacement columns hidden), Add / Move up / Move down / Delete
+          fgrid = fieldsGrid(box, rows, { readOnly: ro, doc: se.kdoc(), height: 190, shown: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+            newName: (rs) => { let n = 1; const names = new Set(rs.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; } });
           pg.append(form([["Symbol name:", name], ["Keywords:", keywords], ["Derive from symbol:", h("span", { class: "ro" }, M.parentNameOf(sym) || "<None>")]]));
           if (!derived) pg.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px" },
             h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Attributes"), power, local, exSim, exBom, exBoard, exPos),
@@ -301,12 +325,12 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
       const simBtn = h("button", { type: "button", class: "btn", id: "sp-sim", disabled: ro, style: "margin-right:auto" }, "Simulation Model...") as HTMLButtonElement;
       simBtn.addEventListener("click", () => {
         const flat = M.flatten(se.libMap(se.libs.get(t.lib) || null), sym);
-        openSimModel<FRow>(rows, {
+        openSimModel<L.FieldRow>(curRows(), {
           prefix: refPrefix(M.fieldValue(sym, "Reference")), pins: simPinsOfLib(flat as unknown as SNode), unitCount: M.unitCount(root), readOnly: ro,
           files: [...projectModelFiles((appState.project && appState.project.docs) || []), ...embeddedModelFiles([sym, root === sym ? null : root])],
-          newRow: (n, v, vis) => ({ name: n, value: v, show: vis, showName: false, x: 0, y: 0, mandatory: false, node: null }),
+          newRow: (n, v, vis) => Object.assign(L.newRow(n, [0, 0]), { value: v, show: vis }),
           clone: (r) => ({ ...r }),
-        }, (next) => { rows.splice(0, rows.length, ...next); if (fieldGrid) fieldGrid.refresh(); });
+        }, (next) => { if (fgrid) fgrid.setRows(next); });
       });
       a.foot.insertBefore(simBtn, a.foot.firstChild);
     },
@@ -318,6 +342,8 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
       if (newName !== oldName && !t.origin && lib && lib.doc && lib.doc.lib.symbols.has(newName)) { void messageBox(`Symbol name '${M.unescapeLibId(newName)}' already in use in library '${lib.nick}'.`); return false; }
       const nu = Math.max(1, Math.min(64, Math.round(Number(unitsIn.value) || 1)));
       void bodyGrid;
+      const finalRows = curRows();
+      const dup = L.duplicateFieldName(finalRows); if (dup) { void messageBox(dup); return false; }
       if (!derived) {
         // DIALOG_LIB_SYMBOL_PROPERTIES::Validate
         const seen = new Set<string>();
@@ -340,10 +366,12 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         const keepMeta = (s.filter((c, j) => j > 0 && Array.isArray(c) && c[0] === "property" && String(c[1]).startsWith("ki_")) as M.Node[]);
         let at = s.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "property"); if (at < 0) at = s.findIndex((c, j) => j > 1 && Array.isArray(c) && c[0] === "symbol"); if (at < 0) at = s.length;
         for (let j = s.length - 1; j >= 1; j--) if (Array.isArray(s[j]) && (s[j] as M.Node)[0] === "property") { s.splice(j, 1); if (j < at) at--; }
-        const fresh: M.Node[] = rows.map((r) => {
-          const n = r.node ? M.clone(r.node) : M.fieldNode(r.name, r.value, r.x, r.y, !r.show);
-          n[1] = r.name; n[2] = r.value; const a = K().kid(n as unknown as SNode, "at"); if (a) { a[1] = +M.fmt(r.x); a[2] = +M.fmt(r.y); }
-          setBool(n, "show_name", r.showName); setHide(n, !r.show); return n;
+        const fresh: M.Node[] = finalRows.map((r) => {
+          const orig = r.src ? fieldSrc.get(r.src) : null;
+          // an untouched row keeps its node as it is in the file
+          if (orig && r.src && sameRow(L.rowFromField(r.src, [0, 0], r.mandatory), r)) return M.clone(orig);
+          if (!r.src) { const n = M.fieldNode(r.name, r.value, r.x, -r.y, !r.show); return schToLib(L.fieldFromRow(Object.assign({}, r, { src: libToSch(n) }), [0, 0])); }
+          return schToLib(L.fieldFromRow(r, [0, 0]));
         });
         s.splice(at, 0, ...fresh, ...keepMeta);
         M.setMetaField(s, "ki_keywords", keywords.value.trim());

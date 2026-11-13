@@ -25,7 +25,13 @@ import { openSheetProperties, openSymbolProperties, sheetPathNow } from "./sch-s
 import { openPageSettings } from "./page-settings";
 
 type Ctx = ToolCtx & { doc: KDoc };
-interface ItemOpts { onCreate?(node: SNode, more?: SNode[]): boolean | void; cancel?(): void; title?: string; label?: string; generic?: boolean; isNew?: boolean }
+interface ItemOpts { onCreate?(node: SNode, more?: SNode[]): boolean | void; cancel?(): void; title?: string; label?: string; generic?: boolean; isNew?: boolean; symbolEditor?: SymEditorTextOpts }
+/** DIALOG_TEXT_PROPERTIES in the Symbol Editor (m_isSymbolEditor): no hyperlink, syntax help or simulation exclusion; Private
+ *  to symbol editor and Common to all units / body styles instead, and the result goes back to the editor. */
+export interface SymEditorTextOpts {
+  private: boolean; multiUnit: boolean; allUnits: boolean; multiBody: boolean; allBodies: boolean;
+  apply(node: SNode, o: { private: boolean; allUnits: boolean; allBodies: boolean }): void;
+}
 interface SchHelpers { autoplaceNode(doc: KDoc, item: KItem, opts?: unknown): SNode | null; selectedItems(ctx: ToolCtx): KItem[]; isPowerSymbol(doc: KDoc, libId: string): boolean }
 const schH = (): SchHelpers | null => { const m = CollabTools.sch; return m && m._ ? m._ as unknown as SchHelpers : null; };
 
@@ -333,12 +339,21 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         fcol = swatch(fill.color, "kd-txt-fcolor", undefined, ro || fill.mode === "none");
         g.append(h("span"), fillCb, h("span"), h("label", null, "Fill color:"), fcol.el, h("span"));
       }
-      const href = textInput(fx.href, undefined, { id: "kd-txt-link", style: "width:100%", disabled: ro }); els.link = href;
-      g.append(h("label", null, "Link:"), href, h("span"));
-      const hyper = checkbox("Make this text item a clickable hyperlink", !!fx.href, (on) => { if (!on) (href as HTMLInputElement).value = ""; }, { id: "kd-txt-hyper" });
-      g.append(h("span"), hyper, h("span"));
-      const ex = checkbox("Exclude from simulation", exclude, undefined, { id: "kd-txt-exsim" }); els.exsim = ex.querySelector("input") as HTMLInputElement;
-      g.append(h("span"), ex, h("span"));
+      const se = opts.symbolEditor;
+      if (se) {
+        // m_fgSymbolEditor: Private to Symbol Editor, Common to all units / body styles
+        const priv = checkbox("Private to Symbol Editor", se.private, undefined, { id: "kd-txt-private" }); els.private = priv.querySelector("input") as HTMLInputElement;
+        const au = checkbox("Common to all units", se.multiUnit && se.allUnits, undefined, { id: "kd-txt-allunits", disabled: !se.multiUnit }); els.allUnits = au.querySelector("input") as HTMLInputElement;
+        const ab = checkbox("Common to all body styles", se.multiBody && se.allBodies, undefined, { id: "kd-txt-allbodies", disabled: !se.multiBody }); els.allBodies = ab.querySelector("input") as HTMLInputElement;
+        g.append(h("span"), h("span", { style: "display:flex;flex-direction:column;gap:3px;margin-top:6px" }, priv, au, ab), h("span"));
+      } else {
+        const href = textInput(fx.href, undefined, { id: "kd-txt-link", style: "width:100%", disabled: ro }); els.link = href;
+        g.append(h("label", null, "Link:"), href, h("span"));
+        const hyper = checkbox("Make this text item a clickable hyperlink", !!fx.href, (on) => { if (!on) (href as HTMLInputElement).value = ""; }, { id: "kd-txt-hyper" });
+        g.append(h("span"), hyper, h("span"));
+        const ex = checkbox("Exclude from simulation", exclude, undefined, { id: "kd-txt-exsim" }); els.exsim = ex.querySelector("input") as HTMLInputElement;
+        g.append(h("span"), ex, h("span"));
+      }
       b.append(g);
       initialFocus(ta);
     },
@@ -347,15 +362,16 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       const text = (els.text as HTMLTextAreaElement).value.replace(/\r/g, "\n");
       const size = lenValue(els.size as HTMLInputElement);
       if (size === undefined || size < 0.01 || size > 1000) { void messageBox(`The value must be between ${fmtLen(0.01)} and ${fmtLen(1000)} ${unitName()}.`); return false; }
-      if (!L.validHyperlink((els.link as HTMLInputElement).value.trim())) { void messageBox(L.BAD_LINK); return false; }
+      const link = els.link ? (els.link as HTMLInputElement).value.trim() : fx.href;
+      if (!L.validHyperlink(link)) { void messageBox(L.BAD_LINK); return false; }
       const n = L.clone(staged); n[1] = text as unknown as SNode;
       const hv = (["left", "center", "right"] as const).find((v, i) => isOn(els["h" + i])) || fx.h;
       const vv = (["top", "center", "bottom"] as const).find((v, i) => isOn(els["v" + i])) || fx.v;
       L.writeFx(n, { font: (els.font as FontPickerEl).value, size: Math.abs(size - fx.size) > 1e-9 ? size : undefined, bold: isOn(els.bold), italic: isOn(els.italic),
-        color: tcol ? tcol.get() : fx.color, h: hv, v: vv, href: (els.link as HTMLInputElement).value.trim() });
+        color: tcol ? tcol.get() : fx.color, h: hv, v: vv, href: link });
       const vert = isOn(els.vert), [x, y] = L.atOf(n);
       if (vert !== vertical) L.setAt(n, x, y, vert ? 90 : 0);
-      L.setYes(n, "exclude_from_sim", (els.exsim as HTMLInputElement).checked, ["at"], true);
+      if (els.exsim) L.setYes(n, "exclude_from_sim", (els.exsim as HTMLInputElement).checked, ["at"], true);
       if (box) {
         const on = (els.border as HTMLInputElement).checked, w = lenValue(els.bwidth as HTMLInputElement);
         L.writeStroke(n, { width: on ? Math.max(0, w ?? 0) : -1, style: (els.bstyle as HTMLSelectElement).value, color: bcol ? bcol.get() : stroke.color });
@@ -363,6 +379,7 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         const filled = (els.fill as HTMLInputElement).checked;
         L.writeFill(n, filled ? "solid" : "none", filled ? (fcol ? fcol.get() : fill.color) : null);
       }
+      if (opts.symbolEditor) { opts.symbolEditor.apply(n, { private: (els.private as HTMLInputElement).checked, allUnits: (els.allUnits as HTMLInputElement).checked, allBodies: (els.allBodies as HTMLInputElement).checked }); return undefined; }
       const S = CollabTools.sch ? CollabTools.sch.state as Record<string, unknown> : {};
       if (opts.onCreate) { S.lastTextBold = isOn(els.bold); S.lastTextItalic = isOn(els.italic); S.lastTextH = hv; S.lastTextV = vv; S.lastTextVertical = vert; return opts.onCreate(n) as boolean | undefined; }
       commitItem(ctx, item, n, box ? "Edit Text Box" : "Edit Text");
@@ -372,7 +389,11 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
 }
 
 // ---------------------------------------------------------------- DIALOG_FIELD_PROPERTIES
-export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
+/**
+ * `apply`: the Symbol Editor's own commit (SYMBOL_EDITOR_EDIT_TOOL::editFieldProperties) of the edited field node; the
+ * item is then a "lib_symbol" holding the field in schematic coordinates.
+ */
+export function openFieldDialog(ctx: Ctx, item: KItem, name: string, apply?: (field: SNode) => void): boolean {
   ensureCss();
   const p0 = L.kids(item.node, "property").find((p) => L.fieldName(p) === name); if (!p0) return false;
   const doc = ctx.doc, ro = !!ctx.viewOnly, fx = L.readFx(p0), [x0, y0, r0] = L.atOf(p0), isFile = item.kind === "sheet" && (name === "Sheetfile" || name === "Sheet file");
@@ -408,7 +429,7 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       const size = lenValue(els.size as HTMLInputElement);
       if (size === undefined || size < 0.01 || size > 1000) { void messageBox(`The value must be between ${fmtLen(0.01)} and ${fmtLen(1000)} ${unitName()}.`); return false; }
       // FIELD_VALIDATOR on the text of a Reference, Footprint, Datasheet, Sheetname or Sheetfile field
-      const fid: L.FieldId | null = item.kind === "symbol" ? (name === "Reference" ? "REFERENCE" : name === "Footprint" ? "FOOTPRINT" : name === "Datasheet" ? "DATASHEET" : null)
+      const fid: L.FieldId | null = item.kind === "symbol" || item.kind === "lib_symbol" ? (name === "Reference" ? "REFERENCE" : name === "Footprint" ? "FOOTPRINT" : name === "Datasheet" ? "DATASHEET" : null)
         : item.kind === "sheet" ? (/^Sheet ?name$/i.test(name) ? "SHEET_NAME" : isFile ? "SHEET_FILENAME" : null) : null;
       const verr = fid && !isFile ? L.fieldValidationError(fid, (els.text as HTMLInputElement).value) : "";
       if (verr) { void messageBox(verr, "Field Validation Error"); (els.text as HTMLInputElement).focus(); return false; }
@@ -420,6 +441,7 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
         h: hv, v: vv, orient: isOn(els.vert) ? 90 : 0, x: lenValue(els.x as HTMLInputElement) ?? x0, y: lenValue(els.y as HTMLInputElement) ?? y0 });
       const moved = L.rowMoved(row, [0, 0]);
       const np = L.fieldFromRow(row, [0, 0]);
+      if (apply) { apply(np); return undefined; }
       for (let j = 1; j < staged.length; j++) if (staged[j] === p) staged[j] = np;
       // a symbol's reference also lives in its instance data (SCH_SYMBOL::SetRef)
       if (name === "Reference" && item.kind === "symbol") { const here = sheetPathNow(doc); L.setInstanceData(staged, here.path, here.project, { reference: row.value }); }   // SetUserRef( *aSheetPath, m_text )

@@ -98,7 +98,7 @@ export class SymbolEditor {
   private drag: { mode: "pan" | "band" | "move"; sx: number; sy: number; x0: number; y0: number; px?: number; py?: number; moved?: boolean; ids?: string[] } | null = null;
   private carry: { ids: string[]; sx: number; sy: number; label: string; amend: boolean; base: string } | null = null;
   /** SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace: a new pin or text follows the cursor (IS_NEW | IS_MOVING) until the second click. */
-  private floating: { kind: "pin"; pin: M.PinInfo } | { kind: "text"; node: M.Node; body: number } | null = null;
+  private floating: { kind: "pin"; pin: M.PinInfo } | { kind: "text"; node: M.Node; body: number; unit?: number } | null = null;
   private draw: { kind: ToolId; pts: number[][] } | null = null;
   private officialList: { name: string; description: string }[] | null = null;
   private officialFailed = "";
@@ -1090,14 +1090,14 @@ export class SymbolEditor {
     const f = this.floating; const sym = this.symbol(); if (!f || !sym) return;
     const [x, y] = this.snapFile(this.mouse.x, this.mouse.y); const s = M.node(M.text(sym));
     if (f.kind === "pin") { const n = M.pinNode({ ...f.pin, x, y }); M.addDrawItem(s, f.pin.unit, f.pin.body, n); }
-    else { const n = M.clone(f.node); M.mapPoints(n, () => [x, y]); M.addDrawItem(s, 0, f.body, n); }
+    else { const n = M.clone(f.node); M.mapPoints(n, () => [x, y]); M.addDrawItem(s, f.unit || 0, f.body, n); }
     this.preview = s; this.kcache = null;
   }
   /** Second click: PlacePin (occupied-position check in sync mode, image pins) or the text added, as one undo step. */
   private async placeFloating(fx: number, fy: number): Promise<void> {
     const f = this.floating; if (!f) return;
     this.floating = null; this.preview = null; this.kcache = null; this.paint();
-    if (f.kind === "text") { const n = M.clone(f.node); M.mapPoints(n, () => [fx, fy]); this.edit("Draw Text", (s) => { M.addDrawItem(s, 0, f.body, n); return [n]; }); return; }
+    if (f.kind === "text") { const n = M.clone(f.node); M.mapPoints(n, () => [fx, fy]); this.edit("Draw Text", (s) => { M.addDrawItem(s, f.unit || 0, f.body, n); return [n]; }); return; }
     const res: M.PinInfo = { ...f.pin, x: fx, y: fy };
     const cur = this.symbol(); if (!cur) return;
     const occ = this.synchronizePins(cur) ? M.occupiedBy(cur, res) : null;

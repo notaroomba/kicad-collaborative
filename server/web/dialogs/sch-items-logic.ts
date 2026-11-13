@@ -323,7 +323,7 @@ export function propertiesTarget(items: { id: string; kind: string; node?: SNode
 const TITLE_CAPS: Record<string, string> = { Reference: "Reference Designator", Value: "Value", Footprint: "Footprint", Datasheet: "Datasheet", Description: "Description", Sheetname: "Sheet Name", Sheetfile: "Sheet File", Intersheetrefs: "Intersheet References" };
 /** "Edit %s Field" with TitleCaps for a mandatory field, "Edit '%s' Field" for a user field. */
 export function fieldDialogTitle(name: string, parentKind: string): string {
-  const mandatory = parentKind === "symbol" ? ["Reference", "Value", "Footprint", "Datasheet", "Description"] : parentKind === "sheet" ? ["Sheetname", "Sheetfile"] : parentKind === "global_label" ? ["Intersheetrefs"] : [];
+  const mandatory = parentKind === "symbol" || parentKind === "lib_symbol" ? ["Reference", "Value", "Footprint", "Datasheet", "Description"] : parentKind === "sheet" ? ["Sheetname", "Sheetfile"] : parentKind === "global_label" ? ["Intersheetrefs"] : [];
   return mandatory.includes(name) ? `Edit ${TITLE_CAPS[name] || name} Field` : `Edit '${name}' Field`;
 }
 
