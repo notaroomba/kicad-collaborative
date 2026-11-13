@@ -1942,6 +1942,41 @@ pub async fn doc_content(
 }
 
 #[derive(Deserialize)]
+pub struct FirstDocQuery {
+    /// The document a link names (`?doc=` on the editor's address), when it names one.
+    pub doc: Option<Uuid>,
+}
+
+/// The text of the document a project opens on, so the page can ask for it at the same moment it
+/// asks for the project (web/editor/boot.ts) instead of after: the document a link names, else the
+/// root schematic, else the board.  The choice is the editor's own (web/editor/bootpick.ts), and the
+/// editor checks `x-doc-id` against it, so a disagreement costs one request, never a wrong sheet.
+pub async fn first_doc_content(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<Uuid>,
+    Query(q): Query<FirstDocQuery>,
+) -> AppResult<Response> {
+    if access::resolve(&state.pool, &viewer, id).await?.is_none() {
+        return Err(if viewer.user.is_some() { AppError::Forbidden } else { AppError::Unauthorized });
+    }
+    let docs = persist::project_documents(&state.pool, id).await?;
+    let shown = |d: &&persist::Document| d.doc_type == "kicad_pcb" || d.doc_type == "kicad_sch";
+    let doc = q.doc.and_then(|want| docs.iter().filter(shown).find(|d| d.id == want))
+        .or_else(|| root_schematic(&docs))
+        .or_else(|| docs.iter().filter(|d| d.doc_type == "kicad_pcb").min_by(|a, b| a.path.cmp(&b.path)))
+        .ok_or(AppError::NotFound)?;
+    let Some((seq, content)) = persist::latest_snapshot(&state.pool, doc.id).await? else {
+        return Err(AppError::NotFound);
+    };
+    let mut response = ([(header::CONTENT_TYPE, "application/octet-stream")], content).into_response();
+    let value = |s: String| axum::http::HeaderValue::from_str(&s).unwrap();
+    response.headers_mut().insert(axum::http::HeaderName::from_static("x-snapshot-seq"), value(seq.to_string()));
+    response.headers_mut().insert(axum::http::HeaderName::from_static("x-doc-id"), value(doc.id.to_string()));
+    Ok(response)
+}
+
+#[derive(Deserialize)]
 pub struct NewDocRequest {
     pub path: String,
     #[serde(rename = "docType")]

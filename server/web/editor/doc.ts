@@ -15,6 +15,8 @@ import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
 import { notePreviewDirty } from "./thumbpush";
 import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
+import { editorDocs, firstDoc, rootSchematicOf } from "./bootpick";
+import type { Boot } from "./boot";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { GridDef } from "../units";
 import type { ItemSummary, SheetEntry, SvgLayer, WireChange } from "./types";
@@ -231,12 +233,22 @@ export function leaveEditor() {
 }
 
 
+/** An answer the page's early loader (boot.ts) already asked for, for this project; each is handed out once. */
+export function takeBoot<K extends "me" | "info" | "content">(key: K, projectId?: string): Boot[K] | undefined {
+  const boot = (window as unknown as { __kcBoot?: Boot }).__kcBoot;
+  if (!boot || !boot[key] || (projectId !== undefined && boot.projectId !== projectId)) return undefined;
+  const v = boot[key]; delete boot[key];
+  return v;
+}
+
 export async function openEditor(id: string) {
   if (state.project && state.project.projectId === id && state.view === "editor") return;
   leaveEditor();
   showView("editor");
   let info: ProjectInfo;
-  try { info = await api(`/api/projects/${id}/info`); }
+  // the page asked for the project as it arrived (boot.ts); a failed early answer is asked again here
+  const early = takeBoot("info", id);
+  try { info = (early && await early.catch(() => null)) as ProjectInfo || await api(`/api/projects/${id}/info`); }
   catch (e) {
     // Signed out, a private project looks the same as a missing one: sign in and come straight back.
     if (!state.me) { location.href = "/auth/github/login?next=" + encodeURIComponent(location.pathname + location.search); return; }
@@ -252,8 +264,7 @@ export async function openEditor(id: string) {
   E.canJoin = true;
   E.viewOnly = !state.me || !can.edit;
   E.canComment = !!state.me && !!can.comment;
-  state.docs = info.docs.filter((d) => d.docType === "kicad_pcb" || d.docType === "kicad_sch")
-    .sort((a, b) => (a.docType === "kicad_pcb" ? 0 : 1) - (b.docType === "kicad_pcb" ? 0 : 1) || a.path.localeCompare(b.path));
+  state.docs = editorDocs(info.docs);
   store.set({ project: info, role: info.role || null, canJoin: E.canJoin, viewOnly: E.viewOnly, canComment: E.canComment, guest: !state.me, can });
   publishDocs();
   loadHistory();
@@ -267,8 +278,8 @@ export async function openEditor(id: string) {
   // A project opens on its root schematic, where a design starts and where KiCad's own project
   // manager leads first; the board is one click away (and ?doc= still opens exactly what a link names).
   // Only a project with no schematic at all opens on the board.
-  const doc = state.docs!.find((d) => d.docId === wanted)
-    || rootSchematic() || state.docs!.find((d) => d.docType === "kicad_pcb") || null;
+  rootSchematic();   // also starts reading the project file and the custom rules
+  const doc = firstDoc(state.docs!, info.docs, wanted);
   if (!doc) {
     base.replaceChildren(); setDocNotice("This project has no board or schematic yet. Open it in the desktop app.");
     setConn("err", "nothing to show"); return;
@@ -278,7 +289,6 @@ export async function openEditor(id: string) {
 
 
 export function rootSchematic(): DocEntry | undefined {
-  const sch = state.docs!.filter((d) => d.docType === "kicad_sch");
   const pro = state.project!.docs.find((d) => d.docType === "kicad_pro");
   if (pro && E.proSettings === null) { E.proSettings = ""; api(`/api/docs/${pro.docId}/content`).then((t) => { E.proSettings = typeof t === "string" ? t : JSON.stringify(t); if (CollabTools.pcb && CollabTools.pcb.setDesignSettings) { try { CollabTools.pcb.setDesignSettings(E.proSettings); } catch (e) { /* module without rules */ } }
     // the title block's last resolver arrives with this file, so a sheet already on screen needs a repaint
@@ -286,9 +296,7 @@ export function rootSchematic(): DocEntry | undefined {
   // the custom rules (.kicad_dru) the PCB tools resolve length / skew constraints from
   const dru = state.project!.docs.find((d) => d.docType === "design_rules");
   if (dru && E.druText === null) { E.druText = ""; api(`/api/docs/${dru.docId}/content`).then((t) => { E.druText = typeof t === "string" ? t : ""; }).catch(() => { E.druText = ""; }); }
-  const stem = pro && pro.path.split("/").pop()!.replace(/\.kicad_pro$/, "");
-  return sch.find((d) => d.path.split("/").pop() === stem + ".kicad_sch")
-    || sch.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.length - b.path.length)[0];
+  return rootSchematicOf(state.docs!, state.project!.docs);
 }
 
 
@@ -321,7 +329,7 @@ export function leaveDoc() {
   E.joinedDocId = null; E.lastSeq = 0; E.resyncAt = 0; E.lastPresenceMm = null; E.applyFailed = false;
   clearInterval(E.renderTimer); E.renderTimer = 0;
   E.items = []; E.sheets = []; E.selected = null; E.drag = null; E.boxSel = null; E.measure = null; E.selection = new Set(); E.highlightIds = null; E.peerState = {}; E.comments = []; E.followPeer = null; E.layers = {};
-  E.kdoc = null; E.layersSeeded = false; canvas.style.display = "none"; if (E.renderReq) { cancelAnimationFrame(E.renderReq); E.renderReq = 0; }
+  E.kdoc = null; E.loadedText = null; E.layersSeeded = false; canvas.style.display = "none"; if (E.renderReq) { cancelAnimationFrame(E.renderReq); E.renderReq = 0; }
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
   closeThread();
   store.slice("document", { layers: [], hiddenLayers: [], copperLayers: [], items: [], sheets: [], hasDoc: false, notice: null });
@@ -355,8 +363,17 @@ export async function openDoc(doc: DocEntry) {
     const own = privateText(doc);   // a board footprint's private copy: no document on the server
     if (own !== null) ok = setDocFromText(own);
     else {
-      const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
-      if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; ok = setDocFromText(text); if (ok && doc.docType === "footprint") onFootprintOpened(Number(r.headers.get("x-snapshot-seq")) || 0); }
+      // the document the page asked for as it arrived (boot.ts), when it is this one; otherwise ask now
+      const early = takeBoot("content", state.project!.projectId);
+      const had = early ? await early : null;
+      if (state.docId !== docId) return;
+      if (had && had.docId === docId) { performance.mark("kc:doc-text"); ok = setDocFromText(had.text); if (ok) { E.loadedText = had.text; E.loadedOpN = E.opN; } }
+      else {
+        const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
+        if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; performance.mark("kc:doc-text"); ok = setDocFromText(text); if (ok) { E.loadedText = text; E.loadedOpN = E.opN; } if (ok && doc.docType === "footprint") onFootprintOpened(Number(r.headers.get("x-snapshot-seq")) || 0); }
+      }
+      // DevTools' Performance panel shows these three (text here, parsed, on screen); scripts/load-timing.mjs reads them
+      if (ok) { performance.mark("kc:doc-parsed"); requestAnimationFrame(() => performance.mark("kc:first-paint")); }
     }
     if (ok && own !== null) onFootprintOpened(0);
   } catch (e) { console.warn(e); }

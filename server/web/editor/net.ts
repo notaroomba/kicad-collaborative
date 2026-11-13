@@ -140,9 +140,18 @@ export async function connect() {
       return;
     }
     if (msg.type === "snapshot" && msg.docId === state.docId && typeof msg.file === "string") {
-      if (setDocFromText(msg.file)) {
+      // The join's snapshot is nearly always the very text the page was just drawn from (doc.ts openDoc), and
+      // nothing has been edited since: parsing and drawing it a second time only made the sheet stutter as
+      // it appeared.  Anything else (a resync, a reconnect, an edit made before the join) takes the snapshot.
+      const same = E.loadedText !== null && E.loadedText === msg.file && E.loadedOpN === E.opN && !!E.kdoc;
+      E.loadedText = null;
+      if (same || setDocFromText(msg.file)) {
         E.lastSeq = Number(msg.seq) || 0;
         for (const op of msg.thenOps || []) { applyChanges(op.changes); noteSeq(op.seq); }
+        // The snapshot is the server's document, which does not have our unacknowledged edits yet (one made
+        // before the join landed, or during a dropped connection): they are sent again below, and put back
+        // on the fresh document here, or this browser alone would go on showing the sheet without them.
+        if (!same) for (const op of (E.pendingOps as Map<string, PendingOp>).values()) { if (op.docId === state.docId) applyChanges(op.changes); }
         replayPending(sock);
       }
     }

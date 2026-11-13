@@ -275,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/static/dist/landing.js.map", get(pages::landing_js_map))
         .route("/static/landing/{name}", get(pages::landing_image))
         .route("/api/projects/{id}/info", get(http::project_info))
+        .route("/api/projects/{id}/first-doc", get(http::first_doc_content))
         .route("/healthz", get(http::healthz))
         .route("/j/{token}", get(pages::join_page))
         .route("/auth/github/login", get(auth::github_login))
@@ -419,6 +420,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/mcp/keys", post(oauth::create_key))
         .route("/api/mcp/grants/{id}", delete(oauth::delete_grant))
         .merge(mcp_routes())
+        .layer(axum::middleware::from_fn(pages::cache_versioned_assets))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         // SVG previews are ~10x smaller compressed; pages benefit too.

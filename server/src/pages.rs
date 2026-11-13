@@ -77,7 +77,8 @@ fn asset_version() -> &'static str {
         let all = [include_str!("../static/dist/editor.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
                    include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html"), THEME_CSS,
                    include_str!("../static/dist/viewer3d.js"), include_str!("../static/dist/fab.js"), include_str!("../static/dist/kicad-icons.json"),
-                   include_str!("../static/dist/sim-ngspice.js")];
+                   include_str!("../static/dist/sim-ngspice.js"), include_str!("../static/dist/autoroute.js"), include_str!("../static/dist/parts.js"),
+                   include_str!("../static/dist/boot.js")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
@@ -91,20 +92,46 @@ fn asset_version() -> &'static str {
 /// navigating itself to a real address — the one way left for sandboxed code to carry what
 /// it has read off the page, in a URL.  The app embeds no other frames.
 pub async fn app_page() -> Response {
-    let v = asset_version();
-    let page = Html(
-        include_str!("../static/app.html")
-            .replace("/static/dist/editor.js\"", &format!("/static/dist/editor.js?v={v}\""))
-            .replace("/static/kicad-canvas.js\"", &format!("/static/kicad-canvas.js?v={v}\""))
-            .replace("/static/sch-tools.js\"", &format!("/static/sch-tools.js?v={v}\""))
-            .replace("/static/pcb-tools.js\"", &format!("/static/pcb-tools.js?v={v}\""))
-            .replace("/static/props.js\"", &format!("/static/props.js?v={v}\""))
-            .replace("/static/kicad-dialogs.js\"", &format!("/static/kicad-dialogs.js?v={v}\""))
-            .replace("/static/dist/ui.js\"", &format!("/static/dist/ui.js?v={v}\""))
-            .replace("/static/dist/ui.css\"", &format!("/static/dist/ui.css?v={v}\""))
-            .replace("/static/theme.css\"", &format!("/static/theme.css?v={v}\"")),
-    );
-    ([(header::CONTENT_SECURITY_POLICY, "frame-src 'none'")], page).into_response()
+    // Built once: every script and stylesheet of the page gets the content hash as `?v=`, which is what
+    // lets them be cached for good (main.rs cache_versioned_assets), and the early loader goes inline.
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let page = PAGE.get_or_init(|| {
+        let v = asset_version();
+        let html = include_str!("../static/app.html").replacen("/*BOOT*/", include_str!("../static/dist/boot.js").trim_end(), 1);
+        let mut out = String::with_capacity(html.len() + 512);
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find("\"/static/") {
+            let (head, tail) = rest.split_at(at + 1);
+            out.push_str(head);
+            let end = tail.find('"').unwrap_or(tail.len());
+            let url = &tail[..end];
+            out.push_str(url);
+            if url.ends_with(".js") || url.ends_with(".css") {
+                out.push_str("?v=");
+                out.push_str(v);
+            }
+            rest = &tail[end..];
+        }
+        out.push_str(rest);
+        out
+    });
+    ([(header::CONTENT_SECURITY_POLICY, "frame-src 'none'"), (header::CACHE_CONTROL, "no-cache")], Html(page.clone())).into_response()
+}
+
+/// A script or stylesheet asked for with the page's content hash (`?v=…`) never changes under that
+/// address, so the browser may keep it for good and not ask again.  Without this every one of them was
+/// downloaded in full on every page load (`no-cache` with nothing to revalidate against): well over a
+/// megabyte before the editor could start.  Asked for without the hash, they stay `no-cache`.
+pub async fn cache_versioned_assets(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let path = req.uri().path();
+    let versioned = path.starts_with("/static/")
+        && (path.ends_with(".js") || path.ends_with(".css") || path.ends_with(".json"))
+        && req.uri().query().is_some_and(|q| q.split('&').any(|p| p.starts_with("v=") && p.len() > 2));
+    let mut res = next.run(req).await;
+    if versioned && res.status() == axum::http::StatusCode::OK {
+        res.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static("public, max-age=31536000, immutable"));
+    }
+    res
 }
 
 pub async fn canvas_js() -> Response {

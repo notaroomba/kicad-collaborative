@@ -34,6 +34,10 @@ export const E: any = {
   pendingOps: new Map(),
   joinedDocId: null,
   lastSeq: 0,
+  // the text the open document was parsed from and the op counter at that moment, until the live session's
+  // first snapshot arrives (net.ts: an identical snapshot is not parsed again)
+  loadedText: null,
+  loadedOpN: 0,
   resyncAt: 0,
   applyFailed: false,
   lastLiveMove: 0,

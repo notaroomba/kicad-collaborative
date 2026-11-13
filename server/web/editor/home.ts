@@ -1,6 +1,6 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 import { state, store } from "./appstore";
-import { leaveEditor, openEditor } from "./doc";
+import { leaveEditor, openEditor, takeBoot } from "./doc";
 import { $$ } from "./dom";
 import { api } from "./util";
 // ---------- routing ----------
@@ -19,7 +19,7 @@ export function route() {
 
 // ---------- session ----------
 export async function loadMe() {
-  try { state.me = await api("/api/me"); } catch { state.me = null; }
+  try { state.me = await (takeBoot("me") || api("/api/me")); } catch { state.me = null; }   // the page asks as it arrives (boot.ts)
   store.set({ me: state.me });
 }
 
