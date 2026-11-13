@@ -364,6 +364,13 @@ How it works:
   of the person's cookies; limits a request to 16 MB, an answer to 24 MB and a person to 240
   requests a minute.  Every request is written to the plugin's log.
   `KC_PLUGIN_NETWORK=off` turns this off for the whole server.
+  An address the package does not name (a library server the user types into the plugin's
+  settings, say) is refused until the user allows it: the editor asks once per address
+  (*Allow a web address?*), and the server keeps the answer per person and per plugin
+  (`/api/plugins/pcm/{identifier}/hosts`, table `plugin_net_hosts`, at most 20).  Only public
+  https host names can be allowed: no IP addresses, no single-label names, no private suffixes
+  such as `.local`, `.lan` or `.internal`.  Allowed addresses are listed in the Plugin Manager
+  under *Addresses you allowed*, each with *Remove*; uninstalling the plugin forgets them.
 
 - **Local ports and helper programs.**  A plugin that listens on `127.0.0.1` and starts a second
   Python program that connects to it (TraceForge's helper and panel) gets both inside the page:

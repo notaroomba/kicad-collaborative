@@ -463,8 +463,29 @@ async function netFetch(p: InstalledPlugin, a: any): Promise<unknown> {
     body: JSON.stringify({ url, method, headers: Array.isArray(a.headers) ? a.headers.filter((h: unknown) => Array.isArray(h) && h.length === 2).map((h: unknown[]) => [String(h[0]), String(h[1])]) : [], body: typeof a.body === "string" ? a.body : "" }),
   });
   const j = await r.json().catch(() => null);
+  if (!r.ok && j && j.error === "plugin_host_unapproved" && !a._asked && (await approveHost(p, url))) return netFetch(p, Object.assign({}, a, { _asked: true }));
   if (!r.ok) { const msg = (j && (j.message || j.error)) || `the server answered ${r.status}`; log(p.identifier, "warn", `Network: ${host}: ${msg}`); return { error: String(msg) }; }
   return j;
+}
+
+/** Host names the person said no to in this page, per plugin: asked once, not again on every request. */
+const refusedHosts = new Set<string>();
+/**
+ * A plugin that talks to a service the person runs themselves (a library server whose address they typed into it)
+ * reaches an address its own code does not name.  The person is asked once for that address; a yes is kept on the
+ * server for this plugin, which still carries only https requests to public internet addresses.
+ */
+async function approveHost(p: InstalledPlugin, url: string): Promise<boolean> {
+  let u: URL; try { u = new URL(url); } catch { return false; }
+  const key = `${p.identifier} ${u.hostname}`;
+  if (refusedHosts.has(key) || u.protocol !== "https:") return false;
+  const yes = await ask(p, { kind: "confirm", title: "Allow a web address?", message: `${p.manifest.name} wants to reach ${u.hostname}, which is not one of the addresses in its own code. Allow it only if this is a server you or your organization run for this plugin (you typed its address into the plugin).\n\nThe server carries the plugin's requests to it over https only. You can take this back in the Plugin and Content Manager.`, fields: [], okLabel: "Allow" });
+  if (!yes) { refusedHosts.add(key); log(p.identifier, "host", `Network: not allowed to reach ${u.hostname}`); return false; }
+  const r = await fetch(`/api/plugins/pcm/${encodeURIComponent(p.identifier)}/hosts`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ host: u.hostname }) });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) { log(p.identifier, "warn", `Network: ${u.hostname} could not be allowed: ${(j && (j.message || j.error)) || r.status}`); toast(`${p.manifest.name}: ${u.hostname} cannot be allowed: ${(j && (j.message || j.error)) || r.status}`, 5000); return false; }
+  log(p.identifier, "host", `Network: allowed to reach ${u.hostname}`);
+  return true;
 }
 
 async function handleCall(run: Run, method: string, a: any): Promise<unknown> {

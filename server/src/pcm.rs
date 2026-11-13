@@ -16,7 +16,10 @@
 //! requests carried by this server.  The server decides where they may go, not the request:
 //! only to the web addresses the plugin's own package names (read from KiCad's repository
 //! here, never from the client), only over https, only to public addresses, with size and
-//! rate limits.  `KC_PLUGIN_NETWORK=off` turns it off.
+//! rate limits.  `KC_PLUGIN_NETWORK=off` turns it off.  A self-hosted service (a library server
+//! whose address the person types into the plugin) is reached only after the person approved that
+//! host name for that plugin (`POST /api/plugins/pcm/{identifier}/hosts`, table plugin_net_hosts);
+//! the https and public-address rules hold for it too.
 //!
 //! It also serves the Python runtime itself (`/static/pyodide/…`): the interpreter, its
 //! standard library and our shim modules, readable from the sandbox's opaque origin.
@@ -27,7 +30,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -37,6 +40,7 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
+use crate::AppState;
 
 const DEFAULT_REPOSITORY: &str = "https://repository.kicad.org/repository.json";
 const INDEX_TTL: Duration = Duration::from_secs(3600);
@@ -628,8 +632,88 @@ fn refuse(msg: impl Into<String>) -> AppError {
     AppError::Api(StatusCode::FORBIDDEN, "plugin_network_refused", msg.into())
 }
 
+#[derive(serde::Deserialize)]
+pub struct HostApproval {
+    host: String,
+}
+
+/// A host name a person may let a plugin reach: a name on the public internet as people type it, not an
+/// address, not this machine, not a name that only means something on a private network.
+fn approvable_host(host: &str) -> Option<String> {
+    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if h.is_empty() || h.len() > 253 || h.parse::<IpAddr>().is_ok() || h.starts_with('[') {
+        return None;
+    }
+    let labels: Vec<&str> = h.split('.').collect();
+    let ok_label = |l: &&str| !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if labels.len() < 2 || !labels.iter().all(ok_label) {
+        return None;
+    }
+    let tld = labels[labels.len() - 1];
+    const PRIVATE: &[&str] = &["localhost", "local", "internal", "intranet", "lan", "home", "corp", "private", "test", "invalid", "example", "onion", "arpa"];
+    if !tld.chars().all(|c| c.is_ascii_alphabetic()) || tld.len() < 2 || PRIVATE.contains(&tld) {
+        return None;
+    }
+    Some(h)
+}
+
+/// `POST /api/plugins/pcm/{identifier}/hosts` — the person lets one of their plugins reach `host`.  Only for an
+/// installed plugin they granted network access; the address must be a public host name.  Requests to it still go
+/// through every check of `net_fetch` (https, public address at the time of the request, size and rate limits).
+pub async fn approve_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path(identifier): Path<String>, Json(req): Json<HostApproval>) -> AppResult<Json<Value>> {
+    // tests stand a service in on this machine (KC_PLUGIN_NETWORK=test), as net_fetch then allows
+    let test_local = net_mode() == NetMode::Test && req.host.trim().parse::<Ipv4Addr>().is_ok_and(|a| a.is_loopback());
+    let host = (if test_local { Some(req.host.trim().to_string()) } else { approvable_host(&req.host) }).ok_or_else(|| bad("only a host name on the public internet can be allowed, not an address or a local name"))?;
+    let granted: Option<Value> = sqlx::query_scalar("SELECT granted FROM plugins WHERE user_id = $1 AND identifier = $2")
+        .bind(user.id)
+        .bind(&identifier)
+        .fetch_optional(&state.pool)
+        .await?;
+    let Some(granted) = granted else { return Err(AppError::NotFound) };
+    if !granted.as_array().is_some_and(|a| a.iter().any(|g| g == "network")) {
+        return Err(refuse("this plugin was not given network access"));
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM plugin_net_hosts WHERE user_id = $1 AND identifier = $2")
+        .bind(user.id)
+        .bind(&identifier)
+        .fetch_one(&state.pool)
+        .await?;
+    if count >= 20 {
+        return Err(bad("this plugin already has as many allowed addresses as it can keep; remove one first"));
+    }
+    sqlx::query("INSERT INTO plugin_net_hosts (user_id, identifier, host) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING")
+        .bind(user.id)
+        .bind(&identifier)
+        .bind(&host)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(json!({ "host": host, "approved": true })))
+}
+
+/// `GET /api/plugins/pcm/{identifier}/hosts` — the addresses the person let this plugin reach.
+pub async fn list_hosts(State(state): State<AppState>, AuthUser(user): AuthUser, Path(identifier): Path<String>) -> AppResult<Json<Value>> {
+    let rows: Vec<String> = sqlx::query_scalar("SELECT host FROM plugin_net_hosts WHERE user_id = $1 AND identifier = $2 ORDER BY host")
+        .bind(user.id)
+        .bind(&identifier)
+        .fetch_all(&state.pool)
+        .await?;
+    Ok(Json(json!({ "hosts": rows })))
+}
+
+/// `DELETE /api/plugins/pcm/{identifier}/hosts/{host}` — take an allowed address back.
+pub async fn remove_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path((identifier, host)): Path<(String, String)>) -> AppResult<Json<Value>> {
+    let gone = sqlx::query("DELETE FROM plugin_net_hosts WHERE user_id = $1 AND identifier = $2 AND host = $3")
+        .bind(user.id)
+        .bind(&identifier)
+        .bind(host.to_ascii_lowercase())
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    Ok(Json(json!({ "removed": gone > 0 })))
+}
+
 /// `POST /api/plugins/pcm/{identifier}/fetch` — carry one HTTP request for an official plugin.
-pub async fn net_fetch(AuthUser(user): AuthUser, Path(identifier): Path<String>, Json(req): Json<NetRequest>) -> AppResult<Json<Value>> {
+pub async fn net_fetch(State(state): State<AppState>, AuthUser(user): AuthUser, Path(identifier): Path<String>, Json(req): Json<NetRequest>) -> AppResult<Json<Value>> {
     let mode = net_mode();
     if mode == NetMode::Off {
         return Err(refuse("network access for plugins is turned off on this server"));
@@ -648,7 +732,19 @@ pub async fn net_fetch(AuthUser(user): AuthUser, Path(identifier): Path<String>,
     }
     let allowed = allowed_hosts(&identifier).await?;
     if !allowed.contains(&base_domain(&host)) {
-        return Err(refuse(format!("{host} is not one of the web addresses this plugin names in its own code")));
+        let approved: Option<i32> = sqlx::query_scalar("SELECT 1 FROM plugin_net_hosts WHERE user_id = $1 AND identifier = $2 AND host = $3")
+            .bind(user.id)
+            .bind(&identifier)
+            .bind(&host)
+            .fetch_optional(&state.pool)
+            .await?;
+        if approved.is_none() {
+            return Err(AppError::Api(
+                StatusCode::FORBIDDEN,
+                "plugin_host_unapproved",
+                format!("{host} is not one of the web addresses this plugin names in its own code, and you have not let it reach that address"),
+            ));
+        }
     }
     let port = url.port_or_known_default().unwrap_or(443);
     // Resolve the name here and connect to exactly that address, so the check and the connection agree.
@@ -743,6 +839,15 @@ pub async fn runtime(Path(file): Path<String>) -> Response {
 #[cfg(test)]
 mod net_tests {
     use super::*;
+
+    #[test]
+    fn approvable_hosts() {
+        assert_eq!(approvable_host("Library.Example-Co.com").as_deref(), Some("library.example-co.com"));
+        assert_eq!(approvable_host("kicomlib.mycompany.co.uk.").as_deref(), Some("kicomlib.mycompany.co.uk"));
+        for bad in ["localhost", "127.0.0.1", "10.0.0.5", "[::1]", "::1", "server", "nas.local", "lib.internal", "x.lan", "metadata.google.internal", "a..b.com", "-a.com", "a b.com", "host.123", "x.test", ""] {
+            assert!(approvable_host(bad).is_none(), "{bad}");
+        }
+    }
 
     #[test]
     fn base_domains() {

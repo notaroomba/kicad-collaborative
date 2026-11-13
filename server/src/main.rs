@@ -408,6 +408,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/plugins/pcm", get(pcm::list))
         .route("/api/plugins/pcm/{identifier}", get(pcm::get))
         .route("/api/plugins/pcm/{identifier}/fetch", post(pcm::net_fetch))
+        .route("/api/plugins/pcm/{identifier}/hosts", get(pcm::list_hosts).post(pcm::approve_host))
+        .route("/api/plugins/pcm/{identifier}/hosts/{host}", axum::routing::delete(pcm::remove_host))
         .route("/api/plugins/pcm/{identifier}/icon", get(pcm::icon))
         .route("/api/plugins/{identifier}/files", get(plugins::plugin_files))
         .route("/static/pyodide/{file}", get(pcm::runtime))

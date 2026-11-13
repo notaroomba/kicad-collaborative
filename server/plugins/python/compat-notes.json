@@ -99,7 +99,7 @@
     },
     "com.github.heronitec-solutions.kicomlib": {
       "status": "limited",
-      "note": "It opens. It keeps library folders on a computer in step with a KiComLib server you run yourself; the web editor has no such folders and a plugin here can only reach the web addresses its own package names."
+      "note": "It opens and can reach a KiComLib server you run yourself once you allow its https address (asked once). Its sync writes library folders and KiCad's global settings on a computer, which the web editor does not have, so it was not proven against a server here."
     },
     "com.github.Steffen-W.impartGUI": {
       "status": "works",

@@ -276,6 +276,23 @@ function InstalledTab() {
     </div>
   );
 }
+/** Web addresses the person let this plugin reach beyond those its code names (a server they run for it); each can be taken back. */
+function AllowedHosts({ identifier }: { identifier: string }) {
+  const [hosts, setHosts] = useState<string[] | null>(null);
+  const base = `/api/plugins/pcm/${encodeURIComponent(identifier)}/hosts`;
+  const load = () => { void fetch(base).then((r) => (r.ok ? r.json() : { hosts: [] })).then((j) => setHosts(Array.isArray(j.hosts) ? j.hosts.map(String) : [])).catch(() => setHosts([])); };
+  useEffect(load, [identifier]);
+  if (!hosts || !hosts.length) return null;
+  return (
+    <div id="pluginHosts">
+      <h3>Addresses you allowed</h3>
+      <ul className="plg-adds">{hosts.map((h) => (
+        <li key={h} data-host={h}>{h} <button type="button" className="btn" onClick={() => { void fetch(`${base}/${encodeURIComponent(h)}`, { method: "DELETE" }).then(load); }}>Remove</button></li>
+      ))}</ul>
+    </div>
+  );
+}
+
 function Detail({ p }: { p: InstalledPlugin }) {
   const run = usePlugins((x) => x.running[p.identifier]); const lines = usePlugins((x) => x.logs[p.identifier]) || []; const m = p.manifest;
   const logEl = useRef<HTMLDivElement>(null);
@@ -297,6 +314,7 @@ function Detail({ p }: { p: InstalledPlugin }) {
       <p className="plg-muted">{m.identifier}{m.author ? ` · by ${m.author}` : ""}{scopesOf(m) ? ` · ${scopesOf(m)}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</p>
       <p>{m.description}</p>
       <h3>Permissions you granted</h3><Permissions perms={p.granted} m={p.manifest} />
+      {python && p.granted.includes("network") ? <AllowedHosts identifier={p.identifier} /> : null}
       <h3>Adds</h3><Contributes m={m} actions={pyActs} />
       {python ? <p className="plg-muted" id="pluginPython">A KiCad Python plugin from {sourceLabel(p.source)}. Its interpreter starts the first time you use one of its commands in a project, which takes a few seconds; after that it stays ready.{run && run.error ? <><br /><span className="plg-err">It reported: {run.error}</span></> : null}</p> : null}
       {python || (p.source === "catalog" && !(s.project.id && s.project.canEdit)) ? null : (
