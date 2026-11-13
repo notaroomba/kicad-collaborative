@@ -155,7 +155,7 @@ def _layout_plan(self, edge: str = "top") -> dict:
     try:
         from . import stackups as _st
         kinds = set((plan.get("route") or {}).get("kinds", {}).values())
-        want = _st.choose(ghz=plan.get("radio_ghz") or None, radio=bool(plan.get("radio_ghz")) or "rf" in kinds, fast=bool(plan.get("pairs")) or "fast" in kinds)
+        want = _st.choose(ghz=plan.get("radio_ghz") or None, radio=bool(plan.get("radio_ghz")) or "rf" in kinds, fast=bool(plan.get("pairs")) or "fast" in kinds, fine_pitch=plan.get("fine_pitch"), bga=bool(plan.get("bga")))
         have = _plan(self, what="stackup")
         plan["stackup"] = {"recommended": want["stackup"], "why": want["why"], "now": {"copper_layers": len(have.get("copper_layers") or []), "thickness": have.get("thickness"), "assumed": have.get("assumed"), "flex": have.get("flex")}}
         if not have.get("flex") and want["layers"] > len(have.get("copper_layers") or []):

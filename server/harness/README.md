@@ -143,7 +143,9 @@ on flex); `board.prepare()` puts antenna keep-outs and their ground vias in befo
 `board.finish()` adds RF fences, thermal vias and stitching after it; `board.review()` checks all of it.
 `kh.calc` has the sums (impedance, current, clearance, wavelength, via pitch, bend radius) and
 `kh.calc.interface("ddr4")` the rules of each bus from I2C to DDR5. `kh.materials.choose(...)` picks a
-material and finish for the job. The reference, with sources, is `../docs/pcb-design-rules.md`.
+material and finish for the job. `sch.review()` checks the support circuits from the netlist before any of that: a bypass capacitor per
+supply pin, I2C pull-ups, crystal load capacitors, USB-C CC resistors, regulator capacitors, set point
+and heat, LED current, net names a slip apart. The reference, with sources, is `../docs/pcb-design-rules.md`.
 
 ## Examples and tests
 

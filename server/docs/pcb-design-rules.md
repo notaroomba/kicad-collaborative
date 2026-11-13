@@ -47,6 +47,29 @@ Physics is decided before placement, not found by a review at the end.
 8. `board.finish()`: RF fences, thermal vias, the antenna's ground edge, stitching, refill.
 9. `board.review()` until clean.
 
+## The circuit, before the board
+
+`sch.review()` checks the support circuits from the netlist (`server/web/ai/review-circuit.ts`,
+`harness/tests/test_circuit.py`), because a board laid out perfectly round a wrong circuit is still wrong:
+
+- One small bypass capacitor for each supply pin, not one per chip (`bypass.count`).
+- Exactly one pull-up per I2C line, and no smaller than (V - 0.4 V) / 3 mA, which is 967 ohm at 3.3 V; above
+  about 10k the edges are too slow for 400 kHz (`i2c.pullups`).
+- A crystal has a capacitor each side, both the same, C = 2 x (CL - Cstray) with 2 to 5 pF of stray; the crystal's
+  CL comes from a `CL` field (`crystal.load`).
+- A USB-C socket has its own resistor on CC1 and on CC2: 5.1k to ground for a device, 56k, 22k or 10k to VBUS for
+  a source; joined CC pins or a missing resistor mean no power from a C-to-C cable (`usbc.cc`). USB data lines
+  have an ESD part (`usb.esd`).
+- A regulator has a capacitor on its input and its output (`regulator.caps`); its feedback divider sets
+  Vout = Vref x (1 + Rtop / Rbottom) and that must be the voltage the output net is named for
+  (`regulator.setpoint`; the reference voltages of common adjustable regulators are built in, others take a `Vref`
+  field); a linear regulator loses P = (Vin - Vout) x I in a package good for about 1 W (SOT-223), 0.5 W
+  (SOT-89) or 0.3 W (SOT-23) (`regulator.heat`).
+- Every LED has a series resistor; more than 20 mA, or more than about 8 mA from an IC pin, is flagged
+  (`led.current`).
+- Net names that differ only in case or separators, or by one dropped or swapped letter, and named nets that
+  reach a single pin (`nets.typos`). One passive package size where possible (`passives.sizes`).
+
 ## Stackup and return paths
 
 - Every signal has a return current, and above a few hundred kilohertz it flows in the plane directly under the
@@ -136,7 +159,8 @@ and the rule the review applies:
 - Track width for current: IPC-2221, `kh.calc.track_width(amps, rise=10, oz=1, internal=False)`. On 1 oz outer copper for a
   10 K rise: 0.3 mm for 1 A, 0.53 mm for 1.5 A, 0.78 mm for 2 A, 1.37 mm for 3 A. A 0.3 mm via carries about 1 A; use
   `kh.calc.vias_for(amps)`. Espressif's own figures: 25 mil for the main supply, 20 mil for the 3.3 V rail, 10 mil
-  for small branches. **planned** (`route.widths`), **checked** (`power.width` in the layout checklist).
+  for small branches. **planned** (`route.widths`), **checked** (`power.width` in the layout checklist; `power.path` for nets through an
+  inductor or from a battery).
 - Switching converters: the hot loop (input capacitor, switch, ground) is as small as the parts allow, the input
   capacitor directly across VIN and GND of the chip; the switch node is short and compact, not a pour; the
   inductor is next to the switch pin with nothing sensitive beside or under it; the feedback divider sits at the

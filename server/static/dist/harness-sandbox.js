@@ -4186,7 +4186,7 @@ def _layout_plan(self, edge: str = "top") -> dict:
     try:
         from . import stackups as _st
         kinds = set((plan.get("route") or {}).get("kinds", {}).values())
-        want = _st.choose(ghz=plan.get("radio_ghz") or None, radio=bool(plan.get("radio_ghz")) or "rf" in kinds, fast=bool(plan.get("pairs")) or "fast" in kinds)
+        want = _st.choose(ghz=plan.get("radio_ghz") or None, radio=bool(plan.get("radio_ghz")) or "rf" in kinds, fast=bool(plan.get("pairs")) or "fast" in kinds, fine_pitch=plan.get("fine_pitch"), bga=bool(plan.get("bga")))
         have = _plan(self, what="stackup")
         plan["stackup"] = {"recommended": want["stackup"], "why": want["why"], "now": {"copper_layers": len(have.get("copper_layers") or []), "thickness": have.get("thickness"), "assumed": have.get("assumed"), "flex": have.get("flex")}}
         if not have.get("flex") and want["layers"] > len(have.get("copper_layers") or []):
@@ -6482,6 +6482,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),o=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});o.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),o.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of M)o.FS.writeFile("/kh/"+r,l);o.runPython(U);let E=o.globals.get("__kc_run"),a;try{a=JSON.parse(String(E(String(e.code||""))))}catch(r){a={ok:!1,error:String(r&&r.message||r).split(`
-`).filter(Boolean).slice(-1)[0]||"The script failed."}}a.done=!0,a.output=n.join(`
-`),d(a),process.exit(0)}V().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),a=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});a.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),a.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of M)a.FS.writeFile("/kh/"+r,l);a.runPython(U);let E=a.globals.get("__kc_run"),o;try{o=JSON.parse(String(E(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
+`),d(o),process.exit(0)}V().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

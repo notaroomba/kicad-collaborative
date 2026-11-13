@@ -28,6 +28,7 @@ type Pt = [number, number];
 
 /** The numbers the checks use (millimetres unless named otherwise); pcb-design-rules.md gives the source of each. */
 export const LIMITS = {
+  powerPath: 0.3,           // a net through a power inductor or from a battery is at least this wide (about 1 A on 1 oz outer copper)
   antennaClear: 0.5,        // no copper inside the antenna's courtyard grown by this (the datasheet's keep-out is usually larger)
   antennaKeepout: 2.0,      // what board.antenna() clears around the part by default
   antennaEdge: 3.0,         // an antenna further than this from every board edge is not at the edge
@@ -73,6 +74,7 @@ export const PHYSICS_RULES: { id: string; what: string }[] = [
   { id: "isolation", what: "Nothing crosses the gap under an optocoupler or isolator, on any layer" },
   { id: "creepage", what: "Conductors are spaced for the voltage between them (IPC-2221 table 6-1)" },
   { id: "dfm.via_in_pad", what: "No open via in a small part's solder pad" },
+  { id: "power.path", what: "Nets that carry the load current (inductors, batteries) are wide enough for it" },
   { id: "flex.bend", what: "On a flex board nothing rigid sits where it bends: no vias, pads or parts, tracks straight across, no solid copper" },
   { id: "flex.copper", what: "A flex board's copper suits bending: tracks on the two sides staggered, copper back from the edge, few layers where it flexes" },
   { id: "stackup.material", what: "The board material suits the job: low-loss laminate for long gigahertz runs, one-sided copper on a metal core" },
@@ -534,6 +536,22 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
     if (inPad.length) add("dfm.via_in_pad", "warning", "A via in a small part's solder pad drains the solder and stands the part on end (tombstoning) unless the fabricator fills and caps it, which costs extra. Move the via just off the pad on a short track.", inPad);
   }
 
+  // ---- the power path: nets that carry the load current are wide
+  {
+    const thin: string[] = []; const seen = new Set<string>();
+    for (const f of fps) {
+      const battery = /^(BT|BAT)\d/i.test(f.ref) || /batter|18650|li-?po|cr20\d\d|coin/i.test(f.lib + " " + f.value); const coil = isPowerInductor(f) && f.pads.length === 2;
+      if (!battery && !coil) continue;
+      for (const p of f.pads) {
+        if (!p.net || isGnd(p.net) || seen.has(p.net)) continue; seen.add(p.net);
+        const ts = (tracksOf.get(p.net) || []).filter((t) => t.length > 1); if (!ts.length) continue;
+        const w = Math.min(...ts.map((t) => t.width || (t.shape.r ? t.shape.r * 2 : 1)));
+        if (w < LIMITS.powerPath - 1e-6) thin.push(`${bare(p.net)} at ${f.ref} ${f.value}: ${r2(w)} mm`.replace(/\s+:/, ":"));
+      }
+    }
+    if (thin.length) add("power.path", "warning", `These nets carry the load current (through an inductor or from a battery) on a track narrower than ${LIMITS.powerPath} mm. On 1 oz outer copper 0.3 mm carries about 1 A, 0.5 mm 1.5 A, 0.8 mm 2 A and 1.4 mm 3 A for a 10 K rise (kh.calc.track_width(amps)); widen them with board.route(widths={net: mm}) or a pour.`, few(thin));
+  }
+
   // ---- flex boards and the board material
   {
     const lyr = (t: any): string => Array.from(t.layers as Set<string>)[0]; const st = physicalStack(doc, k); const flex = st.rows.some((r) => !r.copper && FLEX_MATERIAL.test(r.material));
@@ -817,5 +835,8 @@ function layoutPlan(S: Survey, doc: any, k: any, plan: any): any {
     "board.finish()     # RF fence, thermal vias, stitching, refill",
     "board.review()     # the proof: fix what it lists, in the placement if that is where it comes from",
   ];
-  return { what: "layout", place: { near, edges }, why, apart: apart.map(([a, b]) => [a, b]), route: { widths, kinds, order: Array.from(new Set(order)) }, pairs, radio_ghz: antennas.length ? radio.ghz : undefined, copper_layers: copper.length, notes, steps };
+  // the finest pin pitch on the board decides the finish and, for a BGA, the layer count
+  let finePitch = Infinity; let bga = false;
+  for (const f of S.fps) { if (f.pads.length < 8) continue; if (/BGA|WLCSP|CSP/i.test(f.lib)) bga = true; const ps = f.pads; for (let i = 0; i < ps.length; i++) { let d = Infinity; for (let j = 0; j < ps.length; j++) if (j !== i) { const q = Math.hypot(ps[i].x - ps[j].x, ps[i].y - ps[j].y); if (q > 0.05 && q < d) d = q; } if (d < finePitch) finePitch = d; } }
+  return { what: "layout", fine_pitch: isFinite(finePitch) ? r2(finePitch) : undefined, bga, place: { near, edges }, why, apart: apart.map(([a, b]) => [a, b]), route: { widths, kinds, order: Array.from(new Set(order)) }, pairs, radio_ghz: antennas.length ? radio.ghz : undefined, copper_layers: copper.length, notes, steps };
 }

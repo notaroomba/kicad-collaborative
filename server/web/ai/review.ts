@@ -11,6 +11,7 @@
 import { ED, K, ToolError, fieldsOf, resolveDoc, schNets } from "./design";
 import { checkLayout } from "./layout";
 import { PHYSICS_MANUAL, PHYSICS_RULES, PHYSICS_SOURCE, physicsPlan, reviewPhysics } from "./review-physics";
+import { CIRCUIT_MANUAL, CIRCUIT_RULES, reviewCircuit } from "./review-circuit";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -394,7 +395,9 @@ export async function reviewSchematic(doc: any, path: string): Promise<any> {
     if (noDist) add("bom", "note", `${noDist} parts have an MPN but no distributor part number.`);
   }
 
-  return report("schematic review", path, SCH_RULES, out, SCH_MANUAL);
+  // the support circuits (review-circuit.ts): bypass per pin, pull-ups, crystal load, USB-C, regulators, LEDs, net-name slips
+  try { reviewCircuit({ parts, nets, byRef, netPins, supplyNets, pinNet, railV, isIc, isGround, add }); } catch (err) { add("erc", "note", `The circuit checks could not run: ${err instanceof Error ? err.message : String(err)}`); }
+  return report("schematic review", path, SCH_RULES.concat(CIRCUIT_RULES), out, SCH_MANUAL.concat(CIRCUIT_MANUAL));
 }
 
 // ---------------------------------------------------------------- board

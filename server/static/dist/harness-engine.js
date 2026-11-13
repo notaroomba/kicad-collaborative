@@ -14070,10 +14070,10 @@ ${body}
         pop.replaceChildren(...os2.flatMap((o, i) => {
           const hd = this.head(o, os2[i - 1], "ksel-head");
           if (this.isSep(o)) {
-            const r24 = document.createElement("div");
-            r24.className = "ksel-sep";
-            r24.setAttribute("role", "separator");
-            return hd ? [hd, r24] : [r24];
+            const r25 = document.createElement("div");
+            r25.className = "ksel-sep";
+            r25.setAttribute("role", "separator");
+            return hd ? [hd, r25] : [r25];
           }
           const r = document.createElement("div");
           r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
@@ -28719,7 +28719,7 @@ Link '${target2}' to this file?`)) return null;
     const c = K7.kid(n2, k);
     return !!c && (c.length === 1 || K7.str(c[1]) === "yes");
   };
-  var fieldOf3 = (fp, name) => {
+  var fieldOf4 = (fp, name) => {
     const ps = fp.filter((c) => isList5(c) && c[0] === "property");
     const p = ps.find((c) => K7.str(c[1]) === name) || ps.find((c) => K7.str(c[1]).toLowerCase() === name.toLowerCase());
     return p ? K7.str(p[2]) : null;
@@ -28769,7 +28769,7 @@ Link '${target2}' to this file?`)) return null;
         return bool(yes6(n2, "locked") || n2.slice(1).some((c) => !isList5(c) && K7.str(c) === "locked"));
       case "parent": {
         const fp = fpOf(it);
-        return fp && !isFp ? str22(fieldOf3(fp.node, "Reference") || "") : U;
+        return fp && !isFp ? str22(fieldOf4(fp.node, "Reference") || "") : U;
       }
       case "positionx":
       case "positiony": {
@@ -28863,10 +28863,10 @@ Link '${target2}' to this file?`)) return null;
         return isPad ? kidNum2(n2, "die_length") : U;
       case "reference": {
         const fp = isFp ? it : null;
-        return fp ? str22(fieldOf3(n2, "Reference") || "") : U;
+        return fp ? str22(fieldOf4(n2, "Reference") || "") : U;
       }
       case "value": {
-        if (isFp) return str22(fieldOf3(n2, "Value") || "");
+        if (isFp) return str22(fieldOf4(n2, "Value") || "");
         return U;
       }
       case "librarylink":
@@ -29005,7 +29005,7 @@ Link '${target2}' to this file?`)) return null;
       const cc = K7.kid(fp, "component_classes");
       return !!cc && K7.kids(cc, "class").some((c) => K7.str(c[1]) === name);
     }
-    if (wxMatchesLocal(sel, fieldOf3(fp, "Reference") || "")) return true;
+    if (wxMatchesLocal(sel, fieldOf4(fp, "Reference") || "")) return true;
     return sel.includes(":") && wxMatchesLocal(sel, K7.str(fp[1]));
   }
   var GROUPS = /* @__PURE__ */ new WeakMap();
@@ -29083,7 +29083,7 @@ Link '${target2}' to this file?`)) return null;
       case "memberOfSheetOrChildren": {
         const fp = it ? fpOf(it) : null;
         if (!fp || !as) return bool(false);
-        let sheet = kidStr3(fp.node, "sheetname") || fieldOf3(fp.node, "Sheetname") || "";
+        let sheet = kidStr3(fp.node, "sheetname") || fieldOf4(fp.node, "Sheetname") || "";
         let ref = as;
         if (sheet.endsWith("/")) sheet = sheet.slice(0, -1);
         if (ref.endsWith("/")) ref = ref.slice(0, -1);
@@ -29095,7 +29095,7 @@ Link '${target2}' to this file?`)) return null;
       }
       case "getField": {
         if (!it || it.kind !== "footprint" || !as) return str22("");
-        return str22(fieldOf3(it.node, as) || "");
+        return str22(fieldOf4(it.node, as) || "");
       }
       case "hasNetclass":
         return bool(!!it && !!as && wild(as, netclassName(s, netName22(doc, it.node))));
@@ -29207,7 +29207,7 @@ Link '${target2}' to this file?`)) return null;
     const expand2 = (ls) => ls.flatMap((l) => l === "*.Cu" ? copper : l === "F&B.Cu" ? ["F.Cu", "B.Cu"] : /\.Cu$/.test(l) ? [l] : []);
     for (const it of doc.items.values()) {
       if (it.kind === "footprint") {
-        const ref = fieldOf3(it.node, "Reference") || "";
+        const ref = fieldOf4(it.node, "Reference") || "";
         for (const p of padsOf(it)) nodes.push({ node: p.node, shape: padShape(p), layers: expand2(p.layers), name: ref + "-" + p.number, net: p.net.name || netName22(doc, p.node) });
       } else if (it.kind === "segment" || it.kind === "arc" || it.kind === "via") {
         const sh = itemShape({ kind: it.kind, node: it.node });
@@ -30729,8 +30729,8 @@ Link '${target2}' to this file?`)) return null;
         const dist = tan2 > 0 ? radius / tan2 : 0;
         const r1 = resize(incoming, dist);
         const arcStart = [cur2.p[0] - r1[0], cur2.p[1] - r1[1]];
-        const r24 = resize(perp(incoming), radius);
-        const center = [arcStart[0] + r24[0], arcStart[1] + r24[1]];
+        const r25 = resize(perp(incoming), radius);
+        const center = [arcStart[0] + r25[0], arcStart[1] + r25[1]];
         const arcEnd = reflect(cur2.p, center, arcStart);
         const origin = [arcStart[0] - center[0], arcStart[1] - center[1]];
         out.push(arcStart);
@@ -38402,8 +38402,8 @@ Link '${target2}' to this file?`)) return null;
     if (turn >= 3) return { pts: [gw.mid.slice()], reached: false };
     if (turn > 0) {
       const ahead = rp(vadd(gw.mid, vmul(gw.d, h * Math.tan(turn * Math.PI / 8) + 1e-3)));
-      const r24 = run2(ahead);
-      r = { pts: simplifyPts([gw.mid.slice()].concat(r24.pts)), reached: r24.reached };
+      const r25 = run2(ahead);
+      r = { pts: simplifyPts([gw.mid.slice()].concat(r25.pts)), reached: r25.reached };
     }
     return r;
   }
@@ -43010,10 +43010,10 @@ Link '${target2}' to this file?`)) return null;
         pop.replaceChildren(...os2.flatMap((o, i) => {
           const hd = this.head(o, os2[i - 1], "ksel-head");
           if (this.isSep(o)) {
-            const r24 = document.createElement("div");
-            r24.className = "ksel-sep";
-            r24.setAttribute("role", "separator");
-            return hd ? [hd, r24] : [r24];
+            const r25 = document.createElement("div");
+            r25.className = "ksel-sep";
+            r25.setAttribute("role", "separator");
+            return hd ? [hd, r25] : [r25];
           }
           const r = document.createElement("div");
           r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
@@ -49243,7 +49243,7 @@ var Router = class _Router {
       } else single.push(net);
     }
     const minW = Math.max(s.minTrackWidth || 0, 0.09);
-    const r24 = (v) => Math.round(v * 100) / 100;
+    const r25 = (v) => Math.round(v * 100) / 100;
     for (const e of by.values()) {
       if (e.length !== 2) {
         single.push(...e);
@@ -49258,18 +49258,18 @@ var Router = class _Router {
         const w = widthFor(tr, target2, g2);
         if (w !== null && first === null) first = w;
         if (w !== null && w >= minW && w <= Math.max(0.6, cw * 3)) {
-          pick = { w: r24(w), g: r24(g2) };
+          pick = { w: r25(w), g: r25(g2) };
           break;
         }
       }
-      const rep = { nets: e.map((n2) => n2.key), target: target2, differential: true, layer: tr.layer, model, width: pick ? pick.w : first !== null ? r24(first) : null, gap: pick ? pick.g : r24(clr), applied: !!pick };
+      const rep = { nets: e.map((n2) => n2.key), target: target2, differential: true, layer: tr.layer, model, width: pick ? pick.w : first !== null ? r25(first) : null, gap: pick ? pick.g : r25(clr), applied: !!pick };
       if (pick) {
         for (const n2 of e) {
           this.zWidth.set(n2.key, pick.w);
           this.zGap.set(n2.key, pick.g);
         }
         rep.achieved = Math.round(zdiff(tr, pick.w, pick.g));
-      } else rep.note = first !== null ? `${target2} \u03A9 needs ${r24(first)} mm tracks on this stackup, more than the board can carry: routed at the class width (${Math.round(zdiff(tr, cw, clr))} \u03A9). A thinner dielectric under the layer (a 4-layer build) brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
+      } else rep.note = first !== null ? `${target2} \u03A9 needs ${r25(first)} mm tracks on this stackup, more than the board can carry: routed at the class width (${Math.round(zdiff(tr, cw, clr))} \u03A9). A thinner dielectric under the layer (a 4-layer build) brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
       this.zReports.push(rep);
     }
     for (const net of single) {
@@ -49278,11 +49278,11 @@ var Router = class _Router {
       const cw = this.classFor(net.key).width;
       const w = widthFor(tr, target2);
       const ok2 = w !== null && w >= minW && w <= Math.max(1.2, cw * 5);
-      const rep = { nets: [net.key], target: target2, differential: false, layer: tr.layer, model, width: w !== null ? r24(w) : null, applied: ok2 };
+      const rep = { nets: [net.key], target: target2, differential: false, layer: tr.layer, model, width: w !== null ? r25(w) : null, applied: ok2 };
       if (ok2) {
-        this.zWidth.set(net.key, r24(w));
-        rep.achieved = Math.round(z0(tr, r24(w)));
-      } else rep.note = w !== null && w < minW ? `${target2} \u03A9 needs a ${r24(w)} mm track on this stackup, under the board's minimum track width (${r24(minW)} mm): routed at the class width (${Math.round(z0(tr, cw))} \u03A9).` : w !== null ? `${target2} \u03A9 needs a ${r24(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} \u03A9). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
+        this.zWidth.set(net.key, r25(w));
+        rep.achieved = Math.round(z0(tr, r25(w)));
+      } else rep.note = w !== null && w < minW ? `${target2} \u03A9 needs a ${r25(w)} mm track on this stackup, under the board's minimum track width (${r25(minW)} mm): routed at the class width (${Math.round(z0(tr, cw))} \u03A9).` : w !== null ? `${target2} \u03A9 needs a ${r25(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} \u03A9). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
       this.zReports.push(rep);
     }
   }
@@ -52806,7 +52806,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
+// node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -53465,7 +53465,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
+// node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -56330,7 +56330,7 @@ var Clipper = {
   }
 };
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
+// node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -56946,7 +56946,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
+// node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
   if (typeof clipOrFillRule === "number") {
@@ -64621,6 +64621,8 @@ function itemsWithin(doc, box) {
 
 // web/ai/review-physics.ts
 var LIMITS = {
+  powerPath: 0.3,
+  // a net through a power inductor or from a battery is at least this wide (about 1 A on 1 oz outer copper)
   antennaClear: 0.5,
   // no copper inside the antenna's courtyard grown by this (the datasheet's keep-out is usually larger)
   antennaKeepout: 2,
@@ -64687,6 +64689,7 @@ var PHYSICS_RULES = [
   { id: "isolation", what: "Nothing crosses the gap under an optocoupler or isolator, on any layer" },
   { id: "creepage", what: "Conductors are spaced for the voltage between them (IPC-2221 table 6-1)" },
   { id: "dfm.via_in_pad", what: "No open via in a small part's solder pad" },
+  { id: "power.path", what: "Nets that carry the load current (inductors, batteries) are wide enough for it" },
   { id: "flex.bend", what: "On a flex board nothing rigid sits where it bends: no vias, pads or parts, tracks straight across, no solid copper" },
   { id: "flex.copper", what: "A flex board's copper suits bending: tracks on the two sides staggered, copper back from the edge, few layers where it flexes" },
   { id: "stackup.material", what: "The board material suits the job: low-loss laminate for long gigahertz runs, one-sided copper on a metal core" }
@@ -65496,6 +65499,24 @@ function reviewPhysics(doc, P, k, settings, add) {
     if (inPad.length) add("dfm.via_in_pad", "warning", "A via in a small part's solder pad drains the solder and stands the part on end (tombstoning) unless the fabricator fills and caps it, which costs extra. Move the via just off the pad on a short track.", inPad);
   }
   {
+    const thin = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const f of fps) {
+      const battery = /^(BT|BAT)\d/i.test(f.ref) || /batter|18650|li-?po|cr20\d\d|coin/i.test(f.lib + " " + f.value);
+      const coil = isPowerInductor(f) && f.pads.length === 2;
+      if (!battery && !coil) continue;
+      for (const p of f.pads) {
+        if (!p.net || isGnd(p.net) || seen.has(p.net)) continue;
+        seen.add(p.net);
+        const ts = (tracksOf.get(p.net) || []).filter((t) => t.length > 1);
+        if (!ts.length) continue;
+        const w = Math.min(...ts.map((t) => t.width || (t.shape.r ? t.shape.r * 2 : 1)));
+        if (w < LIMITS.powerPath - 1e-6) thin.push(`${bare(p.net)} at ${f.ref} ${f.value}: ${r22(w)} mm`.replace(/\s+:/, ":"));
+      }
+    }
+    if (thin.length) add("power.path", "warning", `These nets carry the load current (through an inductor or from a battery) on a track narrower than ${LIMITS.powerPath} mm. On 1 oz outer copper 0.3 mm carries about 1 A, 0.5 mm 1.5 A, 0.8 mm 2 A and 1.4 mm 3 A for a 10 K rise (kh.calc.track_width(amps)); widen them with board.route(widths={net: mm}) or a pour.`, few(thin));
+  }
+  {
     const lyr = (t) => Array.from(t.layers)[0];
     const st = physicalStack(doc, k);
     const flex = st.rows.some((r) => !r.copper && FLEX_MATERIAL.test(r.material));
@@ -66020,14 +66041,361 @@ function layoutPlan(S2, doc, k, plan) {
     "board.finish()     # RF fence, thermal vias, stitching, refill",
     "board.review()     # the proof: fix what it lists, in the placement if that is where it comes from"
   ];
-  return { what: "layout", place: { near, edges }, why, apart: apart.map(([a, b]) => [a, b]), route: { widths, kinds, order: Array.from(new Set(order)) }, pairs, radio_ghz: antennas.length ? radio.ghz : void 0, copper_layers: copper.length, notes, steps };
+  let finePitch = Infinity;
+  let bga = false;
+  for (const f of S2.fps) {
+    if (f.pads.length < 8) continue;
+    if (/BGA|WLCSP|CSP/i.test(f.lib)) bga = true;
+    const ps = f.pads;
+    for (let i = 0; i < ps.length; i++) {
+      let d = Infinity;
+      for (let j = 0; j < ps.length; j++) if (j !== i) {
+        const q = Math.hypot(ps[i].x - ps[j].x, ps[i].y - ps[j].y);
+        if (q > 0.05 && q < d) d = q;
+      }
+      if (d < finePitch) finePitch = d;
+    }
+  }
+  return { what: "layout", fine_pitch: isFinite(finePitch) ? r22(finePitch) : void 0, bga, place: { near, edges }, why, apart: apart.map(([a, b]) => [a, b]), route: { widths, kinds, order: Array.from(new Set(order)) }, pairs, radio_ghz: antennas.length ? radio.ghz : void 0, copper_layers: copper.length, notes, steps };
+}
+
+// web/ai/review-circuit.ts
+var CIRCUIT_RULES = [
+  { id: "bypass.count", what: "One small bypass capacitor for each supply pin, not one for the whole chip" },
+  { id: "i2c.pullups", what: "Each I2C line has exactly one pull-up, of a value that suits the bus" },
+  { id: "crystal.load", what: "A crystal has a load capacitor on each side, sized C = 2 x (CL - Cstray)" },
+  { id: "usbc.cc", what: "A USB-C socket has its own resistor on CC1 and on CC2" },
+  { id: "usb.esd", what: "USB data lines have ESD protection" },
+  { id: "regulator.caps", what: "A regulator has a capacitor on its input and on its output" },
+  { id: "regulator.setpoint", what: "An adjustable regulator's feedback divider sets the voltage its output net is named for" },
+  { id: "regulator.heat", what: "A linear regulator's package can lose the heat of its voltage drop at the load current" },
+  { id: "led.current", what: "Every LED has a series resistor that sets a sane current" },
+  { id: "nets.typos", what: "No two net names are a slip apart, and no named net ends at a single pin" },
+  { id: "passives.sizes", what: "Small resistors and capacitors use one package size where they can" }
+];
+var CIRCUIT_MANUAL = [
+  "Each IC's support circuit was compared with the typical application in its datasheet: capacitor values and count, pull-ups, strapping pins.",
+  "The crystal's load capacitance (CL) and the stray capacitance assumed for its pins were taken from the datasheets, and the oscillator's drive level suits the crystal.",
+  "Every regulator's load current is stated on the sheet, and its dissipation was checked at the highest input voltage."
+];
+var VREF = [
+  [/LM317|LM1117|AMS1117|LD1117|NCP1117|TLV1117|LM1085|LM1086|LT1086|LM350|LM338|XL6009|AP3012/i, 1.25],
+  [/LM2596|LM2576|LM2594|LM2595|LM2575|LM2733|LM27313/i, 1.23],
+  [/TPS5430|TPS5410|TPS5420/i, 1.221],
+  [/MIC5219|MIC5205|MIC29\d\d/i, 1.242],
+  [/TPS54331|TPS54231|TPS54332|MP1584|MP2315|MP2359|TPS62130|TPS62140|AP7361|AP7365|AP2127/i, 0.8],
+  [/MP2307|MP1482/i, 0.925],
+  [/MT3608|SX1308|TLV62569|TLV62568|SY8089|TPS62A01|AP3429|RT8059|TPS6282[0-9]|TPS61022/i, 0.6],
+  [/TPS56[234]20[01]/i, 0.765],
+  [/TPS61023/i, 0.595],
+  [/TPS54302|TPS54202/i, 0.596],
+  [/LMR336[0-9]0/i, 1],
+  [/TPS73601|TPS73701|TPS61088|TPS61089/i, 1.204]
+];
+var PACKAGE_W = [
+  [/SOT-?223/i, 1, "SOT-223"],
+  [/TO-?252|DPAK/i, 1.5, "DPAK"],
+  [/TO-?263|D2PAK/i, 2, "D2PAK"],
+  [/TO-?220/i, 2, "TO-220 without a heatsink"],
+  [/SOT-?89/i, 0.5, "SOT-89"],
+  [/SOT-?23|TSOT|SC-?59/i, 0.3, "SOT-23"],
+  [/SC-?70|SOT-?323|SOT-?353|SOT-?363/i, 0.2, "SC-70"],
+  [/DFN|SON|QFN|WSON|UDFN/i, 0.7, "DFN with its pad soldered"],
+  [/SOIC|SOP-?8|MSOP/i, 0.6, "SOIC"]
+];
+var ESD = /(^|[^a-z])(tvs|esd)|usblc|prtr5v|tpd\d|sp05|pesd|srv05|ip4220|pusb|nup\d|rclamp|esda|ecmf|dt1042|d3v3|sm[abc]j\d|smf\d/i;
+var fmtR = (r) => r >= 1e6 ? `${+(r / 1e6).toFixed(2)}M` : r >= 1e3 ? `${+(r / 1e3).toFixed(2)}k` : `${+r.toFixed(1)}R`;
+var fmtC = (c) => c >= 1e-6 ? `${+(c * 1e6).toFixed(2)}uF` : c >= 1e-9 ? `${+(c * 1e9).toFixed(2)}nF` : `${+(c * 1e12).toFixed(1)}pF`;
+var r23 = (v) => Math.round(v * 100) / 100;
+var footprintOf = (p) => {
+  for (const k of Object.keys(p.fields)) if (/^footprint$/i.test(k)) return p.fields[k] || "";
+  return "";
+};
+var fieldOf3 = (p, re) => {
+  for (const k of Object.keys(p.fields)) if (re.test(k) && p.fields[k] && p.fields[k] !== "~") return p.fields[k];
+  return "";
+};
+function reviewCircuit(c) {
+  const { parts, nets, byRef: byRef2, netPins, supplyNets, pinNet, railV, isIc, isGround: isGround2, add } = c;
+  const live = parts.filter((p) => !p.dnp);
+  const isR = (p) => !!p && /^R\d/i.test(p.ref) && p.pins.length === 2, isC = (p) => !!p && /^C\d/i.test(p.ref) && p.pins.length === 2;
+  const other = (p, pin) => p.pins.find((q) => q !== pin && q.number !== pin.number);
+  const across = (net, kind) => (netPins.get(net) || []).map((q) => ({ pin: q, part: byRef2.get(q.ref) })).filter((x) => kind(x.part) && !x.part.dnp).map((x) => ({ part: x.part, far: pinNet(other(x.part, x.pin)) }));
+  const capsToGround = (net) => across(net, isC).filter((x) => isGround2(x.far));
+  const pinNamed = (p, re) => p.pins.filter((q) => re.test(q.name.replace(/[~{}]/g, "")));
+  {
+    const short2 = [];
+    for (const net of supplyNets) {
+      if (isGround2(net)) continue;
+      const pins = (netPins.get(net) || []).filter((q) => {
+        const p = byRef2.get(q.ref);
+        return p && !p.dnp && isIc(p) && q.type === "power_in";
+      });
+      const count = new Set(pins.map((q) => `${q.ref}.${q.number}`)).size;
+      if (count < 2) continue;
+      const small = capsToGround(net).filter((x) => {
+        const f = farads(x.part.value);
+        return f !== null && f <= 101e-8;
+      }).length;
+      if (small > 0 && small < count) {
+        const by = /* @__PURE__ */ new Map();
+        for (const q of pins) by.set(q.ref, (by.get(q.ref) || 0) + 1);
+        short2.push(`${net}: ${count} supply pins (${Array.from(by.entries()).map(([r, n2]) => `${r} x${n2}`).join(", ")}) and ${small} small capacitor${small > 1 ? "s" : ""}`);
+      }
+    }
+    if (short2.length) add("bypass.count", "warning", 'Each supply pin wants its own small ceramic (100 nF class) right at the pin; one capacitor cannot sit next to several pins. Add the missing ones (sch.decouple(pin, "100nF")), unless the datasheet says the pins share one.', short2);
+  }
+  {
+    const twice = [], odd = [];
+    for (const n2 of nets) {
+      const i2c = /(^|[_/])(SDA|SCL)\d*$/i.test(n2.name) || n2.pins.some((q) => /^(SDA|SCL|I2C\d*_?(SDA|SCL))\d*$/i.test(q.name));
+      if (!i2c || supplyNets.has(n2.name)) continue;
+      const ups = across(n2.name, isR).filter((x) => supplyNets.has(x.far) && !isGround2(x.far));
+      if (!ups.length) continue;
+      const vals = ups.map((x) => ohms(x.part.value)).filter((v2) => v2 !== null && v2 > 0);
+      const par = vals.length ? 1 / vals.reduce((a, v2) => a + 1 / v2, 0) : null;
+      const v = railV(ups[0].far) || 3.3;
+      if (ups.length > 1) twice.push(`${n2.name}: ${ups.map((x) => `${x.part.ref} ${x.part.value}`).join(", ")}${par ? ` (together ${fmtR(par)})` : ""}`);
+      const rmin = (v - 0.4) / 3e-3;
+      if (par !== null && par < rmin * 0.95) odd.push(`${n2.name}: ${fmtR(par)} to ${ups[0].far} asks the bus for ${r23((v - 0.4) / par * 1e3)} mA; devices must sink only 3 mA, so no less than ${fmtR(rmin)}`);
+      else if (par !== null && par > 10500) odd.push(`${n2.name}: ${fmtR(par)} is weak; 2.2k to 4.7k suits 400 kHz, up to 10k a short 100 kHz bus`);
+    }
+    if (twice.length) add("i2c.pullups", "warning", "An I2C line has one pull-up for the whole bus. Several in parallel (often one on each module) lower the resistance until a device can no longer pull the line low. Keep one and leave the others unfitted.", twice);
+    if (odd.length) add("i2c.pullups", "warning", "These I2C pull-ups are outside what the bus allows.", odd);
+  }
+  {
+    const missing = [], wrong = [], unknown = [];
+    for (const p of live) {
+      if (!(/^(Y|XTAL)\d/i.test(p.ref) || /crystal|xtal/i.test(p.lib)) || /oscillator|MEMS|TCXO|VCXO/i.test(p.lib + " " + p.value)) continue;
+      if (p.pins.some((q) => supplyNets.has(pinNet(q)) && !isGround2(pinNet(q)))) continue;
+      const legs = Array.from(new Set(p.pins.map(pinNet).filter((n2) => n2 && !isGround2(n2))));
+      if (legs.length !== 2) continue;
+      if (/32\.?768|32k/i.test(p.value) && legs.every((n2) => !capsToGround(n2).length)) continue;
+      const caps = legs.map((n2) => capsToGround(n2));
+      const none = legs.filter((_, i) => !caps[i].length);
+      if (none.length) {
+        missing.push(`${p.ref} ${p.value}: no capacitor to ground on ${none.join(" and ")}`);
+        continue;
+      }
+      const vals = caps.map((l) => farads(l[0].part.value));
+      if (vals[0] === null || vals[1] === null) continue;
+      const names = caps.map((l) => `${l[0].part.ref} ${l[0].part.value}`).join(" and ");
+      if (Math.abs(vals[0] - vals[1]) > 0.11 * Math.max(vals[0], vals[1])) wrong.push(`${p.ref}: ${names} differ; the two load capacitors are the same value`);
+      const clText = fieldOf3(p, /^(CL|C_?load|load[ _]?cap.*)$/i) || (/(\d+(?:\.\d+)?)\s*pF/i.exec(p.value) || [""])[0];
+      const cl = clText ? farads(clText.replace(/\s/g, "")) : null;
+      if (cl === null) {
+        unknown.push(`${p.ref} ${p.value} with ${names}`);
+        continue;
+      }
+      const lo = 2 * (cl - 5e-12), hi = 2 * (cl - 2e-12);
+      const avg = (vals[0] + vals[1]) / 2;
+      if (avg < lo * 0.9 || avg > hi * 1.1) wrong.push(`${p.ref} (CL ${fmtC(cl)}): ${names}; C = 2 x (CL - Cstray) gives ${fmtC(Math.max(lo, 1e-12))} to ${fmtC(hi)} for 2 to 5 pF of stray`);
+    }
+    if (missing.length) add("crystal.load", "error", "A crystal needs a capacitor to ground on each side, or the oscillator runs off frequency or does not start (unless the chip has them inside: say so in a note).", missing);
+    if (wrong.length) add("crystal.load", "warning", "These crystal load capacitors do not match the crystal. The crystal is cut for its load capacitance CL, and each capacitor is C = 2 x (CL - Cstray).", wrong);
+    if (unknown.length) add("crystal.load", "note", 'These crystals do not state their load capacitance, so the capacitors cannot be checked. Add a CL field from the datasheet (sch.set(ref, CL="10pF")).', unknown);
+  }
+  {
+    const cc = [], ccVal = [], noEsd = [];
+    for (const p of live) {
+      const usb = /usb/i.test(p.lib + " " + p.value);
+      if (!usb || !/^(J|P|CN|X|USB)\d/i.test(p.ref)) continue;
+      const c1 = pinNamed(p, /^CC1$/i), c2 = pinNamed(p, /^CC2$/i);
+      if (c1.length && c2.length) {
+        const n1 = pinNet(c1[0]), n2 = pinNet(c2[0]);
+        if (n1 && n1 === n2) cc.push(`${p.ref}: CC1 and CC2 are joined (${n1}); each needs its own resistor, or a cable with a chip in it shorts them and no power arrives`);
+        for (const [nm3, n3] of [["CC1", n1], ["CC2", n2]]) {
+          if (!n3) {
+            cc.push(`${p.ref}.${nm3} is not connected; without its resistor a USB-C to USB-C cable supplies nothing`);
+            continue;
+          }
+          if ((netPins.get(n3) || []).some((q) => {
+            const o = byRef2.get(q.ref);
+            return o && o !== p && isIc(o);
+          })) continue;
+          const rs = across(n3, isR);
+          const down = rs.filter((x) => isGround2(x.far)), up = rs.filter((x) => supplyNets.has(x.far) && !isGround2(x.far));
+          if (!down.length && !up.length) {
+            cc.push(`${p.ref}.${nm3} (${n3}) has no resistor: 5.1k to ground makes it a device that takes power, 56k, 22k or 10k to VBUS a source`);
+            continue;
+          }
+          for (const x of down) {
+            const v = ohms(x.part.value);
+            if (v !== null && Math.abs(v - 5100) > 5100 * 0.06) ccVal.push(`${p.ref}.${nm3}: ${x.part.ref} is ${x.part.value}; a device's pull-down is 5.1k`);
+          }
+          for (const x of up) {
+            const v = ohms(x.part.value);
+            if (v !== null && ![56e3, 22e3, 1e4].some((t) => Math.abs(v - t) <= t * 0.06)) ccVal.push(`${p.ref}.${nm3}: ${x.part.ref} is ${x.part.value}; a source's pull-up is 56k (default current), 22k (1.5 A) or 10k (3 A) to 5 V`);
+          }
+        }
+      }
+      const data = pinNamed(p, /^(D[+-]|DP\d*|DM\d*|DN\d*|D[PN]_?\w?|USB_?D[PMN+-])$/i).map(pinNet).filter(Boolean);
+      const dn = Array.from(new Set(data));
+      if (dn.length && !dn.some((n2) => (netPins.get(n2) || []).some((q) => {
+        const o = byRef2.get(q.ref);
+        return o && ESD.test(o.lib + " " + o.value);
+      }))) noEsd.push(`${p.ref} ${p.value}: ${dn.join(", ")}`);
+    }
+    if (cc.length) add("usbc.cc", "error", "A USB-C socket tells the other end what it is through CC1 and CC2, each with its own resistor.", cc);
+    if (ccVal.length) add("usbc.cc", "warning", "These CC resistors are not the values the USB-C specification gives.", ccVal);
+    if (noEsd.length) add("usb.esd", "warning", "USB data lines leave the board and take the discharge when a cable is plugged in. Put a low-capacitance ESD part (USBLC6-2, TPD2E, PRTR5V0U2X) on them at the connector.", noEsd);
+  }
+  {
+    const noCap = [], off = [], noRef = [], hot = [], warm = [];
+    for (const p of live) {
+      const isReg = /^Regulator_|^Converter_DCDC/i.test(p.lib) || isIc(p) && pinNamed(p, /^(VOUT|OUT|VO)$/i).length > 0 && pinNamed(p, /^(VIN|IN|VI)$/i).length > 0 && /reg|ldo|buck|boost|dcdc|conver/i.test(p.lib + " " + p.value + " " + fieldOf3(p, /^description$/i));
+      if (!isReg) continue;
+      const vin = pinNamed(p, /^(VIN|IN|VI|PVIN|AVIN|VCC|VDD)\d*$/i).map(pinNet).find(Boolean) || "", vout = pinNamed(p, /^(VOUT|OUT|VO|OUTPUT)\d*$/i).map(pinNet).find(Boolean) || "";
+      const fb = pinNamed(p, /^(FB|ADJ|VFB|FB\/NC|VSENSE|SENSE|VOS)\d*$/i).map(pinNet).find(Boolean) || "";
+      const sw = pinNamed(p, /^(SW|LX|PH|SWITCH)\d*$/i).map(pinNet).find(Boolean) || "";
+      const linear = !sw && (/^Regulator_Linear/i.test(p.lib) || !/Switching|DCDC/i.test(p.lib));
+      for (const [what, n2] of [["input", vin], ["output", vout]]) if (n2 && !isGround2(n2) && !capsToGround(n2).length) noCap.push(`${p.ref} ${p.value}: no capacitor on its ${what} (${n2})`);
+      let setV = null, outNet = vout;
+      if (fb && fb !== vout && !isGround2(fb)) {
+        const rs = across(fb, isR);
+        const bottom = rs.filter((x) => isGround2(x.far)), top = rs.filter((x) => !isGround2(x.far) && x.far !== fb);
+        if (bottom.length === 1 && top.length === 1) {
+          const rt = ohms(top[0].part.value), rb = ohms(bottom[0].part.value);
+          outNet = outNet || top[0].far;
+          const stated = fieldOf3(p, /^(Vref|V_?FB|Reference)$/i);
+          let vref = stated ? parseFloat(stated) : null;
+          if (vref === null || !isFinite(vref)) {
+            const hit5 = VREF.find(([re]) => re.test(p.value + " " + p.lib));
+            vref = hit5 ? hit5[1] : null;
+          }
+          if (rt !== null && rb !== null && rb > 0 && rt > 0) {
+            if (vref === null) noRef.push(`${p.ref} ${p.value}: ${top[0].part.ref} ${top[0].part.value} over ${bottom[0].part.ref} ${bottom[0].part.value} gives Vref x ${r23(1 + rt / rb)}`);
+            else {
+              const adj = /^ADJ$/i.test((pinNamed(p, /^(FB|ADJ|VFB)$/i)[0] || { name: "" }).name) && /LM317|LM1117|AMS1117|LD1117|NCP1117|LM108[56]|LT1086|LM350|LM338|TLV1117/i.test(p.value + " " + p.lib);
+              setV = adj ? vref * (1 + rb / rt) : vref * (1 + rt / rb);
+              const want = railV(top[0].far) ?? (vout ? railV(vout) : null);
+              if (want !== null && want > 0 && Math.abs(setV - want) > Math.max(0.04 * want, 0.05)) off.push(`${p.ref} ${p.value}: ${top[0].part.ref} ${top[0].part.value} and ${bottom[0].part.ref} ${bottom[0].part.value} with Vref ${vref} V set ${r23(setV)} V, but the output net is ${top[0].far} (${want} V)`);
+            }
+          }
+        }
+      }
+      if (linear && vin && (vout || setV !== null)) {
+        const vi = railV(vin), vo = setV !== null ? setV : railV(vout || outNet);
+        if (vi === null || vo === null || vi - vo < 0.3) continue;
+        const pk = PACKAGE_W.find(([re]) => re.test(footprintOf(p) + " " + p.value));
+        if (!pk) continue;
+        const drop = vi - vo, imax = pk[1] / drop;
+        const line = `${p.ref} ${p.value}: ${vi} V in, ${r23(vo)} V out drops ${r23(drop)} V; a ${pk[2]} loses about ${pk[1]} W, so about ${Math.round(imax * 1e3)} mA`;
+        if (imax < 0.1) hot.push(line);
+        else if (drop >= 1.5) warm.push(line);
+      }
+    }
+    if (noCap.length) add("regulator.caps", "error", "A regulator needs a capacitor on its input and on its output, of the value and type its datasheet names; without the output capacitor most oscillate.", noCap);
+    if (off.length) add("regulator.setpoint", "error", "The feedback divider does not set the voltage the output net is named for. For most parts Vout = Vref x (1 + Rtop / Rbottom); change a resistor or the net name.", off);
+    if (noRef.length) add("regulator.setpoint", "note", 'The reference voltage of these regulators is not known here, so the divider cannot be checked. Add a Vref field from the datasheet (sch.set(ref, Vref="0.8")).', noRef);
+    if (hot.length) add("regulator.heat", "warning", "These linear regulators burn off their whole voltage drop as heat, P = (Vin - Vout) x I, and their package allows very little current. Use a switching regulator, a lower input, or a larger package with copper under it.", hot);
+    if (warm.length) add("regulator.heat", "note", "Linear regulators with a large drop: keep the load below the figure given, or give the tab copper and vias.", warm);
+  }
+  {
+    const bare2 = [], bright = [];
+    for (const p of live) {
+      if (!(/^(D|LED)\d/i.test(p.ref) && /led/i.test(p.lib + " " + p.value)) || p.pins.length !== 2 || /WS28|SK68|APA10|neopixel|RGB/i.test(p.lib + " " + p.value)) continue;
+      const ends = p.pins.map(pinNet);
+      if (!ends[0] || !ends[1]) continue;
+      let res = null, rail = "", drive = "";
+      for (let i = 0; i < 2; i++) {
+        const r5 = across(ends[i], isR).filter((x) => x.part.ref !== p.ref);
+        if (r5.length && (netPins.get(ends[i]) || []).length <= 3) {
+          res = r5[0];
+          rail = r5[0].far;
+          drive = ends[1 - i];
+        }
+      }
+      if (!res) {
+        const driver = ends.some((n2) => (netPins.get(n2) || []).some((q) => {
+          const o = byRef2.get(q.ref);
+          return o && isIc(o) && /led|driver|sink|cc|pwm|charg|stat|pmic/i.test(o.lib + " " + o.value + " " + q.name);
+        }));
+        if (!driver && ends.some((n2) => supplyNets.has(n2))) bare2.push(`${p.ref} ${p.value} between ${ends.join(" and ")}`);
+        continue;
+      }
+      const r = ohms(res.part.value);
+      if (r === null || r <= 0) continue;
+      const va = railV(rail), vb = railV(drive);
+      const icDrive = (netPins.get(drive) || []).some((q) => {
+        const o = byRef2.get(q.ref);
+        return o && isIc(o);
+      }) || (netPins.get(rail) || []).some((q) => {
+        const o = byRef2.get(q.ref);
+        return o && isIc(o) && !supplyNets.has(rail);
+      });
+      const v = va !== null && vb !== null ? Math.abs(va - vb) : va !== null && va > 0 ? va : vb !== null && vb > 0 ? vb : null;
+      if (v === null) continue;
+      const vf = /blue|white|uv|pink|B\b/i.test(p.value) ? 3 : /green/i.test(p.value) ? 2.2 : 2;
+      const ma = Math.max(0, (v - vf) / r * 1e3);
+      if (ma > 20.5) bright.push(`${p.ref} with ${res.part.ref} ${res.part.value} on ${v} V: about ${Math.round(ma)} mA; an indicator LED is rated 20 mA and is bright at 1 to 5 mA (${fmtR((v - vf) / 5e-3)} gives 5 mA)`);
+      else if (icDrive && ma > 8.5) bright.push(`${p.ref} with ${res.part.ref} ${res.part.value} on ${v} V: about ${Math.round(ma)} mA through an IC pin; many microcontroller pins give 4 to 8 mA (${fmtR((v - vf) / 4e-3)} gives 4 mA)`);
+    }
+    if (bare2.length) add("led.current", "error", "These LEDs sit straight across a supply with no resistor to limit the current. Add a series resistor, R = (V - Vf) / I.", bare2);
+    if (bright.length) add("led.current", "warning", "These LED currents are higher than the LED or the pin driving it should carry.", bright);
+  }
+  {
+    const named = nets.filter((n2) => n2.named && n2.name);
+    const twins = [], lone = [];
+    const norm3 = (s) => s.replace(/^\//, "").replace(/[_\-.\s]/g, "").toUpperCase();
+    const groups = /* @__PURE__ */ new Map();
+    for (const n2 of named) {
+      const k = norm3(n2.name);
+      const g2 = groups.get(k) || [];
+      groups.set(k, g2);
+      if (!g2.includes(n2.name)) g2.push(n2.name);
+    }
+    for (const g2 of groups.values()) if (g2.length > 1) twins.push(`${g2.join(" and ")} differ only in case or separators`);
+    const keys = Array.from(groups.keys()).filter((k) => k.length >= 5 && !supplyNets.has(groups.get(k)[0]));
+    const slip = (a, b) => {
+      if (a.length === b.length) {
+        const d = [];
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d.push(i);
+        return d.length === 2 && d[1] === d[0] + 1 && a[d[0]] === b[d[1]] && a[d[1]] === b[d[0]] && !/\d/.test(a[d[0]] + a[d[1]]);
+      }
+      const [s, l] = a.length < b.length ? [a, b] : [b, a];
+      if (l.length - s.length !== 1) return false;
+      for (let i = 0; i < l.length; i++) if (l.slice(0, i) + l.slice(i + 1) === s) return /[A-Z]/.test(l[i]) && !/^[PNMHLRXS]$/.test(l[i]) || /[A-Z]/.test(l[i]) && i > 0 && i < l.length - 1 && l[i] === l[i - 1];
+      return false;
+    };
+    for (let i = 0; i < keys.length && twins.length < 12; i++) for (let j = i + 1; j < keys.length; j++) if (slip(keys[i], keys[j])) twins.push(`${groups.get(keys[i])[0]} and ${groups.get(keys[j])[0]} are one letter apart`);
+    for (const n2 of named) {
+      if (supplyNets.has(n2.name) || n2.pins.length !== 1) continue;
+      const q = n2.pins[0];
+      if (q.type === "no_connect") continue;
+      const o = byRef2.get(q.ref);
+      if (o && /^(TP|J|P|CN|X)\d/i.test(o.ref)) continue;
+      lone.push(`${n2.name}: only ${q.ref}.${q.name || q.number}`);
+    }
+    if (twins.length) add("nets.typos", "warning", "These net names look like the same net spelled two ways, which leaves the two halves unconnected. Make them one name, or rename one so the difference is plain.", twins);
+    if (lone.length) add("nets.typos", "warning", "These named nets reach a single pin, so the label connects it to nothing: a misspelled label, or the other end was never drawn.", lone.slice(0, 20));
+  }
+  {
+    const sizes = /* @__PURE__ */ new Map();
+    for (const p of live) {
+      if (!/^[RC]\d/i.test(p.ref) || p.pins.length !== 2) continue;
+      const f = farads(p.value);
+      if (/^C/i.test(p.ref) && f !== null && f > 22e-7) continue;
+      const m = /(?:^|[_:])(01005|0201|0402|0603|0805|1206|1210)(?:_|$)/.exec(footprintOf(p));
+      if (!m) continue;
+      const l = sizes.get(m[1]) || [];
+      sizes.set(m[1], l);
+      l.push(p.ref);
+    }
+    if (sizes.size > 1) {
+      const total = Array.from(sizes.values()).reduce((a, l) => a + l.length, 0);
+      const rows = Array.from(sizes.entries()).sort((a, b) => b[1].length - a[1].length);
+      const minor = rows.slice(1).filter(([, l]) => l.length <= Math.max(3, total * 0.15));
+      if (minor.length) add("passives.sizes", "note", `Most small resistors and capacitors here are ${rows[0][0]}. One size keeps assembly cheap and the board easy to rework; move these to ${rows[0][0]} unless their voltage, power or value needs the other size.`, minor.map(([s, l]) => `${s}: ${l.slice(0, 6).join(", ")}${l.length > 6 ? ` and ${l.length - 6} more` : ""}`));
+    }
+  }
 }
 
 // web/ai/review.ts
 var W5 = window;
 var SCH5 = () => W5.CollabTools && W5.CollabTools.sch || null;
 var PCB4 = () => W5.PcbTools || null;
-var r23 = (v) => Math.round(v * 100) / 100;
+var r24 = (v) => Math.round(v * 100) / 100;
 var GROUND2 = /^(?:[ADP]?GND\w*|GNDREF|VSS\w*|EARTH|0V)$/i;
 var NEGATIVE = /^(?:-\d|VEE|V-|VNEG)/i;
 var SUPPLY2 = /^(?:[+-]\d|\d+V\d*$|\d+(?:\.\d+)?V$|V(?:CC|DD|BUS|USB|BAT|IN|OUT|SYS|PP|AA|REF|MOTOR|S)\w*|VD?D?[A-Z]*_\w+|V\d+V?\d*|\w+_\d+V\d*$)/i;
@@ -66226,12 +66594,12 @@ async function reviewSchematic(doc, path2) {
     else groupPins.set(g2, [q]);
   }
   {
-    const bad = labels.filter((l) => SUPPLY2.test(l.text) && !/_(EN|PG|FB|SENSE|OK)$/i.test(l.text) || isGround(l.text)).map((l) => `${l.text} at (${r23(l.x)}, ${r23(l.y)})`);
+    const bad = labels.filter((l) => SUPPLY2.test(l.text) && !/_(EN|PG|FB|SENSE|OK)$/i.test(l.text) || isGround(l.text)).map((l) => `${l.text} at (${r24(l.x)}, ${r24(l.y)})`);
     if (bad.length) add("power.symbols", "error", "These supplies are carried by net labels. Use a supply symbol (sch.net or sch.power draws one, sch.supply(name) makes one for a name KiCad's library lacks).", Array.from(new Set(bad)));
     const turned = [];
     for (const p of powers) {
       const mir = k.kid(p.it.node, "mirror");
-      if ((p.it.rot || 0) % 360 !== 0 || mir && k.str(mir[1]) === "x") turned.push(`${p.value} at (${r23(p.it.x)}, ${r23(p.it.y)}) is turned ${p.it.rot || 0}\xB0${mir ? " and mirrored" : ""}`);
+      if ((p.it.rot || 0) % 360 !== 0 || mir && k.str(mir[1]) === "x") turned.push(`${p.value} at (${r24(p.it.x)}, ${r24(p.it.y)}) is turned ${p.it.rot || 0}\xB0${mir ? " and mirrored" : ""}`);
     }
     if (turned.length) add("power.direction", "error", "Supply symbols point up and ground or negative symbols point down, always. Bend the wire and give the symbol room instead of turning it.", turned);
     const vague = rails.filter((n2) => VAGUE_SUPPLY.test(n2));
@@ -66270,11 +66638,11 @@ async function reviewSchematic(doc, path2) {
     for (const l of labels) {
       const g2 = groupAt(l.x, l.y);
       const pins = (g2 >= 0 ? groupPins.get(g2) : null) || parts.flatMap((p) => p.pins.filter((q) => Math.abs(q.x - l.x) < 1e-3 && Math.abs(q.y - l.y) < 1e-3));
-      if (l.kind === "label" && pins.length <= 1 && ((count.get(l.text) || 0) > 1 || sheets > 0)) stubs.push(`"${l.text}" at (${r23(l.x)}, ${r23(l.y)})${pins.length ? ` on ${pins[0].ref}.${pins[0].number}` : ""}`);
+      if (l.kind === "label" && pins.length <= 1 && ((count.get(l.text) || 0) > 1 || sheets > 0)) stubs.push(`"${l.text}" at (${r24(l.x)}, ${r24(l.y)})${pins.length ? ` on ${pins[0].ref}.${pins[0].number}` : ""}`);
       if (l.kind !== "label" && pins.length) {
         const drives = pins.some((q) => q.type === "output" || q.type === "power_out"), listens = pins.some((q) => q.type === "input"), both = pins.some((q) => q.type === "bidirectional" || q.type === "tri_state");
         const want = both || drives && listens ? "bidirectional" : drives ? "output" : listens ? "input" : "";
-        if (want && l.shape && l.shape !== want && !(want === "bidirectional" && l.shape === "tri_state")) shapes2.push(`"${l.text}" at (${r23(l.x)}, ${r23(l.y)}) is drawn as ${l.shape}; its wire has ${want === "bidirectional" ? "bidirectional pins" : want === "output" ? "an output pin, so the signal leaves here: output" : "only input pins, so the signal arrives here: input"}`);
+        if (want && l.shape && l.shape !== want && !(want === "bidirectional" && l.shape === "tri_state")) shapes2.push(`"${l.text}" at (${r24(l.x)}, ${r24(l.y)}) is drawn as ${l.shape}; its wire has ${want === "bidirectional" ? "bidirectional pins" : want === "output" ? "an output pin, so the signal leaves here: output" : "only input pins, so the signal arrives here: input"}`);
       }
     }
     if (stubs.length) add("labels.stubs", "warning", "A plain label on a wire that reaches one pin is just text: the reader cannot tell the net goes somewhere else. Use a global label with a direction shape (sch.globalize() converts them, sch.label draws one; a name that also labels a drawn-through wire is converted once that label is moved to a wire end).", stubs);
@@ -66295,7 +66663,7 @@ async function reviewSchematic(doc, path2) {
     if (byLabel + byWire >= 6 && byLabel > byWire) add("wires.first", "warning", `${byLabel} of ${byLabel + byWire} signal nets are joined by labels and only ${byWire} by a drawn wire. The eye follows a wire far faster than it finds a label: wire the parts of a block together and keep labels for nets that leave the block.`);
   }
   {
-    const slanted = segs.filter((g2) => Math.abs(g2[0] - g2[2]) > 1e-3 && Math.abs(g2[1] - g2[3]) > 1e-3).map((g2) => `(${r23(g2[0])}, ${r23(g2[1])}) to (${r23(g2[2])}, ${r23(g2[3])})`);
+    const slanted = segs.filter((g2) => Math.abs(g2[0] - g2[2]) > 1e-3 && Math.abs(g2[1] - g2[3]) > 1e-3).map((g2) => `(${r24(g2[0])}, ${r24(g2[1])}) to (${r24(g2[2])}, ${r24(g2[3])})`);
     const off = [];
     const og = (v) => Math.abs(v / 1.27 - Math.round(v / 1.27)) > 1e-3;
     for (const p of parts) if (p.pins.some((q) => og(q.x) || og(q.y))) off.push(p.ref);
@@ -66312,7 +66680,7 @@ async function reviewSchematic(doc, path2) {
         total++;
       }
     }
-    const busy = segs.filter((_, i) => cross[i] > 3).map((g2) => `(${r23(g2[0])}, ${r23(g2[1])}) to (${r23(g2[2])}, ${r23(g2[3])}) is crossed ${cross[segs.indexOf(g2)]} times`);
+    const busy = segs.filter((_, i) => cross[i] > 3).map((g2) => `(${r24(g2[0])}, ${r24(g2[1])}) to (${r24(g2[2])}, ${r24(g2[3])}) is crossed ${cross[segs.indexOf(g2)]} times`);
     if (slanted.length) add("wires.straight", "warning", "Wires run in the four cardinal directions; these are at an angle.", slanted);
     if (off.length) add("wires.straight", "warning", "These parts have pins off the 1.27 mm grid, so wires to them need small jogs.", off.sort(refSort));
     if (busy.length) add("wires.straight", "warning", `A wire should not be crossed more than three times (the sheet has ${total} crossings in all). Reorder the pins, move the part, or use a label or a bus here.`, busy);
@@ -66417,8 +66785,8 @@ async function reviewSchematic(doc, path2) {
         if (r === null || !r || v === null || !v) continue;
         const w = v * v / r, max = wattsOf(p.fields);
         if (max === null) continue;
-        if (w > max) hot.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r23(w * 1e3)} mW; its package is good for ${r23(max * 1e3)} mW`);
-        else if (w > max / 2) warm.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r23(w * 1e3)} mW of ${r23(max * 1e3)} mW`);
+        if (w > max) hot.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r24(w * 1e3)} mW; its package is good for ${r24(max * 1e3)} mW`);
+        else if (w > max / 2) warm.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r24(w * 1e3)} mW of ${r24(max * 1e3)} mW`);
       }
     }
     if (under.length) add("caps.voltage", "error", "Capacitors are rated for at least twice the voltage they work at (a ceramic loses most of its capacitance near its rated voltage).", under);
@@ -66543,7 +66911,12 @@ async function reviewSchematic(doc, path2) {
     if (noDs.length) add("bom", "note", "These ICs have no datasheet link.", noDs.sort(refSort));
     if (noDist) add("bom", "note", `${noDist} parts have an MPN but no distributor part number.`);
   }
-  return report2("schematic review", path2, SCH_RULES, out, SCH_MANUAL);
+  try {
+    reviewCircuit({ parts, nets, byRef: byRef2, netPins, supplyNets, pinNet, railV, isIc, isGround, add });
+  } catch (err) {
+    add("erc", "note", `The circuit checks could not run: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return report2("schematic review", path2, SCH_RULES.concat(CIRCUIT_RULES), out, SCH_MANUAL.concat(CIRCUIT_MANUAL));
 }
 var PCB_RULES = [
   { id: "bypass.near", what: "Small bypass capacitors sit right next to the power and ground leads of their IC" },
@@ -66644,7 +67017,7 @@ async function reviewBoard(doc, path2) {
           }
         }
         if (!isFinite(best)) none.push(`${u.ref}.${p.number} (${bare2(p.net)})`);
-        else if (best > 4) far.push(`${u.ref}.${p.number} (${bare2(p.net)}): nearest capacitor ${who} is ${r23(best)} mm away`);
+        else if (best > 4) far.push(`${u.ref}.${p.number} (${bare2(p.net)}): nearest capacitor ${who} is ${r24(best)} mm away`);
       }
     }
     if (far.length) add("bypass.near", "warning", 'A bypass capacitor belongs within a couple of millimetres of the supply pin it serves, closer than anything else (board.autoplace(near={"C1": "U1"}) or board.place).', far);
@@ -66677,7 +67050,7 @@ async function reviewBoard(doc, path2) {
       if (layers.size >= 2 && isFinite(x0)) {
         const area3 = (x1 - x0) * (y1 - y0) / 100;
         const n2 = vias.filter((v) => isGnd2(v.net)).length + fps.reduce((a, f) => a + f.pads.filter((p) => p.type === "thru_hole" && isGnd2(p.net)).length, 0);
-        if (n2 < Math.max(4, Math.round(area3))) add("ground.stitching", "warning", `${n2} ground via${n2 === 1 ? "" : "s"} tie the ground planes together on a ${r23(area3)} cm\xB2 board. Stitch them about every centimetre, and beside every signal via (board.stitch()).`);
+        if (n2 < Math.max(4, Math.round(area3))) add("ground.stitching", "warning", `${n2} ground via${n2 === 1 ? "" : "s"} tie the ground planes together on a ${r24(area3)} cm\xB2 board. Stitch them about every centimetre, and beside every signal via (board.stitch()).`);
       }
     }
   }
@@ -66688,7 +67061,7 @@ async function reviewBoard(doc, path2) {
       for (const f of fps) if (f.box) used += (f.box[2] - f.box[0]) * (f.box[3] - f.box[1]);
       const backToo = fps.some((f) => f.side === "back" && f.pads.length >= 2);
       const share = used / (board * (backToo ? 2 : 1));
-      if (share < 0.2 && board > 400) add("size", "note", `Parts cover ${Math.round(share * 100)} % of the ${r23(x1 - x0)} x ${r23(y1 - y0)} mm board. Unless the size is fixed by a case or a connector pattern, it can be smaller.`);
+      if (share < 0.2 && board > 400) add("size", "note", `Parts cover ${Math.round(share * 100)} % of the ${r24(x1 - x0)} x ${r24(y1 - y0)} mm board. Unless the size is fixed by a case or a connector pattern, it can be smaller.`);
     }
     const hit5 = (a, b, g2) => a[0] < b[2] + g2 && a[2] > b[0] - g2 && a[1] < b[3] + g2 && a[3] > b[1] - g2;
     const tight = [];

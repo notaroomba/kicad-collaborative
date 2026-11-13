@@ -176,6 +176,8 @@ class Physics(Boards):
                           part("J1", (145, 105), [("1", 0, 0, 0.8, 0.8, "USB_D+"), ("2", 0, 1.5, 0.8, 0.8, "VBUS"), ("3", 0, 3, 0.8, 0.8, "GND")], value="USB_C", lib="Connector_USB:USB_C_Receptacle"),
                           part("D1", (110, 104), [("1", -0.5, 0, 0.5, 0.5, "USB_D+"), ("2", 0.5, 0, 0.5, 0.5, "GND")], value="ESD5V0", lib="Diode_SMD:D_SOD-523"))
         plan = board.plan()
+        self.assertEqual(plan["stackup"]["recommended"], {"material": "fr4", "layers": 4, "finish": "enig"})
+        self.assertIn("this design wants 4", plan["notes"][0])
         near = plan["place"]["near"]
         self.assertEqual({r: near.get(r) for r in ("C1", "C5", "Y1", "C2", "L1", "L2", "C4", "R1", "D1")},
                          {"C1": "L2", "C5": "U1", "Y1": "U1", "C2": "Y1", "L1": "AE1", "L2": "U2", "C4": "U2", "R1": "U2", "D1": "J1"})
@@ -195,6 +197,18 @@ class Physics(Boards):
         fin = board.finish(stitch=None)
         self.assertEqual(fin["antennas"]["AE1"]["keepout"], None)
         self.assertNotIn("antenna.fence", self.failed(board.review()))
+
+    def test_the_power_path_is_wide(self):
+        box = (100, 100, 140, 130)
+        b = self.open(edge(box), zone("GND", "B.Cu", box),
+                      part("L1", (110, 110), [("1", -1.6, 0, 1.2, 2.4, "SW"), ("2", 1.6, 0, 1.2, 2.4, "+3V3")], value="4.7uH"),
+                      part("BT1", (125, 120), [("1", -3, 0, 2, 2, "VBAT"), ("2", 3, 0, 2, 2, "GND")], value="Battery"),
+                      part("U1", (110, 120), [("1", 0, 0, 0.6, 0.6, "SW"), ("2", 1.5, 0, 0.6, 0.6, "+3V3"), ("3", 3, 0, 0.6, 0.6, "VBAT")]),
+                      track("SW", [(108.4, 110), (108.4, 120), (110, 120)], width=0.5), track("+3V3", [(111.6, 110), (111.6, 120)], width=0.2), track("VBAT", [(122, 120), (113, 120)], width=0.15))
+        said = self.finding(b.review(), "power.path")
+        self.assertIn("+3V3 at L1", said)
+        self.assertIn("VBAT at BT1", said)
+        self.assertNotIn("SW at", said)
 
     def test_the_sums(self):
         c = kh.calc
