@@ -40,6 +40,8 @@ function lenInput(mm: number, id: string): HTMLInputElement { return textInput(t
 const lenOf = (i: HTMLInputElement, fallback: number): number => { const v = parseLen(i.value); return v === null ? fallback : +M.fmt(v); };
 
 // ---------------------------------------------------------------- Pin Properties
+/** s_alternatesTurndownOpen: the alternates pane stays open for the next dialog once opened. */
+let altPaneOpen = false;
 /** DIALOG_PIN_PROPERTIES for a new pin (pin = null) or an existing one; resolves with the edited pin, or null. */
 export function pinDialog(se: SymbolEditor, p: M.PinInfo, existing: M.Node | null): Promise<M.PinInfo | null> {
   return new Promise((resolve) => {
@@ -82,14 +84,30 @@ export function pinDialog(se: SymbolEditor, p: M.PinInfo, existing: M.Node | nul
       title: "Pin Properties", width: 720,
       build(body) {
         body.append(info); syncMsg();
-        const left = form([["Pin name:", name], ["Pin number:", number], ["Electrical type:", type], ["Graphic style:", shape]]);
+        // dialog_pin_properties_base.cpp: one grid on the left (name, number, type, style, X, Y, orientation, length,
+        // text sizes); on the right the checkboxes (Visible after a gap), "Preview:" and the preview panel
         number.title = "Pin number: 1 to 4 ASCII letters and/or digits"; type.title = "Used by the ERC.";
-        const geo = form([["X position:", px, unitName(units())], ["Y position:", py, unitName(units())], ["Orientation:", orient, ""], ["Pin length:", len, unitName(units())], ["Name text size:", ns, unitName(units())], ["Number text size:", nus, unitName(units())]], 3);
-        const flags = h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:8px" }, allUnits, allBodies, visible);
-        body.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:14px" }, h("div", null, left, flags), h("div", null, geo, h("div", { style: "margin-top:8px;color:var(--ink-2)" }, "Preview:"), cv)));
-        if (!multiBody) {
-          const box = KD().staticBox(body, "Alternate Pin Function Definitions");
-          altGrid = KD().grid(box, [
+        const u = unitName(units());
+        const left = form([["Pin name:", name, ""], ["Pin number:", number, ""], ["Electrical type:", type, ""], ["Graphic style:", shape, ""], ["X position:", px, u], ["Y position:", py, u],
+          ["Orientation:", orient, ""], ["Pin length:", len, u], ["Name text size:", ns, u], ["Number text size:", nus, u]], 3);
+        left.id = "pin-left";
+        const flags = h("div", { id: "pin-flags", style: "display:flex;flex-direction:column;gap:3px" }, allUnits, allBodies, h("div", { style: "height:10px" }), visible);
+        cv.style.flex = "1"; cv.style.minHeight = "160px";
+        body.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:0 10px" }, left,
+          h("div", { style: "display:flex;flex-direction:column" }, flags, h("div", { style: "margin-top:8px;color:var(--ink-2)" }, "Preview:"), cv)));
+        if (multiBody) {
+          // multiple body styles are a superclass of alternate pin assignments
+          body.append(h("div", { id: "pin-alt-hint", style: "font-style:italic;margin:8px" }, "  (Alternate pin functions are not available on symbols with multiple body styles.)"));
+        } else {
+          // WX_COLLAPSIBLE_PANE "Alternate Pin Function Definitions": collapsed when the pin has none and it was not left open
+          let open = alts.length > 0 || altPaneOpen;
+          const pane = h("div", { id: "pin-alt-pane", style: "margin:6px 10px 0" });
+          const tw = h("span", { class: "tw", style: "display:inline-block;width:14px" });
+          const head = h("div", { id: "pin-alt-toggle", style: "cursor:pointer;user-select:none;display:flex;align-items:center;gap:2px;margin:8px 10px 0" }, tw, "Alternate Pin Function Definitions");
+          const sync = () => { tw.textContent = open ? "▾" : "▸"; pane.style.display = open ? "" : "none"; };
+          head.addEventListener("click", () => { open = !open; altPaneOpen = open; sync(); if (open) altGrid && altGrid.refresh(); });
+          body.append(head, pane); sync();
+          altGrid = KD().grid(pane, [
             { key: "name", label: "Alternate Pin Name", width: 200 },
             { key: "type", label: "Electrical Type", type: "choice", options: M.PIN_TYPES.map(([a, l]) => [a, l] as [string, string]), width: 160 },
             { key: "shape", label: "Graphic Style", type: "choice", options: M.PIN_SHAPES.map(([a, l]) => [a, l] as [string, string]), width: 160 },
