@@ -7,11 +7,10 @@
 // zoom factor: the connection, the number of edits, and — as the frame title does — the sheet path on a
 // schematic or the active layer on a board.  Every coordinate follows the units chosen in View > Units (or
 // Ctrl+U), with the unit's fixed precision.
-import { toDisplayAbs, toDisplayRel } from "../units";
 import { useApp, type Editor } from "../store";
 import { menuMeta } from "../menuspec";
 import { EXTRA_TOOLS, TOOL_MAP } from "../tables";
-import { fmtCoord, gridMessageText, unitsMsg } from "../units";
+import { fmtCoord, gridMessageText, toDisplayAbs, toDisplayRel, unitsMsg } from "../units";
 import { cx } from "../util";
 
 // One field of the bar: a vertically centred cell with a 1px rule on its left (KiCad's status panes).
