@@ -50,3 +50,26 @@ test("netLengths: tracks clipped at the via and the pad, the via's stackup heigh
   // nets without pads are left out unless asked for
   assert.ok(!rows.some((x) => !x.padCount));
 });
+
+const FIELD_BOARD = `(kicad_pcb (version 20260206) (generator "pcbnew")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user) (25 "Edge.Cuts" user))
+  (footprint "Test:R" (layer "F.Cu") (uuid "fp-1") (at 100 50)
+    (property "Reference" "R1" (at 0 -3 0) (layer "F.SilkS") (uuid "f-ref") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -1.5 0) (size 1 2) (layers "F.Cu") (uuid "pad-1")))
+  (segment (start 95 47) (end 105 47) (width 0.25) (layer "F.Cu") (uuid "s-1"))
+)`;
+
+test("GuessSelectionCandidates weighs a footprint field with the track under it: the active layer decides", () => {
+  const doc = K.parseDoc(FIELD_BOARD, "kicad_pcb");
+  const fid = P.fieldCandidateId("fp-1", "Reference");
+  const seg = Array.from(doc.items.values()).find((it) => it.kind === "segment").id;
+  const fp = Array.from(doc.items.values()).find((it) => it.kind === "footprint");
+  const box = K.fieldBoxes(fp, null).find((f) => f.name === "Reference");
+  assert.ok(box, "the reference has a text box");
+  const at = [100, 47];
+  // copper in front: the track (similar area, on the active layer) beats the silkscreen reference
+  assert.deepEqual(P.guessCandidates(doc, [fid, seg], at, { px: 0.01, activeLayer: "F.Cu" }), [seg]);
+  // silkscreen in front: single-layer silk items are preferred (the field is a PCB_FIELD_T)
+  assert.deepEqual(P.guessCandidates(doc, [fid, seg], at, { px: 0.01, activeLayer: "F.SilkS" }), [fid]);
+});

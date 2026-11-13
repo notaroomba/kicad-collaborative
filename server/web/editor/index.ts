@@ -235,7 +235,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (mod && moduleTool(E.tool) && mod.onPointerDown) { if (E.viewOnly && E.tool !== "highlight") { toast("View-only access"); return; } try { if (mod.onPointerDown(ev, [x, y], toolCtx())) { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; } } catch (e) { console.warn(e); } }
   if (E.tool === "select" && E.kdoc && !ev.shiftKey && window.KDialogs) {   // KiCad: a click on a field selects (and drags) the field, not its symbol
     const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
-    if (f) {
+    if (f && (isSch() || !E.hooks.fieldWins || E.hooks.fieldWins([x, y], f.item.id, f.name))) {
       const wasField = !!(E.selField && E.selField.id === f.item.id && E.selField.name === f.name);   // DRAG_SELECTED: only a selected field drags
       clearSelection(); E.selField = { id: f.item.id, name: f.name };
       const pst = !isSch() && CollabTools.pcb && (CollabTools.pcb.state as { downHandled?: unknown } | undefined); if (pst) pst.downHandled = ev;   // one item per click: the board module does not pick what lies under the field

@@ -376,6 +376,23 @@ function ambiguousAt(mm: Mm): string[] {
  */
 E.hooks.candidatesAt = (mm: Mm): string[] => (E.kdoc ? ambiguousAt(mm) : []);
 /**
+ * A left click on a footprint field: GENERAL_COLLECTOR collects the PCB_FIELD beside the tracks, pads and footprints
+ * under the cursor, and GuessSelectionCandidates weighs them together (exact hits, a small item within a much larger
+ * one, the active layer).  False when the field loses (a track on the active copper layer under a silkscreen
+ * reference, say), so the click picks what won instead.
+ */
+E.hooks.fieldWins = (mm: Mm, fpId: string, name: string): boolean => {
+  if (isSch() || !E.kdoc) return true;
+  const P = (window as unknown as { PcbTools?: { guessCandidates?: Guess; fieldCandidateId?: (id: string, n: string) => string } }).PcbTools;
+  if (!P || !P.guessCandidates || !P.fieldCandidateId) return true;
+  const fid = P.fieldCandidateId(fpId, name);
+  const ids = candidatesAt(mm).filter((id) => id !== fid); if (!ids.length) return true;
+  ids.unshift(fid);
+  const ppm = Math.max(1e-6, pxPerMm()), r = stage.getBoundingClientRect();
+  let kept: string[]; try { kept = P.guessCandidates(E.kdoc as KDoc, ids, mm, { px: 1 / ppm, hidden: E.hiddenLayers as Set<string>, viewport: [r.width / ppm, r.height / ppm] }); } catch (e) { console.warn(e); return true; }
+  return kept.includes(fid);
+};
+/**
  * The footprint field (PCB_FIELD) RequestSelection's collector keeps at a point, or null: the field's text quad is
  * under the point, the selection filter lets text through, and its own footprint is not collected there too —
  * FilterCollectorForHierarchy drops a child whose footprint is a candidate, and GENERAL_COLLECTOR collects a

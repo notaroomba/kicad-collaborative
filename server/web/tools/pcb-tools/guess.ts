@@ -2,7 +2,9 @@
 import type { BoardDoc, Box, GeomPrim, PcbCtx, Pt } from "./types";
 
 /** A selection candidate as GuessSelectionCandidates weighs it (candidateEntry). */
-export interface CandEntry { id: string; item: KItem; pad: boolean; geoms: GeomPrim[] }
+export interface CandEntry { id: string; item: KItem; pad: boolean; geoms: GeomPrim[]; /** a footprint field (PCB_FIELD_T), as "fpId@field:Name" */ field?: string }
+/** The candidate id of a footprint field: GENERAL_COLLECTOR lists PCB_FIELD_T beside its footprint. */
+export const fieldCandidateId = (fpId: string, name: string) => `${fpId}@field:${name}`;
 /** guessCandidates' options. */
 export interface GuessOpts { px?: number; activeLayer?: string; hidden?: Set<string> | null; viewport?: number[] | null; highContrast?: boolean }
 import { statusPopup } from "./assistants";
@@ -24,6 +26,12 @@ export const SILK_RE = /\.(SilkS|Silkscreen)$/, CRTYD_RE = /\.(CrtYd|Courtyard)$
 export const TEXTISH = new Set(["gr_text", "gr_text_box", "text", "property", "fp_text"]);
 /** A candidate id ("fpId#padIndex" for a pad) as { id, item, pad, geoms }: the geometry KiCad would hit-test. */
 export function candidateEntry(doc: BoardDoc, id: string, hidden: Set<string> | null | undefined): CandEntry | null {
+  const fi = typeof id === "string" ? id.indexOf("@field:") : -1;
+  if (fi > 0) {   // the field's text box (EDA_TEXT::GetTextBox), a filled quad on the field's layer
+    const item = doc.items.get(id.slice(0, fi)); if (!item) return null;
+    const name = id.slice(fi + 7), fb = (K.fieldBoxes(item, hidden || null) as unknown as { name: string; pts: Pt[]; geom: GeomPrim }[]).find((f) => f.name === name); if (!fb) return null;
+    return { id, item, pad: false, field: name, geoms: [{ t: "poly", pts: fb.pts, fill: true, w: 0, layer: fb.geom.layer } as unknown as GeomPrim] };
+  }
   const h = typeof id === "string" ? id.indexOf("#") : -1;
   const item = doc.items.get(h > 0 ? id.slice(0, h) : id); if (!item) return null;
   const padIndex = h > 0 ? Number(id.slice(h + 1)) : null;
@@ -48,6 +56,7 @@ export function hitTestDistance(e: CandEntry, x: number, y: number, maxSlop: num
     for (const g of e.geoms) if (g.fill && g.t === "poly" && g.pts && g.pts.length > 2 && pointInPolyMm(g.pts, x, y)) return 0;
     return Infinity;
   }
+  if (e.field) { let f = Infinity; for (const g of e.geoms) f = Math.min(f, geomDistance(g, x, y, maxSlop)); return f < Infinity ? Math.max(0, f - maxSlop / 2) : f; }   // a bit of slop to text shapes
   if (it.kind === "footprint" && !e.pad) {   // FOOTPRINT::GetBoundingHull: inside it is an exact hit
     const hb = hullBox(e.geoms);
     if (hb && x >= hb[0] && x <= hb[2] && y >= hb[1] && y <= hb[3]) d = 0;
@@ -80,6 +89,7 @@ export function coverageArea(e: CandEntry, x: number, y: number, px: number, max
   if (it.kind === "zone") { let edge = Infinity; for (const g of e.geoms) if (!g.fill) edge = Math.min(edge, geomDistance(g, x, y, maxSlop / 2)); if (edge <= maxSlop / 2) return px * px * 5; }   // zone borders are "small"
   if (it.kind === "via") { const dr = K.kid(it.node, "drill"); const r = dr ? K.num(dr[1]) / 2 : 0.2; return r * r; }   // vias defer to nothing under them: r², not πr²
   if (it.kind === "image") { const b = it.bbox; return b ? (b[2] - b[0]) * (b[3] - b[1]) : 0; }
+  if (e.field) { const g = e.geoms[0] as unknown as { pts: Pt[] }; return g && g.pts ? polyAreaMm(g.pts) : 0; }
   if (it.kind === "footprint" && !e.pad) { const hb = hullBox(e.geoms); return hb ? (hb[2] - hb[0]) * (hb[3] - hb[1]) : 0; }
   if (it.kind === "zone") { let a = 0; for (const g of e.geoms) if (g.t === "poly" && !g.fill && g.pts && g.pts.length > 2) a = Math.max(a, polyAreaMm(g.pts)); return a; }
   let a = 0; for (const g of e.geoms) a += geomArea(g); return a;
@@ -88,7 +98,7 @@ export function entryOnLayer(e: CandEntry, layer: string) {
   if (!layer) return false;
   const cu = /\.Cu$/.test(layer);
   const hits = (l: string) => l === layer || (cu && (l === "*.Cu" || l === "F&B.Cu"));
-  if (!e.pad) { const l = K.kid(e.item.node, "layer"); if (l && hits(K.str(l[1]))) return true; const ls = K.kid(e.item.node, "layers"); if (ls && ls.slice(1).some((v) => hits(K.str(v)))) return true; }
+  if (!e.pad && !e.field) { const l = K.kid(e.item.node, "layer"); if (l && hits(K.str(l[1]))) return true; const ls = K.kid(e.item.node, "layers"); if (ls && ls.slice(1).some((v) => hits(K.str(v)))) return true; }
   for (const g of e.geoms) { if (g.layer && hits(g.layer)) return true; if (g.viaLayers && cu) return true; }
   return false;
 }
@@ -105,8 +115,8 @@ export function guessCandidates(doc: BoardDoc, ids: string[], where: Pt, opts?: 
   let list = ids.map((id: string) => candidateEntry(doc, id, opts!.hidden)).filter(Boolean) as CandEntry[]; if (list.length < 2) return list.map((e) => e.id);
   // a silk layer in front: single-layer silk texts and shapes; a courtyard in front (high contrast): footprints
   let preferred: CandEntry[] = [];
-  if (SILK_RE.test(active)) preferred = list.filter((e) => !e.pad && e.item.kind !== "footprint" && e.item.kind !== "zone" && (TEXTISH.has(e.item.kind) || /^gr_|^table/.test(e.item.kind)) && SILK_RE.test(layerOf(e.item.node, "")));
-  else if (CRTYD_RE.test(active) && opts.highContrast) preferred = list.filter((e) => !e.pad && e.item.kind === "footprint");
+  if (SILK_RE.test(active)) preferred = list.filter((e) => e.field ? SILK_RE.test(String((e.geoms[0] as { layer?: string }).layer || "")) : !e.pad && e.item.kind !== "footprint" && e.item.kind !== "zone" && (TEXTISH.has(e.item.kind) || /^gr_|^table/.test(e.item.kind)) && SILK_RE.test(layerOf(e.item.node, "")));
+  else if (CRTYD_RE.test(active) && opts.highContrast) preferred = list.filter((e) => !e.pad && !e.field && e.item.kind === "footprint");
   if (preferred.length) { list = preferred; if (list.length === 1) return [list[0].id]; }
   // prefer exact hits to sloppy ones
   const slop = new Map<CandEntry, number>(); let minSlop = Infinity;
@@ -116,8 +126,8 @@ export function guessCandidates(doc: BoardDoc, ids: string[], where: Pt, opts?: 
   const byArea = list.map((e): [CandEntry, number] => [e, coverageArea(e, x, y, px, maxSlop)]).sort((a, b) => a[1] - b[1]);
   const rejected = new Set<CandEntry>(); let rejecting = false;
   for (let i = 1; i < byArea.length; i++) { if (byArea[i][1] > byArea[i - 1][1] * 1.5) rejecting = true; if (rejecting) rejected.add(byArea[i][0]); }
-  for (const [e, a] of byArea) if (e.item.kind === "footprint" && !e.pad && a > 0) {   // FOOTPRINT::CoverageRatio: a covered footprint stays for the menu
-    let cov = 0; for (const [o, oa] of byArea) if (o !== e && !(o.pad && o.item === e.item) && o.item.kind !== "zone") cov += oa;
+  for (const [e, a] of byArea) if (e.item.kind === "footprint" && !e.pad && !e.field && a > 0) {   // FOOTPRINT::CoverageRatio: a covered footprint stays for the menu
+    let cov = 0; for (const [o, oa] of byArea) if (o !== e && !((o.pad || o.field) && o.item === e.item) && o.item.kind !== "zone") cov += oa;
     if (cov / a > 0.7) rejected.delete(e);
   }
   if (list.length > rejected.size) list = list.filter((e) => !rejected.has(e));
