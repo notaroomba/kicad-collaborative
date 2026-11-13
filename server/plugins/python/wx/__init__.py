@@ -3861,6 +3861,13 @@ class ListCtrl(Window):
         self._head.replaceChildren()
         self._cols = []
 
+    def GetTopItem(self):
+        """The first row in view: the list shows its rows from the top, so the first one (none in an empty list)."""
+        return 0 if self.GetItemCount() else -1
+
+    def GetCountPerPage(self):
+        return max(1, self.GetItemCount())
+
     def GetFirstSelected(self):
         return self.GetNextSelected(-1)
 

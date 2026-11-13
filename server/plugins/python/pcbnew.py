@@ -603,6 +603,13 @@ class BOX2I:
         self._h += 2 * dy
         return self
 
+    def GetInflated(self, dx, dy=None):
+        """A copy grown by this much on every side; this box is left as it is."""
+        dy = dx if dy is None else dy
+        b = BOX2I()
+        b._x, b._y, b._w, b._h, b._valid = self._x - dx, self._y - dy, self._w + 2 * dx, self._h + 2 * dy, self._valid
+        return b
+
     def Merge(self, o):
         if isinstance(o, BOX2I):
             if not o._valid:
@@ -1675,6 +1682,12 @@ class PCB_TRACK(BOARD_CONNECTED_ITEM):
     def HasSolderMask(self):
         return False
 
+    def SetHasSolderMask(self, has=True):
+        """A track with its own solder mask opening is not something the web editor draws: leaving it off is taken,
+        turning it on says so."""
+        if has:
+            _unsupported("A solder mask opening on a track")
+
 
 
 
@@ -2495,7 +2508,17 @@ class SHAPE_POLY_SET:
         return False
 
     def Collide(self, *a):
-        return self.Contains(a[0]) if a else False
+        """With a point: is it inside.  With a shape (and a clearance): do they touch, or lie closer than that."""
+        if not a:
+            return False
+        other = a[0]
+        clearance = a[1] if len(a) > 1 and isinstance(a[1], (int, float)) and not isinstance(a[1], bool) else 0
+        if isinstance(other, (SHAPE, SHAPE_POLY_SET, SHAPE_LINE_CHAIN, BOARD_ITEM, BOX2I)) or clearance:
+            return _collide(self._geom(), _geom_of(other), clearance)
+        return self.Contains(other)
+
+    def BuildBBoxCaches(self):
+        """KiCad keeps boxes to make Contains quick; nothing is kept here."""
 
     def Move(self, d):
         for o in self._outlines:

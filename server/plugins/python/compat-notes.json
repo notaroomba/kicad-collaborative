@@ -38,8 +38,8 @@
       "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
     },
     "com.github.samuelcicuitstudio.traceforge-kicad": {
-      "status": "partly",
-      "note": "Its helper and its panel both run in the page and talk over a local port that stays inside the page. The first launch sets its net highlight shortcut and asks to be opened again, as on the desktop. Signal paths, export, rotation, via and trace tools, net colours and manufacturing checks work. Stitching, fences and rounded corners need the shapely package. Teardrops drive KiCad's own Windows dialog, on the desktop too, and are not available here."
+      "status": "works",
+      "note": "Its helper and its panel both run in the page and talk over a local port that stays inside the page. The first launch sets its net highlight shortcut and asks to be opened again, as on the desktop. Checked on a board with ground pours: signal path export, rotation, ground stitching on a grid, a via fence along a track and rounded track corners all land where the numbers say. Its other via and trace tools, net colours and manufacturing checks work. Teardrops drive KiCad's own Windows dialog, on the desktop too, and are not available here."
     },
     "com.github.usetraces.traces": {
       "status": "unsupported",
