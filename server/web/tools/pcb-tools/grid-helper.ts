@@ -7,7 +7,7 @@ import { itemOnLayer, snapAllLayers } from "./snap-pairs";
 import { K, S } from "./state";
 import { anchorOf } from "./transforms";
 import { MOVE_SNAP_MSG, angleSnapMode, displayConstraintsMsg } from "./draw-modes";
-import { clone, corners, isList, pt, r6, samePt } from "./util";
+import { clone, corners, isList, pt, r6, rotator, samePt } from "./util";
 
 // ---------------------------------------------------------------- select-tool drags (PCB_SELECTION_TOOL → EDIT_TOOL::doMoveSelection / drag45)
 // KiCad: a left-drag on a track slides the segment (attached ends follow), a via or graphic moves
@@ -74,6 +74,25 @@ export function bestDragOrigin(doc: BoardDoc, ids: Iterable<string>, mouse: Pt, 
   for (const id of ids) { const it = doc.items.get(id); if (!it) continue; for (const p of itemAnchors(it, true, mouse, gridPitch)) { const d = Math.hypot(p[0] - mouse[0], p[1] - mouse[1]); if (d < bd) { bd = d; best = p; } } }
   return best ? [r6(best[0]), r6(best[1])] : mouse.slice();
 }
+const FP_SHAPES: Record<string, string> = { fp_line: "gr_line", fp_rect: "gr_rect", fp_circle: "gr_circle", fp_arc: "gr_arc", fp_poly: "gr_poly", fp_curve: "gr_curve" };
+/**
+ * The anchors an item offers to snap TO (aFrom false) under the layer filter (computeAnchors' itemIsSnappable:
+ * aMatchLayers & aItem.GetLayerSet() per view item).  queryVisible returns a footprint's children as their own view
+ * items, so the footprint's origin / middle follow the footprint's layer and each footprint graphic its own layer
+ * (PCB_SHAPE_T: magnetic graphics).  `only` empty = every layer (MAGNETIC_SETTINGS::allLayers).
+ */
+export function snapAnchors(it: KItem, only: string, gridPitch: number): SnapAnchor[] {
+  if (it.kind !== "footprint") return !only || itemOnLayer(it, only) ? itemAnchors(it, false, null, gridPitch) : [];
+  const out: SnapAnchor[] = !only || it.layer === only ? itemAnchors(it, false, null, gridPitch) : [];
+  const [fx, fy, fa] = K.atOf(it.node); const R = rotator(fa);
+  for (const c of it.node) {
+    if (!isList(c)) continue; const kind = FP_SHAPES[String(c[0])]; if (!kind) continue;
+    const l = K.kid(c as SNode, "layer"); const layer = l ? K.str(l[1]) : "";
+    if (only && layer !== only) continue;
+    for (const p of itemAnchors({ id: "", kind, node: c as SNode, layer, geom: [] } as unknown as KItem, false, null, gridPitch)) { const [x, y] = R(p[0], p[1]); const q: SnapAnchor = [fx + x, fy + y]; if (p.t) q.t = p.t; out.push(q); }
+  }
+  return out;
+}
 /**
  * PCB_GRID_HELPER::BestSnapAnchor / ResolveSnap: the cursor pulled onto an anchor of an item that is not moving
  * within SNAP_SCREEN_RADIUS pixels (no further than one grid step when the grid is on), else onto the grid.  Shift
@@ -91,9 +110,8 @@ export function snapCursor(ctx: PcbCtx, mm: Pt, skip: Set<string> | null, mods?:
   const only = snapAllLayers(ctx) ? "" : (K.pcbSizes.state.activeLayer || S.gfxLayer || S.layer || "");
   for (const it of ctx.doc.items.values()) {
     if (skip && skip.has(it.id)) continue; const b = it.bbox;
-    if (only && !itemOnLayer(it, only)) continue;
     if (b && (mm[0] < b[0] - range || mm[0] > b[2] + range || mm[1] < b[1] - range || mm[1] > b[3] + range)) continue;
-    for (const p of itemAnchors(it, false, null, ctx.gridPitch)) { const d = Math.hypot(p[0] - mm[0], p[1] - mm[1]); if (d <= bd) { bd = d; best = p; } }
+    for (const p of snapAnchors(it, only, ctx.gridPitch)) { const d = Math.hypot(p[0] - mm[0], p[1] - mm[1]); if (d <= bd) { bd = d; best = p; } }
   }
   if (best) return { p: [r6(best[0]), r6(best[1])], anchor: best };
   // no anchor captured: the angle snap lines through the move's origin (GetNearestSnapLinePoint), drawn as a guide

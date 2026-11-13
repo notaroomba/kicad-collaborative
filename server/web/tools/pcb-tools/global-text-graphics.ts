@@ -19,7 +19,11 @@ export interface TextGraphicsValues {
 }
 export interface TextGraphicsJob { scope: TextGraphicsScope; filter: TextGraphicsFilter; specified: boolean; values: TextGraphicsValues; selection?: Set<string> }
 
-const SHAPES = new Set(["gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_curve", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "barcode"]);
+const SHAPES = new Set(["gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_curve", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve"]);
+/** PCB_SHAPE_T || PCB_BARCODE_T: the graphics the scope visits (a barcode is no PCB_SHAPE: it has no stroke). */
+const GRAPHICS = new Set([...SHAPES, "barcode"]);
+/** The text items that store keep-upright: PCB_TEXT / PCB_FIELD (format writes (unlocked) only for those, never text boxes or cells). */
+const storesUpright = (n: SNode) => n[0] === "fp_text" || n[0] === "property";
 const isText = (n: SNode) => n[0] === "gr_text" || n[0] === "fp_text" || n[0] === "gr_text_box" || n[0] === "fp_text_box" || n[0] === "property" || n[0] === "table_cell";
 const isField = (n: SNode) => n[0] === "property" || (n[0] === "fp_text" && (n[1] === "reference" || n[1] === "value"));
 const fieldName = (n: SNode) => (n[0] === "fp_text" ? (n[1] === "reference" ? "Reference" : "Value") : K.str(n[1]));
@@ -43,6 +47,8 @@ function setThickness(n: SNode, t: number | null): void {
   if (k) k[1] = r6(t); else { const s = K.kid(f, "size"); f.splice(s ? f.indexOf(s) + 1 : f.length, 0, ["thickness", r6(t)]); }
 }
 function setLayer(n: SNode, layer: string): void { const l = K.kid(n, "layer"); if (l) l[1] = layer; }
+/** PCB_BARCODE::SetTextSize: its (text_height …). */
+function setBarcodeTextHeight(n: SNode, h: number): void { const t = K.kid(n, "text_height"); if (t) t[1] = r6(h); else { const tx = K.kid(n, "text"); n.splice(tx ? n.indexOf(tx) + 1 : n.length, 0, ["text_height", r6(h)]); } }
 function setHidden(n: SNode, hidden: boolean): void {
   for (let i = n.length - 1; i > 0; i--) { const c = n[i]; if (c === "hide" || (isList(c) && c[0] === "hide")) n.splice(i, 1); }
   const e = K.kid(n, "effects"); if (e) for (let i = e.length - 1; i > 0; i--) { const c = e[i]; if (c === "hide" || (isList(c) && c[0] === "hide")) e.splice(i, 1); }
@@ -70,8 +76,9 @@ function processNode(n: SNode, job: TextGraphicsJob, inFootprint: boolean, fpCen
   const shape = SHAPES.has(String(n[0])) || n[0] === "gr_text_box" || n[0] === "fp_text_box" ? n : null;
   const dim = n[0] === "dimension" ? n : null;
   if (job.specified) {
-    if (v.layer) setLayer(n, v.layer);
     const t = text || (dim ? dimText(dim) : null);
+    // a dimension's (gr_text …) is parsed into the dimension itself (parsePCB_TEXT( m_board, dim )), so its layer goes too
+    if (v.layer) { setLayer(n, v.layer); if (dim && t) setLayer(t, v.layer); }
     if (t) {
       {
         if (v.textWidth !== null && v.textWidth !== undefined) setSize(t, v.textWidth, null);
@@ -82,10 +89,14 @@ function processNode(n: SNode, job: TextGraphicsJob, inFootprint: boolean, fpCen
         if (v.italic !== null && v.italic !== undefined) setFontFlag(font(t), "italic", v.italic);
         if (v.kicadFont) { const f = font(t); const face = K.kid(f, "face"); if (face) f.splice(f.indexOf(face), 1); }
         if (inFootprint) {
-          if (v.keepUpright !== null && v.keepUpright !== undefined) setKeepUpright(t, v.keepUpright);
+          if (v.keepUpright !== null && v.keepUpright !== undefined && storesUpright(t)) setKeepUpright(t, v.keepUpright);
           if (v.centerOnFootprint && fpCenterLocal) { const at = K.kid(t, "at"); if (at) { at[1] = r6(fpCenterLocal[0]); at[2] = r6(fpCenterLocal[1]); } }
         }
       }
+    }
+    if (n[0] === "barcode") {
+      if (v.textHeight !== null && v.textHeight !== undefined) setBarcodeTextHeight(n, v.textHeight);
+      else if (v.textWidth !== null && v.textWidth !== undefined) setBarcodeTextHeight(n, v.textWidth);
     }
     if (isField(n) && v.visible !== null && v.visible !== undefined) setHidden(n, !v.visible);
     if (v.lineWidth !== null && v.lineWidth !== undefined && (shape && !text || dim)) setLineWidth(n, v.lineWidth);
@@ -94,11 +105,12 @@ function processNode(n: SNode, job: TextGraphicsJob, inFootprint: boolean, fpCen
   }
   // StyleFromSettings( *m_brdSettings, false )
   const st = layerStyle(layerOfNode(n));
+  if (n[0] === "barcode") { setBarcodeTextHeight(n, st.h); return; }     // PCB_BARCODE::StyleFromSettings
   if (shape) setLineWidth(n, st.line);
   const t = text || (dim ? dimText(dim) : null);
   if (t) {
     setSize(t, st.w, st.h); setThickness(t, st.thick); setFontFlag(font(t), "italic", st.italic);
-    if (inFootprint && text) setKeepUpright(t, st.upright);
+    if (inFootprint && text && storesUpright(text)) setKeepUpright(t, st.upright);
   }
   if (dim) {
     setLineWidth(dim, st.line);
@@ -158,7 +170,7 @@ export function editTextAndGraphics(doc: KDoc, job: TextGraphicsJob): [string, S
         else if (sc.values && textOf(node) === "${VALUE}") visit(node);
       } else if (node[0] === "table") { if (sc.footprintTexts) for (const cell of K.kids(K.kid(node, "cells") || node, "table_cell")) visit(cell); }
       else if (node[0] === "dimension") { if (sc.footprintDimensions) visit(node); }
-      else if (SHAPES.has(String(node[0]))) { if (sc.footprintGraphics) visit(node); }
+      else if (GRAPHICS.has(String(node[0]))) { if (sc.footprintGraphics) visit(node); }
     }
     if (changed) out.push([it.id, n]);
   }
@@ -173,7 +185,7 @@ export function editTextAndGraphics(doc: KDoc, job: TextGraphicsJob): [string, S
     if (k === "gr_text" || k === "gr_text_box") { if (sc.boardText) changed = visit(n); }
     else if (k === "table") { if (sc.boardText) for (const cell of K.kids(K.kid(n, "cells") || n, "table_cell")) changed = visit(cell) || changed; }
     else if (k === "dimension") { if (sc.boardDimensions) changed = visit(n); }
-    else if (SHAPES.has(k)) { if (sc.boardGraphics) changed = visit(n); }
+    else if (GRAPHICS.has(k)) { if (sc.boardGraphics) changed = visit(n); }
     if (changed) out.push([it.id, n]);
   }
   return out;

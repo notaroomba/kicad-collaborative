@@ -68,3 +68,43 @@ test("set to layer default values: StyleFromSettings (line width, text size, thi
   assert.deepEqual(size(prop(m.get("fp1"), "Reference")), [s.h, s.w]);
 });
 test("nothing in scope changes nothing", () => { assert.equal(run({ scope: {}, values: { textHeight: 3 } }).size, 0); });
+
+// --- file-format safety: KiCad's parser must still load what the dialog writes
+const SAFE = `(kicad_pcb (version 20250907) (generator "pcbnew")
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user) (25 "Edge.Cuts" user) (35 "F.Fab" user) (39 "Dwgs.User" user))
+ (barcode (at 10 10 0) (layer "F.SilkS") (size 5 5) (text "HELLO") (text_height 1.5) (type qr) (ecc_level M) (uuid "bc1"))
+ (dimension (type aligned) (layer "Dwgs.User") (uuid "d1") (pts (xy 0 0) (xy 10 0)) (height 2)
+  (gr_text "10 mm" (at 5 -2 0) (layer "Dwgs.User") (uuid "d1t") (effects (font (size 1 1) (thickness 0.15))))
+  (format (prefix "") (suffix "") (units 3) (units_format 0) (precision 4)) (style (thickness 0.1) (arrow_length 1.27) (text_position_mode 0) (extension_height 0.58) (extension_offset 0.5) (keep_text_aligned yes)))
+ (footprint "Lib:X" (layer "F.Cu") (uuid "fp1") (at 10 10)
+  (property "Reference" "R1" (at 0 -1.5 0) (layer "F.SilkS") (uuid "r1") (effects (font (size 1 1) (thickness 0.15))))
+  (fp_text_box "fb" (start 0 0) (end 2 2) (margins 0.5 0.5 0.5 0.5) (layer "F.SilkS") (uuid "ftb") (effects (font (size 1 1) (thickness 0.15))) (border yes) (stroke (width 0.1) (type solid)))
+  (barcode (at 1 1 0) (layer "F.SilkS") (size 3 3) (text "X") (text_height 1.5) (type qr) (ecc_level M) (uuid "bc2"))))`;
+const runSafe = (job) => new Map(T.editTextAndGraphics(K.parseDoc(SAFE, "kicad_pcb"), Object.assign({ filter: {}, values: {}, specified: true }, job)));
+test("a barcode never gets a (stroke): line width leaves it, text height sets its text_height", () => {
+  for (const specified of [false, true]) {
+    const m = runSafe({ specified, scope: { boardGraphics: true, footprintGraphics: true }, values: { lineWidth: 0.3 } });
+    for (const n of m.values()) assert.doesNotMatch(K.serialize(n), /\(barcode[^()]*(\([^()]*\)[^()]*)*\(stroke/);
+    const bc = m.get("bc1"); if (bc) assert.ok(!K.kid(bc, "stroke"));
+  }
+  const d = runSafe({ scope: { boardGraphics: true, footprintGraphics: true }, values: { textHeight: 2 } });
+  assert.equal(K.kid(d.get("bc1"), "text_height")[1], 2);
+  assert.equal(K.kid(K.kids(d.get("fp1"), "barcode")[0], "text_height")[1], 2);
+  const w = runSafe({ scope: { boardGraphics: true }, values: { textWidth: 1.8 } });
+  assert.equal(K.kid(w.get("bc1"), "text_height")[1], 1.8, "no height: the width (KiCad's else-if)");
+  const def = runSafe({ specified: false, scope: { boardGraphics: true } });
+  assert.equal(K.kid(def.get("bc1"), "text_height")[1], globalThis.PcbTools.layerStyle("F.SilkS").h, "StyleFromSettings: the layer's text height");
+  assert.ok(!K.kid(def.get("bc1"), "stroke"));
+});
+test("keep upright never writes (unlocked) into a text box", () => {
+  const m = runSafe({ scope: { footprintTexts: true, references: true }, values: { keepUpright: false } });
+  const fp = m.get("fp1");
+  assert.ok(!K.kid(K.kids(fp, "fp_text_box")[0], "unlocked"));
+  assert.deepEqual(K.kid(prop(fp, "Reference"), "unlocked"), ["unlocked", "yes"], "the field does take it");
+});
+test("a dimension's layer change moves its gr_text too", () => {
+  const m = runSafe({ scope: { boardDimensions: true }, values: { layer: "F.Fab" } });
+  const d = m.get("d1");
+  assert.equal(K.kid(d, "layer")[1], "F.Fab");
+  assert.equal(K.kid(K.kid(d, "gr_text"), "layer")[1], "F.Fab");
+});

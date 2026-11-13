@@ -154,6 +154,42 @@ function docText(docId: string): Promise<string> {
   return p;
 }
 
+/** The project's fp-lib-table / sym-lib-table rows: nickname -> uri. */
+export function libTableRows(text: string): { name: string; uri: string }[] {
+  const t = text ? K().parse(text) : null; if (!t) return [];
+  const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
+  return K().kids(t, "lib").map((l) => ({ name: str((K().kid(l, "name") || [])[1]), uri: str((K().kid(l, "uri") || [])[1]) })).filter((r) => r.name);
+}
+/** A project-relative folder for a ${KIPRJMOD} uri ("${KIPRJMOD}/lib/fp.pretty" -> "lib/fp.pretty"); null for one outside the project. */
+export function projectRelativeUri(uri: string): string | null {
+  const m = /^\$\{KIPRJMOD\}\/?(.*)$/.exec(uri.trim()); if (!m) return null;
+  return m[1]!.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+/**
+ * FP_LIB_TABLE::FootprintLoad for a project library: the fp-lib-table row of that nickname, its ${KIPRJMOD} folder,
+ * and the footprint document in it.  `undefined` = the table has no such project row (the caller falls back to the
+ * .pretty folder name), `null` = the row exists but the footprint is not in its folder.
+ */
+export function libTableFootprintDoc(rows: { name: string; uri: string }[], lib: string, name: string, docs: ProjectDoc[]): ProjectDoc | null | undefined {
+  const row = rows.find((r) => r.name === lib); if (!row) return undefined;
+  const dir = projectRelativeUri(row.uri); if (dir === null) return undefined;
+  const want = (dir ? dir + "/" : "") + name + ".kicad_mod";
+  return (docs || []).find((d) => d && d.path === want) || null;
+}
+async function projectTableRows(docs: ProjectDoc[], file: string): Promise<{ name: string; uri: string }[]> {
+  const d = (docs || []).find((x) => x && x.path === file); if (!d) return [];
+  try { return libTableRows(await docText(d.docId)); } catch { return []; }
+}
+/** A footprint of a project library by its LIB_ID nickname: through fp-lib-table first, then the .pretty folder name. */
+export async function projectFootprintByLibId(lib: string, name: string, docs: ProjectDoc[]): Promise<string | null> {
+  const viaTable = libTableFootprintDoc(await projectTableRows(docs, "fp-lib-table"), lib, name, docs);
+  if (viaTable) return docText(viaTable.docId);
+  if (viaTable === null) return null;
+  const pl = projectLibraries("footprint", docs).find((l) => l.name === lib);
+  const d = pl && pl.docs.find((x) => x.path.split("/").pop()!.replace(/\.kicad_mod$/i, "") === name);
+  return d ? docText(d.docId) : null;
+}
+
 async function projectIndex(kind: LibKind, lib: ProjectLib): Promise<LibItem[]> {
   if (kind === "footprint") {
     return lib.docs.map((d): LibItem => { const name = d.path.split("/").pop()!.replace(/\.kicad_mod$/i, ""); return { id: `${lib.name}:${name}`, name, library: lib.name, source: "project" }; })
