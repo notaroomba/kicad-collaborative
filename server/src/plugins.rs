@@ -408,7 +408,7 @@ pub async fn registry_unpublish(State(state): State<AppState>, AuthUser(user): A
 
 /// The server's administrators: the GitHub logins in `KC_ADMINS` (comma separated).  They
 /// moderate the registry; they have no other powers.
-fn is_admin(login: &str) -> bool {
+pub(crate) fn is_admin(login: &str) -> bool {
     std::env::var("KC_ADMINS").map(|v| v.split(',').any(|a| !a.trim().is_empty() && a.trim().eq_ignore_ascii_case(login))).unwrap_or(false)
 }
 

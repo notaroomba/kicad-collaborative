@@ -9,7 +9,16 @@
 import "../components/kselect";   // <k-select>, the themed drop-down the page uses in place of <select>
 
 // ---------------------------------------------------------------- what the server sends (src/github.rs)
-interface Connection { configured: boolean; connected: boolean; login: string; privateRepos?: boolean }
+interface GithubApp { name: string; slug: string; url: string }
+interface Connection {
+  configured: boolean; connected: boolean; login: string; privateRepos?: boolean;
+  /** Junction's GitHub App, when the server has one: connecting goes through it. */
+  app?: GithubApp | null;
+  /** How the stored grant was made: the app (chosen repositories) or the old OAuth `repo` scope. */
+  via?: "app" | "oauth" | null;
+  /** Connected with the old grant while the app exists: offer the switch. */
+  legacy?: boolean;
+}
 interface Repo { fullName: string; private: boolean; pushedAt?: string; defaultBranch?: string }
 interface ScanProject { path: string; name: string; files: number }
 interface Scan { repo: string; branch: string; branches: string[]; projects: ScanProject[]; truncated: boolean }
@@ -84,6 +93,9 @@ function ago(iso: string | null | undefined): string {
 }
 const kb = (n: number): string => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 const plural = (n: number, one: string, many?: string): string => `${n} ${n === 1 ? one : many || one + "s"}`;
+const installUrl = (): string => `/auth/github/install?next=${encodeURIComponent(here)}`;
+/** The latest connection, for pieces drawn without it in hand (the repository picker). */
+let conn: Connection | null = null;
 const connectUrl = (access: string): string => `/auth/github/connect?next=${encodeURIComponent(here)}${access ? "&access=" + access : ""}`;
 
 /** Run an async action behind a button: spinner while it runs, the error shown where the page says. */
@@ -110,9 +122,26 @@ function flashHtml(): string {
 
 // ---------------------------------------------------------------- shared pieces
 function connectBox(gh: Connection): string {
+  conn = gh;
   if (!gh.configured) {
     return `<section class="box"><h2>GitHub account</h2><div class="in">
       <p>GitHub sign-in is not configured on this server, so repositories can't be connected.</p></div></section>`;
+  }
+  const appName = esc(gh.app?.name || "Junction");
+  if (gh.connected && gh.via === "app") {
+    return `<section class="box"><h2>GitHub account</h2><div class="in"><div class="row">
+      <div class="grow"><b>${esc(gh.login)}</b> is connected <span class="pill">chosen repositories</span>
+        <div class="muted">${appName} sees only the repositories you chose, and can only read and change their files and open pull requests.</div></div>
+      <a class="btn small" id="ghChoose" href="${installUrl()}">Choose repositories</a>
+      <button class="btn small" id="ghDisconnect">Disconnect</button></div></div></section>`;
+  }
+  if (gh.connected && gh.legacy) {
+    return `<section class="box"><h2>GitHub account</h2><div class="in">
+      <div class="callout warn" id="ghLegacy">This connection reaches every repository you have, private ones included.
+        Switch to ${appName} to choose which repositories it can see; the old access is then withdrawn on GitHub. Linked projects stay linked.</div>
+      <div class="row actions" style="margin-top:10px"><div class="grow"><b>${esc(gh.login)}</b> is connected <span class="pill">all repositories</span></div>
+        <a class="btn primary" id="ghSwitch" href="${connectUrl("")}">Switch to chosen repositories</a>
+        <button class="btn small" id="ghDisconnect">Disconnect</button></div></div></section>`;
   }
   if (gh.connected) {
     return `<section class="box"><h2>GitHub account</h2><div class="in"><div class="row">
@@ -120,6 +149,11 @@ function connectBox(gh: Connection): string {
         <span class="pill">${gh.privateRepos === false ? "public repositories" : "repositories"}</span>
         ${gh.privateRepos === false ? `<div class="muted">Private repositories are not included. <a href="${connectUrl("")}">Add them</a>.</div>` : ""}</div>
       <button class="btn small" id="ghDisconnect">Disconnect</button></div></div></section>`;
+  }
+  if (gh.app) {
+    return `<section class="box"><h2>GitHub account</h2><div class="in">
+      <p>Signing in only tells this site who you are. To sync, install ${appName} on the repositories you choose: it can read and change their files and open pull requests, and sees nothing else. You can change the repositories or take access back at any time.</p>
+      <div class="row actions"><a class="btn primary" id="ghConnect" href="${connectUrl("")}">Connect repositories</a></div></div></section>`;
   }
   return `<section class="box"><h2>GitHub account</h2><div class="in">
     <p>Signing in only tells this site who you are. To read and write your repositories it needs your permission separately — you can take it back at any time.</p>
@@ -150,7 +184,11 @@ function repoPicker(el: HTMLElement, onPick: (fullName: string, repo: Repo | nul
     if (/^[\w.-]+\/[\w.-]+$/.test(q.value.trim()) && !hits.some((r) => r.fullName.toLowerCase() === needle)) {
       html += `<button type="button" class="it" data-repo="${esc(q.value.trim())}"><span class="nm">Use ${esc(q.value.trim())}</span></button>`;
     }
-    list.innerHTML = html || `<div class="empty">No repository matches.</div>`;
+    const viaApp = conn?.via === "app";
+    list.innerHTML = html || (viaApp && !all.length
+      ? `<div class="empty">No repositories chosen yet. <a href="${installUrl()}">Choose repositories</a> for ${esc(conn?.app?.name || "Junction")} to see.</div>`
+      : `<div class="empty">No repository matches.</div>`);
+    if (viaApp && all.length) list.insertAdjacentHTML("beforeend", `<div class="empty">Missing one? <a class="btn small" href="${installUrl()}">Add repositories</a></div>`);
     $$(".it", list).forEach((b) => (b.onclick = () => {
       const name = b.dataset.repo || "";
       picked = name; draw();
@@ -297,7 +335,7 @@ function render(): void {
     html += `<div><h1>${esc(p.name)}</h1><p class="muted">This project is not linked to a repository yet.</p></div>`;
     html += connectBox(gh);
     if (!p.isOwner) html += `<div class="callout">Only the project's owner can link it to a repository.</div>`;
-    else if (gh.connected) html += linkForm(p);
+    else if (gh.connected) html += linkForm(p, gh);
     app.innerHTML = html;
     bindConnectBox(loadStatus);
     if (p.isOwner && gh.connected) bindLinkForm();
@@ -316,6 +354,11 @@ function render(): void {
     html += connectBox(gh);
     app.innerHTML = html; bindConnectBox(loadStatus); bindCommon();
     return;
+  }
+  conn = gh;
+  if (gh.legacy) {
+    html += `<div class="callout warn" id="ghLegacy">Your GitHub connection reaches every repository you have.
+      <a href="${connectUrl("")}">Switch to chosen repositories</a>; this link keeps working.</div>`;
   }
   const r = status.remote;
   if (!r.reachable) {
@@ -457,9 +500,13 @@ async function doPull(force: boolean): Promise<void> {
 }
 
 // ---------------------------------------------------------------- link form
-function linkForm(p: ProjectInfo): string {
+function linkForm(p: ProjectInfo, gh: Connection): string {
+  // The app is not allowed to create repositories: a new one is made on GitHub and then chosen.
+  const viaApp = gh.via === "app";
   return `<section class="box"><h2>Link to a repository</h2><div class="in">
-    <div class="seg" id="mode" style="margin-bottom:12px"><button type="button" data-v="existing" class="on">Existing repository</button><button type="button" data-v="new">New repository</button></div>
+    ${viaApp
+      ? `<p class="muted" style="margin-bottom:10px">For a new repository, <a href="https://github.com/new" target="_blank" rel="noreferrer">create it on GitHub</a>, then <a href="${installUrl()}">add it to the chosen repositories</a>.</p>`
+      : `<div class="seg" id="mode" style="margin-bottom:12px"><button type="button" data-v="existing" class="on">Existing repository</button><button type="button" data-v="new">New repository</button></div>`}
     <div id="existing"><div id="picker"></div></div>
     <div id="new" class="hide"><div class="row">
       <label class="f grow">Repository name <input type="text" id="newName" value="${esc(p.name.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "") || "kicad-project")}" autocapitalize="off" spellcheck="false"></label>

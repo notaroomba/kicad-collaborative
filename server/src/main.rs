@@ -8,6 +8,7 @@ mod doc_actor;
 mod error;
 mod fonts;
 mod github;
+mod github_app;
 mod http;
 mod lenient_json;
 mod merge;
@@ -359,6 +360,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(versions::routes())
         // GitHub repository sync (github.rs)
         .route("/auth/github/connect", get(auth::github_connect))
+        .route("/auth/github/install", get(github_app::install))
+        .route("/auth/github/installed", get(github_app::installed))
+        .route("/admin/github-app", get(github_app::admin_page))
+        .route("/admin/github-app/created", get(github_app::admin_created))
         .route("/github", get(github::page))
         .route("/p/{id}/github", get(github::page))
         .route("/static/github.js", get(github::page_js))

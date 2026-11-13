@@ -87,8 +87,8 @@ impl From<GhErr> for AppError {
             404 => api_err(
                 StatusCode::NOT_FOUND,
                 "github_not_found",
-                "GitHub can't find that, or your connection can't see it. Private repositories need the \
-                 \"private repositories\" access.",
+                "GitHub can't find that, or your connection can't see it. Junction sees only the repositories \
+                 you chose: add this one to its repositories on GitHub.",
             ),
             0 => api_err(StatusCode::BAD_GATEWAY, "github_unreachable", "GitHub could not be reached."),
             _ => api_err(
@@ -107,47 +107,76 @@ fn cipher(state: &AppState) -> Aes256Gcm {
     Aes256Gcm::new_from_slice(&key).expect("32-byte key")
 }
 
-pub async fn store_token(state: &AppState, user_id: i64, token: &str, scopes: &str) -> AppResult<()> {
+/// Seal a secret for the database (nonce + AES-GCM ciphertext).
+pub(crate) fn seal(state: &AppState, plain: &[u8]) -> AppResult<Vec<u8>> {
     let nonce: [u8; 12] = rand::random();
     let mut blob = nonce.to_vec();
     blob.extend(
         cipher(state)
-            .encrypt(Nonce::from_slice(&nonce), token.as_bytes())
+            .encrypt(Nonce::from_slice(&nonce), plain)
             .map_err(|_| anyhow::anyhow!("token encryption failed"))?,
     );
+    Ok(blob)
+}
+
+/// Open a sealed secret; None when it was sealed under another JWT_SECRET.
+pub(crate) fn unseal(state: &AppState, blob: &[u8]) -> Option<Vec<u8>> {
+    if blob.len() < 13 {
+        return None;
+    }
+    let (nonce, body) = blob.split_at(12);
+    cipher(state).decrypt(Nonce::from_slice(nonce), body).ok()
+}
+
+pub(crate) fn unseal_str(state: &AppState, blob: &[u8]) -> Option<String> {
+    unseal(state, blob).and_then(|b| String::from_utf8(b).ok())
+}
+
+/// A token from the old OAuth app's `repo` / `public_repo` grant.
+pub async fn store_token(state: &AppState, user_id: i64, token: &str, scopes: &str) -> AppResult<()> {
     sqlx::query(
-        "INSERT INTO github_tokens (user_id, token, scopes) VALUES ($1, $2, $3)
+        "INSERT INTO github_tokens (user_id, token, scopes, kind) VALUES ($1, $2, $3, 'oauth')
          ON CONFLICT (user_id) DO UPDATE
-           SET token = EXCLUDED.token, scopes = EXCLUDED.scopes, updated_at = now()",
+           SET token = EXCLUDED.token, scopes = EXCLUDED.scopes, kind = 'oauth', refresh = NULL,
+               expires_at = NULL, refresh_expires_at = NULL, updated_at = now()",
     )
     .bind(user_id)
-    .bind(blob)
+    .bind(seal(state, token.as_bytes())?)
     .bind(scopes)
     .execute(&state.pool)
     .await?;
     Ok(())
 }
 
-/// The user's repository token and its scopes, if they connected one that still decrypts.
-async fn load_token(state: &AppState, user_id: i64) -> AppResult<Option<(String, String)>> {
-    let row = sqlx::query("SELECT token, scopes FROM github_tokens WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    let Some(row) = row else { return Ok(None) };
-    let blob: Vec<u8> = row.get("token");
-    if blob.len() < 13 {
-        return Ok(None);
-    }
-    let (nonce, body) = blob.split_at(12);
-    // A token sealed under another JWT_SECRET is simply gone: reconnect.
-    let Ok(plain) = cipher(state).decrypt(Nonce::from_slice(nonce), body) else {
-        return Ok(None);
-    };
-    Ok(String::from_utf8(plain).ok().map(|t| (t, row.get("scopes"))))
+/// A repository grant as stored.
+pub(crate) struct Grant {
+    pub token: String,
+    pub scopes: String,
+    /// "oauth" (the old blanket `repo` grant) or "app" (the GitHub App, chosen repositories only).
+    pub kind: String,
 }
 
-async fn drop_token(state: &AppState, user_id: i64) -> AppResult<()> {
+/// The user's repository grant, if they connected one that still decrypts.  A GitHub
+/// App token about to expire is refreshed first (github_app::fresh).
+pub(crate) async fn load_grant(state: &AppState, user_id: i64) -> AppResult<Option<Grant>> {
+    let row = sqlx::query(
+        "SELECT token, scopes, kind, expires_at < now() + interval '5 minutes' AS stale
+         FROM github_tokens WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    let kind: String = row.get("kind");
+    if kind == "app" && row.get::<Option<bool>, _>("stale").unwrap_or(false) {
+        return crate::github_app::refresh(state, user_id).await;
+    }
+    let blob: Vec<u8> = row.get("token");
+    // A token sealed under another JWT_SECRET is simply gone: reconnect.
+    Ok(unseal_str(state, &blob).map(|token| Grant { token, scopes: row.get("scopes"), kind }))
+}
+
+pub(crate) async fn drop_token(state: &AppState, user_id: i64) -> AppResult<()> {
     sqlx::query("DELETE FROM github_tokens WHERE user_id = $1")
         .bind(user_id)
         .execute(&state.pool)
@@ -161,6 +190,8 @@ struct Gh {
     http: reqwest::Client,
     api: String,
     token: String,
+    /// "app" when the token is a GitHub App user token (chosen repositories only).
+    kind: String,
 }
 
 /// Percent-encode a path segment sequence, keeping `/`.
@@ -181,8 +212,9 @@ fn enc(s: &str) -> String {
 
 impl Gh {
     async fn for_user(state: &AppState, user: &User) -> AppResult<Gh> {
-        let (token, _) = load_token(state, user.id).await?.ok_or_else(not_connected)?;
+        let Grant { token, kind, .. } = load_grant(state, user.id).await?.ok_or_else(not_connected)?;
         Ok(Gh {
+            kind,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(60))
                 .build()
@@ -713,23 +745,36 @@ fn require_editor(a: &Access) -> AppResult<()> {
 
 /// Whether the caller has granted repository access, and with what reach.
 pub async fn connection(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<Response> {
-    let token = load_token(&state, user.id).await?;
-    let scopes = token.as_ref().map(|(_, s)| s.clone()).unwrap_or_default();
-    let private = scopes.split([',', ' ']).any(|s| s == "repo");
+    let grant = load_grant(&state, user.id).await?;
+    let app = crate::github_app::creds(&state).await?;
+    let scopes = grant.as_ref().map(|g| g.scopes.clone()).unwrap_or_default();
+    let via_app = grant.as_ref().is_some_and(|g| g.kind == "app");
+    let private = via_app || scopes.split([',', ' ']).any(|s| s == "repo");
     Ok(Json(json!({
-        "configured": state.cfg.github_client_id.is_some(),
-        "connected": token.is_some(),
+        "configured": state.cfg.github_client_id.is_some() || app.is_some(),
+        "connected": grant.is_some(),
         "login": user.login,
         "avatarUrl": user.avatar_url,
         "scopes": scopes,
         "privateRepos": private,
+        // Junction's GitHub App, when registered: connecting goes through it.
+        "app": app.as_ref().map(|a| json!({ "name": a.name, "slug": a.slug, "url": a.html_url })),
+        "via": grant.as_ref().map(|g| if g.kind == "app" { "app" } else { "oauth" }),
+        // Still on the old grant that reaches every repository: offer the switch.
+        "legacy": app.is_some() && grant.as_ref().is_some_and(|g| g.kind != "app"),
+        "manageUrl": format!("{}/settings/installations", state.cfg.github_web_url),
     }))
     .into_response())
 }
 
-/// Forget the caller's repository token.  Links stay; syncing them needs a
-/// connected account again.
+/// Forget the caller's repository token, and with a GitHub App token also withdraw the
+/// app's authorization on GitHub.  Links stay; syncing them needs a connected account again.
 pub async fn disconnect(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<Response> {
+    if let Some(g) = load_grant(&state, user.id).await?.filter(|g| g.kind == "app") {
+        if let Some(app) = crate::github_app::creds(&state).await? {
+            crate::github_app::revoke_grant(&state, &app.client_id, &app.client_secret, &g.token).await;
+        }
+    }
     drop_token(&state, user.id).await?;
     Ok(Json(json!({ "ok": true })).into_response())
 }
@@ -749,6 +794,41 @@ pub async fn list_repos(
     let gh = Gh::for_user(&state, &user).await?;
     let needle = q.q.trim().to_ascii_lowercase();
     let mut repos = Vec::new();
+    let keep = |r: &Value, repos: &mut Vec<Value>| {
+        let full = r["full_name"].as_str().unwrap_or("").to_string();
+        if !needle.is_empty() && !full.to_ascii_lowercase().contains(&needle) {
+            return;
+        }
+        repos.push(json!({
+            "fullName": full,
+            "private": r["private"].as_bool().unwrap_or(false),
+            "defaultBranch": r["default_branch"],
+            "description": r["description"],
+            "pushedAt": r["pushed_at"],
+            "canPush": r["permissions"]["push"].as_bool().unwrap_or(false),
+        }));
+    };
+    if gh.kind == "app" {
+        // Only what the person installed the app on: every installation they can see,
+        // then the repositories each was given.
+        let installs = gh.get("/user/installations?per_page=100").await?;
+        for inst in installs["installations"].as_array().cloned().unwrap_or_default() {
+            let Some(iid) = inst["id"].as_i64() else { continue };
+            for page in 1..=10 {
+                let v = gh.get(&format!("/user/installations/{iid}/repositories?per_page=100&page={page}")).await?;
+                let items = v["repositories"].as_array().cloned().unwrap_or_default();
+                for r in &items {
+                    keep(r, &mut repos);
+                }
+                if items.len() < 100 {
+                    break;
+                }
+            }
+        }
+        repos.sort_by(|a, b| b["pushedAt"].as_str().unwrap_or("").cmp(a["pushedAt"].as_str().unwrap_or("")));
+        repos.dedup_by(|a, b| a["fullName"] == b["fullName"]);
+        return Ok(Json(json!({ "repos": repos, "installations": installs["total_count"] })).into_response());
+    }
     for page in 1..=3 {
         let v = gh
             .get(&format!(
@@ -978,6 +1058,15 @@ pub async fn link_project(
     let subdir = clean_subdir(&req.path)?;
 
     let info = if let Some(create) = &req.create {
+        if gh.kind == "app" {
+            // The app is deliberately not allowed to administer repositories.
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                "github_app_cannot_create",
+                "Junction can only see the repositories you choose, so it can't create one. Create it on GitHub, \
+                 add it to Junction's repositories, then pick it here.",
+            ));
+        }
         let name = create.name.trim();
         // Validates the name against GitHub's alphabet.
         RepoRef::parse(&format!("{}/{name}", user.login))?;
@@ -1046,10 +1135,20 @@ pub async fn project_status(
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let a = access(&state, &user, id).await?;
-    let connected = load_token(&state, user.id).await?.is_some();
+    let grant = load_grant(&state, user.id).await?;
+    let connected = grant.is_some();
+    let app = crate::github_app::creds(&state).await?;
+    let app_ready = app.is_some();
     let mut out = json!({
         "project": { "projectId": a.project.id, "name": a.project.name, "role": a.role, "isOwner": a.is_owner },
-        "github": { "configured": state.cfg.github_client_id.is_some(), "connected": connected, "login": user.login },
+        "github": {
+            "configured": state.cfg.github_client_id.is_some() || app_ready,
+            "connected": connected,
+            "login": user.login,
+            "via": grant.as_ref().map(|g| if g.kind == "app" { "app" } else { "oauth" }),
+            "legacy": app_ready && grant.as_ref().is_some_and(|g| g.kind != "app"),
+            "app": app.as_ref().map(|a| json!({ "name": a.name, "slug": a.slug, "url": a.html_url })),
+        },
         "link": Value::Null,
     });
     let Some(link) = load_link(&state, id).await? else {

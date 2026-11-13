@@ -32,6 +32,21 @@ const commits = new Map();   // sha -> { tree, parents, message, author, date }
 let browserUser = null;      // who "is signed in to github.com" for the next authorize
 let calls = [];              // method + path of every API call, for assertions
 let nextPr = 1;
+// The GitHub App side (github_app.rs): one registered app, its installations and refresh tokens.
+let ghApp = null;            // { id, slug, name, client_id, client_secret, manifest }
+const manifestCodes = new Map(); // code -> manifest JSON
+const installations = new Map(); // id -> { id, account, repos: Set<fullName> }
+const refreshTokens = new Map(); // refresh token -> login
+let nextInstall = 1;
+let installChoice = null;    // repositories the next install picks (POST /__ctl/install-choice)
+const installedOn = (repo) => [...installations.values()].some((i) => i.account === repo.owner && i.repos.has(repo.fullName));
+const issueAppToken = (login) => {
+  const token = 'ghu_' + crypto.randomBytes(18).toString('hex');
+  const refresh = 'ghr_' + crypto.randomBytes(18).toString('hex');
+  tokens.set(token, { login, scopes: new Set(), app: true });
+  refreshTokens.set(refresh, login);
+  return { access_token: token, token_type: 'bearer', scope: '', expires_in: 28800, refresh_token: refresh, refresh_token_expires_in: 15811200 };
+};
 
 function user(login, id) {
   if (!users.has(login)) users.set(login, { id: id ?? 1000 + users.size, login, name: login });
@@ -104,6 +119,12 @@ function auth(req) {
 
 /** What GitHub lets this token do with a repository: null = cannot even see it. */
 function reach(t, repo) {
+  if (t.app) {
+    // An app user token: only repositories the app is installed on, and only as far as the person may go.
+    const member = repo.owner === t.login || repo.collaborators.has(t.login);
+    if (!installedOn(repo) || !(member || repo.readers.has(t.login) || !repo.private)) return null;
+    return { push: member };
+  }
   const member = repo.owner === t.login || repo.collaborators.has(t.login);
   const reader = member || repo.readers.has(t.login);
   if (repo.private) {
@@ -131,7 +152,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, ORIGIN);
   const path = decodeURIComponent(url.pathname);
   const q = url.searchParams;
-  const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : {};
+  const body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) ? await readBody(req) : {};
 
   // ---- test controls
   if (path.startsWith('/__ctl/')) {
@@ -139,6 +160,7 @@ const server = http.createServer(async (req, res) => {
     if (what === 'reset') {
       users.clear(); tokens.clear(); codes.clear(); repos.clear(); blobs.clear(); trees.clear(); commits.clear();
       browserUser = null; calls = []; nextPr = 1;
+      ghApp = null; manifestCodes.clear(); installations.clear(); refreshTokens.clear(); nextInstall = 1; installChoice = null;
       return send(res, 200, { ok: true });
     }
     if (what === 'user') return send(res, 200, user(body.login, body.id));
@@ -164,6 +186,10 @@ const server = http.createServer(async (req, res) => {
       const repo = repos.get(q.get('repo'));
       return send(res, 200, { branches: repo ? Object.fromEntries(repo.refs) : {}, pulls: repo ? repo.pulls : [], calls });
     }
+    if (what === 'install-choice') { installChoice = body.repos; return send(res, 200, { ok: true }); }
+    if (what === 'installations') return send(res, 200, [...installations.values()].map((i) => ({ ...i, repos: [...i.repos] })));
+    if (what === 'app') return send(res, 200, ghApp);
+    if (what === 'tokens') return send(res, 200, [...tokens.entries()].map(([k, v]) => ({ token: k, login: v.login, app: !!v.app, scopes: [...v.scopes] })));
     if (what === 'revoke') { for (const [t, v] of tokens) if (v.login === body.login) tokens.delete(t); return send(res, 200, { ok: true }); }
     if (what === 'access') {
       const repo = repos.get(body.fullName);
@@ -174,11 +200,61 @@ const server = http.createServer(async (req, res) => {
     return notFound(res);
   }
 
+  // ---- App manifest flow (github.com/settings/apps/new, then api /app-manifests/<code>/conversions)
+  if (/^(\/organizations\/[^/]+)?\/settings\/apps\/new$/.test(path) && req.method === 'POST') {
+    if (!browserUser) { res.writeHead(400); return res.end('nobody is signed in to the fake github'); }
+    const manifest = JSON.parse(body.manifest || '{}');
+    const code = crypto.randomUUID();
+    manifestCodes.set(code, { manifest, owner: path.startsWith('/organizations/') ? path.split('/')[2] : browserUser });
+    const back = new URL(manifest.redirect_url);
+    back.searchParams.set('code', code);
+    if (q.get('state')) back.searchParams.set('state', q.get('state'));
+    res.writeHead(302, { Location: back.toString() });
+    return res.end();
+  }
+  let am;
+  if ((am = path.match(/^\/app-manifests\/([^/]+)\/conversions$/)) && req.method === 'POST') {
+    const got = manifestCodes.get(am[1]);
+    manifestCodes.delete(am[1]);
+    if (!got) return notFound(res);
+    const slug = got.manifest.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    ghApp = { id: 4242, slug, name: got.manifest.name, client_id: 'Iv23test' + slug, client_secret: crypto.randomBytes(20).toString('hex'),
+              manifest: got.manifest };
+    return send(res, 201, { id: ghApp.id, slug, name: ghApp.name, owner: { login: got.owner }, html_url: `${ORIGIN}/apps/${slug}`,
+                            client_id: ghApp.client_id, client_secret: ghApp.client_secret, webhook_secret: 'whsec',
+                            pem: '-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----\n', permissions: got.manifest.default_permissions });
+  }
+  if ((am = path.match(/^\/apps\/([^/]+)\/installations\/new$/))) {
+    if (!ghApp || am[1] !== ghApp.slug) return notFound(res);
+    if (!browserUser) { res.writeHead(400); return res.end('nobody is signed in to the fake github'); }
+    let inst = [...installations.values()].find((i) => i.account === browserUser);
+    const action = inst ? 'update' : 'install';
+    if (!inst) { inst = { id: nextInstall++, account: browserUser, repos: new Set() }; installations.set(inst.id, inst); }
+    for (const r of installChoice || []) inst.repos.add(r);
+    const back = new URL(ghApp.manifest.setup_url);
+    back.searchParams.set('installation_id', String(inst.id));
+    back.searchParams.set('setup_action', action);
+    if (q.get('state')) back.searchParams.set('state', q.get('state'));
+    res.writeHead(302, { Location: back.toString() });
+    return res.end();
+  }
+  if ((am = path.match(/^\/applications\/([^/]+)\/grant$/)) && req.method === 'DELETE') {
+    const basic = Buffer.from((req.headers.authorization || '').replace(/^Basic /, ''), 'base64').toString();
+    const [cid, secret] = basic.split(':');
+    const okApp = ghApp && cid === ghApp.client_id && secret === ghApp.client_secret;
+    if (cid !== am[1] || !(okApp || secret === 'test')) return send(res, 404, { message: 'Not Found' });
+    calls.push(`DELETE ${path}`);
+    const t = tokens.get(body.access_token);
+    if (!t) return send(res, 404, { message: 'Not Found' });
+    for (const [k, v] of tokens) if (v.login === t.login && !!v.app === okApp) tokens.delete(k);
+    res.writeHead(204); return res.end();
+  }
+
   // ---- OAuth web flow (github.com)
   if (path === '/login/oauth/authorize') {
     if (!browserUser) { res.writeHead(400); return res.end('nobody is signed in to the fake github (POST /__ctl/browser)'); }
     const code = crypto.randomUUID();
-    codes.set(code, { login: browserUser, scope: q.get('scope') || '' });
+    codes.set(code, { login: browserUser, scope: q.get('scope') || '', app: !!ghApp && q.get('client_id') === ghApp.client_id });
     const back = new URL(q.get('redirect_uri'));
     back.searchParams.set('code', code);
     back.searchParams.set('state', q.get('state'));
@@ -186,7 +262,19 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   if (path === '/login/oauth/access_token') {
+    if (body.grant_type === 'refresh_token') {
+      calls.push('REFRESH');
+      const login = refreshTokens.get(body.refresh_token);
+      refreshTokens.delete(body.refresh_token);
+      if (!login || !ghApp || body.client_secret !== ghApp.client_secret) return send(res, 200, { error: 'bad_refresh_token' });
+      return send(res, 200, issueAppToken(login));
+    }
     const grant = codes.get(body.code);
+    if (grant && grant.app) {
+      codes.delete(body.code);
+      if (body.client_id !== ghApp.client_id || body.client_secret !== ghApp.client_secret) return send(res, 200, { error: 'incorrect_client_credentials' });
+      return send(res, 200, issueAppToken(grant.login));
+    }
     codes.delete(body.code);
     if (!grant) return send(res, 200, { error: 'bad_verification_code' });
     const token = 'gho_' + crypto.randomBytes(18).toString('hex');
@@ -203,6 +291,19 @@ const server = http.createServer(async (req, res) => {
 
   if (path === '/user' && req.method === 'GET') return send(res, 200, { id: me.id, login: me.login, name: me.name, avatar_url: null });
   if (path === '/user/emails') return send(res, 200, [{ email: `${me.login}@example.test`, primary: true, verified: true }]);
+  if (path === '/user/installations' && req.method === 'GET') {
+    if (!t.app) return send(res, 403, { message: 'You must authenticate with an access token authorized to a GitHub App' });
+    const mine = [...installations.values()].filter((i) => i.account === t.login);
+    return send(res, 200, { total_count: mine.length, installations: mine.map((i) => ({ id: i.id, account: { login: i.account }, app_id: ghApp.id })) });
+  }
+  if ((am = path.match(/^\/user\/installations\/(\d+)\/repositories$/)) && req.method === 'GET') {
+    const inst = installations.get(+am[1]);
+    if (!t.app || !inst || inst.account !== t.login) return notFound(res);
+    if (+(q.get('page') || 1) > 1) return send(res, 200, { total_count: inst.repos.size, repositories: [] });
+    const list = [...inst.repos].map((n) => repos.get(n)).filter(Boolean).map((r) => repoJson(r, reach(t, r) || { push: false }));
+    return send(res, 200, { total_count: list.length, repositories: list });
+  }
+  if (path === '/user/repos' && req.method === 'POST' && t.app) return send(res, 403, { message: 'Resource not accessible by integration' });
   if (path === '/user/repos' && req.method === 'GET') {
     if (+(q.get('page') || 1) > 1) return send(res, 200, []);
     const out = [];

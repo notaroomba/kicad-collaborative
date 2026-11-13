@@ -257,11 +257,29 @@ An online project can be linked to one folder of one branch of a GitHub
 repository (`src/github.rs`, page at `/github` and `/p/{id}/github`, also under
 File → GitHub Sync… in the web editor).
 
-- **Connecting.** Sign-in asks GitHub for identity only. Repository access is a
-  separate grant (`/auth/github/connect`, same OAuth app and callback, `repo`
-  or `public_repo` scope) that a user gives when they want sync and can drop
-  again. The token is stored AES-GCM encrypted under a key derived from
-  `JWT_SECRET`; every GitHub call is made as the user doing the action.
+- **Connecting.** Sign-in asks GitHub for identity only (the OAuth app,
+  `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`). Repository access goes through
+  Junction's GitHub App (`src/github_app.rs`): `/auth/github/connect`
+  authorizes it, and if it is installed nowhere yet sends the person on to
+  install it on the repositories they choose. The app asks for Contents (read
+  and write), Pull requests (read and write) and Metadata, nothing else, and
+  cannot create repositories. Its user tokens expire after eight hours and are
+  refreshed with their refresh token (row-locked, since a refresh token works
+  once). `/auth/github/install` changes the chosen repositories. Tokens are
+  stored AES-GCM encrypted under a key derived from `JWT_SECRET`; every GitHub
+  call is made as the user doing the action.
+- **Registering the app.** An administrator (a login in `KC_ADMINS`) opens
+  `/admin/github-app` and presses Register: GitHub creates the app from a
+  manifest (callback `PUBLIC_URL/auth/github/callback`, setup URL
+  `PUBLIC_URL/auth/github/installed`, no webhook) and hands its id, client
+  secret and private key straight back, sealed into the `github_app` table.
+  `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`
+  override it for an app made by hand. Without an app, connecting falls back
+  to the OAuth app's `repo` / `public_repo` scope.
+- **Old grants.** Someone connected with the old `repo` scope keeps syncing
+  with it; the page offers "Switch to chosen repositories", which installs the
+  app and withdraws the old grant on GitHub. Linked projects stay linked.
+  Tests: `scripts/github-app-e2e.mjs` against `scripts/fake-github.mjs`.
 - **Comparing.** The server remembers the git blob id each file had the last
   time both sides agreed. That tells a file changed online (push) from one
   changed on GitHub (pull) from one changed on both.

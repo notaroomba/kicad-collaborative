@@ -307,7 +307,7 @@ struct PendingAuthorization {
     scope: String,
 }
 
-fn page(title: &str, host: &str, body: &str) -> Html<String> {
+pub(crate) fn page(title: &str, host: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>{title} — Junction</title>{STYLE}
 <style>

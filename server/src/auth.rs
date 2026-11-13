@@ -54,6 +54,9 @@ pub struct PendingConnect {
     pub github_id: i64,
     /// Where to send the browser afterwards (an allowed origin + a relative path).
     pub return_to: String,
+    /// Through Junction's GitHub App rather than the sign-in OAuth app's `repo` scope.
+    #[serde(default)]
+    pub app: bool,
 }
 
 /// One-time code that hands a finished browser session to a non-canonical
@@ -303,7 +306,6 @@ pub async fn github_connect(
     jar: CookieJar,
     Query(q): Query<ConnectQuery>,
 ) -> AppResult<Response> {
-    let (client_id, _) = github_configured(&state)?;
     let next = sanitize_next(q.next.as_deref());
     let Some(user) = user_from_jar(&state, &jar).await else {
         let back = format!("/auth/github/connect?next={}", urlencode(&next));
@@ -317,6 +319,19 @@ pub async fn github_connect(
     let origin = request_origin(&headers)
         .filter(|o| is_allowed_origin(&state, o))
         .unwrap_or_else(|| canonical.to_string());
+    // With Junction's GitHub App registered, repository access goes through it: the person
+    // picks the repositories, and the app asks for nothing but their files and pull
+    // requests (github_app.rs).  Without one, the old OAuth scopes.
+    if let Some(app) = crate::github_app::creds(&state).await? {
+        let connect = PendingConnect {
+            user_id: user.id,
+            github_id: user.github_id,
+            return_to: format!("{origin}{next}"),
+            app: true,
+        };
+        return start_github_flow(&state, &app.client_id, next, None, None, Some(connect), "").await;
+    }
+    let (client_id, _) = github_configured(&state)?;
     let scope = if q.access.as_deref() == Some("public") {
         "read:user user:email public_repo"
     } else {
@@ -326,6 +341,7 @@ pub async fn github_connect(
         user_id: user.id,
         github_id: user.github_id,
         return_to: format!("{origin}{next}"),
+        app: false,
     };
     start_github_flow(&state, client_id, next, None, None, Some(connect), scope).await
 }
@@ -342,11 +358,11 @@ async fn start_github_flow(
     let oauth_state = random_token();
     pending_put(state, KIND_LOGIN, &oauth_state, &PendingLogin { next, desktop, return_origin, connect }).await?;
     let url = format!(
-        "{}/login/oauth/authorize?client_id={}&redirect_uri={}&scope={}&state={}",
+        "{}/login/oauth/authorize?client_id={}&redirect_uri={}{}&state={}",
         state.cfg.github_web_url,
         urlencode(client_id),
         urlencode(&format!("{}/auth/github/callback", state.cfg.public_url)),
-        urlencode(scope),
+        if scope.is_empty() { String::new() } else { format!("&scope={}", urlencode(scope)) },
         urlencode(&oauth_state),
     );
 
@@ -415,7 +431,6 @@ pub async fn github_callback(
     Query(q): Query<CallbackQuery>,
     jar: CookieJar,
 ) -> AppResult<Response> {
-    let (client_id, client_secret) = github_configured(&state)?;
 
     // A sign-in must come back to the browser that started it (the state cookie).
     // A repository grant is bound differently: its state names the account it is
@@ -433,6 +448,13 @@ pub async fn github_callback(
     let pending: PendingLogin = pending_take(&state, KIND_LOGIN, &q.state)
         .await?
         .ok_or_else(|| AppError::BadRequest("unknown or expired oauth state".into()))?;
+
+    if let Some(connect) = pending.connect.as_ref().filter(|c| c.app) {
+        let connect = PendingConnect { return_to: connect.return_to.clone(), user_id: connect.user_id, github_id: connect.github_id, app: true };
+        let resp = crate::github_app::finish_connect(&state, connect, &q.code).await?;
+        return Ok((jar, resp).into_response());
+    }
+    let (client_id, client_secret) = github_configured(&state)?;
 
     let http = reqwest::Client::new();
     let token: GithubTokenResponse = http
