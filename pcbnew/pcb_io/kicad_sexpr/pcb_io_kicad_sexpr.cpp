@@ -385,7 +385,7 @@ void PCB_IO_KICAD_SEXPR::FormatBoardToFormatter( OUTPUTFORMATTER* aOut, BOARD* a
 
     m_out = aOut;
 
-    // KiCad Collaborative round-trips project files with stock KiCad installs: keep the format
+    // Junction round-trips project files with stock KiCad installs: keep the format
     // version the file was opened with instead of restamping it, so a save here doesn't flag the
     // file as "newer format" for everyone else.  New boards (nothing loaded) get the current one.
     //

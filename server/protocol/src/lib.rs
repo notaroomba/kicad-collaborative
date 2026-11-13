@@ -1,4 +1,4 @@
-//! Wire protocol (v1) for KiCad Collaborative: JSON over one WebSocket at `/ws`.
+//! Wire protocol (v1) for Junction: JSON over one WebSocket at `/ws`.
 //!
 //! This crate is the single source of truth for the message shapes.  It is
 //! consumed by the sync server and compiles unchanged to

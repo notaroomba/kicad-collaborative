@@ -604,7 +604,7 @@ await step('phone', async () => {
   await m.locator('.hp-tabbar a >> nth=1').tap(); await m.waitForSelector('.hp-item:not(.skel)'); check('phone: Explore tab', await m.locator('.hp-head h1').textContent() === 'Explore');
   await m.locator('.hp-topbar .hp-account').tap(); await m.locator('.hp-menu button', { hasText: 'Log out' }).tap();
   // Signed out, "/" is the public home page (web/landing), not this app.
-  await m.waitForFunction(() => !document.querySelector('.hp-account') && document.readyState === 'complete' && /KiCad Collaborative/.test(document.title));
+  await m.waitForFunction(() => !document.querySelector('.hp-account') && document.readyState === 'complete' && /Junction/.test(document.title));
   check('sign out returns to the public home page', (await m.evaluate(() => fetch('/api/me').then((r) => r.status))) === 401);
   await m.screenshot({ path: `${out}/15-phone-signed-out.png` });
   await m.context().close();

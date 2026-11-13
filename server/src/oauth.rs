@@ -86,7 +86,7 @@ pub async fn protected_resource(State(state): State<AppState>, headers: HeaderMa
         "authorization_servers": [origin],
         "scopes_supported": [SCOPE_READ, SCOPE_WRITE],
         "bearer_methods_supported": ["header"],
-        "resource_name": "KiCad Collaborative",
+        "resource_name": "Junction",
         "resource_documentation": format!("{origin}/connect"),
     }))
 }
@@ -309,7 +309,7 @@ struct PendingAuthorization {
 
 fn page(title: &str, host: &str, body: &str) -> Html<String> {
     Html(format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>{title} — KiCad Collaborative</title>{STYLE}
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>{title} — Junction</title>{STYLE}
 <style>
   .kv dd code {{ word-break: break-all; }}
   .choice {{ display: flex; gap: 10px; align-items: flex-start; margin: 14px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }}
@@ -436,7 +436,7 @@ pub async fn authorize(
     let body = format!(
         r#"<div class="body">
     <h1>{app} wants to work with your projects</h1>
-    <p>It is asking to act as you on KiCad Collaborative until you disconnect it.</p>
+    <p>It is asking to act as you on Junction until you disconnect it.</p>
     <dl class="kv">
       <dt>Account</dt><dd><b>{login}</b></dd>
       <dt>App</dt><dd>{app} <span class="muted">(the name it gave itself)</span></dd>
@@ -855,7 +855,7 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
         r#"<p class="muted"><a href="/auth/github/login?next=/connect">Sign in</a> to create an access key.</p>"#
     };
     let html = format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>Connect an AI assistant — KiCad Collaborative</title>{STYLE}
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Connect an AI assistant — Junction</title>{STYLE}
 <style>
   body {{ display: block; }}
   main {{ max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }}
@@ -886,7 +886,7 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
   ul.can {{ columns: 2; column-gap: 28px; padding-left: 18px; line-height: 1.6; }}
   @media (max-width: 640px) {{ ul.can {{ columns: 1; }} table.apps th:nth-child(3), table.apps td:nth-child(3) {{ display: none; }} }}
 </style></head><body><main>
-<header class="top"><span class="mark">{MARK}</span><b>KiCad Collaborative</b><a href="/">Back to projects</a></header>
+<header class="top"><span class="mark">{MARK}</span><b>Junction</b><a href="/">Back to projects</a></header>
 <h1>Connect an AI assistant</h1>
 <p class="lead">Any AI model or service can open your online projects, read schematics and boards, run the rule checks, look parts
 up, and make changes that everyone in the project sees live, with its own cursor. It connects over MCP, the open standard that
@@ -898,7 +898,7 @@ Nothing here is tied to one vendor, and the work runs on whatever plan or key yo
 <div class="card">
   <h3>Claude</h3>
   <ol><li>On the web or in the desktop app, open <b>Settings</b>, then <b>Connectors</b>, and choose <b>Add custom connector</b>.</li>
-      <li>Name it KiCad Collaborative, paste the address above, choose <b>Connect</b>, sign in here and allow it.</li></ol>
+      <li>Name it Junction, paste the address above, choose <b>Connect</b>, sign in here and allow it.</li></ol>
   <p class="muted">In Claude Code, run the line below, then <code>/mcp</code>, pick <b>kicad</b> and sign in.</p>
   <pre>claude mcp add --transport http kicad {url}</pre>
   <h3>ChatGPT</h3>

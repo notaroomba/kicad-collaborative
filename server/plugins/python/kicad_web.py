@@ -1904,7 +1904,7 @@ def _fab_drill(board, kind, opts, directory, drill, map_file):
 
 def _fab_report(board, opts, path):
     flush()
-    lines = [f"Drill report for {_board_stem()}.kicad_pcb", "Created by the KiCad Collaborative web editor", ""]
+    lines = [f"Drill report for {_board_stem()}.kicad_pcb", "Created by the Junction web editor", ""]
     for f in _fab_drill_files(opts):
         lines.append(f"Drill file '{f['name']}' contains")
         lines.append("    " + ("plated through holes:" if "NPTH" not in f["name"] else "unplated through holes:"))

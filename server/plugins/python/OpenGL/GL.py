@@ -314,7 +314,7 @@ def glGetError():
 
 
 def glGetString(name):
-    return {GL_VENDOR: b"KiCad Collaborative", GL_RENDERER: b"WebGL (fixed-function OpenGL for plugins)", GL_VERSION: b"1.5 web", GL_EXTENSIONS: b"",
+    return {GL_VENDOR: b"Junction", GL_RENDERER: b"WebGL (fixed-function OpenGL for plugins)", GL_VERSION: b"1.5 web", GL_EXTENSIONS: b"",
             GL_SHADING_LANGUAGE_VERSION: b""}.get(name, b"")
 
 

@@ -80,7 +80,7 @@
 		(title "555 blinker")
 		(date "2026-11-11")
 		(rev "A")
-		(company "KiCad Collaborative")
+		(company "Junction")
 		(comment 1 "Home page demo")
 	)
 	(lib_symbols
@@ -2373,7 +2373,7 @@
 		(title "555 blinker")
 		(date "2026-11-11")
 		(rev "A")
-		(company "KiCad Collaborative")
+		(company "Junction")
 		(comment 1 "Home page demo")
 	)
 	(layers

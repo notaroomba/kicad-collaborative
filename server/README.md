@@ -1,6 +1,6 @@
 # kicad-collab-server
 
-Sync server for KiCad Collaborative — real-time multiplayer editing for KiCad.
+Sync server for Junction — real-time multiplayer editing for KiCad.
 
 One Rust binary (axum + tokio + sqlx) plus Postgres. Live at
 `https://kicad-collab-production.up.railway.app`.

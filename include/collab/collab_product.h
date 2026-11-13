@@ -20,7 +20,7 @@
 #pragma once
 
 /**
- * Product identity for the KiCad Collaborative fork.
+ * Product identity for the Junction fork.
  *
  * Everything a person sees (window titles, the setup wizard, the About
  * dialog, installers) carries this name and version so it is never mistaken
@@ -30,7 +30,7 @@
  *
  * Keep KICAD_COLLAB_PRODUCT_VERSION in sync with packaging/VERSION.
  */
-#define KICAD_COLLAB_PRODUCT_NAME     wxS( "KiCad Collaborative" )
+#define KICAD_COLLAB_PRODUCT_NAME     wxS( "Junction" )
 #define KICAD_COLLAB_PRODUCT_VERSION  wxS( "2.0.0" )
 
 /**

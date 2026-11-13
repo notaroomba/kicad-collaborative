@@ -211,7 +211,7 @@ export class Schematic {
     for (const [a, b] of this.segs) for (const p of [a, b]) for (const v of p) if (Math.abs(v / 1.27 - Math.round(v / 1.27)) > 1e-6) throw new Error(`wire point ${p} is off the 1.27 mm grid`);
     const j = this.junctions().map(([x, y], i) => `(junction (at ${x} ${y}) (diameter 0) (color 0 0 0 0) (uuid ${q(this.uuid("junction/" + i))}))`);
     return `(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid ${q(this.root)}) (paper ${this.paper})
-  (title_block (title ${q(this.title)}) (date ${q(meta.date)}) (rev ${q(meta.rev)}) (company "KiCad Collaborative") (comment 1 ${q(meta.comment)}))
+  (title_block (title ${q(this.title)}) (date ${q(meta.date)}) (rev ${q(meta.rev)}) (company "Junction") (comment 1 ${q(meta.comment)}))
   (lib_symbols ${[...this.libs.values()].map((s) => K.serialize(s)).join(" ")})
   ${j.join("\n")}
   ${wires.join("\n")}
@@ -335,7 +335,7 @@ export class Board {
   }
   render(meta, extra = "") {
     return `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0") (general (thickness 1.6) (legacy_teardrops no)) (paper "A4")
-  (title_block (title ${q(this.sch.title)}) (date ${q(meta.date)}) (rev ${q(meta.rev)}) (company "KiCad Collaborative") (comment 1 ${q(meta.comment)}))
+  (title_block (title ${q(this.sch.title)}) (date ${q(meta.date)}) (rev ${q(meta.rev)}) (company "Junction") (comment 1 ${q(meta.comment)}))
   ${LAYERS}
   (setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no) (tenting front back) (grid_origin ${this.ox} ${this.oy}))
   ${this.nl.nets.map((n, i) => `(net ${i} ${q(n)})`).join(" ")}

@@ -28,8 +28,8 @@ function singleButton(body: HTMLElement): void {
 /** The keys that exist only here: the collaboration tools and whatever a tool module binds beyond KiCad's defaults. */
 function webRows(): HotkeyRow[] {
   const ed = isSch() ? "sch" : "pcb"; const out: HotkeyRow[] = [];
-  for (const t of EXTRA_TOOLS) if (t.key) out.push({ section: "KiCad Collaborative", id: t.id, label: t.name, key: t.key, alt: "", tip: "" });
-  out.push({ section: "KiCad Collaborative", id: "cancel", label: "Cancel / Select Tool", key: "Esc", alt: "", tip: "End the current operation; press again to return to the selection tool" });
+  for (const t of EXTRA_TOOLS) if (t.key) out.push({ section: "Junction", id: t.id, label: t.name, key: t.key, alt: "", tip: "" });
+  out.push({ section: "Junction", id: "cancel", label: "Cancel / Select Tool", key: "Esc", alt: "", tip: "End the current operation; press again to return to the selection tool" });
   const mod = activeModule() as { tools?: Keyed[]; actions?: Record<string, Keyed> } | null;
   const seen = new Set<string>();
   for (const a of [...((mod && mod.tools) || []), ...Object.values((mod && mod.actions) || {})]) {
@@ -37,7 +37,7 @@ function webRows(): HotkeyRow[] {
     const key = normKey(String(a.key).replace(/^Delete$/, "Del").replace(/^Insert$/, "Ins").replace(/\+Delete$/, "+Del"));
     if (hotkeyOwners(ed, key).length || seen.has(key + a.label)) continue;      // KiCad's own binding: already in the lists above
     seen.add(key + a.label);
-    out.push({ section: "KiCad Collaborative", id: a.id, label: a.label.replace(/…/g, "..."), key, alt: "", tip: "" });
+    out.push({ section: "Junction", id: a.id, label: a.label.replace(/…/g, "..."), key, alt: "", tip: "" });
   }
   return out;
 }
@@ -54,7 +54,7 @@ export function openHotkeyList(): void {
         <p class="kd-note" style="margin:8px 0 0">Default hotkeys of KiCad. Greyed commands run in the desktop app.</p>`;
       const list = body.querySelector<HTMLElement>("#hkList")!, filter = body.querySelector<HTMLInputElement>("#hkFilter")!;
       const avail = new Map<string, boolean>();
-      const isAvail = (r: HotkeyRow) => { if (r.section === "KiCad Collaborative" || !inEditor) return true; let v = avail.get(r.id); if (v === undefined) { v = kicadActionAvailable(r.id); avail.set(r.id, v); } return v; };
+      const isAvail = (r: HotkeyRow) => { if (r.section === "Junction" || !inEditor) return true; let v = avail.get(r.id); if (v === undefined) { v = kicadActionAvailable(r.id); avail.set(r.id, v); } return v; };
       const draw = () => {
         const words = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
         const hit = (r: HotkeyRow) => { const hay = `${r.label} ${r.key} ${r.alt} ${r.tip}`.toLowerCase(); return words.every((w) => hay.includes(w)); };
@@ -77,14 +77,14 @@ export function openHotkeyList(): void {
     } });
 }
 
-const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
-const SOURCE = "https://github.com/notaroomba/kicad-collaborative";
+const RELEASES = "https://github.com/notaroomba/junction/releases";
+const SOURCE = "https://github.com/notaroomba/junction";
 const LOGO = `<img src="/favicon.svg" width="64" height="64" alt="">`;
 
 /** The text KiCad's "Copy Version Info" puts on the clipboard, for this client. */
 export function versionInfo(): string {
   const spec = (window as unknown as { KiCadCanvas?: { VERSION?: string } }).KiCadCanvas;
-  return [`Application: KiCad Collaborative web editor`, `Version: ${PRODUCT_VERSION}, based on KiCad 10`, `Platform: ${navigator.platform || "browser"}, ${navigator.userAgent}`,
+  return [`Application: Junction web editor`, `Version: ${PRODUCT_VERSION}, based on KiCad 10`, `Platform: ${navigator.platform || "browser"}, ${navigator.userAgent}`,
     `Display: ${window.innerWidth}x${window.innerHeight} @ ${window.devicePixelRatio || 1}x`, `Locale: ${navigator.language}`, spec && spec.VERSION ? `Canvas: ${spec.VERSION}` : ""].filter(Boolean).join("\n");
 }
 
@@ -93,17 +93,17 @@ export function openAbout(): void {
   const link = (url: string, text?: string) => `<a href="${url}" target="_blank" rel="noreferrer">${esc(text || url)}</a>`;
   const pages: Record<string, string> = {
     About: `<p><b><u>Description</u></b></p><p>The KiCad EDA Suite is a set of open source applications for the creation of electronic schematics and printed circuit boards.</p>
-      <p>KiCad Collaborative adds real-time collaboration: several people edit the same schematic and board at once, in the desktop application or in this web editor, with live cursors, comments and version history.</p>
-      <p><b><u>KiCad Collaborative on the web</u></b></p><ul><li>Source code - ${link(SOURCE)}</li><li>Desktop application - ${link(RELEASES)}</li></ul>
+      <p>Junction adds real-time collaboration: several people edit the same schematic and board at once, in the desktop application or in this web editor, with live cursors, comments and version history.</p>
+      <p><b><u>Junction on the web</u></b></p><ul><li>Source code - ${link(SOURCE)}</li><li>Desktop application - ${link(RELEASES)}</li></ul>
       <p><b><u>KiCad on the web</u></b></p><ul><li>The official KiCad website - ${link("http://www.kicad.org")}</li><li>Developer website - ${link("https://go.kicad.org/dev")}</li><li>Official KiCad library repositories - ${link("https://go.kicad.org/libraries")}</li></ul>
       <p><b><u>KiCad users group and community</u></b></p><ul><li>KiCad forum - ${link("https://go.kicad.org/forum")}</li></ul>`,
     Version: `<pre id="abVersion" style="margin:0;white-space:pre-wrap;font-family:var(--mono);user-select:text">${esc(versionInfo())}</pre>`,
     License: `<p>The complete KiCad EDA Suite is released under the</p><p><b>GNU General Public License (GPL) version 3 or any later version</b></p>
-      <p>KiCad Collaborative is a fork of KiCad and is distributed under the same license. The source code is available from ${link(SOURCE)}.</p>`,
+      <p>Junction is a fork of KiCad and is distributed under the same license. The source code is available from ${link(SOURCE)}.</p>`,
   };
-  D.open({ title: "About KiCad Collaborative", width: 640,
+  D.open({ title: "About Junction", width: 640,
     build(body) {
-      body.innerHTML = `<div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">${LOGO}<div><div style="font-size:20px;font-weight:700">KiCad Collaborative</div>
+      body.innerHTML = `<div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">${LOGO}<div><div style="font-size:20px;font-weight:700">Junction</div>
         <div style="font-family:var(--mono);color:var(--ink-2);margin-top:2px" id="abVer">Version: ${esc(PRODUCT_VERSION)}, web editor</div><div style="color:var(--ink-2);margin-top:2px">Based on KiCad 10</div></div></div>
         <div id="abTabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line)">${Object.keys(pages).map((t, i) => `<button type="button" data-tab="${t}" class="${i ? "" : "on"}" style="border:1px solid var(--line);border-bottom:0;border-radius:var(--r-3) var(--r-3) 0 0;padding:5px 12px;background:${i ? "transparent" : "var(--panel)"};color:var(--ink);font:inherit;cursor:pointer">${t}</button>`).join("")}</div>
         <div id="abPage" style="height:260px;overflow:auto;border:1px solid var(--line);border-top:0;background:var(--panel);padding:10px 14px;line-height:1.5"></div>

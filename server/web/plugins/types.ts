@@ -5,7 +5,7 @@
 // name, description, runtime, actions[] with scopes / show-button / entrypoint) with one more
 // runtime type, "web", and the keys a browser plugin needs: `permissions`, `panel`, `importers`,
 // `exporters`, `assistant_tools`.  A folder can therefore carry a desktop plugin (python / exec,
-// which KiCad Collaborative on the desktop runs exactly as KiCad does) and a web one side by side.
+// which Junction on the desktop runs exactly as KiCad does) and a web one side by side.
 
 export type Scope = "pcb" | "schematic" | "footprint_wizard";
 

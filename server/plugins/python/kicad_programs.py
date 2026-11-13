@@ -758,7 +758,7 @@ Subcommands:
   sch      Schematics: export netlist|bom
   version  Reports the version info in various formats
 
-This is the KiCad Collaborative web editor answering for kicad-cli; other subcommands need the desktop application.
+This is the Junction web editor answering for kicad-cli; other subcommands need the desktop application.
 """
 
 _PCB = {("drc",): (_pcb_drc, _DRC_VALUES, _DRC_SWITCHES), ("export", "gerbers"): (_pcb_gerbers, _GBR_VALUES, _GBR_SWITCHES),
@@ -785,7 +785,7 @@ def kicad_cli(argv, cwd=None):
             elif x.startswith("--format="):
                 fmt = x.split("=", 1)[1]
         if fmt == "about":
-            return Result(0, f"Application: kicad-cli (KiCad Collaborative web editor)\n\nVersion: {_version()}\n\nPlatform: web browser\n", "")
+            return Result(0, f"Application: kicad-cli (Junction web editor)\n\nVersion: {_version()}\n\nPlatform: web browser\n", "")
         return Result(0, _version() + "\n", "")
     table = _PCB if argv[0] == "pcb" else _SCH if argv[0] == "sch" else None
     if table is not None:
@@ -837,7 +837,7 @@ def git(argv, cwd=None):
     repo = os.path.abspath(_repo())
     inside = here == repo or here.startswith(repo + os.sep)
     if cmd in ("version", "--version"):
-        return Result(0, "git version 2.47.0 (KiCad Collaborative version history)\n", "")
+        return Result(0, "git version 2.47.0 (Junction version history)\n", "")
     if cmd in ("--help", "-h", "help"):
         return Result(0, "usage: git <command> [<args>]\n\nIn the web editor git stands for the project's version history: version, rev-parse, status, branch, log, add, commit, gui.\n", "")
     if not inside:
@@ -924,7 +924,7 @@ def git(argv, cwd=None):
 
 # ----------------------------------------------------------------------------- ffmpeg
 
-_FF_VERSION = "ffmpeg version 7.1-web Copyright (c) 2000-2024 the FFmpeg developers\nbuilt for the KiCad Collaborative web editor: image sequences to GIF, MP4 and PNG, encoded by the browser\n"
+_FF_VERSION = "ffmpeg version 7.1-web Copyright (c) 2000-2024 the FFmpeg developers\nbuilt for the Junction web editor: image sequences to GIF, MP4 and PNG, encoded by the browser\n"
 _FF_FLAGS = {"-y", "-n", "-hide_banner", "-nostdin", "-stats", "-nostats", "-an", "-sn", "-dn", "-shortest", "-report"}
 _FF_FILTERS = {"color", "overlay", "scale", "palettegen", "paletteuse", "fps", "format", "split", "null", "copy", "setsar", "pad"}
 

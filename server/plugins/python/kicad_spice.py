@@ -384,7 +384,7 @@ def ngspice(argv, cwd=None):
             return 0, _USAGE, ""
         if a in ("-v", "--version"):
             e = engine()
-            return 0, f"******\n** ngspice-{e.version} : Circuit level simulation program\n** Compiled to WebAssembly for the KiCad Collaborative web editor\n******\n", ""
+            return 0, f"******\n** ngspice-{e.version} : Circuit level simulation program\n** Compiled to WebAssembly for the Junction web editor\n******\n", ""
         if a in ("-b", "--batch"):
             batch = True
         elif a in ("-r", "-o") and i + 1 < len(args):

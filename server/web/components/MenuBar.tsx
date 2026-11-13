@@ -101,7 +101,7 @@ function disabledWhy(c: Ctx, id: string): string | null {
 const isCheckable = (id: string) => MENU_CHECKS.has(id);
 
 // ---------------------------------------------------------------- the app menu
-/* The "KiCad Collaborative" title opens the application menu, like the application menu of a desktop program:
+/* The "Junction" title opens the application menu, like the application menu of a desktop program:
    the places outside the current editor (projects, public projects, the part libraries, plugins, GitHub, AI assistants)
    and the account.  Each entry is an editor action (web/editor/actions.ts HANDLERS). */
 interface AppEntry { id: string; label: string; icon: string; key?: string }
@@ -119,7 +119,7 @@ function appEntries(me: AppState["me"], project: AppState["project"], inEditor: 
     { id: "github", label: inEditor && project ? "GitHub Sync for This Project..." : "GitHub Sync...", icon: "import" },
     { id: "connectAI", label: "Connect an AI Assistant...", icon: "special_tools" },
     "-",
-    { id: "about", label: "About KiCad Collaborative", icon: "about" });
+    { id: "about", label: "About Junction", icon: "about" });
   if (me) out.push({ id: "signOut", label: "Log Out", icon: "" });
   return out;
 }
@@ -154,12 +154,12 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
   const r = open && btn.current ? btn.current.getBoundingClientRect() : null;
   return (
     <div className="brand relative flex flex-none items-center mr-3 max-[1100px]:mr-1.5">
-      <button type="button" id="appMenuBtn" ref={btn} aria-haspopup="menu" aria-expanded={open} title="KiCad Collaborative menu"
+      <button type="button" id="appMenuBtn" ref={btn} aria-haspopup="menu" aria-expanded={open} title="Junction menu"
         className={cx("flex items-center gap-2 font-semibold border-0 py-1 px-1.5 -ml-1.5 rounded-sm text-ink hover:bg-paper hover:shadow-[inset_0_0_0_1px_var(--line)]", open ? "bg-paper shadow-[inset_0_0_0_1px_var(--line)]" : "bg-transparent")}
         onPointerDown={(ev) => { if (ev.button !== 0) return; ev.preventDefault(); if (open) close(); else { setOpen(true); setSel(-1); } }}
         onKeyDown={(ev) => { if (!open && (ev.key === "Enter" || ev.key === " " || ev.key === "ArrowDown")) { ev.preventDefault(); setOpen(true); setSel(items[0] ?? -1); } }}>
         <img className="logo w-4.5 h-4.5 block" src="/favicon.svg" alt="" />
-        <span className="max-[1100px]:hidden">KiCad Collaborative</span> <span className="ver max-[1100px]:hidden text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
+        <span className="max-[1100px]:hidden">Junction</span> <span className="ver max-[1100px]:hidden text-xs font-mono font-normal leading-[normal] text-ink-3">{PRODUCT_VERSION}</span>
         <span className="text-2xs text-ink-3" aria-hidden="true">▾</span>
       </button>
       {open && r ? (

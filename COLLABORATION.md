@@ -1,4 +1,4 @@
-# KiCad Collaborative
+# Junction
 
 Real-time multiplayer editing for KiCad — shared cursors, live selections, and
 concurrent schematic **and board** editing, with cloud projects, offline support

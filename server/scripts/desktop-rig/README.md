@@ -1,6 +1,6 @@
 # Two real desktop editors, driven without a screen
 
-These scripts run two KiCad Collaborative editors as two users against a local server,
+These scripts run two Junction editors as two users against a local server,
 each on its own virtual display, and drive them through KiCad's IPC API (`kicad-python`).
 They are how zone fills, groups and the offline merge were checked end to end on Linux.
 

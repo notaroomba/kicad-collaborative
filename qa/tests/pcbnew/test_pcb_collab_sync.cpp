@@ -624,7 +624,7 @@ BOOST_AUTO_TEST_CASE( ZoneTravelsWithItsFill )
 }
 
 
-// KiCad Collaborative must not restamp the file format version on save: a
+// Junction must not restamp the file format version on save: a
 // project shared with a stock KiCad keeps the version it was opened with.
 BOOST_AUTO_TEST_CASE( SaveKeepsFileFormatVersion )
 {

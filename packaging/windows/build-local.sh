@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command local Windows build of the KiCad Collaborative installer.
+# One-command local Windows build of the Junction installer.
 #
 # Run ON A WINDOWS MACHINE inside an MSYS2 UCRT64 shell
 # (https://www.msys2.org — open "MSYS2 UCRT64" from the Start Menu):
@@ -92,4 +92,4 @@ makensis -DVERSION="$VERSION" -DSTAGEDIR="$(cygpath -w "$PWD/stage")" \
     packaging/windows/installer.nsi
 
 echo
-echo "Installer ready: KiCad-Collaborative-${VERSION}-windows-x64.exe"
+echo "Installer ready: Junction-${VERSION}-windows-x64.exe"

@@ -1,4 +1,4 @@
-; NSIS installer for KiCad Collaborative (built in CI from an MSYS2 tree).
+; NSIS installer for Junction (built in CI from an MSYS2 tree).
 ;
 ; Installs into its own directory with its own Start Menu entry and
 ; uninstaller, deliberately NOT registering .kicad_* file associations:
@@ -14,10 +14,10 @@
   !define STAGEDIR "stage"
 !endif
 
-Name "KiCad Collaborative ${VERSION}"
-OutFile "KiCad-Collaborative-${VERSION}-windows-x64.exe"
+Name "Junction ${VERSION}"
+OutFile "Junction-${VERSION}-windows-x64.exe"
 Unicode true
-InstallDir "$PROGRAMFILES64\KiCad Collaborative"
+InstallDir "$PROGRAMFILES64\Junction"
 InstallDirRegKey HKLM "Software\KiCad Collaborative" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
@@ -32,26 +32,27 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-Section "KiCad Collaborative"
+Section "Junction"
   SetOutPath "$INSTDIR"
   File /r "${STAGEDIR}\*.*"
 
   WriteRegStr HKLM "Software\KiCad Collaborative" "InstallDir" "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  ; Register the kicad-collab:// URL scheme (the web "Open in KiCad
-  ; Collaborative" button) to launch the project manager with the link.
-  WriteRegStr HKCR "kicad-collab" "" "URL:KiCad Collaborative Protocol"
+  ; Register the kicad-collab:// URL scheme (the web "Open in Junction" button) to launch the project manager with the link.
+  WriteRegStr HKCR "kicad-collab" "" "URL:Junction Protocol"
   WriteRegStr HKCR "kicad-collab" "URL Protocol" ""
   WriteRegStr HKCR "kicad-collab\DefaultIcon" "" "$INSTDIR\bin\kicad.exe,0"
   WriteRegStr HKCR "kicad-collab\shell\open\command" "" '"$INSTDIR\bin\kicad.exe" "%1"'
 
-  CreateDirectory "$SMPROGRAMS\KiCad Collaborative"
-  CreateShortcut "$SMPROGRAMS\KiCad Collaborative\KiCad Collaborative.lnk" "$INSTDIR\bin\kicad.exe"
-  CreateShortcut "$SMPROGRAMS\KiCad Collaborative\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  ; Upgrading from the old name: drop its Start Menu folder.
+  RMDir /r "$SMPROGRAMS\KiCad Collaborative"
+  CreateDirectory "$SMPROGRAMS\Junction"
+  CreateShortcut "$SMPROGRAMS\Junction\Junction.lnk" "$INSTDIR\bin\kicad.exe"
+  CreateShortcut "$SMPROGRAMS\Junction\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KiCadCollaborative" \
-      "DisplayName" "KiCad Collaborative ${VERSION}"
+      "DisplayName" "Junction ${VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KiCadCollaborative" \
       "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KiCadCollaborative" \
@@ -66,7 +67,7 @@ SectionEnd
 
 Section "Uninstall"
   RMDir /r "$INSTDIR"
-  RMDir /r "$SMPROGRAMS\KiCad Collaborative"
+  RMDir /r "$SMPROGRAMS\Junction"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\KiCadCollaborative"
   DeleteRegKey HKCR "kicad-collab"
   DeleteRegKey HKLM "Software\KiCad Collaborative"

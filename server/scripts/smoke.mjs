@@ -16,7 +16,7 @@ const health = await fetch(`${BASE}/healthz`);
 check('healthz 200', health.status === 200, `got ${health.status}`);
 
 const idx = await fetch(`${BASE}/`);
-check('index renders', idx.status === 200 && (await idx.text()).includes('KiCad Collaborative'));
+check('index renders', idx.status === 200 && (await idx.text()).includes('Junction'));
 
 const badLink = await fetch(`${BASE}/j/definitely-not-a-real-token`);
 const badLinkBody = await badLink.text();

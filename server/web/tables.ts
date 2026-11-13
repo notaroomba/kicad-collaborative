@@ -271,21 +271,21 @@ export const HOME_MENUS: [string, MenuEntry[]][] = [];
 export const LOCAL_LABELS: Record<string, string> = {
   github: "GitHub Sync...", fabPackage: "Fabrication Package (JLCPCB, PCBWay)...", drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
   collabCopyLink: "Copy Share Link", collabComments: "Comments...", collabFollow: "Follow Next Peer", collabHistory: "History",
-  collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative...", home: "Back to Projects",
+  collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in Junction...", home: "Back to Projects",
   showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",
   showNetNames: "Show Net Names", showPadNumbers: "Show Pad Numbers", showHiddenText: "Show Hidden Text", zoneFillPreview: "Zone Fill Preview", flipBoard: "Flip Board View", clearMarkers: "Clear Markers",
-  theme: "Toggle Dark Theme", themeLight: "Light", themeDark: "Dark", themeSystem: "System", downloadDesktop: "Download Desktop App", sourceCode: "Source on GitHub", about: "About KiCad Collaborative",
+  theme: "Toggle Dark Theme", themeLight: "Light", themeDark: "Dark", themeSystem: "System", downloadDesktop: "Download Desktop App", sourceCode: "Source on GitHub", about: "About Junction",
   languageEnglish: "English", showSearch: "Search", toDLabel: "Change to Directive Label", decrement: "Decrement", netInspector: "Net Inspector",
   // home-view menu entries
-  share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Log Out", checkpoint: "Create checkpoint…", kicad: "Open in KiCad Collaborative…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
+  share: "Share…", newProject: "New Project…", joinLink: "Join with Link…", importGithub: "Import from GitHub…", openTrash: "Trash", signOut: "Log Out", checkpoint: "Create checkpoint…", kicad: "Open in Junction…", zoomin: "Zoom in", zoomout: "Zoom out", fit: "Zoom to fit",
   "tab-appearance": "Layers", "tab-props": "Properties", "tab-peers": "Collaborators", "tab-comments": "Comments", "tab-history": "History",
 };
 export const LOCAL_KEYS: Record<string, string> = { zoomin: "+", zoomout: "−", fit: "Home", undo: "Ctrl+Z", redo: "Ctrl+Shift+Z", selectAll: "Ctrl+A" };
 /** External links among the menu entries (rendered as anchors). */
 export const LINKS: Record<string, string> = {
-  downloadDesktop: "https://github.com/notaroomba/kicad-collaborative/releases", sourceCode: "https://github.com/notaroomba/kicad-collaborative",
+  downloadDesktop: "https://github.com/notaroomba/junction/releases", sourceCode: "https://github.com/notaroomba/junction",
   help: "https://docs.kicad.org/", gettingStarted: "https://docs.kicad.org/master/en/getting_started_in_kicad/getting_started_in_kicad.html",
-  getInvolved: "https://go.kicad.org/contribute/", donate: "https://go.kicad.org/app-donate", reportBug: "https://github.com/notaroomba/kicad-collaborative/issues/new",
+  getInvolved: "https://go.kicad.org/contribute/", donate: "https://go.kicad.org/app-donate", reportBug: "https://github.com/notaroomba/junction/issues/new",
 };
 
 /** Docked pane ids and the KiCad "show …" action that toggles each. */

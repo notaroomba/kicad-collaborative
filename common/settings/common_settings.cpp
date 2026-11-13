@@ -955,7 +955,7 @@ void COMMON_SETTINGS::InitializeEnvironment()
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ), PATHS::GetStockSymbolsPath() );
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) ), PATHS::GetStockDesignBlocksPath() );
 
-    // KiCad Collaborative resolves the stock libraries from an installed
+    // Junction resolves the stock libraries from an installed
     // stock KiCad when it ships none itself (PATHS::GetStockEDALibraryPath).
     // That install's global library tables reference ITS versioned variables
     // (e.g. ${KICAD9_SYMBOL_DIR}), so define those names for past majors too.

@@ -30,7 +30,7 @@ export function Toast() {
   return <div id="toast" role="status" aria-live="polite" className={cx("fixed left-1/2 bottom-10 transform-[translateX(-50%)] bg-ink text-paper rounded-sm py-2 px-3.5 opacity-0 transition-opacity duration-200 ease-[ease] pointer-events-none z-100 show:opacity-100", show && "show")}>{toast ? toast.text : ""}</div>;
 }
 
-const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
+const RELEASES = "https://github.com/notaroomba/junction/releases";
 const H4 = "m-0 mb-2 text-base";                                                                              // was #popover h4
 const INPUT = "w-full bg-paper border border-line rounded-sm py-1.5 px-2 text-ink font-mono text-sm";     // was #popover input
 
@@ -43,23 +43,23 @@ function PopoverBody({ p }: { p: PopoverState }) {
       return (
         <>
           <h4 className={H4}>{p.title}</h4><p className="note">{p.why}</p>
-          <p className="note"><a href="#" onClick={(ev) => { ev.preventDefault(); dispatch({ type: "popover", popover: { kind: "kicad", anchor: p.anchor } }); }}>Open this project in KiCad Collaborative…</a></p>
+          <p className="note"><a href="#" onClick={(ev) => { ev.preventDefault(); dispatch({ type: "popover", popover: { kind: "kicad", anchor: p.anchor } }); }}>Open this project in Junction…</a></p>
         </>
       );
     case "about":
-      return <><h4 className={H4}>KiCad Collaborative 1.0</h4><p className="note">Real-time collaboration for KiCad, based on KiCad 10.<br />Web editor v1: move, rotate, delete footprints; comments; history; live presence.</p></>;
+      return <><h4 className={H4}>Junction</h4><p className="note">Real-time collaboration for KiCad, based on KiCad 10.<br />Web editor v1: move, rotate, delete footprints; comments; history; live presence.</p></>;
     case "share":
       return (
         <>
           <h4 className={H4}>Share link (editor)</h4>
           <input className={INPUT} value={p.url || ""} readOnly onClick={(ev) => ev.currentTarget.select()} />
-          <p className="note">Copied to your clipboard. Anyone with it can join in the browser or from KiCad Collaborative → File → Join Session from URL…</p>
+          <p className="note">Copied to your clipboard. Anyone with it can join in the browser or from Junction → File → Join Session from URL…</p>
         </>
       );
     case "kicad":
       return (
         <>
-          <h4 className={H4}>Open in KiCad Collaborative</h4>
+          <h4 className={H4}>Open in Junction</h4>
           <p className="note">1. Install the desktop app from the <a href={RELEASES} target="_blank" rel="noreferrer">releases page</a>.<br />2. File → Join Session from URL… and paste a share link (File → Copy share link… here).<br />3. Edits sync both ways, live.</p>
         </>
       );

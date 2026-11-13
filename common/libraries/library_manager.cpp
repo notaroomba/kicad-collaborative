@@ -588,7 +588,7 @@ bool LIBRARY_MANAGER::CreateGlobalTable( LIBRARY_TABLE_TYPE aType, bool aPopulat
 
 void LIBRARY_MANAGER::LoadGlobalTables( std::initializer_list<LIBRARY_TABLE_TYPE> aTablesToLoad )
 {
-    // KiCad Collaborative: when a global table is missing but the stock
+    // Junction: when a global table is missing but the stock
     // default table is available (bundled, or auto-found from a stock KiCad
     // install — see PATHS::GetStockEDALibraryPath), set the default
     // configuration up silently instead of asking on first run.  A table the

@@ -162,7 +162,7 @@ function repoPicker(el: HTMLElement, onPick: (fullName: string, repo: Repo | nul
 
 // ================================================================ /github
 async function renderImport(): Promise<void> {
-  document.title = "GitHub — KiCad Collaborative";
+  document.title = "GitHub — Junction";
   let gh: Connection;
   try { gh = await api<Connection>("/api/github"); }
   catch (e) { return renderSignedOut(e); }
@@ -283,7 +283,7 @@ function render(): void {
   if (!st) return;
   const status = st;
   const p = status.project, gh = status.github, link = status.link;
-  document.title = `${p.name} — GitHub — KiCad Collaborative`;
+  document.title = `${p.name} — GitHub — Junction`;
   need("#crumb").textContent = "· " + p.name;
   need("#who").textContent = gh.login;
   const back = need<HTMLAnchorElement>("#back"); back.textContent = "Open project"; back.href = `/p/${p.projectId}/edit`;
@@ -342,7 +342,7 @@ function render(): void {
         <button class="btn primary" id="push" ${s.push && r.canPush ? "" : "disabled"}>Push to GitHub${s.push ? ` (${s.push})` : ""}</button>
       </div>
       <div class="row" style="margin-top:12px">
-        <label class="f grow">Commit message <input type="text" id="msg" placeholder="Update ${esc(p.name)} from KiCad Collaborative" maxlength="200"></label>
+        <label class="f grow">Commit message <input type="text" id="msg" placeholder="Update ${esc(p.name)} from Junction" maxlength="200"></label>
         <label class="muted" style="display:flex;gap:6px;align-items:center;min-height:34px"><input type="checkbox" id="asPr" ${r.branchExists ? "" : "disabled"}> Open a pull request instead</label>
       </div>
       <div class="row" style="margin-top:12px">

@@ -1,5 +1,5 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// KiCad Collaborative web app: home (recent / explore / open link) + online
+// Junction web app: home (recent / explore / open link) + online
 // board editor.  Talks to the same REST + WebSocket API the desktop uses.
 //
 // This file is the editor core: the document (kicad-canvas.js), the websocket

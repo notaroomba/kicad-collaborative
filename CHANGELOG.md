@@ -1,7 +1,8 @@
 # Changelog
 
-Releases of KiCad Collaborative. The version here is the product version
-(`packaging/VERSION`), not the KiCad version it is based on.
+Releases of Junction, which was called KiCad Collaborative up to 1.0.9. The
+version here is the product version (`packaging/VERSION`), not the KiCad
+version it is based on.
 
 ## 2.0.0 (2026-11-12)
 
@@ -10,6 +11,11 @@ now built on a much newer KiCad (2782 upstream commits, through 2026-11-10),
 so a 2.0 client can write things into a shared project that a 1.0.9 client
 cannot read. Everyone in a project should update together. Files you open
 still keep the format version they came with unless an edit needs a newer one.
+
+### New name
+- KiCad Collaborative is now Junction. The app, the installers, the web editor
+  and the repository (github.com/notaroomba/junction) carry the new name. Your
+  settings, sign-in, online projects and the kicad-collab:// links are unchanged.
 
 ### Web editor
 - The browser editor went from a viewer to a full editor that follows KiCad's

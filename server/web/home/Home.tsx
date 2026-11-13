@@ -13,7 +13,7 @@ import { FirstProject } from "../onboarding/FirstProject";
 import { miniBoard, startGuidedProject } from "../onboarding/state";
 import { ago, Avatar, Confirm, copyText, Ic, layerOpen, Menu, Modal, PHONE, toast, toastError, useMedia, type MenuAt, type MenuEntry } from "./ui";
 
-const RELEASES = "https://github.com/notaroomba/kicad-collaborative/releases";
+const RELEASES = "https://github.com/notaroomba/junction/releases";
 type Tab = "projects" | "explore" | "trash";
 type Scope = "all" | "owned" | "shared" | "starred";
 type Sort = "updated" | "name" | "created";
@@ -705,7 +705,7 @@ function Welcome({ onJoin }: { onJoin: () => void }) {
       <ol className="hp-steps">
         <li><b>Put a project online.</b> Upload it here after signing in, or use File → Publish Project Online in the <a href={RELEASES} target="_blank" rel="noreferrer">desktop app</a>.</li>
         <li><b>Share it.</b> Invite people by GitHub username or email, or send a link.</li>
-        <li><b>Work together.</b> Everyone edits the same schematic and board, from KiCad Collaborative or the browser.</li>
+        <li><b>Work together.</b> Everyone edits the same schematic and board, from Junction or the browser.</li>
       </ol>
     </div>
   );
@@ -838,7 +838,7 @@ export function Home() {
             </div>
           </aside>
           <main className="hp-main" id="homeMain">
-            <div className="hp-topbar"><span className="hp-brand">KiCad Collaborative</span>{accountBtn}</div>
+            <div className="hp-topbar"><span className="hp-brand">Junction</span>{accountBtn}</div>
             <div className="hp-page">
               {tab === "explore" ? <Explore me={me} tick={tick + bump} />
                 : tab === "trash" && me ? <Trash tick={tick + bump} />

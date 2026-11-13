@@ -45,7 +45,7 @@ def _find_engine() -> str:
         if t and os.path.isfile(t):
             return t
     raise HarnessError("The design engine (harness-engine.js) was not found. Set KC_HARNESS_ENGINE to its path; "
-                       "in the kicad-collaborative repository it is server/static/dist/harness-engine.js.")
+                       "in the junction repository it is server/static/dist/harness-engine.js.")
 
 
 class LocalEngine(Transport):
@@ -104,7 +104,7 @@ class LocalEngine(Transport):
 
 
 class McpTransport(Transport):
-    """An online project on a KiCad Collaborative server, through its MCP endpoint."""
+    """An online project on a Junction server, through its MCP endpoint."""
     kind = "mcp"
     live = True
     _NAMES = {"apply": "apply_changes", "overview": "get_design_overview"}

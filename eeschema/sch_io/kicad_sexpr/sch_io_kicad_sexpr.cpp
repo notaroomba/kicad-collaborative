@@ -464,7 +464,7 @@ void SCH_IO_KICAD_SEXPR::Format( SCH_SHEET* aSheet )
     else
         m_schematic->GetEmbeddedFiles()->ClearEmbeddedFonts();
 
-    // KiCad Collaborative round-trips project files with stock KiCad installs: keep the format
+    // Junction round-trips project files with stock KiCad installs: keep the format
     // version the file was opened with instead of restamping it, so a save here doesn't flag the
     // file as "newer format" for everyone else.  New files (nothing loaded) get the current one.
     //

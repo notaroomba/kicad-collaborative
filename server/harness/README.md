@@ -29,7 +29,7 @@ autorouter), so the files stay valid and open in KiCad.
 | | Where the design is | How |
 |---|---|---|
 | Local files | a folder of KiCad files | `kh.open(folder)` / `kh.new(folder)`, then `project.save()`. Needs Node 20+ for the engine. |
-| Online project, from your computer | a project on a KiCad Collaborative server | `kh.connect("https://site", token, "project name")`. Edits appear live for everyone, with a cursor. |
+| Online project, from your computer | a project on a Junction server | `kh.connect("https://site", token, "project name")`. Edits appear live for everyone, with a cursor. |
 | Online project, from an AI assistant | the same | The assistant calls the server's `run_python` MCP tool with a script; `project`, `kh` and `parts` are already defined. |
 
 Install for local use, from the repository:

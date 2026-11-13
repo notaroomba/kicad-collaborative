@@ -5,7 +5,7 @@
     rows = parts.find("TPS54331", vendors=["digikey"])
     hit = parts.lookup("TPS54331")                          # one part: maker, datasheet, where to buy
 
-With a project open on a KiCad Collaborative server (`project=`), the server's vendor search is
+With a project open on a Junction server (`project=`), the server's vendor search is
 used, with the keys saved there.  Without one, the vendors are asked directly:
 
 - LCSC needs no key.

@@ -44,7 +44,7 @@ const MAX_RESULT_CHARS: usize = 120_000;
 /// An undo is not kept for a change whose inverse is larger than this (a deleted pour with its fill).
 const MAX_UNDO_BYTES: usize = 6 * 1024 * 1024;
 
-const INSTRUCTIONS: &str = "KiCad Collaborative: the person's online KiCad projects (schematics and boards), shared live with their collaborators. \
+const INSTRUCTIONS: &str = "Junction: the person's online KiCad projects (schematics and boards), shared live with their collaborators. \
 Start with list_projects, then get_design_overview for the project. Every design tool takes the project (id or exact name) and usually a document (a path from get_project, or \"board\"). \
 Read the design with the tools instead of guessing: coordinates are millimetres with Y down, schematic items sit on a 1.27 mm grid, and pins connect only when a wire end or label lands exactly on the pin's connection point. \
 render_view shows a sheet or the board as a picture. apply_changes edits the design at once and everyone in the project sees it live, so change only what the person asked for, use dry_run when unsure, check the result with run_checks and render_view, and take a wrong change back with undo_changes. \
@@ -215,11 +215,11 @@ fn hosts() -> &'static HostPool {
 
 const PROMPTS: &[(&str, &str, &str, &str)] = &[
     ("review_design", "Review a design", "Review a project's schematic and board and report the problems, ranked.",
-     "Review the KiCad project {project} on KiCad Collaborative. Read get_design_guide (topic review) first, then the design itself: the overview, the components and nets of every sheet, the ERC and the DRC, a picture of each sheet and of the board, and the datasheets of the ICs. Report what would stop it from working first, then what is risky, then polish, naming the references and nets. Do not change anything unless I ask."),
+     "Review the KiCad project {project} on Junction. Read get_design_guide (topic review) first, then the design itself: the overview, the components and nets of every sheet, the ERC and the DRC, a picture of each sheet and of the board, and the datasheets of the ICs. Report what would stop it from working first, then what is risky, then polish, naming the references and nets. Do not change anything unless I ask."),
     ("tidy_schematic", "Tidy a schematic", "Rearrange a schematic sheet so it reads cleanly, without changing any connection.",
-     "Tidy the schematic of the KiCad project {project} on KiCad Collaborative so it reads like a careful engineer drew it. Read get_design_guide (topic schematic) first. Work one functional block per change, look at the sheet with render_view before and after, and make sure every change reports connectivity unchanged; undo any that does not."),
+     "Tidy the schematic of the KiCad project {project} on Junction so it reads like a careful engineer drew it. Read get_design_guide (topic schematic) first. Work one functional block per change, look at the sheet with render_view before and after, and make sure every change reports connectivity unchanged; undo any that does not."),
     ("design_board", "Design a board from a description", "Take a design from a description to a placed and routed board, in stages.",
-     "Design this on KiCad Collaborative, in the project {project} (create it if it does not exist): {description}. Read get_design_guide first and work in its stages: requirements, parts with their datasheets, the schematic block by block, the board (update from schematic, outline, placement), rules and routing, then the checks and a short report of what to look at before ordering."),
+     "Design this on Junction, in the project {project} (create it if it does not exist): {description}. Read get_design_guide first and work in its stages: requirements, parts with their datasheets, the schematic block by block, the board (update from schematic, outline, placement), rules and routing, then the checks and a short report of what to look at before ordering."),
 ];
 
 fn prompts_list() -> Value {
@@ -366,7 +366,7 @@ async fn handle(state: &AppState, caller: &Arc<Caller>, site: &str, message: Val
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false }, "prompts": { "listChanged": false } },
-                "serverInfo": { "name": "kicad-collaborative", "title": "KiCad Collaborative", "version": env!("CARGO_PKG_VERSION"),
+                "serverInfo": { "name": "junction", "title": "Junction", "version": env!("CARGO_PKG_VERSION"),
                     "websiteUrl": site,
                     "icons": [
                         { "src": format!("{site}/icon-192.png"), "mimeType": "image/png", "sizes": ["192x192"] },

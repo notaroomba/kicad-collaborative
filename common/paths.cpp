@@ -241,7 +241,7 @@ wxString PATHS::GetWindowsBaseSharePath()
 
 
 /**
- * KiCad Collaborative ships without the stock symbol/footprint libraries.
+ * Junction ships without the stock symbol/footprint libraries.
  * When our own EDA-library dir has none, quietly fall back to an installed
  * stock KiCad's share dir so libraries, 3D models and library-table
  * templates resolve out of the box.  The probe runs once per process; a

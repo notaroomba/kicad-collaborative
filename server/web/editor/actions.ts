@@ -139,7 +139,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   compareSchematicWithFile: () => openCompare({ pickFile: true }), compareBoardWithFile: () => openCompare({ pickFile: true }),
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
   theme: () => toggleTheme(), themeLight: () => setTheme("light"), themeDark: () => setTheme("dark"), themeSystem: () => setTheme("system"), about: (a) => runAction("about", a),
-  // the app menu (the "KiCad Collaborative" title in the menu bar): places outside the current editor
+  // the app menu (the "Junction" title in the menu bar): places outside the current editor
   explore: () => navigate("/gallery"), connectAI: () => { location.href = "/connect"; },
   symbolLibrary: () => { if (window.KiCadLibrary) window.KiCadLibrary.openChooser("symbol", { browser: true }); },
   footprintLibrary: () => { if (window.KiCadLibrary) window.KiCadLibrary.openChooser("footprint", { browser: true }); },

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the dev build as a relocatable "KiCad Collaborative.app" + DMG.
+"""Package the dev build as a relocatable "Junction.app" + DMG.
 
 Takes the KiCad.app produced in the build tree (which links Homebrew and
 build-tree dylibs by absolute path), copies every non-system dependency into
@@ -20,7 +20,7 @@ import sys
 
 BREW_PREFIXES = ("/opt/homebrew/", "/usr/local/opt/", "/usr/local/Cellar/")
 
-APP_NAME = "KiCad Collaborative"
+APP_NAME = "Junction"
 BUNDLE_ID = "org.kicad-collaborative.kicad"
 
 
@@ -115,7 +115,7 @@ def main():
     contents = os.path.join(app, "Contents")
 
     # Branded app icon: the KiCad "Ki" with a two-tone (red/blue) dot on the
-    # "i" so KiCad Collaborative is distinct from stock KiCad in the Dock,
+    # "i" so Junction is distinct from stock KiCad in the Dock,
     # Launchpad and Finder.  Overwrites the icon the bundle references.
     branded_icns = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.icns")
     if os.path.exists(branded_icns):
@@ -303,7 +303,7 @@ def main():
             "installation's libraries or your own.\n"
         )
 
-    dmg = os.path.join(out_dir, f"KiCad-Collaborative-{args.version}-macos.dmg")
+    dmg = os.path.join(out_dir, f"Junction-{args.version}-macos.dmg")
     if os.path.exists(dmg):
         os.remove(dmg)
     print("building DMG …")

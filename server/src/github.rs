@@ -983,7 +983,7 @@ pub async fn link_project(
             json!({
                 "name": name,
                 "private": create.private,
-                "description": format!("{} — KiCad project, synced with KiCad Collaborative", a.project.name),
+                "description": format!("{} — KiCad project, synced with Junction", a.project.name),
                 "auto_init": true,
             }),
         )
@@ -1465,7 +1465,7 @@ async fn push_as(state: &AppState, user: &User, id: Uuid, req: PushRequest) -> A
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| format!("Update {} from KiCad Collaborative", a.project.name));
+        .unwrap_or_else(|| format!("Update {} from Junction", a.project.name));
 
     if req.pull_request && remote.head.is_none() {
         return Err(AppError::BadRequest(format!(
@@ -1589,7 +1589,7 @@ async fn push_as(state: &AppState, user: &User, id: Uuid, req: PushRequest) -> A
                     "head": target_branch,
                     "base": link.branch,
                     "body": format!(
-                        "Changes to **{}** made in KiCad Collaborative.\n\nFiles:\n{}",
+                        "Changes to **{}** made in Junction.\n\nFiles:\n{}",
                         a.project.name,
                         pushed.iter().map(|p| format!("- `{}`", link.repo_path(p))).collect::<Vec<_>>().join("\n")
                     ),

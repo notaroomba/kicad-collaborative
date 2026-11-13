@@ -345,8 +345,8 @@ function PcmIcon({ identifier, has, small }: { identifier: string; has: boolean;
 type Source = "all" | "builtin" | "kicad" | "community";
 const sizeOf = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} kB`);
 const SOURCE_NOTE: Record<Source, string> = {
-  all: "Everything you can install, in one list: the plugins built into KiCad Collaborative, the ones in KiCad's own Plugin and Content Manager, and the ones other people published here. You are shown what a plugin asks for before it is installed.",
-  builtin: "These ship with KiCad Collaborative and double as examples: their source is in server/plugins.",
+  all: "Everything you can install, in one list: the plugins built into Junction, the ones in KiCad's own Plugin and Content Manager, and the ones other people published here. You are shown what a plugin asks for before it is installed.",
+  builtin: "These ship with Junction and double as examples: their source is in server/plugins.",
   kicad: "The plugins in KiCad's own Plugin and Content Manager. They are Python programs written for the desktop; here each runs on a Python interpreter in the plugin sandbox, on your board, with its dialogs drawn in the editor. Each label comes from a test run: the plugin was loaded and every command it adds was run on a demo board.",
   community: "Published by other people and not reviewed. You are shown who published a plugin and everything it asks for before it is installed.",
 };
@@ -533,7 +533,7 @@ function DevelopTab() {
       {err ? <p className="plg-err" id="pluginDevErr">{err}</p> : null}
       <h3>Writing a plugin</h3>
       <p>A plugin is a folder with a <code>plugin.json</code> — KiCad's own plugin manifest, with <code>"runtime": {"{"}"type": "web", "entrypoint": "main.js"{"}"}</code> — and a script that uses the <code>kicad</code> object: <code>kicad.actions.register()</code>, <code>kicad.design.components()</code>, <code>kicad.design.apply()</code>, <code>kicad.ui.prompt()</code>…</p>
-      <p>The guide and the API reference are in <a href="https://github.com/notaroomba/kicad-collaborative/blob/master/server/plugins/README.md" target="_blank" rel="noreferrer noopener">server/plugins/README.md ↗</a>; the catalog plugins beside it are short, complete examples.</p>
+      <p>The guide and the API reference are in <a href="https://github.com/notaroomba/junction/blob/master/server/plugins/README.md" target="_blank" rel="noreferrer noopener">server/plugins/README.md ↗</a>; the catalog plugins beside it are short, complete examples.</p>
       <p className="plg-muted">Python and exec plugins for the desktop app (KiCad's IPC API and action plugins) are installed there, in its Plugin and Content Manager. What they change in an online project reaches the web like any other edit.</p>
     </div>
   );

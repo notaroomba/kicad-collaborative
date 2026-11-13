@@ -38,7 +38,7 @@ export function showView(name: "home" | "editor"): void {
 
 export function showHome() {
   showView("home");
-  document.title = "KiCad Collaborative";
+  document.title = "Junction";
   renderHome();
 }
 

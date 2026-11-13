@@ -68,7 +68,7 @@ def new(folder: str, name: str | None = None) -> Project:
 
 
 def connect(url: str, token: str, project: str, live: bool = True) -> Project:
-    """Open an online project on a KiCad Collaborative server; edits are live for everyone in it.
+    """Open an online project on a Junction server; edits are live for everyone in it.
 
     With `live` (the default) each batch of edits is drawn a few items at a time with a cursor on them.
     """

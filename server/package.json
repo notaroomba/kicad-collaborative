@@ -2,7 +2,7 @@
   "name": "kicad-collab-web",
   "version": "2.0.0",
   "private": true,
-  "description": "React + TypeScript chrome for the KiCad Collaborative web editor (bundled into static/dist/ui.js)",
+  "description": "React + TypeScript chrome for the Junction web editor (bundled into static/dist/ui.js)",
   "scripts": {
     "build": "npm run gen:version && node scripts/gen-icon-pack.js && node scripts/build-python.mjs && npm run build:canvas && npm run build:kicad-dialogs && npm run build:props && npm run build:sch-tools && npm run build:pcb-tools && npm run build:editor && npm run build:parts && npm run build:router && npm run build:landing && npm run build:github && npm run build:styleguide && npm run build:viewer3d && npm run build:sim-ngspice && npm run build:mcp && npm run build:harness && npm run build:fab && esbuild web/main.tsx --bundle --minify --sourcemap --target=es2020 --jsx=automatic --define:process.env.NODE_ENV=\\\"production\\\" --define:MENU_SPEC_SHARED=true --outfile=static/dist/ui.js --legal-comments=none && tailwindcss -i web/styles/tailwind.css -o static/dist/ui.css --minify",
     "dev": "node scripts/gen-version.js && esbuild web/canvas/index.ts --bundle --format=iife --target=es2020 --sourcemap --outfile=static/kicad-canvas.js --watch & esbuild web/main.tsx --bundle --sourcemap --target=es2020 --jsx=automatic --define:process.env.NODE_ENV=\\\"development\\\" --outfile=static/dist/ui.js --watch & tailwindcss -i web/styles/tailwind.css -o static/dist/ui.css --watch & wait",

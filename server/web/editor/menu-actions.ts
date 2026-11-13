@@ -81,7 +81,7 @@ export function netlistText(doc: { items: Map<string, Item> }, source: string): 
   const refKey = (r: string) => { const m = /^(.*?)(\d+)$/.exec(r); return m ? [m[1], +m[2]] as const : [r, 0] as const; };
   const byRef = (a: string, b: string) => { const x = refKey(a), y = refKey(b); return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] - y[1]; };
   comps.sort((a, b) => byRef(a.ref, b.ref));
-  const out: string[] = ['(export (version "E")', "  (design", `    (source ${q(source)})`, `    (date ${q(new Date().toISOString().slice(0, 19))})`, '    (tool "KiCad Collaborative web editor"))', "  (components"];
+  const out: string[] = ['(export (version "E")', "  (design", `    (source ${q(source)})`, `    (date ${q(new Date().toISOString().slice(0, 19))})`, '    (tool "Junction web editor"))', "  (components"];
   for (const c of comps) {
     const n = c.item.node, lib = K.str((K.kid(n, "lib_id") || [])[1]), [libName, part] = lib.includes(":") ? [lib.slice(0, lib.indexOf(":")), lib.slice(lib.indexOf(":") + 1)] : ["", lib];
     const uuid = K.str((K.kid(n, "uuid") || [])[1]);

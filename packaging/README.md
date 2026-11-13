@@ -1,12 +1,12 @@
-# Packaging KiCad Collaborative
+# Packaging Junction
 
-Installers are branded **KiCad Collaborative** and are designed to install
+Installers are branded **Junction** and are designed to install
 *alongside* a stock KiCad, sharing the same project files.
 
 ## Coexistence with stock KiCad
 
 - **Lock files are never created or modified.** Stock KiCad guards open
-  projects with `~*.lck` files; KiCad Collaborative reads and honors an
+  projects with `~*.lck` files; Junction reads and honors an
   existing lock but never writes, overwrites or deletes one — live-session
   coordination is the collaboration server's job. Set
   `KICAD_COLLAB_CREATE_LOCKS=1` to restore stock locking.
@@ -54,7 +54,7 @@ python3 packaging/macos/package_macos.py build dist
 Copies `build/kicad/KiCad.app`, bundles the whole Homebrew dylib closure
 into `Contents/Frameworks`, rewrites install names to `@executable_path`,
 ad-hoc re-signs, rebrands the bundle, and produces
-`dist/KiCad-Collaborative-<version>-macos.dmg`. The result runs on a
+`dist/Junction-<version>-macos.dmg`. The result runs on a
 machine without Homebrew (verified: `DYLD_PRINT_LIBRARIES` shows zero
 `/opt/homebrew` loads). The build is ad-hoc signed, not notarized:
 first launch needs right-click → Open.
@@ -64,7 +64,7 @@ first launch needs right-click → Open.
 Built in CI: the `windows-installer` GitHub Actions workflow builds the
 tree under MSYS2/MINGW64, bundles the MinGW runtime DLL closure, and runs
 NSIS on `packaging/windows/installer.nsi` to produce
-`KiCad-Collaborative-<version>-windows-x64.exe` as a workflow artifact.
+`Junction-<version>-windows-x64.exe` as a workflow artifact.
 Trigger it from the Actions tab (workflow_dispatch) or by pushing a `v*`
 tag. The workflow refuses to build against a libcurl without WebSocket
 support, since the collaboration client would silently fail to connect.

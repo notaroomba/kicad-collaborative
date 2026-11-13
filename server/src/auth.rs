@@ -619,18 +619,18 @@ async fn finish_login(
             .to_string();
         let page = format!(
             r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize sign-in — KiCad Collaborative</title>{style}</head><body>
+<title>Authorize sign-in — Junction</title>{style}</head><body>
 <div class="dialog">
   <div class="titlebar"><span class="mark">{mark}</span>Authorize sign-in<span class="host">{host}</span></div>
   <div class="body">
-    <h1>KiCad Collaborative wants to sign in as you</h1>
+    <h1>Junction wants to sign in as you</h1>
     <p>The desktop app on this computer is asking to use your account for 30 days.</p>
     <dl class="kv">
       <dt>Account</dt><dd><b>{login}</b></dd>
       <dt>App address</dt><dd><code>{uri}</code></dd>
       <dt>Access</dt><dd>Your online projects and live sessions</dd>
     </dl>
-    <p class="muted">Only continue if you just chose <b>File &rarr; Sign In to Collaboration</b> in KiCad Collaborative.
+    <p class="muted">Only continue if you just chose <b>File &rarr; Sign In to Collaboration</b> in Junction.
        The address above is the app that receives the sign-in — a stranger's app would show a different one.</p>
   </div>
   <form method="post" action="/auth/desktop/confirm" class="actions">

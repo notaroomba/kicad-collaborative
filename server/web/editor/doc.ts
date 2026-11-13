@@ -234,7 +234,7 @@ export async function openEditor(id: string) {
   }
   state.project = info;
   state.role = info.role;
-  document.title = `${info.name} — KiCad Collaborative`;
+  document.title = `${info.name} — Junction`;
   state.docs = [];
   // What the server lets this person do (server/src/access.rs).  Someone who is not signed in
   // still joins the live session, as a guest who only watches.

@@ -11,7 +11,7 @@
 		(title "USB-C 3.3 V regulator")
 		(date "2026-11-11")
 		(rev "A")
-		(company "KiCad Collaborative")
+		(company "Junction")
 		(comment 1 "Starter template")
 	)
 	(layers

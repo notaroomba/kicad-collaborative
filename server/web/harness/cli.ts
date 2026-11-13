@@ -131,7 +131,7 @@ async function backend(url: string, init?: { method?: string; body?: string }): 
     return miss("Searching KiCad's libraries needs a KiCad installation on this computer or a server.");
   }
   const s = await server(url, init); if (s) return s;
-  return miss(u.pathname.startsWith("/api/ai/datasheet") ? "Reading a datasheet by address needs a server; give the harness the PDF file instead." : "This needs a KiCad Collaborative server (pass server= and token=).", 502);
+  return miss(u.pathname.startsWith("/api/ai/datasheet") ? "Reading a datasheet by address needs a server; give the harness the PDF file instead." : "This needs a Junction server (pass server= and token=).", 502);
 }
 
 async function handle(req: any): Promise<unknown> {

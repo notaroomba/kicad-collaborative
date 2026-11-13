@@ -612,7 +612,7 @@ with socket.create_connection(("127.0.0.1", int(os.environ["DESK_PORT"])), timeo
         print(stream.readline().decode().strip())
 `;
 const DESK_META = { $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'Desk Tool', description: 'A plugin that uses desktop programs, Qt and a footprint wizard, used to test the web runtime.', description_full: 'Runs kicad-cli and git, opens a Qt window and registers a footprint wizard.', identifier: DESK_ID, type: 'plugin',
-  author: { name: 'KiCad Collaborative tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com' }, versions: [{ version: '1.0.0', status: 'stable', kicad_version: '8.0' }] };
+  author: { name: 'Junction tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com' }, versions: [{ version: '1.0.0', status: 'stable', kicad_version: '8.0' }] };
 
 // A plugin for KiCad's IPC interface: a program of its own that talks to KiCad through kipy (plugin.json names its entry point).
 const IPC_ID = 'com.example.ipctool';
@@ -648,11 +648,11 @@ print("IPCTOOL version=%s board=%s footprints=%d made=%s copper=%d stackup=%d" %
     board.get_copper_layer_count(), len(board.get_stackup().layers)))
 `;
 const IPC_META = { $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'IPC Tool', description: 'A plugin for KiCad\'s IPC interface, used to test the web runtime.', description_full: 'Adds a via through kipy.', identifier: IPC_ID, type: 'plugin',
-  author: { name: 'KiCad Collaborative tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com/ipctool' }, versions: [{ version: '0.3.0', status: 'stable', kicad_version: '9.0', runtime: 'ipc' }] };
+  author: { name: 'Junction tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com/ipctool' }, versions: [{ version: '0.3.0', status: 'stable', kicad_version: '9.0', runtime: 'ipc' }] };
 const METADATA = {
   $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'Py Tool', description: 'A Python action plugin written for the desktop, used to test the web runtime.',
   description_full: 'Moves a footprint, asks in a wx dialog, reads the project and makes fabrication files.', identifier: ID, type: 'plugin',
-  author: { name: 'KiCad Collaborative tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com/pytool' },
+  author: { name: 'Junction tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com/pytool' },
   versions: [{ version: '1.2.0', status: 'stable', kicad_version: '8.0' }],
 };
 

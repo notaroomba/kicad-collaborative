@@ -4,7 +4,7 @@
   "name": "Design Statistics",
   "description": "A docked panel with live counts for the open document and details of what is selected. It updates as you and your collaborators edit.",
   "version": "1.0.0",
-  "author": "KiCad Collaborative",
+  "author": "Junction",
   "license": "GPL-3.0-or-later",
   "runtime": { "type": "web", "entrypoint": "main.js" },
   "permissions": ["design:read", "view"],

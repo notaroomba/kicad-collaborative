@@ -1020,7 +1020,7 @@ pub async fn export_library(State(state): State<AppState>, AuthUser(user): AuthU
         symbols.iter().map(|s| format!("\t{s}")).collect::<Vec<_>>().join("\n")
     );
     let readme = format!(
-        "{name} — a KiCad Collaborative part library\n\
+        "{name} — a Junction part library\n\
          ==========================================\n\n\
          {symbols} symbols, {fps} footprints, {models} 3D models.\n\n\
          To use it in KiCad:\n\

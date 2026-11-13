@@ -1019,7 +1019,7 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     /* Set title */
     aInfo.SetAppName( Pgm().App().GetAppName() );
 
-    /* KiCad Collaborative product version, with the KiCad base it tracks */
+    /* Junction product version, with the KiCad base it tracks */
     wxString version;
     version << KICAD_COLLAB_PRODUCT_VERSION
             << wxT( " (" ) << KICAD_COLLAB_PRODUCT_NAME << wxT( "), based on KiCad " )

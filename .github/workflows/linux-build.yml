@@ -77,18 +77,18 @@ jobs:
           # prefers it via LD_LIBRARY_PATH.
           mkdir -p pkgroot/usr/lib/kicad-collab
           cp -a /opt/collab-curl/lib/libcurl.so* pkgroot/usr/lib/kicad-collab/
-          cat > pkgroot/usr/bin/kicad-collaborative << 'EOF'
+          cat > pkgroot/usr/bin/junction << 'EOF'
           #!/bin/sh
           here=$(dirname "$(readlink -f "$0")")
           export LD_LIBRARY_PATH="$here/../lib/kicad-collab${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           exec "$here/kicad" "$@"
           EOF
-          chmod +x pkgroot/usr/bin/kicad-collaborative
-          tar -C pkgroot -czf KiCad-Collaborative-$VERSION-linux-x64.tar.gz usr
-          ls -la KiCad-Collaborative-$VERSION-linux-x64.tar.gz
+          chmod +x pkgroot/usr/bin/junction
+          tar -C pkgroot -czf Junction-$VERSION-linux-x64.tar.gz usr
+          ls -la Junction-$VERSION-linux-x64.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kicad-collaborative-linux
-          path: KiCad-Collaborative-*-linux-x64.tar.gz
+          name: junction-linux
+          path: Junction-*-linux-x64.tar.gz
           if-no-files-found: error

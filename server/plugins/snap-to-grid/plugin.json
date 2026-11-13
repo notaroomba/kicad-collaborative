@@ -4,7 +4,7 @@
   "name": "Snap to Grid",
   "description": "Moves the selected symbols or footprints (or all of them) onto a grid you choose. One undo step.",
   "version": "1.0.0",
-  "author": "KiCad Collaborative",
+  "author": "Junction",
   "license": "GPL-3.0-or-later",
   "runtime": { "type": "web", "entrypoint": "main.js" },
   "permissions": ["design:read", "design:write"],

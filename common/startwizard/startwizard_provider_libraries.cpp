@@ -232,7 +232,7 @@ bool STARTWIZARD_PROVIDER_LIBRARIES::NeedsUserInput() const
     if( LIBRARY_MANAGER::GlobalTablesValid() )
         return false;
 
-    // KiCad Collaborative: when the stock default tables are available
+    // Junction: when the stock default tables are available
     // (bundled, or auto-found from a stock KiCad install), set the default
     // configuration up silently rather than asking.  The wizard page only
     // remains for the case where there is nothing to find.

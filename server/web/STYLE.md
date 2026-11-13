@@ -1,4 +1,4 @@
-# KiCad Collaborative web style guide
+# Junction web style guide
 
 One theme covers every page of the web product: the home page, the sign-in, join and authorize
 pages, the projects window, the GitHub page, and the editor with its panes, dialogs, the Assistant

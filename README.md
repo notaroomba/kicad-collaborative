@@ -1,6 +1,6 @@
-# KiCad Collaborative
+# Junction
 
-**Design circuits together, live.** KiCad Collaborative brings multiplayer editing directly into KiCad’s schematic and PCB editors: shared cursors, live changes, cloud projects, and version history.
+**Design circuits together, live.** Junction brings multiplayer editing directly into KiCad’s schematic and PCB editors: shared cursors, live changes, cloud projects, and version history.
 
 ## Screenshots
 
@@ -24,7 +24,7 @@ Two schematic editors on the same sheet, each at its own zoom. The named cursor 
 
 ## Try it
 
-1. Open KiCad Collaborative and choose **File → Online Projects…** in the project manager.
+1. Open Junction and choose **File → Online Projects…** in the project manager.
 2. Sign in with GitHub, then upload a project or open one shared with you.
 3. Use **Share…** to invite a collaborator or create an edit, comment-only or view-only link.
 4. Open the same schematic or PCB in both clients. Cursors and supported edits synchronize live.

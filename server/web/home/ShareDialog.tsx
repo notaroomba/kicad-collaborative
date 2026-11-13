@@ -236,7 +236,7 @@ export function ShareDialog({ target, onClose, onChanged }: { target: ShareTarge
               <p className="hp-note" id="hp-link-note">{linkRole === "editor" ? "Anyone with this link can edit after signing in."
                 : perms?.linksRequireSignin ? `Anyone with this link can ${linkRole === "commenter" ? "view and comment" : "view"} after signing in.`
                 : linkRole === "commenter" ? "Anyone with this link can view without an account, and comment after signing in. They cannot change the design."
-                : "Anyone with this link can view without an account. They cannot comment or change the design."} Links also open in KiCad Collaborative (File → Join Session from URL…).</p>
+                : "Anyone with this link can view without an account. They cannot comment or change the design."} Links also open in Junction (File → Join Session from URL…).</p>
               <div className="hp-linknew">
                 <RoleSelect value={linkRole} onChange={setLinkRole} label="Role the link grants" />
                 <select className="hp-select" aria-label="Link expiry" value={linkDays} onChange={(ev) => setLinkDays(Number(ev.target.value))}>

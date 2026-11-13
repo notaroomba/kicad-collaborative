@@ -788,7 +788,7 @@ BOOST_AUTO_TEST_CASE( AddedWithExistingUuidUpserts )
 }
 
 
-// KiCad Collaborative must not restamp the file format version on save: a
+// Junction must not restamp the file format version on save: a
 // project shared with a stock KiCad keeps the version it was opened with.  The version is
 // only kept when the bytes actually fit in it; when they do not it is raised and the reason
 // reported, so an older KiCad never gets a file that lies about its format.

@@ -1,6 +1,6 @@
 # Plugins for the web editor
 
-KiCad Collaborative runs plugins in two places.
+Junction runs plugins in two places.
 
 - **Desktop app.** KiCad's own plugin systems are unchanged: IPC API plugins (`plugin.json` with a
   `python` or `exec` runtime, `kicad-python`), the legacy action plugins, and the Plugin and

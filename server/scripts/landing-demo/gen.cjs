@@ -163,7 +163,7 @@ schItems.push(`(text "f = 1.44 / ((R3 + 2 R4) C3) = 1.4 Hz" (exclude_from_sim no
 schItems.push(`(text "5k1 on each CC line asks the charger for 5 V" (exclude_from_sim no) (at 20.32 91.44 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid ${q(uuid("note/cc"))}))`);
 
 const schText = `(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid ${q(ROOT)}) (paper "User" 170 142)
-  (title_block (title "555 blinker") (date "2026-11-11") (rev "A") (company "KiCad Collaborative") (comment 1 "Home page demo"))
+  (title_block (title "555 blinker") (date "2026-11-11") (rev "A") (company "Junction") (comment 1 "Home page demo"))
   (lib_symbols ${Object.values(libSyms).map(flatText).join(" ")})
   ${schItems.join("\n")}
   ${symNodes.map((s) => flatText(s.node)).join("\n")}
@@ -304,7 +304,7 @@ const LAYERS = `(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (9 "F.Adhes" user "F
   (5 "F.SilkS" user "F.Silkscreen") (7 "B.SilkS" user "B.Silkscreen") (1 "F.Mask" user) (3 "B.Mask" user) (17 "Dwgs.User" user "User.Drawings") (19 "Cmts.User" user "User.Comments")
   (21 "Eco1.User" user "User.Eco1") (23 "Eco2.User" user "User.Eco2") (25 "Edge.Cuts" user) (27 "Margin" user) (31 "F.CrtYd" user "F.Courtyard") (29 "B.CrtYd" user "B.Courtyard") (35 "F.Fab" user) (33 "B.Fab" user))`;
 const pcbText = `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0") (general (thickness 1.6) (legacy_teardrops no)) (paper "A4")
-  (title_block (title "555 blinker") (date "2026-11-11") (rev "A") (company "KiCad Collaborative") (comment 1 "Home page demo"))
+  (title_block (title "555 blinker") (date "2026-11-11") (rev "A") (company "Junction") (comment 1 "Home page demo"))
   ${LAYERS}
   (setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no) (tenting front back) (grid_origin ${OX} ${OY}))
   ${NETS.map((n, i) => `(net ${i} ${q(n)})`).join(" ")}

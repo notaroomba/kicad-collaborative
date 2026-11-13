@@ -54,7 +54,7 @@ class LOCKFILE
 {
 public:
     /**
-     * KiCad Collaborative never creates, overwrites or deletes lock files:
+     * Junction never creates, overwrites or deletes lock files:
      * it shares project directories with stock KiCad installs, and live
      * sessions are coordinated by the collaboration server.  Existing locks
      * (e.g. one held by a stock KiCad) are still read and honored.  Setting

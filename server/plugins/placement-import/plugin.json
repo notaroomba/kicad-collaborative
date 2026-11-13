@@ -4,7 +4,7 @@
   "name": "Footprint Placement CSV",
   "description": "Exports footprint positions to CSV and places footprints from one: edit positions in a spreadsheet, or carry a layout from another tool. Columns: Ref, X, Y, Rot.",
   "version": "1.0.0",
-  "author": "KiCad Collaborative",
+  "author": "Junction",
   "license": "GPL-3.0-or-later",
   "runtime": { "type": "web", "entrypoint": "main.js" },
   "permissions": ["design:read", "design:write", "files:import", "files:export"],

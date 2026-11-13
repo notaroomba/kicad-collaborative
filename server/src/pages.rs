@@ -363,7 +363,7 @@ pub async fn join_page(
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>Join {name} — KiCad Collaborative</title>{STYLE}</head><body>
+<title>Join {name} — Junction</title>{STYLE}</head><body>
 <div class="dialog">
   <div class="titlebar"><span class="mark">{MARK}</span>Join project<span class="host">{host}</span></div>
   <div class="body">
@@ -371,10 +371,10 @@ pub async fn join_page(
     <dl class="kv"><dt>Shared by</dt><dd><b>{owner}</b></dd><dt>This link makes you a</dt><dd><b id="linkrole" data-role="{role}">{role_word}</b><br><span class="muted">{role_note}</span></dd></dl>
     <div class="choices">
       <a class="choice web" id="openweb" href="{web_href}"><b>Open in the web editor</b><span class="muted">{web_note}</span></a>
-      <a class="choice desktop" href="kicad-collab://join/{token}"><b>Open in KiCad Collaborative</b><span class="muted">The desktop app, signed in; a working copy is kept in sync.</span></a>
+      <a class="choice desktop" href="kicad-collab://join/{token}"><b>Open in Junction</b><span class="muted">The desktop app, signed in; a working copy is kept in sync.</span></a>
     </div>
     {signin}
-    <p class="muted">Desktop app didn't open? Paste this link into KiCad Collaborative &rarr; <b>File &rarr; Join Session from URL…</b></p>
+    <p class="muted">Desktop app didn't open? Paste this link into Junction &rarr; <b>File &rarr; Join Session from URL…</b></p>
     <div class="linkbox">
       <input id="lnk" readonly value="{url}">
       <button type="button" class="btn" onclick="navigator.clipboard.writeText(document.getElementById('lnk').value);this.textContent='Copied';">Copy</button>
@@ -448,7 +448,7 @@ pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> 
 
     Ok(Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gallery — KiCad Collaborative</title>{STYLE}
+<title>Gallery — Junction</title>{STYLE}
 <style>
   body {{ max-width: 1080px; }}
   .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }}
@@ -564,7 +564,7 @@ document.getElementById("cloneBtn").onclick = async () => {{
 
     Ok(Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{name} — KiCad Collaborative</title>{STYLE}<style>
+<title>{name} — Junction</title>{STYLE}<style>
   body {{ display: block; max-width: 860px; margin: 0 auto; }}
   .card {{ width: 100%; }}
   .desc {{ white-space: pre-wrap; }}
@@ -628,7 +628,7 @@ pub async fn live_page(
 
     Ok(Html(format!(
         r##"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{name} live — KiCad Collaborative</title>{STYLE}
+<title>{name} live — Junction</title>{STYLE}
 <style>
   body {{ display: block; max-width: 1100px; margin: 0 auto; }}
   #stage {{ position: relative; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--r-2);

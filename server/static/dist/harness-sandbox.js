@@ -69,7 +69,7 @@ def new(folder: str, name: str | None = None) -> Project:
 
 
 def connect(url: str, token: str, project: str, live: bool = True) -> Project:
-    """Open an online project on a KiCad Collaborative server; edits are live for everyone in it.
+    """Open an online project on a Junction server; edits are live for everyone in it.
 
     With \`live\` (the default) each batch of edits is drawn a few items at a time with a cursor on them.
     """
@@ -1934,7 +1934,7 @@ def _find_engine() -> str:
         if t and os.path.isfile(t):
             return t
     raise HarnessError("The design engine (harness-engine.js) was not found. Set KC_HARNESS_ENGINE to its path; "
-                       "in the kicad-collaborative repository it is server/static/dist/harness-engine.js.")
+                       "in the junction repository it is server/static/dist/harness-engine.js.")
 
 
 class LocalEngine(Transport):
@@ -1993,7 +1993,7 @@ class LocalEngine(Transport):
 
 
 class McpTransport(Transport):
-    """An online project on a KiCad Collaborative server, through its MCP endpoint."""
+    """An online project on a Junction server, through its MCP endpoint."""
     kind = "mcp"
     live = True
     _NAMES = {"apply": "apply_changes", "overview": "get_design_overview"}
@@ -4650,7 +4650,7 @@ def header(name: str, pins: int, rows: int = 1, pitch: float = 2.54, lead: float
     rows = parts.find("TPS54331", vendors=["digikey"])
     hit = parts.lookup("TPS54331")                          # one part: maker, datasheet, where to buy
 
-With a project open on a KiCad Collaborative server (\`project=\`), the server's vendor search is
+With a project open on a Junction server (\`project=\`), the server's vendor search is
 used, with the keys saved there.  Without one, the vendors are asked directly:
 
 - LCSC needs no key.

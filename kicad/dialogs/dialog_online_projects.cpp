@@ -2917,7 +2917,7 @@ void DIALOG_ONLINE_PROJECTS::claimLink( const wxString& aLinkToken, bool aOpenWi
                 m_selectAfterRefresh = jsonStr( project, "projectId" );
                 refresh();
 
-                // "Open in KiCad Collaborative" on the web already said what to do: go
+                // "Open in Junction" on the web already said what to do: go
                 // straight to the project.  A pasted link still gets the question.
                 if( aOpenWithoutAsking
                     || wxMessageBox( wxString::Format( _( "Joined '%s'.  Open it now?\n\n"
