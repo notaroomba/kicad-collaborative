@@ -51,7 +51,7 @@ export const libCopyId = (lib: string, name: string) => `lib:${lib}:${name}`;
 export const boardCopyId = (boardDocId: string, fpUuid: string) => `board:${boardDocId}:${fpUuid}`;
 
 // ---------------------------------------------------------------- libraries of the project
-export interface FpLib { name: string; uri: string; footprints: { name: string; docId: string; path: string }[]; descr?: string; readOnly?: boolean; loaded?: boolean }
+export interface FpLib { name: string; uri: string; footprints: { name: string; docId: string; path: string; descr?: string }[]; descr?: string; readOnly?: boolean; loaded?: boolean; pinned?: boolean }
 /** "Lib:Name" of a footprint document: its .pretty folder is the library, the file name the footprint. */
 export function fpLibIdOf(path: string): { lib: string; name: string } {
   const parts = path.split("/"); const file = parts.pop() || ""; const dir = parts.pop() || "";
@@ -90,7 +90,7 @@ export function publishLibs(): void { store.set({ fpLibs: { libs: treeLibs(), cu
 
 // ---------------------------------------------------------------- the libraries outside the project
 /** The global (official) footprint libraries: GET /api/libs/footprints, each library's footprints on demand. */
-const official: { list: { name: string; descr: string }[] | null; fps: Map<string, string[]>; loading: boolean } = { list: null, fps: new Map(), loading: false };
+const official: { list: { name: string; descr: string }[] | null; fps: Map<string, { n: string; d: string }[]>; loading: boolean } = { list: null, fps: new Map(), loading: false };
 async function loadOfficialLibs(): Promise<void> {
   if (official.list || official.loading) return; official.loading = true;
   try {
@@ -105,10 +105,25 @@ async function loadOfficialLib(lib: string): Promise<void> {
   official.fps.set(lib, []);
   try {
     const r = await fetch(`/api/libs/footprints/${encodeURIComponent(lib)}`, { credentials: "same-origin", headers: { accept: "application/json" } });
-    const j = r.ok ? await r.json() as { footprints?: { n: string }[] } : null;
-    official.fps.set(lib, j && Array.isArray(j.footprints) ? j.footprints.map((f) => f.n).filter(Boolean) : []);
+    const j = r.ok ? await r.json() as { footprints?: { n: string; d?: string }[] } : null;
+    official.fps.set(lib, j && Array.isArray(j.footprints) ? j.footprints.filter((f) => f && f.n).map((f) => ({ n: f.n, d: f.d || "" })) : []);
   } catch { official.fps.delete(lib); }
   publishLibs();
+}
+/** Pinned footprint libraries (LIB_TREE_MODEL_ADAPTER "pinned_footprint_libs"), kept for this viewer. */
+export function pinnedFpLibs(): Set<string> { try { return new Set(JSON.parse(localStorage.getItem("kui.fpedit.pinned") || "[]") as string[]); } catch { return new Set(); } }
+function setPinnedFpLib(name: string, on: boolean): void {
+  const p = pinnedFpLibs(); if (on) p.add(name); else p.delete(name);
+  try { localStorage.setItem("kui.fpedit.pinned", JSON.stringify([...p])); } catch { /* no storage */ }
+  publishLibs();
+}
+/** The library tree's selection (LIB_TREE::GetSelectedLibId): a library, or one of its footprints. */
+let treeSel: { lib: string; docId?: string } | null = null;
+/** FOOTPRINT_EDIT_FRAME::GetTargetFPID: the tree's selection, else the open footprint. */
+function targetLibName(): string {
+  if (treeSel && treeSel.lib) return treeSel.lib;
+  if (isFpReadOnlyLib()) return state.docId!.slice(4).split(":")[0];
+  return state.doc && state.doc.docType === "footprint" && !isFpPrivate() ? fpLibIdOf(state.doc.path).lib : "";
 }
 /** FOOTPRINT_EDIT_FRAME's library tree: every library of the project and the global ones, by StrNumCmp. */
 export function treeLibs(): FpLib[] {
@@ -118,10 +133,13 @@ export function treeLibs(): FpLib[] {
     if (have.has(g.name)) continue;
     const names = official.fps.get(g.name);
     out.push({ name: g.name, uri: "${KICAD10_FOOTPRINT_DIR}/" + g.name + ".pretty", descr: g.descr, readOnly: true, loaded: !!names,
-      footprints: (names || []).map((n) => ({ name: n, docId: libCopyId(g.name, n), path: g.name + ".pretty/" + n + ".kicad_mod" })) });
+      footprints: (names || []).map((f) => ({ name: f.n, docId: libCopyId(g.name, f.n), path: g.name + ".pretty/" + f.n + ".kicad_mod", descr: f.d })) });
   }
+  // FP_TREE_SYNCHRONIZING_ADAPTER DESC_COL: the open footprint's own description
+  if (E.kdoc && E.kdoc.fpEditor && state.docId) { const d = KiCadCanvas.footprintDoc.headerKids(E.kdoc, "descr")[0]; for (const l of out) for (const f of l.footprints) if (f.docId === state.docId) f.descr = d ? str(d[1]) : ""; }
   const cmp = PT() && PT().pad ? PT().pad.strNumCmp : (a: string, b: string) => a.localeCompare(b);
-  return out.sort((a, b) => cmp(a.name, b.name));
+  const pinned = pinnedFpLibs();
+  return out.sort((a, b) => (pinned.has(a.name) !== pinned.has(b.name) ? (pinned.has(a.name) ? -1 : 1) : cmp(a.name, b.name))).map((l) => (pinned.has(l.name) ? Object.assign(l, { pinned: true }) : l));
 }
 
 // ---------------------------------------------------------------- opening
@@ -553,10 +571,18 @@ async function pickLibrary(title: string, listLabel = "Save in library:", presel
     if (!api) resolve(null);
   });
 }
-async function newFootprint(): Promise<void> {
+/**
+ * FOOTPRINT_EDITOR_CONTROL::NewFootprint: the new footprint goes into the target library (GetTargetFPID: the tree's
+ * selection, else the open footprint's) without asking; a read-only target warns as tryToSaveFootprintInLibrary
+ * does.  A footprint has to live in a library here, so with no usable target the library is asked for.
+ */
+async function newFootprint(targetLib?: string): Promise<void> {
   if (E.viewOnly || !state.project) { toast("You can view this project but not change it"); return; }
   await libTableRows();
-  const lib = await pickLibrary("New Footprint"); if (!lib) return;
+  const want = targetLib || targetLibName();
+  let lib = want ? projectFpLibs().find((l) => l.name === want) || null : null;
+  if (want && !lib) await messageBoxAsync(`The footprint could not be added to the selected library ('${want}'). This library is read-only.`);
+  if (!lib) lib = await pickLibrary("New Footprint"); if (!lib) return;
   let name = "Untitled"; const base = name; let i = 1; while (lib.footprints.some((f) => f.name === name)) name = `${base}_${i++}`;
   // attributes from the library's last footprint, as CreateNewFootprint infers them (else SMD)
   let attr = "smd";
@@ -768,7 +794,11 @@ window.addEventListener("kc-fpedit-lib", ((ev: CustomEvent) => {
   case "loadLib": if (m.lib) void loadOfficialLib(m.lib); break;
   case "delete": if (id) { if (ro) readOnlyError(id.slice(4).split(":")[0]); else void deleteFootprint(id); } break;
   case "rename": if (id) { if (ro) readOnlyError(id.slice(4).split(":")[0]); else void renameFootprint(id); } break;
-  case "new": if (m.lib && !projectFpLibs().some((l) => l.name === m.lib)) readOnlyError(m.lib); else void newFootprint(); break;
+  case "new": if (m.lib && !projectFpLibs().some((l) => l.name === m.lib)) readOnlyError(m.lib); else void newFootprint(m.lib); break;
+  case "select": treeSel = m.lib ? { lib: m.lib, docId: id } : null; break;
+  case "pin": if (m.lib) setPinnedFpLib(m.lib, true); break;
+  case "unpin": if (m.lib) setPinnedFpLib(m.lib, false); break;
+  case "hideTree": showPane("libtree", false); break;
   case "create": void createFootprint(m.lib); break;
   case "newLibrary": void newLibrary(); break;
   case "save": void saveFootprint(); break;
@@ -1091,7 +1121,7 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   Object.assign(HANDLERS, {
   save: ((a) => { if (isFpEdit()) { saveFootprint(); return; } prevSave(a); }) as ActionHandler,
   revert: ((a) => { if (isFpEdit()) { revertFootprint(); return; } if (prevRevert) prevRevert(a); }) as ActionHandler,
-  saveAs: fpOnly(saveAs), newFootprint: fpOnly(newFootprint), createFootprint: fpOnly(() => createFootprint()), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
+  saveAs: fpOnly(saveAs), newFootprint: fpOnly(() => newFootprint()), createFootprint: fpOnly(() => createFootprint()), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
   enumeratePads: fpOnly(enumeratePads), checkFootprint: fpOnly(checkFootprint), padTable: fpOnly(padTable), pushPadSettings: fpOnly(pushPadSettings),
   copyPadSettings: fpOnly(copyPadSettings), applyPadSettings: fpOnly(applyPadSettings),
   explodePad: fpOnly(editPad), recombinePad: fpOnly(editPad), exportFootprint: fpOnly(exportFootprint), exportFootprintAsSVG: fpOnly(exportFootprintAsSVG), exportFootprintAsPNG: fpOnly(exportFootprintAsPNG),

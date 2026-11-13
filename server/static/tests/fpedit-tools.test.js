@@ -193,3 +193,13 @@ test("PAD_TOOL::copyPadSettings / pastePadProperties: the buffer pad's settings 
   assert.deepEqual(K.kid(n2, "at").slice(1, 3), [0.825, 0]);
   assert.equal(P.fpPads.copyPadSettings(doc, [p1.id, p2.id]), false, "one pad only");
 });
+
+test("library tree menu: FOOTPRINT_EDITOR_CONTROL::Init order and conditions, Pin Library and Hide Library Tree", () => {
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "fptree.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const m = { exports: {} }; new Function("module", "exports", "require", out.outputFiles[0].text)(m, m.exports, require); const T = m.exports;
+  assert.deepEqual(T.fpTreeMenu({ libSelected: true, fpSelected: false, hasFootprint: true, allPinned: false, allUnpinned: true }),
+    ["pinLibrary", "-", "newFootprint", "createFootprint", "-", "save", "saveAs", "revert", "-", "pasteFootprint", "-", "importFootprint", "exportFootprint", "-", "hideLibraryTree"]);
+  assert.deepEqual(T.fpTreeMenu({ libSelected: false, fpSelected: true, hasFootprint: false, allPinned: true, allUnpinned: true }).slice(3),
+    ["save", "saveAs", "revert", "-", "cutFootprint", "copyFootprint", "pasteFootprint", "duplicateFootprint", "renameFootprint", "deleteFootprint", "footprintProperties", "-", "importFootprint", "-", "hideLibraryTree"]);
+});

@@ -164,9 +164,11 @@ export interface ContextMenuState { id: number; x: number; y: number; title?: st
 
 /** A footprint library of the project as the Libraries pane lists it. */
 export interface FpLibRow {
-  name: string; uri: string; footprints: { name: string; docId: string; path: string }[];
+  name: string; uri: string; footprints: { name: string; docId: string; path: string; descr?: string }[];
   /** fp-lib-table description; a library outside the project (the official ones) is read-only and its footprints load on expand */
   descr?: string; readOnly?: boolean; loaded?: boolean;
+  /** kept at the top of the tree (Pin Library) */
+  pinned?: boolean;
 }
 export interface AppState {
   view: "home" | "editor";
