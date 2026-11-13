@@ -183,7 +183,7 @@ export function messageBox(title: string, message: string, buttons: { label: str
   if (typeof document === "undefined") return null;
   ensureCss();
   const ov = h("div", { class: "kd-overlay", style: "z-index:10050", "data-k": "messagebox" });
-  const dlg = h("div", { class: "kd-dialog", style: "width:440px", tabIndex: -1 });
+  const dlg = h("div", { class: "kd-dialog", style: "width:max-content;min-width:440px;max-width:min(640px, calc(100vw - 32px))", tabIndex: -1 });
   const body = h("div", { class: "kd-body" }, h("p", { style: "margin:4px 0 6px;white-space:pre-wrap", "data-k": "message" }, message));
   const foot = h("div", { class: "kd-foot" }, h("span", { class: "spacer" }));
   const done = (i: number): void => { ov.remove(); const b = buttons[i]; if (b && b.fn) b.fn(); };
@@ -206,7 +206,7 @@ export function textEntryBox(title: string, caption: string, value: string, mult
   if (typeof document === "undefined") return null;
   ensureCss();
   const ov = h("div", { class: "kd-overlay", style: "z-index:10050", "data-k": "textentry" });
-  const dlg = h("div", { class: "kd-dialog", style: "width:440px", tabIndex: -1 });
+  const dlg = h("div", { class: "kd-dialog", style: "width:max-content;min-width:440px;max-width:min(640px, calc(100vw - 32px))", tabIndex: -1 });
   const field = multiline ? h("textarea", { class: "pd-text", style: "min-height:90px;width:100%", "data-k": "entry" }) : h("input", { type: "text", style: "width:100%", "data-k": "entry" });
   (field as HTMLInputElement | HTMLTextAreaElement).value = value;
   const body = h("div", { class: "kd-body" }, caption ? h("p", { style: "margin:4px 0 6px" }, caption) : null, field);

@@ -191,5 +191,19 @@ test("ImportTo: scale, offset, the mean scale on widths, rounding to the editor'
   assert.deepEqual(p[0].a, [10, 5]); assert.deepEqual(p[0].b, [12.4691, 5]); assert.equal(p[0].width, 0.2); assert.equal(p[0].dash, "dash");
 });
 
+const RP = load(["dialogs", "erc-report.ts"]);
+test("ERC_REPORT::GetTextReport: shown severities, ShowReport lines, counts and ignored checks", () => {
+  const list = [{ code: "pin_not_connected", severity: "error", x: 76.2, y: 41.91, text: "Pin 1 of U1", ids: ["a"] },
+    { code: "unannotated", severity: "exclusion", base: "warning", x: 1, y: 2, text: "Symbol R?", ids: ["b"] },
+    { code: "label_dangling", severity: "warning", x: 0, y: 0, text: "L", ids: ["c"] }];
+  const o = { errors: true, warnings: false, exclusions: true, units: "mm", date: "2026-01-02T03:04:05", ignored: [], title: (m) => "T:" + m.code };
+  const t = RP.ercTextReport(list, o);
+  assert.equal(t, "ERC report (2026-01-02T03:04:05, Encoding UTF8)\nReport includes: Errors, Exclusions\n\n***** Sheet /\n" +
+    "[pin_not_connected]: T:pin_not_connected\n    ; error\n    @(76.20 mm, 41.91 mm): Pin 1 of U1\n" +
+    "[unannotated]: T:unannotated\n    ; warning (excluded)\n    @(1.00 mm, 2.00 mm): Symbol R?\n" +
+    "\n ** ERC messages: 2  Errors 1  Warnings 1\n\n ** Ignored checks:\n    - None\n");
+  const t2 = RP.ercTextReport(list, { ...o, errors: false, exclusions: false, units: "mil", ignored: ["Pin to pin"] });
+  assert.ok(/Report includes: None/.test(t2) && /ERC messages: 0/.test(t2) && /    - Pin to pin\n$/.test(t2));
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
