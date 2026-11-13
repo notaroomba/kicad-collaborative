@@ -2,6 +2,7 @@
 // applied live.  Defaults are KiCad's (common/settings/app_settings.cpp, eeschema/eeschema_settings.cpp).
 import { E, GRID_CHOICES, gridListKey, isSch, requestRender, setToggle, setToggles, store, toolCtx, updateGridStatus } from "./editor";
 import { syncSchModes } from "../editor/panes";
+import { publishUserOrigin } from "../editor/userorigin";
 import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
 import { gridChoiceText, type GridDef, type IuScale } from "../units";
@@ -31,6 +32,8 @@ export interface Prefs {
     padClearance?: boolean };
   /** COMMON_SETTINGS appearance.hicontrast_dimming_factor (0.8) */
   common: { hcDimming: number };
+  /** PCB Editor > Origins & Axes (PCBNEW_SETTINGS m_Display.m_DisplayOrigin, m_DisplayInvertXAxis / YAxis) */
+  pcbOrigin: { origin: "page" | "aux" | "grid"; invertX: boolean; invertY: boolean };
   /** PCB Editor > Editing Options (PCBNEW_SETTINGS): m_AutoRefillZones */
   pcbEditing: { autoRefillZones: boolean };
   grids: Record<EditorId, GridPrefs>;
@@ -47,6 +50,7 @@ export const DEFAULT_PREFS: Prefs = {
   schColors: { theme: "default", followDark: false },
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, trackClearance: 2, padClearance: true },
   common: { hcDimming: 0.8 },
+  pcbOrigin: { origin: "page", invertX: false, invertY: false },
   pcbEditing: { autoRefillZones: false },
   grids: {
     // APP_SETTINGS_BASE::DefaultGridSizeList and addParamsForWindow's defaultGridIdx (common/settings/app_settings.cpp):
@@ -166,6 +170,7 @@ export function applyPrefs(full = true): void {
   E.middleDragPan = p.mouse.middleDrag !== "none"; E.rightDragPan = p.mouse.rightDrag !== "none";
   E.gridFor = activeGridPitch;
   applyColorTheme(p);
+  E.pcbOrigin = p.pcbOrigin; publishUserOrigin();
   const ed = editorId(), g = p.grids[ed];
   if (E.kdoc) {
     const choices = gridDefs(g);

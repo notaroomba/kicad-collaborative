@@ -121,5 +121,11 @@ test("dialog geometry: a remembered place and size come back clamped to the wind
   assert.deepEqual(S.clampGeometry({ left: -20, top: -5, width: 2000, height: 1200 }, 1440, 900), { left: 0, top: 0, width: 1440, height: 900 });
 });
 
+test("ORIGIN_TRANSFORMS: the board status bar from the user origin, axes inverted", () => {
+  assert.deepEqual(U.toDisplayAbs([149, 83.25], [10, 20], false, true), [139, -63.25]);
+  assert.deepEqual(U.toDisplayAbs([149, 83.25], [0, 0], true, false), [-149, 83.25]);
+  assert.deepEqual(U.toDisplayRel([2, -3], true, true), [-2, 3]);
+});
+
 console.log(`\nui-chrome: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

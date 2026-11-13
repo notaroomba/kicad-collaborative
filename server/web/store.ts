@@ -193,6 +193,9 @@ export interface AppState {
     /** the view's zoom as KiCad states it (GAL::GetZoomFactor), for the aux toolbar's zoom choice */
     kzoom: number;
     /** the grids of Preferences > Grids in their order (GRID_SETTINGS::grids), shown with gridChoiceText in the user units */
+    /** PCB_BASE_FRAME::GetOriginTransforms: the user origin the board's status bar counts from and its axis senses
+        (Preferences > PCB Editor > Origins & Axes); absent: the page origin, X right, Y down */
+    userOrigin?: [number, number]; invertX?: boolean; invertY?: boolean;
     gridOn: boolean; gridPitch: number; gridChoices: GridDef[]; snapOn: boolean;
     crosshair: "small" | "full" | "45"; selMode: "rect" | "lasso";
     lineMode: "free" | "90" | "45" | null; dragMode: "drag" | "move" | null;

@@ -9,6 +9,7 @@
 //   · owns the two dialogs — Board Setup's "Pre-defined Sizes" page and "Select Copper Layer Pair" —
 //     and registers them, with their KiCad action ids, on CollabTools.pcb.actions,
 //   · writes edited lists back into the project file (see saveProjectFile).
+import { publishUserOrigin } from "./userorigin";
 import type { DiffPairDim, LayerPairPreset, PcbSizes, SizeUnits, ViaDim } from "../canvas/pcb-sizes";
 import type { RoutingState } from "../store";
 import { setToggles, state, store } from "./appstore";
@@ -81,6 +82,7 @@ function onSizesChanged(): void {
     const go = st.gridOrigin[0] || st.gridOrigin[1] ? [st.gridOrigin[0], st.gridOrigin[1]] : undefined;
     if (JSON.stringify(E.renderOpts.gridOrigin) !== JSON.stringify(go)) { E.renderOpts.gridOrigin = go; requestRender(); }
     rememberOrigins();
+    E.pcbOrigins = { grid: [st.gridOrigin[0], st.gridOrigin[1]], aux: [st.auxOrigin[0], st.auxOrigin[1]] }; publishUserOrigin();
   }
   publish();
 }
@@ -106,6 +108,7 @@ function onDocument(): void {
   let grid = docOrigins.grid, aux = docOrigins.aux;
   try { const key = originKey(); const saved = key ? JSON.parse(localStorage.getItem(key) || "null") : null; if (saved) { grid = pair(saved.grid) || grid; aux = pair(saved.aux) || aux; } } catch (e) { /* no storage */ }
   st.gridOrigin = [grid[0], grid[1]]; st.auxOrigin = [aux[0], aux[1]];
+  E.pcbOrigins = { grid: [grid[0], grid[1]], aux: [aux[0], aux[1]] }; publishUserOrigin();
   const cu = PS().copperStack(doc.copper && doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]);
   if (!cu.includes(st.layerPair[0]) || !cu.includes(st.layerPair[1])) st.layerPair = [cu[0], cu[cu.length - 1]];
   st.activeLayer = E.activeLayer || cu[0];

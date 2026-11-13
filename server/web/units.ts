@@ -93,3 +93,12 @@ export function loadUnits(app: UnitsApp): UnitsSettings {
 export function saveUnits(app: UnitsApp, s: UnitsSettings): void {
   try { localStorage.setItem(unitsKey(app), JSON.stringify({ units: s.units, last_imperial_units: s.lastImperial === "in" ? "in" : "mil" })); } catch (e) { /* no storage */ }
 }
+
+/** ORIGIN_TRANSFORMS::ToDisplayAbs: a board position as the status bar prints it. */
+export function toDisplayAbs(p: [number, number], origin: [number, number], invertX: boolean, invertY: boolean): [number, number] {
+  return [(p[0] - origin[0]) * (invertX ? -1 : 1), (p[1] - origin[1]) * (invertY ? -1 : 1)];
+}
+/** ORIGIN_TRANSFORMS::ToDisplayRel: a distance as the status bar prints it. */
+export function toDisplayRel(d: [number, number], invertX: boolean, invertY: boolean): [number, number] {
+  return [d[0] * (invertX ? -1 : 1), d[1] * (invertY ? -1 : 1)];
+}

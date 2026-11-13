@@ -7,6 +7,7 @@
 // zoom factor: the connection, the number of edits, and — as the frame title does — the sheet path on a
 // schematic or the active layer on a board.  Every coordinate follows the units chosen in View > Units (or
 // Ctrl+U), with the unit's fixed precision.
+import { toDisplayAbs, toDisplayRel } from "../units";
 import { useApp, type Editor } from "../store";
 import { menuMeta } from "../menuspec";
 import { EXTRA_TOOLS, TOOL_MAP } from "../tables";
@@ -38,10 +39,15 @@ export function StatusBar() {
   const u = vp.units;
   // MessageTextFromValue's short form on the schematic (sch_base_frame.cpp:264-272): "%.3f" mm / in, "%.0f" mils
   const sch = editor === "sch", c = (v: number) => fmtCoord(v, u, sch);
-  const dx = vp.cursor[0] - vp.origin[0], dy = vp.cursor[1] - vp.origin[1];
+  // PCB_BASE_FRAME::UpdateStatusBar: the absolute and the cartesian relative coordinates go through the user's
+  // origin transforms (Origins & Axes); the polar form is computed before them, from the raw offset
+  const inv = !sch && editor === "pcb", ix = inv && !!vp.invertX, iy = inv && !!vp.invertY;
+  const abs = inv ? toDisplayAbs(vp.cursor, vp.userOrigin || [0, 0], ix, iy) : vp.cursor;
+  const rdx = vp.cursor[0] - vp.origin[0], rdy = vp.cursor[1] - vp.origin[1];
+  const [dx, dy] = toDisplayRel([rdx, rdy], ix, iy);
   // only PCB_BASE_FRAME::UpdateStatusBar honours GetShowPolarCoords; eeschema always prints dx / dy / dist
   const delta = vp.polar && !sch
-    ? `r ${c(Math.hypot(dx, dy))}  theta ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(3)}`
+    ? `r ${c(Math.hypot(rdx, rdy))}  theta ${(Math.atan2(-rdy, rdx) * 180 / Math.PI).toFixed(3)}`
     : `dx ${c(dx)}  dy ${c(dy)}  dist ${c(Math.hypot(dx, dy))}`;
   // status field 7, DisplayConstraintsMsg: only pcbnew's DRAWING_TOOL::UpdateStatusBar writes it (by LEADER_MODE)
   const constraint = sch ? "" : vp.lineMode === "45" ? "Constrain to H, V, 45" : vp.lineMode === "90" ? "Constrain to H, V" : "";
@@ -75,7 +81,7 @@ export function StatusBar() {
         <>
           <span className={cx(cell, "max-[900px]:hidden")} id="sbWhere" title={editor === "sch" ? "Sheet path" : "Active layer"}>{where}</span>
           <span className={cx(cell, "min-w-[calc(9ch+20px)] max-[560px]:hidden")} id="sbZoom">Z {vp.kzoom.toFixed(2)}</span>
-          <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {c(vp.cursor[0])}  Y {c(vp.cursor[1])}</span>
+          <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {c(abs[0])}  Y {c(abs[1])}</span>
           <span className={cx(cell, "min-w-[calc(42ch+20px)] max-[1180px]:hidden")} id="sbDelta">{delta}</span>
           {/* EDA_DRAW_FRAME::DisplayGridMsg ("grid %s", GRID::UserUnitsMessageText) and DisplayUnitsMsg: plain text; the
               units change from the left toolbar or Ctrl+U */}

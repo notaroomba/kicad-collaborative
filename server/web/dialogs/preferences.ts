@@ -1,7 +1,7 @@
 // dialogs/preferences.ts — Preferences → Preferences… (Ctrl+,) in both editors: KiCad's paged dialog with the panels
 // that mean something in a browser.  Common > Mouse and Touchpad (common/dialogs/panel_mouse_settings), Hotkeys
 // (panel_hotkeys_editor, read-only here); Schematic Editor > Display Options, Grids, Editing Options, Colors;
-// PCB Editor > Display Options, Grids.  Everything is kept in localStorage (prefs.ts) and applied on OK.
+// PCB Editor > Display Options, Grids, Origins & Axes, Editing Options.  Everything is kept in localStorage (prefs.ts) and applied on OK.
 import { E, toast } from "./editor";
 import { keyName } from "../keys";
 import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
@@ -201,6 +201,22 @@ export function openPreferences(page?: string): void {
               checkbox("Show pad clearance", p.pcbDisplay.padClearance !== false, (on) => { p.pcbDisplay.padClearance = on; }, { id: "kd-pref-padclearance" }));
           } },
           { label: "Grids", build: gridsPage("pcb") },
+          { label: "Origins & Axes", build(pg) {
+            // panel_pcbnew_display_origin: where the status bar counts from, and which way each axis increases
+            const o = p.pcbOrigin;
+            const group = (title: string, name: string, rows: [string, string][], value: string, set: (v: string) => void) => {
+              const box = h("div", { style: "margin-bottom:12px" }, h("div", { style: "margin-bottom:4px" }, title));
+              for (const [v, label] of rows) {
+                const r = h("input", { type: "radio", name, value: v, id: `kd-pref-${name}-${v}` }) as HTMLInputElement; r.checked = v === value;
+                r.addEventListener("change", () => { if (r.checked) set(v); });
+                box.append(h("label", { class: "kd-row", style: "margin-left:16px;gap:6px" }, r, label));
+              }
+              pg.append(box);
+            };
+            group("Display Origin", "origin", [["page", "Page origin"], ["aux", "Drill/place file origin"], ["grid", "Grid origin"]], o.origin, (v) => { o.origin = v as "page" | "aux" | "grid"; });
+            group("X Axis", "xaxis", [["right", "Increases right"], ["left", "Increases left"]], o.invertX ? "left" : "right", (v) => { o.invertX = v === "left"; });
+            group("Y Axis", "yaxis", [["up", "Increases up"], ["down", "Increases down"]], o.invertY ? "up" : "down", (v) => { o.invertY = v === "up"; });
+          } },
           { label: "Editing Options", build(pg) {
             // panel_edit_options (PCB): the arc editing mode, and the Miscellaneous box's zone refill
             const ed = KD().staticBox(pg, "Editing Options");
