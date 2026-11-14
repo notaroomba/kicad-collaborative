@@ -31,7 +31,7 @@ import { drillChartPage, viaStacksPage, zonesPage, tuningPatternsPage, tuningPro
 import { ruleAtLine, ruleErrors, rulesEditor } from "./rules-editor";
 import { markdownToHtml } from "../markdown";
 import { RULES_HELP_MD } from "../../generated/rules-help";
-import { IS_MAC } from "../../keys";
+import { keysInText } from "../../keys";
 import type { DrillProfile, StackupLayer } from "../../canvas/board-setup";
 
 type Obj = { [key: string]: Plain };
@@ -634,7 +634,7 @@ export async function openBoardSetup(ctx: ToolCtx, startPage?: string): Promise<
     const help = h("a", { href: "#", "data-k": "syntax-help", title: "Show syntax help window" }, "Syntax help");
     help.addEventListener("click", (ev) => {
       ev.preventDefault();
-      let md = RULES_HELP_MD; if (IS_MAC) md = md.replace(/Ctrl\+/g, "Cmd+");
+      const md = keysInText(RULES_HELP_MD);   // panel_setup_rules.cpp: Ctrl+ reads Cmd+ on a Mac
       if (typeof KDialogs !== "undefined" && KDialogs) KDialogs.open({ title: "Syntax Help", width: 760, modeless: true, child: true, buttons: [], build(body: HTMLElement) { const d = h("div", { class: "kd-help", "data-k": "rules-help", style: "max-height:70vh;overflow:auto;font-size:12px;line-height:1.35" }); d.innerHTML = markdownToHtml(md); body.append(d); } });
     });
     const btn = h("button", { type: "button", class: "btn", "data-k": "checkSyntax" }, "Check rule syntax"); btn.addEventListener("click", check);

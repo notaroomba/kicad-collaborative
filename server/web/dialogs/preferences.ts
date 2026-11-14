@@ -240,13 +240,7 @@ export function openPreferences(page?: string, staged?: Staged): void {
             rot.title = "Set increment (in degrees) for context menu and hotkey rotation.";
             ed.append(h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 8px;align-items:center" },
               h("label", { style: "color:var(--ink-2);white-space:nowrap" }, "Step for rotate commands:"), h("div", { class: "kd-row", style: "gap:6px" }, rot, h("span", null, "deg"))));
-            const mod = IS_MAC ? "Cmd" : "Ctrl";
-            const cmds: [string, string][] = [["Click:", "Select item(s)"], ["Long Click:", "Clarify selection from menu"], ["Shift:", "Add item(s) to selection"],
-              [IS_MAC ? "Shift+Cmd:" : "Ctrl+Shift:", "Remove item(s) from selection"], [mod + ":", "Toggle selection"]];
-            if (IS_MAC) cmds.push(["Option:", "Clarify selection from menu"]);
-            KD().staticBox(pg, "Left Click Mouse Commands").append(
-              h("div", { style: "font-style:italic;color:var(--ink-3);font-size:var(--fs-sm);margin-bottom:6px;white-space:pre-line" }, IS_MAC ? "Left click (and drag) actions depend on 3 modifier keys:\nOption, Shift and Cmd" : "Left click (and drag) actions depend on 2 modifier keys:\nShift and Ctrl"),
-              h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;align-items:start" }, ...cmds.flatMap(([k, v]) => [h("span", null, k), h("span", null, v)])));
+            KD().staticBox(pg, "Left Click Mouse Commands").append(...leftClickCommands("Toggle selection"));
           } },
         ] },
         { label: "PCB Editor", pages: [
@@ -294,14 +288,9 @@ export function openPreferences(page?: string, staged?: Staged): void {
                 ["Arc editing mode:", select([["0", "Keep center, adjust radius"], ["1", "Keep endpoints or direction of starting point"], ["2", "Keep center and radius, adjust endpoints"]], String(arcEdit), (v) => { arcEdit = +v; }, { id: "kd-pref-arcedit", style: "width:100%" })],
                 ["Track mouse-drag mode:", select([["move", "Move"], ["drag", "Drag (45 degree mode)"], ["dragFree", "Drag (free angle)"]], e.trackDragAction, (v) => { e.trackDragAction = v as typeof e.trackDragAction; }, { id: "kd-pref-trackdrag", style: "width:100%" })]));
             // Left Click Mouse Commands (m_mouseCmdsWinLin / m_mouseCmdsOSX): fixed rows, and Ctrl's choice
-            const mod = IS_MAC ? "Cmd" : "Ctrl";
             const lc = KD().staticBox(L, "Left Click Mouse Commands");
             const radio = (v: boolean, label: string) => { const r = h("input", { type: "radio", name: "kd-pref-ctrlclick", id: `kd-pref-ctrlclick-${v ? "hl" : "toggle"}` }) as HTMLInputElement; r.checked = e.ctrlClickHighlight === v; r.addEventListener("change", () => { if (r.checked) e.ctrlClickHighlight = v; }); return h("label", { class: "kd-row", style: "gap:6px" }, r, label); };
-            const cmds: [string, Node | string][] = [["Click:", "Select item(s)"], ["Long Click:", "Clarify selection from menu"], ["Shift:", "Add item(s) to selection"],
-              [IS_MAC ? "Shift+Cmd:" : "Ctrl+Shift:", "Remove item(s) from selection"], [mod + ":", h("div", null, radio(false, "Toggle selection"), radio(true, "Highlight net (for pads/tracks)"))]];
-            if (IS_MAC) cmds.push(["Option:", "Clarify selection from menu"]);
-            lc.append(h("div", { style: "font-style:italic;color:var(--ink-3);font-size:var(--fs-sm);margin-bottom:6px;white-space:pre-line" }, IS_MAC ? "Left click (and drag) actions depend on 3 modifier keys:\nOption, Shift and Cmd" : "Left click (and drag) actions depend on 2 modifier keys:\nShift and Ctrl"),
-              h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;align-items:start" }, ...cmds.flatMap(([k, v]) => [h("span", null, k), typeof v === "string" ? h("span", null, v) : v])));
+            lc.append(...leftClickCommands(h("div", null, radio(false, "Toggle selection"), radio(true, "Highlight net (for pads/tracks)"))));
             const rb = KD().staticBox(R, "Ratsnest");
                         // wxSpinCtrlDouble( 0.5, 10, 0.5, 0.5 ) with 1 digit: a typed value is clamped to the range and rounded
             const thick = h("input", { type: "number", min: "0.5", max: "10", step: "0.5", value: String(e.ratsnestThickness), id: "kd-pref-ratsthick", style: "width:80px" }) as HTMLInputElement;
@@ -334,6 +323,21 @@ export function scrollModsValid(m: Prefs["mouse"]): boolean { return m.zoomMod !
  * PANEL_MOUSE_SETTINGS (common/dialogs/panel_mouse_settings_base.cpp): Pan and Zoom, Drag Gestures and Scroll
  * Gestures, with the radio grid of modifiers per vertical-scroll action and the two reset buttons.
  */
+/**
+ * PANEL_EDIT_OPTIONS' Left Click Mouse Commands (m_mouseCmdsWinLin / m_mouseCmdsOSX): the note and the fixed rows, the
+ * Ctrl row showing `ctrl` (the board editor's Toggle selection / Highlight net choice).  The modifier names come from
+ * keys.ts, in the order each of KiCad's two panels writes them ("Ctrl+Shift", "Shift+Cmd").
+ */
+function leftClickCommands(ctrl: Node | string): HTMLElement[] {
+  const ctrlK = modName("Ctrl"), shiftK = modName("Shift"), altK = modName("Alt");
+  const cmds: [string, Node | string][] = [["Click:", "Select item(s)"], ["Long Click:", "Clarify selection from menu"], [`${shiftK}:`, "Add item(s) to selection"],
+    [IS_MAC ? `${shiftK}+${ctrlK}:` : `${ctrlK}+${shiftK}:`, "Remove item(s) from selection"], [`${ctrlK}:`, ctrl]];
+  if (IS_MAC) cmds.push([`${altK}:`, "Clarify selection from menu"]);
+  const note = IS_MAC ? `Left click (and drag) actions depend on 3 modifier keys:\n${altK}, ${shiftK} and ${ctrlK}` : `Left click (and drag) actions depend on 2 modifier keys:\n${shiftK} and ${ctrlK}`;
+  return [h("div", { style: "font-style:italic;color:var(--ink-3);font-size:var(--fs-sm);margin-bottom:6px;white-space:pre-line" }, note),
+    h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;align-items:start" }, ...cmds.flatMap(([k, v]) => [h("span", null, k), typeof v === "string" ? h("span", null, v) : v]))];
+}
+
 function mousePage(pg: HTMLElement, p: Prefs): void {
   const m = p.mouse;
   const pz = KD().staticBox(pg, "Pan and Zoom");
