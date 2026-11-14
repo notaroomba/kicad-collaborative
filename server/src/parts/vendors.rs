@@ -436,7 +436,8 @@ pub fn lcsc_info_from_easyeda(id: &str, result: &Value, conv: Option<&super::eas
         manufacturer: super::easyeda::clean_maker(super::easyeda::cpara_any(&cpara, &["Manufacturer", "BOM_Manufacturer"])),
         description: s(result, "description"),
         package: s(&cpara, "package"),
-        datasheet: conv.map(|c| c.datasheet.clone()).unwrap_or_default(),
+        // no datasheet link in the drawing: the product page, which links LCSC's copy of it
+        datasheet: conv.map(|c| c.datasheet.clone()).filter(|d| !d.is_empty()).unwrap_or_else(|| url.clone()),
         url,
         stock: int(lcsc.get("stock")),
         prices: lcsc_prices(lcsc.get("price")),

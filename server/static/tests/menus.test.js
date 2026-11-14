@@ -65,7 +65,7 @@ function flatten(entries, trail, out) {
     for (const ed of ["sch", "pcb"]) {
       const mod = globalThis.CollabTools[ed];
       for (const [title, entries] of T.MENUS[ed]) for (const e of flatten(entries, [title.replace("&", "")], [])) {
-        if (e.id.startsWith("module:")) { assert.ok(mod.actions[e.id.slice(7)], `${ed} ${e.trail.join(" > ")}: no module action ${e.id}`); continue; }
+        if (e.id.startsWith("module:")) { assert.ok(mod.actions[e.id.slice(7)] || T.LATE_MODULE_ACTIONS.has(e.id.slice(7)), `${ed} ${e.trail.join(" > ")}: no module action ${e.id}`); continue; }
         assert.ok(meta(ed, e.id) || T.LOCAL_LABELS[e.id] || T.LINKS[e.id] || mod.actions[e.id], `${ed} ${e.trail.join(" > ")}: unknown entry "${e.id}"`);
       }
     }

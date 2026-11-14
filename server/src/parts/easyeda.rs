@@ -1243,11 +1243,10 @@ pub fn convert_with(result: &Value, tidy: bool) -> Result<Converted, String> {
     if symbol.is_none() && footprint.is_none() {
         return Err("the vendor has no symbol or footprint drawing for this part".into());
     }
-    let datasheet = [vstr(&cpara, "link"), vstr(&pkg_cpara, "link")]
-        .into_iter()
-        .find(|l| l.starts_with("http"))
-        .unwrap_or("")
-        .to_string();
+    // Only the symbol's own link: a footprint is shared by every part in that package and
+    // its link is whichever datasheet its drawer copied the land pattern from (a WCH CH592D
+    // came out pointing at a TI regulator).
+    let datasheet = Some(vstr(&cpara, "link")).filter(|l| l.starts_with("http")).unwrap_or("").to_string();
     Ok(Converted {
         name,
         prefix: if prefix.is_empty() { "U".into() } else { prefix },

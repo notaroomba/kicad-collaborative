@@ -109,7 +109,13 @@ function carrySymbol(s: SymbolSession, sameReference: boolean): void {
   s.nodeId = K().uuidOf(node); s.doc = doc;
   const carry: SchCarry = { kind: "symbol", node, item: null, pos: null };
   (sch.state as Record<string, unknown>).carry = carry;                  // onActivate sees the carry and opens no chooser
-  if (E.tool !== "place" && E.tool !== "power") setTool("place");
+  // the carry is set first so onActivate opens no chooser; the switch is ours, so the module's veto (a placement
+  // in flight refuses another tool) does not apply to it
+  if (E.tool !== "place" && E.tool !== "power") {
+    const st = sch.state as Record<string, unknown>; const was = st.internalSwitch;
+    st.internalSwitch = true;
+    try { setTool("place"); } finally { st.internalSwitch = was; }
+  }
   h.placeCarry(ctxNow(), at);
   ctx.requestRender();
 }

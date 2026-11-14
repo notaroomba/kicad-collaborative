@@ -41,7 +41,7 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -1067,10 +1067,20 @@ async fn footprint_index(_user: AuthUser, Path(lib): Path<String>) -> Response {
     json_response(libs().footprint_index_json(&lib).await)
 }
 
-async fn footprint(_user: AuthUser, Path((lib, name)): Path<(String, String)>) -> Response {
+async fn footprint(State(state): State<AppState>, _user: AuthUser, Path((lib, name)): Path<(String, String)>) -> Response {
     let lib = lib.strip_suffix(".pretty").unwrap_or(&lib).to_string();
     let name = name.strip_suffix(".kicad_mod").unwrap_or(&name).to_string();
-    json_response(libs().footprint_json(&lib, &name).await)
+    let official = libs().footprint_json(&lib, &name).await;
+    // Not an official footprint: a vendor part's (the Footprint field of a symbol placed from
+    // LCSC or a saved part library names "LCSC:<package>").  The official libraries never use
+    // these nicknames, so a hit here cannot shadow one of theirs; it is also tried when the
+    // official libraries cannot be reached, since the vendor copy is local.
+    if official.is_err() && lib.len() <= MAX_NAME_LEN && name.len() <= MAX_NAME_LEN {
+        if let Some(text) = crate::parts::footprint_by_name(&state, &lib, &name).await {
+            return json_response(Ok(json!({ "library": lib, "name": name, "fpid": format!("{lib}:{name}"), "footprint": text, "vendor": true }).to_string()));
+        }
+    }
+    json_response(official)
 }
 
 #[cfg(test)]

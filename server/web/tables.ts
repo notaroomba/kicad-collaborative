@@ -55,6 +55,10 @@ const HELP_MENU: MenuEntry[] = ["help", "gettingStarted", "listHotKeys", "getInv
 const LANG_MENU: MenuEntry = ["Set Language", ["languageEnglish"]];
 // Tools > External Plugins: the plugins' own actions join it above a separator (plugins/PluginUi.tsx, AddApiPluginMenuItems)
 const PLUGINS_MENU: MenuEntry = ["External Plugins", ["pluginsReload", "pluginsShowFolder"]];
+/** Module commands a later bundle adds to CollabTools.<m>.actions once it loads (web/parts adds the vendor parts
+ *  entries), so the tool modules themselves do not carry them. */
+export const LATE_MODULE_ACTIONS = new Set<string>(["vendorParts", "vendorLibraries", "vendorBom"]);
+
 export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
   sch: [
     ["&File", ["save", "saveCurrSheetCopyAs", "revert", "-",
@@ -76,6 +80,8 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["&Inspect", ["showBusSyntaxHelp", "-", "runERC", "prevMarker", "nextMarker", "excludeMarker", "-", "diffSymbol", "-", "showSimulator"]],
     ["&Tools", ["updatePcbFromSchematic", "showPcbNew", "showProjectManager", "showCalculatorTools", "-", "showSymbolEditor", "updateSymbols", "-", "rescueSymbols", "remapSymbols",
       "-", "editSymbolFields", "editSymbolLibraryLinks", "-", "annotate", "incrementAnnotations", "-", "assignFootprints", "generateBOM", "generateBOMLegacy",
+      // the web's vendor parts (LCSC, Mouser, DigiKey, Farnell) and saved part libraries
+      "-", "module:vendorParts", "module:vendorLibraries", "module:vendorBom",
       "-", "updateSchematicFromPcb", "-", "createNetChain", "-",
       ["Variants", ["addVariant", "removeVariant", "editVariantDescription", "renameVariant", "copyVariant"]], "-", PLUGINS_MENU]],
     ["P&references", ["configurePaths", "showSymbolLibTable", "showDesignBlockLibTable", "openPreferences", "-", LANG_MENU]],
@@ -108,6 +114,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["Ro&ute", ["selectLayerPair", "-", "routeSingleTrack", "routeDiffPair", "routerSpreadTracks", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "-", "routerSettingsDialog"]],
     ["&Inspect", ["boardStatistics", "measureTool", "-", "runDRC", "prevMarker", "nextMarker", "excludeMarker", "-", "inspectClearance", "inspectConstraints", "showFootprintAssociations", "diffFootprint"]],
     ["&Tools", ["updatePcbFromSchematic", "showEeschema", "showProjectManager", "showCalculatorTools", "-", "drcRuleEditor", "showDrillGroups", "-", "showFootprintEditor", "updateFootprints", "migrate3DModels", "editFootprintFields",
+      "-", "module:vendorParts", "module:vendorLibraries", "module:vendorBom",
       "-", "zonesManager", "-", "cleanupTracksAndVias", "removeUnusedPads", "cleanupGraphics", "repairBoard", "-", "collect3DModels", "-", "boardReannotate", "updateSchematicFromPcb",
       ["Multi-Channel", ["generatePlacementRuleAreas", "expandToMatchingTopology", "expandToLargestTopology", "repeatLayout", "updateLinkedLayouts", "unlinkLayout"]],
       // the web's own autorouter and placer are external tools, listed like the API plugins' actions above KiCad's two entries

@@ -253,11 +253,12 @@ async fn store_part(state: &AppState, info: &PartInfo, cad_raw: Option<&Value>) 
         stored.image.clear();
     }
     sqlx::query(
-        "INSERT INTO parts (vendor, vendor_id, mpn, manufacturer, info, info_fetched_at, cad_raw, cad_fetched_at)
-         VALUES ($1, $2, $3, $4, $5, now(), $6, CASE WHEN $6::jsonb IS NULL THEN NULL ELSE now() END)
+        "INSERT INTO parts (vendor, vendor_id, mpn, manufacturer, info, info_fetched_at, cad_raw, cad_fetched_at, fp_name)
+         VALUES ($1, $2, $3, $4, $5, now(), $6, CASE WHEN $6::jsonb IS NULL THEN NULL ELSE now() END, $7)
          ON CONFLICT (vendor, vendor_id) DO UPDATE SET
            mpn = EXCLUDED.mpn, manufacturer = EXCLUDED.manufacturer, info = EXCLUDED.info, info_fetched_at = now(),
            cad_raw = COALESCE(EXCLUDED.cad_raw, parts.cad_raw),
+           fp_name = CASE WHEN EXCLUDED.cad_raw IS NULL THEN parts.fp_name ELSE EXCLUDED.fp_name END,
            cad_fetched_at = CASE WHEN EXCLUDED.cad_raw IS NULL THEN parts.cad_fetched_at ELSE now() END",
     )
     .bind(&stored.vendor)
@@ -266,9 +267,49 @@ async fn store_part(state: &AppState, info: &PartInfo, cad_raw: Option<&Value>) 
     .bind(&stored.manufacturer)
     .bind(serde_json::to_value(&stored).unwrap_or(Value::Null))
     .bind(cad_raw)
+    .bind(cad_raw.and_then(fp_name_of))
     .execute(&state.pool)
     .await?;
     Ok(())
+}
+
+/// The footprint name a cached vendor drawing converts to.
+fn fp_name_of(raw: &Value) -> Option<String> {
+    easyeda::convert(raw).ok()?.footprint.map(|f| f.name)
+}
+
+/// A vendor footprint by the name a placed symbol's Footprint field gives it ("LCSC:<name>",
+/// or "<saved library nickname>:<name>"), as .kicad_mod text, from the cached vendor drawings.
+/// Rows cached before footprint names were recorded get theirs filled in on the way.
+pub async fn footprint_by_name(state: &AppState, lib: &str, name: &str) -> Option<String> {
+    async fn find(state: &AppState, name: &str) -> Option<PartRow> {
+        sqlx::query_as::<_, PartRow>(&format!("SELECT {PART_COLS} FROM parts WHERE fp_name = $1 AND cad_raw IS NOT NULL ORDER BY cad_fetched_at DESC NULLS LAST LIMIT 1"))
+            .bind(name)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+    }
+    let mut row = find(state, name).await;
+    if row.is_none() {
+        let pending: Vec<(String, String, Value)> =
+            sqlx::query_as("SELECT vendor, vendor_id, cad_raw FROM parts WHERE fp_name IS NULL AND cad_raw IS NOT NULL LIMIT 2000")
+                .fetch_all(&state.pool)
+                .await
+                .ok()?;
+        if !pending.is_empty() {
+            for (vendor, id, raw) in pending {
+                // "" marks a drawing without a footprint, so it is not converted again
+                let n = fp_name_of(&raw).unwrap_or_default();
+                let _ = sqlx::query("UPDATE parts SET fp_name = $3 WHERE vendor = $1 AND vendor_id = $2").bind(&vendor).bind(&id).bind(&n).execute(&state.pool).await;
+            }
+            row = find(state, name).await;
+        }
+    }
+    let row = row?;
+    let info = info_of(&row);
+    let d = drawings(&info, &row, &lib_nick(Some(lib)))?;
+    d.footprint
 }
 
 fn fresh(at: Option<DateTime<Utc>>, hours: i64) -> bool {

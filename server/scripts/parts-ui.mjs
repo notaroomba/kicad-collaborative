@@ -78,9 +78,11 @@ const open = async (jwt, scale) => {
 const A = await open(dana, 2), B = await open(sam, 1);
 const items = (page) => page.evaluate(() => window.CollabApp.getState().document.items.map((i) => ({ ref: i.ref, value: i.value, lib: i.lib, id: i.id })));
 const goDoc = async (page, doc) => { await page.goto(`${BASE}/p/${proj.projectId}/edit?doc=${doc}`); await page.waitForFunction(() => window.CollabApp && window.CollabApp.getState().document.hasDoc && window.CollabApp.getState().document.items.length > 0); await page.waitForTimeout(800); };
-const openDialog = async (page, entry = 'Add Part from Vendor…') => { await page.click('[data-menu="tools"] > button'); await page.getByText(entry, { exact: true }).click(); await page.waitForSelector('#kp-dialog .kp-tab.on'); await page.waitForTimeout(300); };
+const openDialog = async (page, entry = 'Add Part from Vendor...') => { await page.click('[data-menu="tools"] > button'); await page.getByText(entry, { exact: true }).click(); await page.waitForSelector('#kp-dialog .kp-tab.on'); await page.waitForTimeout(300); };
 const search = async (page, q) => { await page.fill('#kp-q', q); await page.keyboard.press('Enter'); await page.waitForFunction(() => document.querySelector('#kp-results tr.kp-row') || document.querySelector('#kp-results .kp-empty b')); };
 const pick = async (page, vendorId) => { await page.click(`#kp-results tr.kp-row[data-id="${vendorId}"], #kp-items tr.kp-row[data-id="${vendorId}"]`); await page.waitForFunction((id) => { const t = document.querySelector('#kp-side .kp-mono'); return t && t.textContent === id && !document.querySelector('#kp-side .kp-spin'); }, vendorId); await page.waitForTimeout(250); };
+/** Choose an option of a select, which the editor shows as its themed <k-select>. */
+const choose = (page, sel, value) => page.evaluate(([s, v]) => { const el = document.querySelector(s); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, [sel, value]);
 /** Does a canvas hold more than its background? */
 const drawn = (page, sel) => page.evaluate((s) => { const c = document.querySelector(s); if (!c) return false; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; const seen = new Set(); for (let i = 0; i < d.length; i += 16) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]); return seen.size > 2; }, sel);
 
@@ -88,9 +90,9 @@ const drawn = (page, sel) => page.evaluate((s) => { const c = document.querySele
 await goDoc(A, SCH); await goDoc(B, SCH);
 const before = (await items(A)).length;
 await A.click('[data-menu="tools"] > button');
-check('the Tools menu offers vendor parts and part libraries', await A.getByText('Add Part from Vendor…', { exact: true }).isVisible() && await A.getByText('Part Libraries…', { exact: true }).isVisible());
+check('the Tools menu offers vendor parts and part libraries', await A.getByText('Add Part from Vendor...', { exact: true }).isVisible() && await A.getByText('Part Libraries...', { exact: true }).isVisible());
 await shot(A, '01-tools-menu');
-await A.getByText('Add Part from Vendor…', { exact: true }).click(); await A.waitForSelector('#kp-dialog');
+await A.getByText('Add Part from Vendor...', { exact: true }).click(); await A.waitForSelector('#kp-dialog');
 await search(A, 'STM32F103C8T6');
 const firstRow = await A.locator('#kp-results tr.kp-row').first().innerText();
 check('searching finds the part at LCSC with stock and price', /STM32F103C8T6/.test(firstRow) && /C8734/.test(firstRow) && /\$\d/.test(firstRow) && /LQFP-48/.test(firstRow), firstRow.replace(/\s+/g, ' '));
@@ -122,12 +124,12 @@ check('the op carries the library symbol and the vendor fields', op.includes('LC
 await openDialog(A); await search(A, 'C25804');
 await A.waitForFunction(() => { const t = document.querySelector('#kp-side .kp-mono'); return t && t.textContent === 'C25804'; });
 check('searching an LCSC number opens that part straight away', /0603WAF1002T5E/.test(await A.locator('#kp-part-title').innerText()));
-await A.selectOption('#kp-add', '+'); await A.waitForSelector('#kp-ask-input'); await shot(A, '06b-new-library'); await A.fill('#kp-ask-input', 'Motor Board'); await A.click('#kp-ask-ok'); await A.waitForFunction(() => [...document.querySelectorAll('#kp-add option')].some((o) => o.textContent === 'Motor Board'));
+await choose(A, '#kp-add', '+'); await A.waitForSelector('#kp-ask-input'); await shot(A, '06b-new-library'); await A.fill('#kp-ask-input', 'Motor Board'); await A.click('#kp-ask-ok'); await A.waitForFunction(() => [...document.querySelectorAll('#kp-add option')].some((o) => o.textContent === 'Motor Board'));
 check('the part is saved to a new library', (await db.query(`SELECT i.vendor, i.vendor_id, i.mpn FROM part_library_items i JOIN part_libraries l ON l.id = i.library_id WHERE l.owner_id = $1`, [danaId])).rows.map((r) => `${r.vendor}:${r.vendor_id}:${r.mpn}`).join() === 'lcsc:C25804:0603WAF1002T5E');
 await search(A, 'C165948'); await A.waitForFunction(() => { const t = document.querySelector('#kp-side .kp-mono'); return t && t.textContent === 'C165948' && !document.querySelector('#kp-side .kp-spin'); });
 const libId = (await db.query(`SELECT id FROM part_libraries WHERE owner_id = $1`, [danaId])).rows[0].id;
-await A.selectOption('#kp-add', libId); await A.waitForTimeout(500);
-await search(A, 'STM32F103C8T6'); await pick(A, 'C8734'); await A.selectOption('#kp-add', libId); await A.waitForTimeout(500);
+await choose(A, '#kp-add', libId); await A.waitForTimeout(500);
+await search(A, 'STM32F103C8T6'); await pick(A, 'C8734'); await choose(A, '#kp-add', libId); await A.waitForTimeout(500);
 await A.click('.kp-tab[data-tab="libraries"]'); await A.waitForSelector('#kp-items tr.kp-row');
 check('My Libraries lists the three saved parts', await A.locator('#kp-items tr.kp-row').count() === 3 && /Motor Board/.test(await A.locator('#kp-libname').innerText()));
 await pick(A, 'C165948');
@@ -141,7 +143,7 @@ check('the library downloads as a KiCad library zip', download.suggestedFilename
 await A.keyboard.press('Escape');
 
 // ---------------------------------------------------------------- bill of materials
-await openDialog(A, 'Bill of Materials with Vendor Prices…'); await A.waitForSelector('#kp-bom tr.kp-row');
+await openDialog(A, 'Bill of Materials with Vendor Prices...'); await A.waitForSelector('#kp-bom tr.kp-row');
 await A.waitForFunction(() => !document.querySelector('#kp-bom .kp-spin'));
 const stmRow = await A.locator('#kp-bom tr.kp-row[data-id="C8734"]').innerText();
 check('the BOM lists the placed vendor part with its stock and price', /STM32F103C8T6/.test(stmRow) && /212,539/.test(stmRow) && /\$1\.41/.test(stmRow), stmRow.replace(/\s+/g, ' '));
@@ -176,7 +178,7 @@ await A.keyboard.press('Escape');
 // ---------------------------------------------------------------- board: place a footprint from the library
 await goDoc(A, PCB); await goDoc(B, PCB);
 const fpBefore = (await items(A)).length;
-await openDialog(A, 'Part Libraries…'); await A.waitForSelector('#kp-items tr.kp-row', { timeout: 6000 }).catch(async (e) => { await A.screenshot({ path: '/tmp/uitest/dbg.png' }); console.log(await A.locator('#kp-dialog').innerText()); throw e; }); await pick(A, 'C165948');
+await openDialog(A, 'Part Libraries...'); await A.waitForSelector('#kp-items tr.kp-row', { timeout: 6000 }).catch(async (e) => { await A.screenshot({ path: '/tmp/uitest/dbg.png' }); console.log(await A.locator('#kp-dialog').innerText()); throw e; }); await pick(A, 'C165948');
 check('on a board the button places a footprint', (await A.locator('#kp-place').innerText()) === 'Place Footprint' && await A.locator('#kp-place').isEnabled());
 await A.click('#kp-fp'); await A.waitForSelector('#kp-zoom-canvas'); await A.waitForTimeout(200); await shot(A, '08-footprint-enlarged'); await A.click('.kp-zoom');
 await A.click('#kp-place');
@@ -194,12 +196,12 @@ await shot(B, '11-footprint-on-the-other-client');
 const pcbOp = (await db.query(`SELECT changes::text AS c FROM ops WHERE doc_id = $1 ORDER BY seq DESC LIMIT 1`, [PCB])).rows[0].c;
 check('the board op is a footprint with pads, slots and the vendor fields', pcbOp.includes('"ADDED"') && pcbOp.includes('(footprint \\"Motor_Board:USB-C_SMD-TYPE-C-31-M-12_1\\"') && pcbOp.includes('drill oval') && pcbOp.includes('\\"LCSC\\" \\"C165948\\"') && pcbOp.includes('(property \\"Reference\\" \\"REF**\\"'));
 // escape cancels a placement
-await openDialog(A, 'Part Libraries…'); await A.waitForSelector('#kp-items tr.kp-row'); await pick(A, 'C25804'); await A.click('#kp-place');
+await openDialog(A, 'Part Libraries...'); await A.waitForSelector('#kp-items tr.kp-row'); await pick(A, 'C25804'); await A.click('#kp-place');
 await A.mouse.move(500, 400); await A.keyboard.press('Escape'); await A.waitForTimeout(300);
 check('Escape cancels a placement', await A.locator('.kp-ghost').count() === 0 && (await items(A)).length === fpBefore + 1);
 
 // the other person, an editor of the project, finds the shared library
-await openDialog(B, 'Part Libraries…'); await B.waitForSelector('#kp-items tr.kp-row');
+await openDialog(B, 'Part Libraries...'); await B.waitForSelector('#kp-items tr.kp-row');
 check('the shared library shows up for the other project member', /Motor Board/.test(await B.locator('.kp-lib').first().innerText()) && /by ui-dana/.test(await B.locator('.kp-lib').first().innerText()) && await B.locator('#kp-items tr.kp-row').count() === 3);
 await shot(B, '12-shared-library-other-client');
 await B.keyboard.press('Escape');
