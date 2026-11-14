@@ -20,6 +20,7 @@ import { openSimModel } from "../dialogs/sim-model";
 import { embeddedModelFiles, projectModelFiles, refPrefix, simPinsOfLib } from "../dialogs/sim-files";
 import { libDocFor } from "./libdoc";
 import type { Units } from "../store";
+import { chooserPinNumbers, symbolFpFilters, type FpChooserFilters } from "../library/fpchoice";
 
 const K = (): KiCadCanvasApi => window.KiCadCanvas;
 export const typeLabel = (t: string): string => (M.PIN_TYPES.find((p) => p[0] === t) || [t, t])[1];
@@ -433,7 +434,10 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         { label: "General", build(pg) {
           const box = KD().staticBox(pg, "Fields");
           // dialog_lib_symbol_properties_base.cpp: Name … Font (the table's Color and Allow Autoplacement columns hidden), Add / Move up / Move down / Delete
-          fgrid = fieldsGrid(box, rows, { readOnly: ro, doc: se.kdoc(), height: 190, shown: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+          // FIELDS_GRID_TABLE's m_symbolNetlist: the symbol's pins (the root's drawing) and its own footprint filters as they were
+          // when the dialog opened; a power symbol's Footprint is read-only
+          const netlist = ((): FpChooserFilters | null => { const pins = new Set(chooserPinNumbers(root as unknown as SNode)).size, filters = symbolFpFilters(sym as unknown as SNode); return pins || filters.length ? { pins, filters } : null; })();
+          fgrid = fieldsGrid(box, rows, { readOnly: ro, doc: se.kdoc(), height: 190, shown: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], browse: { footprint: () => netlist, footprintReadOnly: !!hd.power },
             newName: (rs) => { let n = 1; const names = new Set(rs.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; } });
           pg.append(form([["Symbol name:", name], ["Keywords:", keywords], ["Derive from symbol:", inherit]]));
           // bSizerLowerBasicPanel: the General box (power, local power indented), Pin Text Options, then Attributes

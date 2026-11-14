@@ -6,6 +6,8 @@
 import { E, appState, toast, toolCtx, cloneNode } from "./editor";
 import { KD, checkbox, download, h, promptFields, promptText, select, textInput, type GridApi, type GridColumn } from "./dom";
 import { messageBox } from "./sch-items";
+import { datasheetButton, footprintButton } from "./browse-cells";
+import { commonChooserFilters, type FpChooserFilters } from "../library/fpchoice";
 import { fieldNamesAreDuplicates } from "./sch-items-logic";
 import { ATTR_FIELDS, BOM_FMT_PRESETS, BOM_PRESETS, ITEM_NO, QTY, bomExport, bomRows, fieldNames, str, symbolRows, withAllFields, type BomField, type BomFmt, type BomPreset, type BomRow, type SymRow } from "./logic";
 import { loadProject, obj, projectDocs, projectName, readDoc, saveProject, sub, submitDocOp, type Json, type JsonObj } from "./project";
@@ -105,6 +107,13 @@ export function openFieldsTable(exportTab = false): void {
   const syncFmtInputs = () => { for (const [k, inp] of Object.entries(fmtInputs)) { const v = (fmt as unknown as Record<string, string | boolean>)[k]; if (inp.type === "checkbox") inp.checked = !!v; else inp.value = str(v).replace(/\t/g, "\\t"); } };
   const refreshPreview = () => { if (previewEl) previewEl.value = bomExport(rows, preset, fmt); };
   const refreshFields = () => { if (fieldGrid) { fieldGrid.rows.splice(0, fieldGrid.rows.length, ...preset.fields_ordered); fieldGrid.refresh(); } };
+  /** getFootprintChooserSymbolNetlist: the library symbols of a row's symbols, one set of filters when they agree. */
+  const rowFilters = (r: GRow): FpChooserFilters | null => commonChooserFilters((r._g.rows as Row[]).flatMap((x) => x.members).map((m) => {
+    const d = docs.get(m.docId), it = d && d.items.get(m.id); if (!d || !it) return null;
+    const ln = KiCadCanvas.kid(it.node, "lib_name") || KiCadCanvas.kid(it.node, "lib_id");
+    return ln ? KiCadCanvas.resolveLib(d, KiCadCanvas.str(ln[1])) : null;
+  }));
+  const dsButton = datasheetButton();
   const refreshGrid = () => {
     if (!gridHost) return;
     const cols: GridColumn<GRow>[] = preset.fields_ordered.filter((f) => f.show).map((f) => {
@@ -112,7 +121,10 @@ export function openFieldsTable(exportTab = false): void {
       const base = { key: f.name, label: f.label + sorted };
       if (ATTR_FIELDS[f.name]) return Object.assign(base, { type: "bool" as const, width: 90, ro: (r: GRow) => !r._g.rows.every((x) => x.editable) });
       if (f.name === QTY || f.name === ITEM_NO) return Object.assign(base, { type: "ro" as const, width: 46 });
-      return Object.assign(base, { type: "text" as const, ro: (r: GRow) => (f.name === "Reference" && r._g.rows.length > 1) || !r._g.rows.every((x) => x.editable), list: f.name === "Footprint" ? undefined : undefined });
+      // DIALOG_SYMBOL_FIELDS_TABLE: the Footprint column's GRID_CELL_FPID_EDITOR (filters only when every symbol of the
+      // row has the same ones), the Datasheet column's GRID_CELL_URL_EDITOR
+      const button = f.name === "Footprint" ? (r: GRow) => footprintButton(() => rowFilters(r)) : f.name === "Datasheet" ? () => dsButton : undefined;
+      return Object.assign(base, { type: "text" as const, ro: (r: GRow) => (f.name === "Reference" && r._g.rows.length > 1) || !r._g.rows.every((x) => x.editable), button });
     });
     const groups = bomRows(rows, preset);
     const data: GRow[] = groups.map((g) => { const r: GRow = { _g: g }; for (const f of preset.fields_ordered) { const a = ATTR_FIELDS[f.name]; r[f.name] = a ? g.rows.every((x) => x[a.flag]) : g.cells[f.name]; } return r; });

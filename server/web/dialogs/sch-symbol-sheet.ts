@@ -22,6 +22,7 @@ import { currentInstance, loadSheets, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
 import * as VM from "../canvas/variant-model";
 import { writeSymbolVariant } from "./variant-edits";
+import { chooserFilters } from "../library/fpchoice";
 
 type Ctx = ToolCtx & { doc: KDoc };
 interface PropsHelpers {
@@ -119,7 +120,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
         { label: "General", build(pg: HTMLElement) {
           const fh = h("div"); const fb = KD().staticBox(fh, "Fields"); pg.append(fh);
           grid = fieldsGrid(fb, L.fieldRows(staged, origin, MANDATORY_SYMBOL).sort((a, c) => { const i = MANDATORY_SYMBOL.indexOf(a.name), j = MANDATORY_SYMBOL.indexOf(c.name); return (i < 0 ? 99 : i) - (j < 0 ? 99 : j); }),
-            { readOnly: ro, doc, newName: nextName, height: 200, shown: [0, 1, 2, 3, 4, 5, 6, 7] });
+            { readOnly: ro, doc, newName: nextName, height: 200, shown: [0, 1, 2, 3, 4, 5, 6, 7], browse: { footprint: () => chooserFilters(lib), footprintReadOnly: isPower } });
           const row = h("div", { style: "display:flex;gap:10px;margin-top:2px;align-items:stretch" });
           // General: Unit / Body style / Composed reference / Angle / Mirror, then Show pin numbers / Show pin names and Local power
           const gen = h("div", { style: "flex:7;min-width:0" }); const gb = KD().staticBox(gen, "General");

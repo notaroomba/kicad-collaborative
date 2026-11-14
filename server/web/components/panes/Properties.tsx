@@ -12,6 +12,7 @@ import type { PropGrid, PropRow } from "../../panels-api";
 import { useApp } from "../../store";
 import { cx } from "../../util";
 import { rowValueText } from "./prop-text";
+import { KIcon } from "../Icon";
 import { ContextMenu, panels, useContextMenu, usePanels, type MenuItem } from "./widgets";
 
 const MIXED = "<...>";
@@ -95,9 +96,18 @@ function Editor({ row, onDone }: { row: PropRow; onDone: () => void }) {
     );
   }
   const shown = draft !== null ? draft : row.value;
+  // PG_FPID_EDITOR / PG_URL_EDITOR: a wxPGMultiButton at the editor's right edge (small_library; small_folder while the
+  // datasheet is empty, www once it holds something), shown while the property is being edited or pointed at
+  const browseIcon = row.browse === "footprint" ? "small_library" : row.browse === "url" ? (!shown.trim() || shown.trim() === "~" ? "small_folder" : "www") : null;
+  const browseTip = row.browse === "footprint" ? "Browse for footprint" : browseIcon === "www" ? "Show datasheet in browser" : "Open file";
   return (
     <>
-      <input type="text" className={cx(CELL, row.readOnly && "text-ink-3", err && "shadow-[inset_0_0_0_1px_var(--color-err)]")} data-prop={row.id} spellCheck={false} autoComplete="off"
+      {browseIcon ? <button type="button" tabIndex={-1} title={browseTip} data-prop-browse={row.id} data-icon={browseIcon}
+        className="absolute right-0 top-0 bottom-0 z-1 w-[20px] p-0 flex items-center justify-center bg-transparent border-0 rounded-xs text-ink-2 invisible group-hover:visible group-focus-within:visible hover:bg-sel-soft"
+        onPointerDown={(ev) => ev.preventDefault()}
+        onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); const p = panels(); if (!p) return; if (draft !== null && !commit(draft)) return; settled.current = false; p.browseProp(row.id); }}>
+        <KIcon name={browseIcon} size={16} /></button> : null}
+      <input type="text" className={cx(CELL, browseIcon && "pr-[20px]", row.readOnly && "text-ink-3", err && "shadow-[inset_0_0_0_1px_var(--color-err)]")} data-prop={row.id} spellCheck={false} autoComplete="off"
         readOnly={row.readOnly} value={shown} placeholder={row.mixed ? MIXED : ""} title={err || (row.type === "longtext" ? row.value : undefined)}
         onFocus={(ev) => { if (!row.readOnly) ev.target.select(); }}
         onChange={(ev) => { setDraft(ev.target.value); setErr(null); }}
@@ -218,7 +228,7 @@ export function PropertiesPane() {
                   onContextMenu={(ev) => { const items = menuFor(g, r); if (items.length) menu.open(ev, items); else ev.preventDefault(); }}>{r.name}
                   {labelEdit && labelEdit.id === r.id ? <LabelEditor row={r} pending={labelEdit.pending} onEnd={() => { setLabelEdit(null); setTick((t) => t + 1); }} /> : null}
                   <span className="kprop-split absolute right-0 top-0 bottom-0 w-[5px] cursor-col-resize z-1" onPointerDown={dragSplit} /></span>
-                <span className="relative min-w-0"><Editor row={r} onDone={() => setTick((t) => t + 1)} /></span>
+                <span className="relative min-w-0 group"><Editor row={r} onDone={() => setTick((t) => t + 1)} /></span>
               </div>
             ))}
           </div>

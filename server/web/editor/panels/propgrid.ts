@@ -15,6 +15,9 @@ import { commitWithOtherUnits } from "../../dialogs/sync-units";
 import * as VM from "../../canvas/variant-model";
 import { currentInstance } from "../schnets";
 import { unescapeString } from "../../dialogs/sch-items-logic";
+import { chooseFootprint, noFileBrowsing, openDatasheet } from "../../dialogs/browse-cells";
+import { chooserFilters, datasheetLink, type FpChooserFilters } from "../../library/fpchoice";
+import { toast } from "../util";
 
 type Raw = string | number | boolean | null;
 interface PropDef {
@@ -846,6 +849,9 @@ export function propGrid(): PropGrid {
     });
     const row: PropRow = { id, name: d.name, type: d.type, value: mixed ? "" : value, mixed, readOnly: ro || !writable, choices: d.choices };
     if (d.key && !ro && items.length === 1) row.keyEditable = true;   // isKeyEditable looks at the front item
+    // SCH_PROPERTIES_PANEL / PCB_PROPERTIES_PANEL::createPGProperty: the Footprint and Datasheet properties get
+    // PG_FPID_EDITOR and PG_URL_EDITOR (an editor only an editable row opens)
+    if (d.group === "Fields" && d.type === "text" && !row.readOnly) { if (d.name === "Footprint") row.browse = "footprint"; else if (d.name === "Datasheet") row.browse = "url"; }
     let g = groups.find((x) => x.name === d.group); if (!g) { g = { name: d.group, rows: [] }; groups.push(g); }
     g.rows.push(row);
   }
@@ -940,6 +946,35 @@ export function setProp(id: string, text: string): string | null {
   return null;
 }
 
+
+/** SCH_PROPERTIES_PANEL's netlistCallback: the selected symbols' library symbol when they share one (else nothing);
+ *  the board's panel sends an empty netlist. */
+function selectionFilters(doc: KDoc, items: KItem[]): FpChooserFilters | null {
+  if (!isSchDoc()) return null;
+  const syms = items.filter((it) => it.kind === "symbol"); if (!syms.length) return null;
+  const libName = (n: SNode): string => { const k = H().kid(n, "lib_name") || H().kid(n, "lib_id"); return k ? H().str(k[1]) : ""; };
+  const first = libName(syms[0].node); if (syms.some((it) => libName(it.node) !== first)) return null;
+  return chooserFilters(K().resolveLib(doc, first));
+}
+/** PG_FPID_EDITOR / PG_URL_EDITOR::OnEvent( wxEVT_BUTTON ). */
+export function browseProp(id: string): void {
+  const doc = kdoc(); if (!doc || E.viewOnly) return;
+  const { items, defs } = resolve(); if (!items.length) return;
+  const d = defs[0].get(id); if (!d) return;
+  let raw: Raw = null; try { raw = d.get(items[0]); } catch (e) { raw = null; }
+  const value = raw === null ? "" : String(raw), mixed = items.some((it, i) => { const o = defs[i].get(id); let v: Raw = null; try { v = o ? o.get(it) : null; } catch (e) { v = null; } return String(v ?? "") !== value; });
+  if (d.name === "Datasheet") {
+    // a mixed value has no one datasheet to show: the editor starts as for an empty one
+    if (mixed || datasheetLink(value).kind === "none") void noFileBrowsing("property");
+    else openDatasheet(value);
+    return;
+  }
+  if (d.name !== "Footprint") return;
+  void chooseFootprint(mixed ? "" : value, selectionFilters(doc, items)).then((fp) => {
+    if (!fp) return;
+    const err = setProp(id, fp); if (err) toast(err);   // aGrid->ChangePropertyValue: one commit, one undo step
+  });
+}
 
 // ---------------------------------------------------------------- the label column (PCB_PROPERTIES_PANEL key editing)
 /** isKeyNameInUse: the front item already has a property of that name (a built-in one, a field or a custom one). */

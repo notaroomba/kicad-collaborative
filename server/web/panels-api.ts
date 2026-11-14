@@ -43,6 +43,8 @@ export interface PropRow {
   choices?: [string, string][];
   /** the name may be edited in the label column (a footprint's own field, a custom property) */
   keyEditable?: boolean;
+  /** the value editor carries a browse button: PG_FPID_EDITOR ("footprint") or PG_URL_EDITOR ("url") */
+  browse?: "footprint" | "url";
 }
 /** add: the category's "+" button and context-menu entry ("Add Field", "Add Custom Property") */
 export interface PropGroup { name: string; rows: PropRow[]; add?: "Add Field" | "Add Custom Property" }
@@ -121,6 +123,9 @@ export interface PanelsApi {
   addPropKey(kind: "field" | "custom"): string | null;
   /** Remove a footprint field or a custom property from the selection. */
   removePropKey(id: string): boolean;
+  /** The browse button of a row with `browse` (PG_FPID_EDITOR / PG_URL_EDITOR::OnEvent): the footprint chooser, whose
+   *  choice is committed like setProp, or the datasheet opened. */
+  browseProp(id: string): void;
   searchTabs(): SearchTab[];
   search(tab: string, query: string): SearchResult;
   /** The board's Net Inspector pane: its columns and rows (editor/panels/netinsp.ts). */

@@ -7,8 +7,9 @@
 // units" and Cancel / OK.  A double click or Enter on an item accepts it.
 import { isPowerRow, parseLibId, searchScore, symbolInfo, unitName } from "./core";
 import { clearPreview, renderFootprintPreview, renderSymbolPreview } from "./preview";
-import { fetchItem, libraryIndex, officialLibraries, onSourcesChanged, placedItems, projectLibraries, recentItems, registeredSources } from "./sources";
+import { fetchItem, libraryIndex, officialLibraries, onSourcesChanged, placedItems, projectLibraries, recentItems, registeredSources, rememberRecent } from "./sources";
 import type { FetchedItem, LibItem, LibKind, LibraryEntry, LibrarySource, SourceContext } from "./sources";
+import { filterLabels, footprintPasses, type FpChooserFilters } from "./fpchoice";
 import "../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 export interface ChooserOptions {
@@ -21,6 +22,15 @@ export interface ChooserOptions {
   filter?: string;
   /** The document cannot be edited: browsing only. */
   viewOnly?: boolean;
+  /** FOOTPRINT_CHOOSER_FRAME's MAIL_SYMBOL_NETLIST: the symbol's pin count and footprint filters, offered as the
+   *  "Filter by pin count (n)" / "Apply footprint filters (…)" check boxes under the filter box. */
+  fpFilters?: FpChooserFilters | null;
+  /** PANEL_FOOTPRINT_CHOOSER::SetPreselect: the item ("Lib:Name") selected and shown when the tree opens. */
+  preselect?: string;
+  /** Only the libraries (a field's value is picked: a vendor search result has no library id to write back). */
+  noSources?: boolean;
+  /** FOOTPRINT_CHOOSER_FRAME's AddFootprintToHistory: an accepted item goes to "-- Recently Used --". */
+  history?: boolean;
 }
 
 export interface Chosen {
@@ -84,6 +94,9 @@ const CSS = `
 @keyframes klib-spin { to { transform: rotate(360deg); } }
 .klib-tw { display: inline-block; width: 16px; text-align: center; color: var(--ink-2); font-size: 9px; }
 .klib-row.sel .klib-tw { color: var(--on-accent); }
+.klib-filters { display: flex; flex-direction: column; padding-left: 4px; }
+.klib-filters label { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.klib-filters input[type=checkbox] { width: auto; margin: 0; flex: none; }
 .klib-details { height: 132px; flex: none; overflow: auto; border: 1px solid var(--line); border-top: 0; background: var(--panel); padding: 6px 10px; line-height: 1.45; }
 .klib-details b.klib-name { font-size: 13px; }
 .klib-details table { border-collapse: collapse; margin-top: 4px; }
@@ -116,6 +129,13 @@ export function closeChooser(): void { if (openDialog) openDialog.close(); }
 // "Place all units" starts on (m_useUnits->SetValue( true )); neither is remembered
 const CHOOSER_DEFAULTS = { keep: false, allUnits: true } as const;
 
+// PCBNEW_SETTINGS m_FootprintChooser.filter_on_pin_count / use_fp_filters (both off by default), kept between openings
+const FP_FILTER_KEY = "klib.fpchooser.filters";
+function loadFpFilterPrefs(): { pins: boolean; filters: boolean } {
+  try { const j = JSON.parse(localStorage.getItem(FP_FILTER_KEY) || "{}") as { pins?: unknown; filters?: unknown }; return { pins: j.pins === true, filters: j.filters === true }; } catch { return { pins: false, filters: false }; }
+}
+function saveFpFilterPrefs(v: { pins: boolean; filters: boolean }): void { try { localStorage.setItem(FP_FILTER_KEY, JSON.stringify(v)); } catch { /* no storage */ } }
+
 /** Open the chooser; resolves with the chosen item (its s-expression fetched) or null on Cancel. */
 export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOptions = {}): Promise<Chosen | null> {
   if (openDialog) openDialog.close();
@@ -123,6 +143,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
   const isSym = kind === "symbol", browser = !!opts.browser, power = isSym && !!opts.power;
   const baseTitle = opts.title || (browser ? (isSym ? "Symbol Library Browser" : "Footprint Library Browser") : power ? "Choose Power Symbol" : isSym ? "Choose Symbol" : "Choose Footprint");
   const okLabel = browser ? (isSym ? "Add Symbol to Schematic" : "Add Footprint to Board") : "OK";
+  const fpf = !isSym ? opts.fpFilters || null : null, labels = filterLabels(fpf), fpOn = loadFpFilterPrefs();
 
   return new Promise<Chosen | null>((resolve) => {
     const ov = document.createElement("div"); ov.className = "kd-overlay klib-overlay";
@@ -133,6 +154,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         <div class="klib-left">
           <div class="klib-filter"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-5-5"/></svg>
             <input type="text" placeholder="Filter" spellcheck="false" autocomplete="off" aria-label="Filter"><span class="klib-clear" title="Clear filter">×</span></div>
+          ${labels.filters || labels.pins ? `<div class="klib-filters">${labels.filters ? `<label><input type="checkbox" class="klib-by-filters"${fpOn.filters ? " checked" : ""}> ${esc(labels.filters)}</label>` : ""}${labels.pins ? `<label><input type="checkbox" class="klib-by-pins"${fpOn.pins ? " checked" : ""}> ${esc(labels.pins)}</label>` : ""}</div>` : ""}
           <div class="klib-head"><span>Item</span><span>Description</span></div>
           <div class="klib-tree" tabindex="0"><div class="klib-rows"></div></div>
           <div class="klib-details"></div>
@@ -173,7 +195,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
       const libs = groups.filter((g) => g.type === "lib");
       groups.length = 0;
       groups.push(recentGroup, placedGroup);
-      for (const src of registeredSources(kind)) {
+      for (const src of opts.noSources ? [] : registeredSources(kind)) {
         let g = sourceGroups.get(src.id);
         if (!g) { g = { key: "@src:" + src.id, label: src.label, description: "", type: "source", src, items: [], loading: false, error: "" }; sourceGroups.set(src.id, g); }
         groups.push(g);
@@ -183,9 +205,14 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     rebuildGroups();
     const offSources = onSourcesChanged(() => { rebuildGroups(); searchSources(); refresh(); });
 
+    const byPinsBox = dlg.querySelector<HTMLInputElement>(".klib-by-pins"), byFiltersBox = dlg.querySelector<HTMLInputElement>(".klib-by-filters");
+    const fpFiltering = (): { pins: boolean; filters: boolean } => ({ pins: !!(byPinsBox && byPinsBox.checked), filters: !!(byFiltersBox && byFiltersBox.checked) });
+    /** filterFootprint is on: libraries without a passing footprint are left out and the rest open, like a search */
+    const filtering = (): boolean => { const on = fpFiltering(); return !!fpf && ((on.pins && fpf.pins > 0) || (on.filters && fpf.filters.length > 0)); };
     const visibleItems = (g: Group): LibItem[] => {
       let items = g.items || [];
       if (power) items = items.filter(isPowerRow);
+      if (fpf && g.type !== "source") { const on = fpFiltering(); items = items.filter((it) => footprintPasses(it, fpf, on)); }
       return items;
     };
     const itemKey = (g: Group, it: LibItem) => g.key + "/" + it.id;
@@ -199,7 +226,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         const scored = all.map((it) => ({ it, score: g.type === "source" ? 1 : searchScore({ name: it.name, description: it.description, keywords: it.keywords, library: it.library }, query) })).filter((x) => x.score > 0);
         if (query) scored.sort((a, b) => b.score - a.score || a.it.name.localeCompare(b.it.name));
         const best = scored.length ? scored[0].score : 0;
-        if (g.type === "lib") { if ((query || power) && !scored.length) continue; }
+        if (g.type === "lib") { if ((query || power || filtering()) && !scored.length) continue; }
         else if (g.type === "source") { if (!scored.length && !g.loading && !g.error && !query) continue; }
         else if (!scored.length) continue;
         ranked.push({ g, items: scored, best });
@@ -210,7 +237,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         ranked.sort((a, b) => rank(b) - rank(a));
       }
       for (const { g, items } of ranked) {
-        const open = query ? !expanded.has("-" + g.key) : expanded.has(g.key);
+        const open = query || filtering() ? !expanded.has("-" + g.key) : expanded.has(g.key);
         const count = g.items ? items.length : -1;
         out.push({ key: g.key, depth: 0, group: g, label: g.label, description: g.description, expandable: count !== 0 || g.loading || !!g.error || !g.items, expanded: open });
         if (!open) continue;
@@ -225,6 +252,9 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
       }
       rows = out;
     }
+    /** The scroll height follows the rows at once (drawRows sets it a frame later), so a scroll to the selection is
+     *  not clamped to the old height. */
+    const growRows = (): void => { rowsEl.style.height = rows.length * ROW_H + "px"; };
 
     // ---- rendering (a windowed list: a search can match thousands of rows)
     let drawQueued = false;
@@ -249,9 +279,28 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
       status.textContent = tableError ? tableError : pending > 0 ? `Loading libraries… ${pending} to go` : searching ? "Searching vendor catalogues…" : "";
     }
     let refreshTimer = 0;
+    let preselect = opts.preselect && opts.preselect.includes(":") ? opts.preselect : "";
+    /** SetPreselect: once the library holding the item is in, open it and select the item */
+    function applyPreselect(): void {
+      if (!preselect || query) return;
+      const lib = preselect.slice(0, preselect.indexOf(":"));
+      const g = groups.find((x) => x.type === "lib" && x.label === lib); if (!g) return;
+      if (!g.items) { void loadGroup(g); return; }
+      const it = visibleItems(g).find((x) => x.id === preselect || (x.library || lib) + ":" + x.name === preselect);
+      preselect = "";
+      if (!it) return;
+      if (!filtering()) expanded.add(g.key); else expanded.delete("-" + g.key);
+      buildRows(); const k = itemKey(g, it);
+      if (rows.some((r) => r.key === k)) { growRows(); selKey = ""; select(k, true); const i = rows.findIndex((r) => r.key === k); tree.scrollTop = Math.max(0, i * ROW_H - (tree.clientHeight || 300) / 2); }
+    }
     function refresh(selectBest = false): void {
       if (closed) return;
+      applyPreselect();
+      // libraries that load (or open) above the selection push it down: the view follows it
+      const before = selKey ? rows.findIndex((r) => r.key === selKey) : -1;
       buildRows();
+      const after = before >= 0 ? rows.findIndex((r) => r.key === selKey) : -1;
+      if (before >= 0 && after >= 0 && after !== before) { growRows(); tree.scrollTop += (after - before) * ROW_H; }
       if (selectBest || !rows.some((r) => r.key === selKey)) {
         const best = query || selectBest ? rows.find((r) => r.item) : null;
         if (best) select(best.key, true); else if (selKey && !rows.some((r) => r.key === selKey)) { selKey = ""; showSelection(); }
@@ -398,6 +447,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     function accept(): void {
       const row = selectedRow(); if (!row || !row.item || opts.viewOnly) return;
       const it = row.item;
+      if (opts.history) rememberRecent(kind, it);
       const finish = (got: FetchedItem) => close({ kind, item: it, libId: got.libId || (isSym ? it.id : undefined), fpid: got.fpid || (isSym ? undefined : it.id), symbol: got.symbol, footprint: got.footprint,
         fields: got.fields, unit: row.unit || 1, keep: !!(keepBox && keepBox.checked), allUnits: !!(unitsBox && unitsBox.checked && !unitsBox.disabled) });
       if (shown && shown.row.key === row.key) { finish(shown.got); return; }
@@ -406,7 +456,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     }
     function toggle(row: Row): void {
       if (!row.expandable) return;
-      if (row.depth === 0 && query) { if (row.expanded) expanded.add("-" + row.key); else expanded.delete("-" + row.key); }
+      if (row.depth === 0 && (query || filtering())) { if (row.expanded) expanded.add("-" + row.key); else expanded.delete("-" + row.key); }
       else if (row.expanded) expanded.delete(row.key); else expanded.add(row.key);
       if (row.depth === 0 && !row.expanded) void loadGroup(row.group);
       refresh();
@@ -425,6 +475,9 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
       if (row.item) accept(); else toggle(row);
     });
     tree.addEventListener("scroll", queueDraw);
+    const onFilterToggle = () => { saveFpFilterPrefs(fpFiltering()); tree.scrollTop = 0; refresh(); };
+    if (byPinsBox) byPinsBox.addEventListener("change", onFilterToggle);
+    if (byFiltersBox) byFiltersBox.addEventListener("change", onFilterToggle);
     input.addEventListener("input", () => {
       query = input.value.trim(); filterBox.classList.toggle("has-text", !!input.value);
       tree.scrollTop = 0; refresh(true);

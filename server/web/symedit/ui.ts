@@ -80,6 +80,11 @@ export const CSS = `
 .se-prow .v input[type=text]:focus{outline:none;box-shadow:inset 0 0 0 1px var(--blue)}
 .se-prow .v input:disabled{color:var(--ink-3)}
 .se-prow .v .cb{display:flex;align-items:center;padding:0 4px}
+.se-prow .v .se-pbtn{position:relative;display:flex;align-items:center;width:100%;height:100%}
+.se-prow .v .se-pbtn input[type=text]{padding-right:22px}
+.se-pbrowse{position:absolute;right:0;top:0;bottom:0;width:20px;padding:0;display:flex;align-items:center;justify-content:center;border:0;border-radius:var(--r-1);background:transparent;color:var(--ink-2);cursor:pointer;visibility:hidden}
+.se-prow:hover .se-pbrowse,.se-pbtn:focus-within .se-pbrowse{visibility:visible}
+.se-pbrowse:hover{background:var(--sel-soft)}
 .se-msg{flex:none;display:flex;gap:18px;padding:4px 10px;min-height:40px;max-height:64px;background:var(--panel);border-top:1px solid var(--line);overflow-x:auto}
 .se-msg div{display:flex;flex-direction:column;white-space:nowrap}
 .se-msg b{font-weight:400;color:var(--ink-2)}

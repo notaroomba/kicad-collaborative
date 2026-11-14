@@ -28,7 +28,9 @@ EXTRA_ICONS = {"import", "export_file", "fabrication", "language", "add_zone", "
                # the Net Inspector pane's configure button (pcbnew/widgets/net_inspector_panel.cpp)
                "config",
                # Clarify Selection rows: the item icons of BOARD_ITEM::GetMenuImage with no action of their own
-               "add_dashed_line", "show_mod_edge", "drc", "add_pcb_target", "grid_select", "add_point"}
+               "add_dashed_line", "show_mod_edge", "drc", "add_pcb_target", "grid_select", "add_point",
+               # the browse buttons of the grid cell editors (common/widgets/grid_text_button_helpers.cpp)
+               "small_library", "small_folder", "www"}
 
 
 MAC_IF = r"#\s*if(?:def\s+|\s+defined\(\s*)__WX(?:OSX_)?MAC__[ \t]*\)?[^\n]*\n"

@@ -28,6 +28,8 @@ import { HL, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
 import { openSheetProperties, openSymbolProperties, sheetPathNow } from "./sch-symbol-sheet";
 import { openPageSettings } from "./page-settings";
+import { datasheetButton, footprintButton } from "./browse-cells";
+import type { FpChooserFilters } from "../library/fpchoice";
 
 type Ctx = ToolCtx & { doc: KDoc };
 interface ItemOpts { onCreate?(node: SNode, more?: SNode[]): boolean | void; cancel?(): void; title?: string; label?: string; generic?: boolean; isNew?: boolean; symbolEditor?: SymEditorTextOpts }
@@ -133,12 +135,17 @@ function fromG(r: GRow): L.FieldRow {
   return r;
 }
 /** The grid with its Add field / Delete field / Move up / Move down buttons.  -> rows() for TransferDataFromWindow */
-export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number; shown?: number[] }): { rows(): L.FieldRow[]; setRows(rows: L.FieldRow[]): void } {
+/** A symbol's grid (FIELDS_GRID_TABLE over a symbol): the Footprint value gets GRID_CELL_FPID_EDITOR (with the symbol's
+ *  chooser filters; read-only on a power symbol) and the Datasheet value GRID_CELL_URL_EDITOR. */
+export interface FieldsGridBrowse { footprint(): FpChooserFilters | null; footprintReadOnly?: boolean }
+export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number; shown?: number[]; browse?: FieldsGridBrowse }): { rows(): L.FieldRow[]; setRows(rows: L.FieldRow[]): void } {
   const rows: GRow[] = rows0.map(toG);
   const faces = fontFaces(opts.doc);
+  const br = opts.browse, fpBtn = br ? footprintButton(() => br.footprint()) : null, dsBtn = br ? datasheetButton() : null;
+  const isFp = (r: GRow): boolean => !!br && r.mandatory && r.name === "Footprint", isDs = (r: GRow): boolean => !!br && r.mandatory && r.name === "Datasheet";
   const cols = [
     { key: "name", label: "Name", width: 110, ro: (r: GRow) => r.mandatory },
-    { key: "value", label: "Value", width: 170 },
+    { key: "value", label: "Value", width: 170, ro: (r: GRow) => !!br && !!br.footprintReadOnly && isFp(r), button: (r: GRow) => (isFp(r) ? fpBtn : isDs(r) ? dsBtn : null) },
     { key: "show", label: "Show", type: "bool" as const, width: 42 },
     { key: "showName", label: "Show Name", type: "bool" as const, width: 42 },
     { key: "hT", label: "H Align", type: "choice" as const, options: [["left", "Left"], ["center", "Center"], ["right", "Right"]] as [string, string][], width: 70 },

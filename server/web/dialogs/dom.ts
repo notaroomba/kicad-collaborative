@@ -30,7 +30,12 @@ export interface NotebookTab { label: string; build(page: HTMLElement): void }
 export interface NotebookApi { el: HTMLElement; select(i: number): void; index(): number; pages: HTMLElement[] }
 export interface TreeSection { label: string; pages: NotebookTab[] }
 export interface TreebookApi { el: HTMLElement; select(label: string): void; current(): string | null }
-export interface GridColumn<R> { key: string; label: string; type?: "text" | "bool" | "choice" | "ro"; options?: (string | [string, string])[] | ((row: R) => (string | [string, string])[]); width?: number; list?: string; ro?(row: R): boolean; format?(v: unknown, row: R): string; title?(row: R): string }
+/** A text cell's browse button (wxComboCtrl's button of KiCad's GRID_CELL_*_EDITORs): its icon (from the KiCad icon
+ *  pack) and tooltip for the cell's current text, and what a click does; set() writes and commits the cell. */
+export interface GridCellButton { icon(value: string): string; title(value: string): string; run(value: string, set: (v: string) => void, input?: HTMLInputElement): void }
+export interface GridColumn<R> { key: string; label: string; type?: "text" | "bool" | "choice" | "ro"; options?: (string | [string, string])[] | ((row: R) => (string | [string, string])[]); width?: number; list?: string; ro?(row: R): boolean; format?(v: unknown, row: R): string; title?(row: R): string;
+  /** a text cell of this row gets a browse button (GRID_CELL_FPID_EDITOR, GRID_CELL_URL_EDITOR) */
+  button?(row: R): GridCellButton | null }
 export interface GridOpts<R> { readOnly?: boolean; onHeader?(column: GridColumn<R>, index: number): void; height?: number | string; onChange?(row: R, key: string | null, value: unknown, index: number): void; onSelect?(row: R | null, index: number): void;
   buttons?: { add?(): R | null; addTitle?: string; remove?: boolean; removeTitle?: string; move?: boolean; canRemove?(row: R): boolean } }
 export interface GridApi<R> { el: HTMLElement; rows: R[]; columns: GridColumn<R>[]; refresh(): void; selected(): number; select(i: number): void; bar?: HTMLElement }

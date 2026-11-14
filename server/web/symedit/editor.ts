@@ -21,6 +21,9 @@ import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from ".
 import { fitMenu } from "../menufit";
 import * as D from "./dialogs";
 import * as SP from "./props";
+import { FP_BROWSE_TIP, chooseFootprint, noFileBrowsing, openDatasheet, urlIcon, urlTip } from "../dialogs/browse-cells";
+import { datasheetLink } from "../library/fpchoice";
+import { kicadIcon, setKicadIcon } from "../components/kicon-dom";
 import { symCanvasMenu, symTreeMenu, type SymMenuCtx } from "./ctxmenu";
 import { ZOOM_LIST, LINKS, LOCAL_LABELS } from "../tables";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
@@ -926,6 +929,21 @@ export class SymbolEditor {
         };
         i.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(); } else if (ev.key === "Escape") { i.value = shown; i.blur(); } });
         i.addEventListener("change", done); ed = i;
+        // SCH_PROPERTIES_PANEL: PG_FPID_EDITOR on Footprint, PG_URL_EDITOR on Datasheet (the symbol editor's selection
+        // holds no placed symbol, so the chooser gets no netlist and shows no filter toggles)
+        if (!dis && r.group === "Fields" && (r.name === "Footprint" || r.name === "Datasheet")) {
+          const isFp = r.name === "Footprint", iconOf = (v: string) => (isFp ? "small_library" : urlIcon(v)), tipOf = (v: string) => (isFp ? FP_BROWSE_TIP : urlTip(v));
+          const ic = kicadIcon(iconOf(shown)), b = h("button", { type: "button", class: "se-pbrowse", tabindex: "-1", title: tipOf(shown), "data-prop-browse": r.group + "/" + r.name, "data-icon": iconOf(shown) }, ic) as HTMLButtonElement;
+          i.addEventListener("input", () => { setKicadIcon(ic, iconOf(i.value)); b.title = tipOf(i.value); b.dataset.icon = iconOf(i.value); });
+          b.addEventListener("pointerdown", (ev) => ev.preventDefault());
+          b.addEventListener("click", (ev) => {
+            ev.preventDefault(); ev.stopPropagation(); if (i.value !== shown) done();
+            const cur = r.mixed ? "" : i.value;
+            if (!isFp) { if (r.mixed || datasheetLink(cur).kind === "none") void noFileBrowsing("property"); else openDatasheet(cur); return; }
+            void chooseFootprint(cur, null).then((fp) => { if (fp && fp !== shown) commit(r, fp); });
+          });
+          ed = h("span", { class: "se-pbtn" }, i, b);
+        }
       }
       grid.append(h("div", { class: "se-prow" + (dis ? " ro" : ""), "data-prop-row": r.group + "/" + r.name }, h("span", { class: "k", title: r.name }, r.name), h("span", { class: "v" }, ed)));
     }

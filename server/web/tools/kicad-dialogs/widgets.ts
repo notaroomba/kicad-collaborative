@@ -1,9 +1,10 @@
 // kicad-dialogs/widgets.ts — widgets: notebook, treebook, grid
 // The pieces KiCad's larger dialogs are made of (wxNotebook, PAGED_DIALOG's wxTreebook, WX_GRID with its
 // add / delete / move buttons).  Their CSS travels with them so a dialog works wherever this file is loaded.
-import type { GridApi, GridColumn, GridOpts, NotebookApi, NotebookTab, TreebookApi, TreeSection } from "../../dialogs/dom";
+import type { GridApi, GridCellButton, GridColumn, GridOpts, NotebookApi, NotebookTab, TreebookApi, TreeSection } from "../../dialogs/dom";
 import { esc, isList, str } from "./sexpr";
 import { el } from "./shell";
+import { kicadIcon, setKicadIcon } from "../../components/kicon-dom";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
 
 const WIDGET_CSS = `
@@ -34,6 +35,12 @@ const WIDGET_CSS = `
 .kd-body .kd-grid td input[type=text], .kd-body .kd-grid td input[type=number], .kd-body .kd-grid td k-select { border: none; background: transparent; border-radius: 0; padding: 2px 6px; font-family: inherit; }
 .kd-body .kd-grid td input[type=text]:focus, .kd-body .kd-grid td k-select:focus-within { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--panel); }
 .kd-grid td input[type=checkbox] { margin: 0; }
+.kd-grid td.kd-btn-cell { position: relative; }
+.kd-body .kd-grid td.kd-btn-cell input[type=text] { padding-right: 24px; }
+.kd-grid .kd-cell-btn { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 22px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-1); background: transparent; color: var(--ink-2); cursor: pointer; visibility: hidden; }
+.kd-grid td.kd-btn-cell:focus-within .kd-cell-btn, .kd-grid tr:hover td.kd-btn-cell .kd-cell-btn { visibility: visible; }
+.kd-grid .kd-cell-btn:hover { background: var(--sel-soft); }
+.kd-grid .kd-cell-btn:active { background: var(--on); }
 .kd-grid-btns { display: flex; gap: 4px; margin-top: 4px; }
 .kd-grid-btns .btn { padding: 1px 7px; min-width: 26px; font-size: 13px; line-height: 18px; }
 .kd-sb { border: 1px solid var(--line); border-radius: 3px; padding: 14px 10px 8px; margin: 12px 0 8px; position: relative; }
@@ -94,7 +101,8 @@ export function grid<R>(host: HTMLElement, columns: GridColumn<R>[], rows: R[], 
   function select(i: number): void { sel = i; [...table.querySelectorAll("tbody tr")].forEach((tr, j) => tr.classList.toggle("sel", j === i)); if (opts.onSelect) opts.onSelect(rows[i] || null, i); }
   function refresh(): void {
     const cols = api.columns;
-    table.innerHTML = `<thead><tr>${cols.map((c) => `<th${c.width ? ` style="width:${c.width}px"` : ""}>${esc(c.label)}</th>`).join("")}</tr></thead>`;
+    // a column with a browse button keeps its width (the grid scrolls sideways instead of squeezing the text under it)
+    table.innerHTML = `<thead><tr>${cols.map((c) => `<th${c.width ? ` style="width:${c.width}px${c.button ? `;min-width:${c.width}px` : ""}"` : ""}>${esc(c.label)}</th>`).join("")}</tr></thead>`;
     const tb = el("tbody");
     rows.forEach((r, i) => {
       const tr = el("tr"); if (i === sel) tr.classList.add("sel");
@@ -103,7 +111,8 @@ export function grid<R>(host: HTMLElement, columns: GridColumn<R>[], rows: R[], 
         if (c.type === "bool") { td.className = "c"; const cb = el("input") as HTMLInputElement; cb.type = "checkbox"; cb.checked = !!v; cb.disabled = !!ro; cb.dataset.col = c.key; cb.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = cb.checked; if (opts.onChange) opts.onChange(r, c.key, cb.checked, i); }); td.appendChild(cb); }
         else if (ro) { td.className = "ro"; td.textContent = c.format ? c.format(v, r) : str(v); if (c.title) td.title = c.title(r); }
         else if (c.type === "choice") { const s = el("k-select") as HTMLSelectElement; s.dataset.col = c.key; for (const o of (typeof c.options === "function" ? c.options(r) : c.options!)) { const op = el("option") as HTMLOptionElement; op.value = isList(o) ? o[0] : o; op.textContent = isList(o) ? o[1] : o; s.appendChild(op); } s.value = str(v); s.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = s.value; if (opts.onChange) opts.onChange(r, c.key, s.value, i); }); td.appendChild(s); }
-        else { const inp = el("input") as HTMLInputElement; inp.type = "text"; inp.value = c.format ? c.format(v, r) : str(v); inp.dataset.col = c.key; if (c.list) inp.setAttribute("list", c.list); inp.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = inp.value; if (opts.onChange) opts.onChange(r, c.key, inp.value, i); }); td.appendChild(inp); }
+        else { const inp = el("input") as HTMLInputElement; inp.type = "text"; inp.value = c.format ? c.format(v, r) : str(v); inp.dataset.col = c.key; if (c.list) inp.setAttribute("list", c.list); inp.addEventListener("change", () => { (r as Record<string, unknown>)[c.key] = inp.value; if (opts.onChange) opts.onChange(r, c.key, inp.value, i); }); td.appendChild(inp);
+          const cb = c.button ? c.button(r) : null; if (cb) cellButton(td, inp, cb); }
         tr.appendChild(td);
       }
       tr.addEventListener("pointerdown", () => { if (sel !== i) select(i); });
@@ -124,6 +133,31 @@ export function grid<R>(host: HTMLElement, columns: GridColumn<R>[], rows: R[], 
     host.appendChild(bar); api.bar = bar;
   }
   return api;
+}
+/**
+ * The browse button inside a text cell (wxComboCtrl with SetButtonBitmaps, as KiCad's GRID_CELL_FPID_EDITOR and
+ * GRID_CELL_URL_EDITOR build it): shown at the cell's right edge while the cell is being edited (and under the
+ * pointer), a click keeps the cell's editor and runs the button; a value the button sets is written and committed
+ * at once (CommitPendingChanges).  Esc in an edited cell gives the committed text back instead of closing the dialog.
+ */
+function cellButton(td: HTMLElement, inp: HTMLInputElement, spec: GridCellButton): void {
+  td.classList.add("kd-btn-cell");
+  const b = el("button", "kd-cell-btn") as HTMLButtonElement; b.type = "button"; b.tabIndex = -1; b.dataset.cellBtn = inp.dataset.col || "";
+  const ic = kicadIcon(spec.icon(inp.value), 16); b.appendChild(ic);
+  const sync = (): void => { setKicadIcon(ic, spec.icon(inp.value)); b.title = spec.title(inp.value); b.dataset.icon = spec.icon(inp.value); };
+  sync();
+  inp.addEventListener("input", sync);
+  b.addEventListener("pointerdown", (ev) => { ev.preventDefault(); if (document.activeElement !== inp) inp.focus(); });   // the cell stays in edit
+  b.addEventListener("click", (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    spec.run(inp.value, (v) => { inp.value = v; inp.defaultValue = v; sync(); inp.dispatchEvent(new Event("change")); }, inp);
+  });
+  inp.addEventListener("focus", () => { inp.defaultValue = inp.value; });
+  inp.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || inp.value === inp.defaultValue) return;
+    ev.preventDefault(); ev.stopPropagation(); inp.value = inp.defaultValue; sync();   // wxGrid: Esc cancels the cell edit
+  });
+  td.appendChild(b);
 }
 /** wxStaticBoxSizer: a titled frame; returns the element to fill. */
 export function staticBox(host: HTMLElement, title: string): HTMLElement { ensureCss(); const b = el("div", "kd-sb"); b.appendChild(el("span", "kd-sb-t", esc(title))); host.appendChild(b); return b; }
