@@ -174,6 +174,53 @@
     if (hidden) setKid(p, "hide", ["yes"], ["uuid", "effects"]);
   }
 
+  // web/components/kicon-dom.ts
+  var G = () => typeof window === "undefined" ? {} : window;
+  var NS = "http://www.w3.org/2000/svg";
+  var CSS2 = `
+.kicon-dom .dk { display: none; }
+:root[data-theme="dark"] .kicon-dom .lt { display: none; } :root[data-theme="dark"] .kicon-dom .dk { display: inline; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kicon-dom .lt { display: none; } :root:not([data-theme="light"]) .kicon-dom .dk { display: inline; } }
+`;
+  var styled = false;
+  function ensureCss() {
+    if (styled || typeof document === "undefined") return;
+    styled = true;
+    const st = document.createElement("style");
+    st.id = "kicon-dom-css";
+    st.textContent = CSS2;
+    document.head.appendChild(st);
+  }
+  function fill(el2, ic) {
+    el2.setAttribute("viewBox", ic.vb || "0 0 24 24");
+    el2.innerHTML = `<g class="lt">${ic.light || ic.dark || ""}</g><g class="dk">${ic.dark || ic.light || ""}</g>`;
+    el2.dataset.icon = el2.dataset.want || "";
+  }
+  function kicadIcon(name, size = 16) {
+    ensureCss();
+    const el2 = document.createElementNS(NS, "svg");
+    el2.setAttribute("class", "kicon-dom");
+    el2.setAttribute("aria-hidden", "true");
+    el2.setAttribute("width", String(size));
+    el2.setAttribute("height", String(size));
+    setKicadIcon(el2, name);
+    return el2;
+  }
+  function setKicadIcon(el2, name) {
+    if (el2.dataset.want === name && el2.dataset.icon === name) return;
+    el2.dataset.want = name;
+    const g = G(), ic = g.KiCadIconFor ? g.KiCadIconFor(name) : void 0;
+    if (ic) {
+      fill(el2, ic);
+      return;
+    }
+    if (g.KiCadIconsReady) void g.KiCadIconsReady.then(() => {
+      if (el2.dataset.want !== name) return;
+      const i = G().KiCadIconFor?.(name);
+      if (i) fill(el2, i);
+    }).catch(() => void 0);
+  }
+
   // web/keys.ts
   function detectMac() {
     if (typeof navigator === "undefined") return false;
@@ -869,6 +916,12 @@
 .kd-body .kd-grid td input[type=text], .kd-body .kd-grid td input[type=number], .kd-body .kd-grid td k-select { border: none; background: transparent; border-radius: 0; padding: 2px 6px; font-family: inherit; }
 .kd-body .kd-grid td input[type=text]:focus, .kd-body .kd-grid td k-select:focus-within { outline: 2px solid var(--blue); outline-offset: -2px; background: var(--panel); }
 .kd-grid td input[type=checkbox] { margin: 0; }
+.kd-grid td.kd-btn-cell { position: relative; }
+.kd-body .kd-grid td.kd-btn-cell input[type=text] { padding-right: 24px; }
+.kd-grid .kd-cell-btn { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 22px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-1); background: transparent; color: var(--ink-2); cursor: pointer; visibility: hidden; }
+.kd-grid td.kd-btn-cell:focus-within .kd-cell-btn, .kd-grid tr:hover td.kd-btn-cell .kd-cell-btn { visibility: visible; }
+.kd-grid .kd-cell-btn:hover { background: var(--sel-soft); }
+.kd-grid .kd-cell-btn:active { background: var(--on); }
 .kd-grid-btns { display: flex; gap: 4px; margin-top: 4px; }
 .kd-grid-btns .btn { padding: 1px 7px; min-width: 26px; font-size: 13px; line-height: 18px; }
 .kd-sb { border: 1px solid var(--line); border-radius: 3px; padding: 14px 10px 8px; margin: 12px 0 8px; position: relative; }
@@ -878,7 +931,7 @@
 .kd-chk input { width: auto; margin: 0; }
 `;
   var cssDone = false;
-  function ensureCss() {
+  function ensureCss2() {
     if (cssDone || typeof document === "undefined") return;
     cssDone = true;
     const st = document.createElement("style");
@@ -887,7 +940,7 @@
     document.head.appendChild(st);
   }
   function notebook(host, tabs, opts) {
-    ensureCss();
+    ensureCss2();
     const nb = el("div", "kd-nb"), bar = el("div", "kd-nb-tabs"), pages = [];
     let cur = -1;
     const select = (i) => {
@@ -917,7 +970,7 @@
     return { el: nb, select, index: () => cur, pages };
   }
   function treebook(host, sections, opts) {
-    ensureCss();
+    ensureCss2();
     const tb = el("div", "kd-tb"), tree = el("div", "kd-tb-tree"), pane = el("div", "kd-tb-page"), built = /* @__PURE__ */ new Map(), nodes = /* @__PURE__ */ new Map();
     let cur = null;
     const pages = /* @__PURE__ */ new Map();
@@ -960,7 +1013,7 @@
     return { el: tb, select, current: () => cur };
   }
   function grid(host, columns, rows, optsIn) {
-    ensureCss();
+    ensureCss2();
     const opts = optsIn || {};
     const wrap = el("div", "kd-grid-wrap"), table = el("table", "kd-grid");
     if (opts.height) wrap.style.maxHeight = wrap.style.height = typeof opts.height === "number" ? opts.height + "px" : opts.height;
@@ -973,7 +1026,7 @@
     }
     function refresh() {
       const cols = api.columns;
-      table.innerHTML = `<thead><tr>${cols.map((c) => `<th${c.width ? ` style="width:${c.width}px"` : ""}>${esc(c.label)}</th>`).join("")}</tr></thead>`;
+      table.innerHTML = `<thead><tr>${cols.map((c) => `<th${c.width ? ` style="width:${c.width}px${c.button ? `;min-width:${c.width}px` : ""}"` : ""}>${esc(c.label)}</th>`).join("")}</tr></thead>`;
       const tb = el("tbody");
       rows.forEach((r, i) => {
         const tr = el("tr");
@@ -1022,6 +1075,8 @@
               if (opts.onChange) opts.onChange(r, c.key, inp.value, i);
             });
             td.appendChild(inp);
+            const cb = c.button ? c.button(r) : null;
+            if (cb) cellButton(td, inp, cb);
           }
           tr.appendChild(td);
         }
@@ -1095,8 +1150,49 @@
     }
     return api;
   }
+  function cellButton(td, inp, spec) {
+    td.classList.add("kd-btn-cell");
+    const b = el("button", "kd-cell-btn");
+    b.type = "button";
+    b.tabIndex = -1;
+    b.dataset.cellBtn = inp.dataset.col || "";
+    const ic = kicadIcon(spec.icon(inp.value), 16);
+    b.appendChild(ic);
+    const sync = () => {
+      setKicadIcon(ic, spec.icon(inp.value));
+      b.title = spec.title(inp.value);
+      b.dataset.icon = spec.icon(inp.value);
+    };
+    sync();
+    inp.addEventListener("input", sync);
+    b.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      if (document.activeElement !== inp) inp.focus();
+    });
+    b.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      spec.run(inp.value, (v) => {
+        inp.value = v;
+        inp.defaultValue = v;
+        sync();
+        inp.dispatchEvent(new Event("change"));
+      }, inp);
+    });
+    inp.addEventListener("focus", () => {
+      inp.defaultValue = inp.value;
+    });
+    inp.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape" || inp.value === inp.defaultValue) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      inp.value = inp.defaultValue;
+      sync();
+    });
+    td.appendChild(b);
+  }
   function staticBox(host, title) {
-    ensureCss();
+    ensureCss2();
     const b = el("div", "kd-sb");
     b.appendChild(el("span", "kd-sb-t", esc(title)));
     host.appendChild(b);
@@ -1414,7 +1510,7 @@
     });
     const entry = { ov, dlg, body, spec, finish };
     stack.push(entry);
-    ensureCss();
+    ensureCss2();
     const api = { body, close: () => closeEntry(entry), dlg, foot, finish, refocus(key) {
       const c = key !== void 0 && body.querySelector(`[data-k="${key}"]`);
       if (c) {
@@ -1622,7 +1718,7 @@
     treebook,
     grid,
     staticBox,
-    ensureCss,
+    ensureCss: ensureCss2,
     _: { fieldNode, fieldEffects, setFieldEffects, fieldAt, setFieldAt, fieldHidden, setFieldHidden, fieldUnlocked, setFieldUnlocked, fieldLayer, setFieldLayer, fieldText, setFieldText }
   };
   root.KDialogs = kdialogs;
