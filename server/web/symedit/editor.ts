@@ -920,12 +920,13 @@ export class SymbolEditor {
         const len = r.type === "length" || r.type === "coord";
         const shown = r.mixed ? "" : len ? this.fmt(Number(r.value)) : r.value;
         const i = h("input", { type: "text", "data-prop": r.name, value: shown, disabled: dis, spellcheck: "false", autocomplete: "off" }) as HTMLInputElement;
+        let committed = shown;   // what the row holds now: the shown value, or the text done() last committed
         const done = () => {
-          if (i.value === shown) return;
+          if (i.value === committed) return;
           let v = i.value;
           if (len) { const mm = D.parseLen(v); if (mm === null) { this.infoBarError(`Invalid value for ${r.name}`); i.value = shown; return; } v = M.fmt(mm); }
           else if (r.type === "int") { if (!/^\s*\d+\s*$/.test(v)) { i.value = shown; return; } v = String(parseInt(v, 10)); }
-          commit(r, v);
+          commit(r, v); committed = i.value;
         };
         i.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); done(); } else if (ev.key === "Escape") { i.value = shown; i.blur(); } });
         i.addEventListener("change", done); ed = i;
@@ -937,10 +938,11 @@ export class SymbolEditor {
           i.addEventListener("input", () => { setKicadIcon(ic, iconOf(i.value)); b.title = tipOf(i.value); b.dataset.icon = iconOf(i.value); });
           b.addEventListener("pointerdown", (ev) => ev.preventDefault());
           b.addEventListener("click", (ev) => {
-            ev.preventDefault(); ev.stopPropagation(); if (i.value !== shown) done();
+            ev.preventDefault(); ev.stopPropagation(); done();
             const cur = r.mixed ? "" : i.value;
             if (!isFp) { if (r.mixed || datasheetLink(cur).kind === "none") void noFileBrowsing("property"); else openDatasheet(cur); return; }
-            void chooseFootprint(cur, null).then((fp) => { if (fp && fp !== shown) commit(r, fp); });
+            // the typed text done() just committed is the value to compare the choice with, not the one first shown
+            void chooseFootprint(cur, null).then((fp) => { if (fp && fp !== committed) { commit(r, fp); committed = fp; } });
           });
           ed = h("span", { class: "se-pbtn" }, i, b);
         }
