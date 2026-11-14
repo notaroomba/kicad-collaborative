@@ -220,7 +220,11 @@ export function kicadAscDesc(m: Pick<FaceMetrics, "asc" | "desc">): { asc: numbe
  * "text" = SCH_TEXT (lifted by GetOffsetToMatchSCH_FIELD; `lift` is the schematic text offset already in the anchor),
  * "field" = SCH_FIELD (centred on its text box), otherwise FONT::Draw at the anchor.
  */
-export interface OutlineBlock { x: number; y: number; line: number; lines: number; first: string; kind?: "text" | "field"; lift?: number }
+export interface OutlineBlock {
+  x: number; y: number; line: number; lines: number; first: string; kind?: "text" | "field"; lift?: number;
+  /** a multi-line field: the shown text of every line (its box is as wide as the widest, every line centred on it) */
+  all?: string[];
+}
 /** What the layout needs of a text geometry. */
 export interface OutlineTextG { x: number; y: number; text: string; raw?: string; size: number; sizeX?: number; rot?: number; h: string; v: string; mirror?: boolean; bold?: boolean; italic?: boolean; face?: string; olBlock?: OutlineBlock }
 /** One laid-out line in the text's own frame (origin at `ox, oy`, x along the reading direction, y down): its left end on the baseline, and its box. */
@@ -252,17 +256,22 @@ export function outlineLayout(g: OutlineTextG): OutlineLayout | null {
   let ax = 0, ay = 0;
   if (blk && blk.kind === "text" && blk.lift) { const [lx, ly] = toLocal(0, blk.lift, rot, mirror); ax = lx; ay = ly; }
   const lineW = (s: number) => (g.h === "left" ? s : g.h === "right" ? s - width : s - width / 2);
-  const bx0 = ax + (g.h === "left" ? 0 : g.h === "right" ? -(width - italicOff) : -(width - italicOff) / 2);
+  // a field's box is GetTextBox( -1 ): as wide as its widest line; any other text's line box is that line's own
+  const field = !!blk && blk.kind === "field";
+  const boxW = field && blk!.all && blk!.all.length > 1 ? Math.max(width, ...blk!.all.map((t) => m.advance(t) * emX)) : width;
+  const bx0 = ax + (g.h === "left" ? 0 : g.h === "right" ? -(boxW - italicOff) : -(boxW - italicOff) / 2);
   const by0 = ay + (g.v === "top" ? -fudge : g.v === "bottom" ? -boxH + fudge : -boxH / 2);
   const lineTop = by0 + (i ? firstH + (i - 1) * interline + (interline - lineH) : 0);
-  const box: [number, number, number, number] = [bx0, lineTop, bx0 + width, lineTop + (i ? lineH : firstH)];
+  // SCH_PAINTER::draw( SCH_FIELD ) centres every line on the field's box (FONT::getLinePositions, -lineSize.x / 2)
+  const lx0 = field ? bx0 + (boxW - width) / 2 : bx0;
+  const box: [number, number, number, number] = [lx0, lineTop, lx0 + width, lineTop + (i ? lineH : firstH)];
   // FONT::getLinePositions: the baselines (single line: one height below the top of a 1.17-height block)
   const blockH = size * FIRST_LINE + (n - 1) * interline;
   const firstBase = (v: string) => size - (v === "top" ? 0 : v === "bottom" ? blockH : blockH / 2);
   let x: number, baseline: number;
-  if (blk && blk.kind === "field") {
+  if (field) {
     // SCH_PAINTER::draw( SCH_FIELD ): centred, horizontally and vertically, on the centre of the field's text box
-    const cx = bx0 + width / 2, cy = by0 + boxH / 2;
+    const cx = bx0 + boxW / 2, cy = by0 + boxH / 2;
     x = cx - width / 2; baseline = cy + firstBase("middle") + i * interline;
   } else {
     x = lineW(0); baseline = firstBase(g.v) + i * interline;

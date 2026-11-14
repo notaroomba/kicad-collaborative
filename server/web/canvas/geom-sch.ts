@@ -439,7 +439,8 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g);
-          if (!ef.hide) { const [px, py] = tf(tx, ty); transformedText(item, Ti, px, py, str(g[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, olKind: "field" }); take("body"); }
+          // SCH_PAINTER::draw( SCH_TEXT ) on LAYER_DEVICE: placed on its box like a field, each line keeping its H justification
+          if (!ef.hide) { const [px, py] = tf(tx, ty); transformedText(item, Ti, px, py, str(g[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, olKind: "field", olKeepH: true }); take("body"); }
         } else if (gk === "text_box") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g); const sz = kid(g, "size"); const [px, py] = tf(tx, ty);
           if (!ef.hide) { transformedText(item, Ti, px, py, str(g[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, defH: "left", defV: "top" }); take("body"); }

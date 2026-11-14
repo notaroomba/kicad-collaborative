@@ -99,7 +99,7 @@ export function textGeom(item: GeomSink, x: number, y: number, text: SAtom | nul
   const g: TextGeom = { t: "text", x, y, text: m.text, bars: m.bars, size: size || 1.27, w: 0, color, rot: r, h: j.h, v: j.v, layer };
   if (m.text !== text) g.raw = text;   // the marked-up source: the stroke painter lays out ~{} _{} ^{} itself
   // copies whichever text fields the caller set: a dynamic key, so the records are indexed as plain maps here
-  for (const k in extra) if (k !== "defH" && k !== "defV" && k !== "pcb" && k !== "upright" && k !== "olKind" && k !== "olLift") (g as unknown as Record<string, unknown>)[k] = (extra as Record<string, unknown>)[k];
+  for (const k in extra) if (k !== "defH" && k !== "defV" && k !== "pcb" && k !== "upright" && k !== "olKind" && k !== "olLift" && k !== "olKeepH") (g as unknown as Record<string, unknown>)[k] = (extra as Record<string, unknown>)[k];
   return G(item, g);
 }
 
@@ -107,8 +107,9 @@ export function textGeom(item: GeomSink, x: number, y: number, text: SAtom | nul
 export function textLines(item: GeomSink, x: number, y: number, text: SAtom | null | undefined, size: number, color: string | null | undefined, rot: number | null | undefined, just: readonly string[] | null | undefined, layer: string, extra?: TextExtra | null): TextGeom {
   const lines = splitLines(str(text));
   // an outline-font text: every line knows the block it belongs to, which KiCad lays out as a whole (outline-text.ts)
+  const all = extra && extra.face && extra.olKind === "field" && !extra.olKeepH && lines.length > 1 ? lines.map((ln) => parseMarkup(unescapeText(ln)).text) : undefined;
   const block = (i: number, e: TextExtra | null | undefined): TextExtra | null | undefined => !e || !e.face ? e
-    : Object.assign({}, e, { olBlock: { x, y, line: i, lines: lines.length, first: unescapeText(lines[0] || ""), kind: e.olKind, lift: e.olLift } });
+    : Object.assign({}, e, { olBlock: { x, y, line: i, lines: lines.length, first: unescapeText(lines[0] || ""), kind: e.olKind, lift: e.olLift, all } });
   if (lines.length === 1) return textGeom(item, x, y, lines[0], size, color, rot, just, layer, block(0, extra));
   if (extra && extra.dxfText) extra = Object.assign({}, extra, { dxfText: undefined });   // DXF_PLOTTER::PlotText draws a multiline text as graphics
   const j = justOf(just || [], extra && extra.defH, extra && extra.defV); const il = size * INTERLINE;

@@ -203,6 +203,8 @@ export type TextExtra = Partial<Omit<TextGeom, "t">> & {
   upright?: boolean;
   /** how KiCad positions an outline-font text (OutlineBlock.kind): an SCH_TEXT and its schematic text offset, or a field */
   olKind?: "text" | "field"; olLift?: number;
+  /** a symbol's own text placed like a field but keeping its horizontal justification line by line (not centred) */
+  olKeepH?: boolean;
 };
 
 /** One wire-format change as applyChange reads it: the chrome's KChange, or a peer's with the item text under itemSexpr. */

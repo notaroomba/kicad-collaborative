@@ -195,6 +195,23 @@ test("a field in an outline face is drawn centred on its text box (SCH_PAINTER::
   near(cy, -0.17 * lineH(s) + lineH(s) / 2, 1e-5);
 });
 
+test("a multi-line left / right field centres every line on its whole box (GetTextBox width = the widest line)", () => {
+  const s = 2, em = 0.6 * 1.4 * s;
+  const lib = '(lib_symbols (symbol "x:R" (symbol "R_0_1" (rectangle (start -1 -1) (end 1 1) (stroke (width 0) (type default)) (fill (type none))) (text "AB\\nABCDEF" (at 0 0 0) (effects (font (face "${FACE}") (size ${s} ${s})) (justify left))))))'.replace("${FACE}", FACE).replace(/\$\{s\}/g, s);
+  for (const [just, x0] of [["left", 0], ["right", -6 * em]]) {
+    const d = doc(`${lib} (symbol (lib_id "x:R") (at 50 50 0) (unit 1) (uuid "s1")
+      (property "Value" "AB\\nABCDEF" (at 50 45 0) (effects (font (face "${FACE}") (size ${s} ${s})) (justify ${just}))))`);
+    const [a, b] = texts(d.items.get("s1")).filter((x) => x.field === "Value").map((g) => K.outlineLayout(g));
+    near(a.width, 2 * em, 1e-9); near(b.width, 6 * em, 1e-9);
+    near(b.x, x0, 1e-9, just + ": the long line fills the box");
+    near(a.x + a.width / 2, b.x + b.width / 2, 1e-9, just + ": the short line centred over it");
+    near(a.box[0], a.x, 1e-9); near(a.box[2], a.x + a.width, 1e-9);
+    // a symbol's own text keeps its justification line by line (SCH_PAINTER::draw( SCH_TEXT ) on LAYER_DEVICE)
+    const [ta, tb] = texts(d.items.get("s1")).filter((x) => !x.field && x.text.startsWith("AB")).map((g) => K.outlineLayout(g));
+    near(ta.x, tb.x, 1e-9, "symbol text: flush left");
+  }
+});
+
 test("bold asked of a regular-only family is not synthesised; italic asked of an upright one is slanted 12 degrees", () => {
   const m = K.faceMetrics(FACE, true, true);
   assert.ok(!/bold|italic/.test(m.css), m.css); assert.strictEqual(m.slant, true);
