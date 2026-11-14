@@ -44239,9 +44239,9 @@ You may wish to run DRC with 'Test for parity between PCB and schematic' checked
   }
 });
 
-// node_modules/opentype.js/dist/opentype.js
+// ../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.js
 var require_opentype = __commonJS({
-  "node_modules/opentype.js/dist/opentype.js"(exports2, module2) {
+  "../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.js"(exports2, module2) {
     (function(global, factory) {
       typeof exports2 === "object" && typeof module2 !== "undefined" ? factory(exports2) : typeof define === "function" && define.amd ? define(["exports"], factory) : (global = global || self, factory(global.opentype = {}));
     })(exports2, (function(exports3) {
@@ -57028,6 +57028,13 @@ function colorOf(node) {
   if (a <= 0) return null;
   return rgba(num(c[1]), num(c[2]), num(c[3]), a);
 }
+function fontColorOf(font) {
+  const c = kid(font, "color");
+  if (!c) return null;
+  const r = num(c[1]), g2 = num(c[2]), b = num(c[3]), a = num(c[4], 1);
+  if (!r && !g2 && !b && !a) return null;
+  return rgba(r, g2, b, Math.max(0, a));
+}
 function strokeColorOf(node) {
   const s = kid(node, "stroke");
   return s ? colorOf(s) : null;
@@ -57109,6 +57116,8 @@ function effectsOf(node) {
       r.italic = yesNo(f2, "italic");
       const fc = kid(f2, "face");
       if (fc && str(fc[1])) r.face = str(fc[1]);
+      const col = fontColorOf(f2);
+      if (col) r.color = col;
     }
     const j = kid(e, "justify");
     if (j) {
@@ -58236,7 +58245,7 @@ function buildTableGeom(doc, item, n2) {
         tx = j.h === "left" ? b.x0 + lm : j.h === "right" ? b.x1 - rm : (b.x0 + b.x1) / 2;
         ty = j.v === "top" ? b.y0 + tm : j.v === "bottom" ? b.y1 - bm : (b.y0 + b.y1) / 2;
       }
-      textLines(item, tx, ty, text2, ef.size, colorOf(cn) || SCH.notes, b.rot, [j.h, j.v], layer, { z, w: textPen(ef, ef.size) });
+      textLines(item, tx, ty, text2, ef.size, ef.color || SCH.notes, b.rot, [j.h, j.v], layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     }
   }
   const cellAt2 = (r, c) => cells[r * cols + c] || null;
@@ -58659,6 +58668,9 @@ function intersheetRefsText(refs, label) {
   return refs.prefix + ref + refs.suffix;
 }
 var INTERSHEET_FIELD = /^intersheet ?refs$/i;
+function fieldColor(ef, layerColor) {
+  return ef.color || layerColor;
+}
 function labelFields(item, n2, color2, layer, z, doc, labelLen = 0) {
   for (const p of kids(n2, "property")) {
     const ef = effectsOf(p);
@@ -58690,13 +58702,13 @@ function labelFields(item, n2, color2, layer, z, doc, labelLen = 0) {
           just = ["right"];
         }
       }
-      textLines(item, px2, py2, val, ef.size, colorOf(p) || SCH.glabel, pr2, just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
+      textLines(item, px2, py2, val, ef.size, ef.color || SCH.glabel, pr2, just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]), olKind: "field" });
       continue;
     }
     if (!val || /^\$\{.*\}$/.test(val)) continue;
     const [px, py, pr] = atOf(p);
     const sink = ef.hide ? { geom: [], bbox: null } : item;
-    textLines(sink, px, py, val, ef.size, ef.hide ? SCH.hidden : color2, pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
+    textLines(sink, px, py, val, ef.size, fieldColor(ef, ef.hide ? SCH.hidden : color2), pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]), olKind: "field" });
     if (ef.hide && sink.geom.length) {
       for (const g2 of sink.geom) {
         g2.hiddenText = true;
@@ -58748,7 +58760,7 @@ function buildSchGeom(doc, item) {
   } else if (k === "text") {
     const [x, y, rot3] = atOf(n2);
     const ef = effectsOf(n2);
-    textLines(item, x, y - 0.25, expandDocVars(doc, str(n2[1])), ef.size, colorOf(n2) || SCH.notes, rot3, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textLines(item, x, y - 0.25, expandDocVars(doc, str(n2[1])), ef.size, ef.color || SCH.notes, rot3, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, olKind: "text", olLift: 0.25 });
   } else if (k === "text_box") {
     const [x, y, rot3] = atOf(n2);
     const s = kid(n2, "size");
@@ -58774,7 +58786,7 @@ function buildSchGeom(doc, item) {
       ty = j.v === "top" ? y0 + tm : j.v === "bottom" ? y1 - bm : (y0 + y1) / 2;
     }
     const col = vert ? y1 - y0 - tm - bm : x1 - x0 - lm - rm;
-    textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n2[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, colorOf(n2) || SCH.notes, rot3, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n2[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, ef.color || SCH.notes, rot3, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
   } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier" || k === "ellipse" || k === "ellipse_arc") {
     shapeGeom(item, n2, k, (x, y) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n2, 0) || SCH_PEN);
   } else if (k === "rule_area") {
@@ -58918,10 +58930,10 @@ function buildLabelGeom(item, n2, k, doc) {
   if (k === "label") {
     const d = off + lpen;
     const tx = st.rot ? x - d : x, ty = st.rot ? y : y - d;
-    textGeom(item, tx, ty, text2, size, colorOf(n2) || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textGeom(item, tx, ty, text2, size, ef.color || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     labelFields(item, n2, SCH.field, "Fields", SCH_Z.fields);
   } else if (k === "global_label") {
-    const color2 = colorOf(n2) || SCH.glabel;
+    const color2 = ef.color || SCH.glabel;
     const margin = schFormat.labelSizeRatio * size;
     let horiz = margin;
     if (shape3 === "input" || shape3 === "bidirectional" || shape3 === "tri_state") horiz += size * 0.75;
@@ -58950,14 +58962,14 @@ function buildLabelGeom(item, n2, k, doc) {
     const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
     labelFields(item, n2, SCH.field, "Fields", SCH_Z.fields, doc, Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)));
   } else if (k === "hierarchical_label") {
-    const color2 = colorOf(n2) || SCH.hlabel;
+    const color2 = ef.color || SCH.hlabel;
     const d = off + ef.sizeX;
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
     textGeom(item, x + to[0], y + to[1], text2, size, color2, st.rot, [st.h, "middle"], "Labels", { z: SCH_Z.hierlabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     G(item, { t: "poly", pts: hierShape(x, y, size, shape3 || "input", spin), close: false, w: pen, color: color2, layer: "Labels", z: SCH_Z.hierlabel });
     labelFields(item, n2, SCH.field, "Fields", SCH_Z.fields);
   } else {
-    const color2 = colorOf(n2) || SCH.netclass;
+    const color2 = ef.color || SCH.netclass;
     const lenN = kid(n2, "length");
     const pinLen = lenN ? num(lenN[1]) : 2.54;
     const symSize = 0.508;
@@ -59016,8 +59028,8 @@ function buildSheetGeom(item, n2) {
     if (name === "Sheetfile") item.file = val;
     if (ef.hide || !val) continue;
     const [px, py, pr] = atOf(p);
-    const color2 = col(name === "Sheetname" ? SCH.sheetName : name === "Sheetfile" ? SCH.sheetFile : SCH.sheetFields);
-    textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color2, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    const color2 = col(fieldColor(ef, name === "Sheetname" ? SCH.sheetName : name === "Sheetfile" ? SCH.sheetFile : SCH.sheetFields));
+    textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color2, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, olKind: "field" });
   }
   for (const pin of kids(n2, "pin")) {
     const [px, py, pr] = atOf(pin);
@@ -59030,11 +59042,12 @@ function buildSheetGeom(item, n2) {
     if (shape3 === "input") shape3 = "output";
     else if (shape3 === "output") shape3 = "input";
     const g0 = item.geom.length;
-    G(item, { t: "poly", pts: hierShape(px, py, size, shape3, spin), close: false, w: SCH_PEN, color: col(SCH.sheetLabel), layer: "Sheets", z: SCH_Z.sheet });
+    const pinColor = col(ef.color || SCH.sheetLabel);
+    G(item, { t: "poly", pts: hierShape(px, py, size, shape3, spin), close: false, w: SCH_PEN, color: pinColor, layer: "Sheets", z: SCH_Z.sheet });
     const d = 0.15 * size + ef.sizeX;
     const st = spinText(spin);
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
-    textGeom(item, px + to[0], py + to[1], str(pin[1]), size, col(SCH.sheetLabel), st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textGeom(item, px + to[0], py + to[1], str(pin[1]), size, pinColor, st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = str(pin[1]);
   }
   if (dnp && schFormat.showDnpMarkers) {
@@ -59124,14 +59137,20 @@ function buildSymbolGeom(doc, item) {
         const before = item.bbox ? item.bbox.slice() : null;
         item.bbox = null;
         if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc" || gk === "ellipse" || gk === "ellipse_arc") {
-          shapeGeom(item, g2, gk, tf2, col(SCH.outline), bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g2, 0) || SCH_PEN, void 0, true);
+          const g0 = item.geom.length;
+          shapeGeom(item, g2, gk, tf2, SCH.outline, bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g2, 0) || SCH_PEN, void 0, true);
+          if (dnp) for (let i = g0; i < item.geom.length; i++) {
+            const x = item.geom[i];
+            if (x.color) x.color = col(x.color);
+            if (x.fill) x.fill = col(x.fill);
+          }
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g2);
           const ef = effectsOf(g2);
           if (!ef.hide) {
             const [px, py] = tf2(tx, ty);
-            transformedText(item, Ti, px, py, str(g2[1]), ef.size, col(strokeColorOf(g2) || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha });
+            transformedText(item, Ti, px, py, str(g2[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, olKind: "field", olKeepH: true });
             take("body");
           }
         } else if (gk === "text_box") {
@@ -59140,7 +59159,7 @@ function buildSymbolGeom(doc, item) {
           const sz = kid(g2, "size");
           const [px, py] = tf2(tx, ty);
           if (!ef.hide) {
-            transformedText(item, Ti, px, py, str(g2[1]), ef.size, col(SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, defH: "left", defV: "top" });
+            transformedText(item, Ti, px, py, str(g2[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, defH: "left", defV: "top" });
             take("body");
           }
         } else if (gk === "pin") {
@@ -59187,7 +59206,7 @@ function buildSymbolGeom(doc, item) {
     const [px, py, pr] = atOf(p);
     const isRef = name === "Reference", isVal = name === "Value";
     const sink = ef.hide ? { geom: [], bbox: null } : item;
-    const color2 = ef.hide ? SCH.hidden : col(isRef || isVal ? SCH.ref : SCH.field);
+    const color2 = col(fieldColor(ef, ef.hide ? SCH.hidden : isRef || isVal ? SCH.ref : SCH.field));
     let shown = isRef && unitCount2 > 1 ? val + unitLetter(unit2) : val;
     if (shown.indexOf("${") >= 0) shown = expandTextVars(shown, (tok) => {
       const up = tok.toUpperCase();
@@ -59196,7 +59215,7 @@ function buildSymbolGeom(doc, item) {
       if (SIM_VARS.has(tok)) return "";
       return null;
     });
-    const tg = transformedText(sink, Ti, px, py, shown, ef.size, color2, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, field: name });
+    const tg = transformedText(sink, Ti, px, py, shown, ef.size, color2, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, field: name, olKind: "field" });
     if (isVal && localPower) localPowerIcon(sink, tg, shown, textPen(ef, ef.size), color2, name);
     if (ef.hide) {
       for (const hg of sink.geom) {
@@ -60334,6 +60353,266 @@ function buildPadGeom(item, pad, tf2, side, doc, padIndex) {
   }
 }
 
+// web/canvas/outline-text.ts
+var OUTLINE_EM = 1.4;
+var OUTLINE_INTERLINE = 1.68;
+var FIRST_LINE = 1.17;
+var ITALIC_TILT2 = 1 / 8;
+var FAKE_ITALIC_SLANT = Math.tan(12 * Math.PI / 180);
+var cssFamily = (face) => '"' + String(face).replace(/["'\\<>&;]/g, "") + '"';
+var FONT_GEN = 0;
+var FACES = /* @__PURE__ */ new Map();
+var measureCtx = null;
+function ctx2d() {
+  if (measureCtx) return measureCtx;
+  try {
+    if (typeof document !== "undefined") measureCtx = document.createElement("canvas").getContext("2d");
+    else if (typeof OffscreenCanvas !== "undefined") measureCtx = new OffscreenCanvas(8, 8).getContext("2d");
+  } catch (e) {
+    measureCtx = null;
+  }
+  return measureCtx;
+}
+function faceAvailable(face) {
+  let ok2 = FACES.get(face);
+  if (ok2 !== void 0) return ok2;
+  ok2 = false;
+  if (face && !/^kicad font$/i.test(face) && typeof document !== "undefined") {
+    try {
+      const c = ctx2d();
+      const probe2 = "mmmmmmmmmmlliWW0123@#", fam = cssFamily(face);
+      const w = (f2) => {
+        c.font = "40px " + f2;
+        return c.measureText(probe2).width;
+      };
+      ok2 = w(fam + ", monospace") !== w("monospace") || w(fam + ", serif") !== w("serif");
+    } catch (e) {
+      ok2 = false;
+    }
+  }
+  FACES.set(face, ok2);
+  return ok2;
+}
+function fontChanged(face) {
+  FONT_GEN++;
+  METRICS.clear();
+  if (face === void 0) {
+    FACES.clear();
+    FONT_DATA.clear();
+    return;
+  }
+  FACES.delete(face);
+}
+var FONT_DATA = /* @__PURE__ */ new Map();
+var fontKey = (face, bold, italic) => face.toLowerCase() + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
+function setFontData(face, bold, italic, font) {
+  if (font) FONT_DATA.set(fontKey(face, bold, italic), font);
+  else FONT_DATA.delete(fontKey(face, bold, italic));
+  FONT_GEN++;
+  METRICS.clear();
+}
+function fontData(face, bold, italic) {
+  return FONT_DATA.get(fontKey(face, bold, italic)) || null;
+}
+function allFontData() {
+  return [...FONT_DATA].map(([k, f2]) => {
+    const [face, b, i] = k.split("|");
+    return [face, b === "b", i === "i", f2];
+  });
+}
+function readSfnt(buf) {
+  try {
+    const dv = new DataView(buf);
+    let base = 0;
+    if (dv.getUint32(0) === 1953784678) base = dv.getUint32(12);
+    const n2 = dv.getUint16(base + 4);
+    const T = /* @__PURE__ */ new Map();
+    for (let i = 0; i < n2; i++) {
+      const r = base + 12 + 16 * i;
+      T.set(String.fromCharCode(dv.getUint8(r), dv.getUint8(r + 1), dv.getUint8(r + 2), dv.getUint8(r + 3)), dv.getUint32(r + 8));
+    }
+    const head = T.get("head"), hhea = T.get("hhea"), hmtx = T.get("hmtx"), cmap = T.get("cmap"), os2 = T.get("OS/2");
+    if (head === void 0 || hhea === void 0) return null;
+    const upm = dv.getUint16(head + 18) || 1e3;
+    const os2ok = os2 !== void 0 && dv.getUint16(os2) !== 65535;
+    let asc = dv.getInt16(hhea + 4), desc = dv.getInt16(hhea + 6);
+    if (os2ok && dv.getUint16(os2 + 62) & 128) {
+      asc = dv.getInt16(os2 + 68);
+      desc = dv.getInt16(os2 + 70);
+    } else if (!asc && !desc && os2ok) {
+      const ta = dv.getInt16(os2 + 68), td = dv.getInt16(os2 + 70);
+      if (ta || td) {
+        asc = ta;
+        desc = td;
+      } else {
+        asc = dv.getUint16(os2 + 74);
+        desc = -dv.getUint16(os2 + 76);
+      }
+    }
+    const nh = dv.getUint16(hhea + 34);
+    const adv = (gid) => hmtx === void 0 || !nh ? 0 : dv.getUint16(hmtx + 4 * Math.min(gid, nh - 1));
+    const glyph = cmapLookup(dv, cmap);
+    return { upm, asc, desc, advance: (cp2) => adv(glyph(cp2)) };
+  } catch (e) {
+    return null;
+  }
+}
+function cmapLookup(dv, cmap) {
+  if (cmap === void 0) return () => 0;
+  const n2 = dv.getUint16(cmap + 2);
+  let f42 = -1, f12 = -1;
+  for (let i = 0; i < n2; i++) {
+    const r = cmap + 4 + 8 * i, pid = dv.getUint16(r), eid = dv.getUint16(r + 2), off = cmap + dv.getUint32(r + 4), fmt4 = dv.getUint16(off);
+    if (fmt4 === 12 && (pid === 0 || pid === 3 && eid === 10)) f12 = off;
+    else if (fmt4 === 4 && (pid === 0 || pid === 3 && (eid === 1 || eid === 0))) {
+      if (f42 < 0 || pid === 3) f42 = off;
+    }
+  }
+  const cache3 = /* @__PURE__ */ new Map();
+  return (cp2) => {
+    let g2 = cache3.get(cp2);
+    if (g2 !== void 0) return g2;
+    g2 = 0;
+    if (f12 >= 0) {
+      const groups = dv.getUint32(f12 + 12);
+      for (let i = 0; i < groups; i++) {
+        const r = f12 + 16 + 12 * i, s = dv.getUint32(r), e = dv.getUint32(r + 4);
+        if (cp2 >= s && cp2 <= e) {
+          g2 = dv.getUint32(r + 8) + cp2 - s;
+          break;
+        }
+      }
+    } else if (f42 >= 0 && cp2 <= 65535) {
+      const segX2 = dv.getUint16(f42 + 6), ends = f42 + 14, starts = ends + segX2 + 2, deltas = starts + segX2, ranges = deltas + segX2;
+      for (let i = 0; i < segX2 / 2; i++) {
+        if (cp2 > dv.getUint16(ends + 2 * i)) continue;
+        const s = dv.getUint16(starts + 2 * i);
+        if (cp2 < s) break;
+        const ro = dv.getUint16(ranges + 2 * i), d = dv.getInt16(deltas + 2 * i);
+        if (!ro) g2 = cp2 + d & 65535;
+        else {
+          const gi = dv.getUint16(ranges + 2 * i + ro + 2 * (cp2 - s));
+          g2 = gi ? gi + d & 65535 : 0;
+        }
+        break;
+      }
+    }
+    cache3.set(cp2, g2);
+    return g2;
+  };
+}
+var METRICS = /* @__PURE__ */ new Map();
+function heldFile(face, bold, italic) {
+  for (const [b, i] of [[bold, italic], [false, italic], [bold, false], [false, false]]) {
+    const f2 = fontData(face, b, i);
+    if (f2) return f2;
+  }
+  return null;
+}
+function faceMetrics(face, bold, italic) {
+  if (!face || /^kicad font$/i.test(face)) return null;
+  const key3 = fontKey(face, bold, italic);
+  if (METRICS.has(key3)) return METRICS.get(key3);
+  const file = heldFile(face, bold, italic), info = file ? readSfnt(file.data) : null;
+  const onPage = faceAvailable(face);
+  let m = null;
+  if (info || onPage) {
+    const fileBold = file ? file.bold : bold, fileItalic = file ? file.italic : italic;
+    const css = `${fileItalic ? "italic " : ""}${fileBold ? "bold " : ""}1px ${cssFamily(face)}`;
+    const c = onPage ? ctx2d() : null;
+    let asc = 0.8, desc = 0.2;
+    if (info) {
+      asc = info.asc / info.upm;
+      desc = -info.desc / info.upm;
+    } else if (c) {
+      c.font = css.replace("1px", "100px");
+      const tm = c.measureText("Hg");
+      if (tm.fontBoundingBoxAscent) {
+        asc = tm.fontBoundingBoxAscent / 100;
+        desc = (tm.fontBoundingBoxDescent || 0) / 100;
+      }
+    }
+    const widths = /* @__PURE__ */ new Map();
+    const advance = (text2) => {
+      let w = widths.get(text2);
+      if (w !== void 0) return w;
+      if (c) {
+        c.font = css.replace("1px", "100px");
+        w = c.measureText(text2).width / 100;
+      } else {
+        w = 0;
+        for (const ch of text2) w += info.advance(ch.codePointAt(0)) / info.upm;
+      }
+      if (widths.size < 4096) widths.set(text2, w);
+      return w;
+    };
+    m = { asc, desc, advance, css, slant: italic && !fileItalic };
+  }
+  METRICS.set(key3, m);
+  return m;
+}
+function kicadAscDesc(m) {
+  const faceSize = Math.trunc(16 * 64 * OUTLINE_EM), ppem = faceSize * 1152 / 72;
+  return { asc: Math.ceil(m.asc * ppem / 64) * 64 / ppem, desc: Math.ceil(m.desc * ppem / 64) * 64 / ppem };
+}
+function outlineLayout(g2) {
+  if (!g2.face) return null;
+  const m = faceMetrics(g2.face, !!g2.bold, !!g2.italic);
+  if (!m) return null;
+  const size = g2.size || 1.27, sizeX = g2.sizeX && g2.sizeX > 0 ? g2.sizeX : size;
+  const em = size * OUTLINE_EM, emX = sizeX * OUTLINE_EM;
+  const blk = g2.olBlock, n2 = blk ? Math.max(1, blk.lines) : 1, i = blk ? Math.min(blk.line, n2 - 1) : 0;
+  const ox = blk ? blk.x : g2.x, oy = blk ? blk.y : g2.y, rot3 = g2.rot || 0, mirror = !!g2.mirror;
+  const text2 = g2.text || "", width = m.advance(text2) * emX;
+  const { asc, desc } = kicadAscDesc(m);
+  const interline = size * OUTLINE_INTERLINE;
+  const lineH = (asc + desc) * em, firstH = lineH * (/~\{/.test(blk ? blk.first : g2.raw || text2) ? 7 / 6 : 1);
+  const boxH = firstH + (n2 - 1) * interline, fudge = Math.round(lineH * 0.17 * 1e6) / 1e6;
+  const italicOff = g2.italic ? size * ITALIC_TILT2 : 0;
+  let ax = 0, ay = 0;
+  if (blk && blk.kind === "text" && blk.lift) {
+    const [lx, ly] = toLocal(0, blk.lift, rot3, mirror);
+    ax = lx;
+    ay = ly;
+  }
+  const lineW = (s) => g2.h === "left" ? s : g2.h === "right" ? s - width : s - width / 2;
+  const field2 = !!blk && blk.kind === "field";
+  const boxW = field2 && blk.all && blk.all.length > 1 ? Math.max(width, ...blk.all.map((t) => m.advance(t) * emX)) : width;
+  const bx0 = ax + (g2.h === "left" ? 0 : g2.h === "right" ? -(boxW - italicOff) : -(boxW - italicOff) / 2);
+  const by0 = ay + (g2.v === "top" ? -fudge : g2.v === "bottom" ? -boxH + fudge : -boxH / 2);
+  const lineTop = by0 + (i ? firstH + (i - 1) * interline + (interline - lineH) : 0);
+  const lx0 = field2 ? bx0 + (boxW - width) / 2 : bx0;
+  const box = [lx0, lineTop, lx0 + width, lineTop + (i ? lineH : firstH)];
+  const blockH = size * FIRST_LINE + (n2 - 1) * interline;
+  const firstBase = (v) => size - (v === "top" ? 0 : v === "bottom" ? blockH : blockH / 2);
+  let x, baseline;
+  if (field2) {
+    const cx = bx0 + boxW / 2, cy = by0 + boxH / 2;
+    x = cx - width / 2;
+    baseline = cy + firstBase("middle") + i * interline;
+  } else {
+    x = lineW(0);
+    baseline = firstBase(g2.v) + i * interline;
+    if (blk && blk.kind === "text") baseline -= Math.round(0.4 * (firstH - size) * 1e4) / 1e4;
+  }
+  return { ox, oy, rot: rot3, mirror, size, sizeX, em, emX, metrics: m, text: text2, x, baseline, width, box };
+}
+function toLocal(dx, dy, rot3, mirror) {
+  const a = rot3 * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const lx = dx * c - dy * s, ly = dx * s + dy * c;
+  return [mirror ? -lx : lx, ly];
+}
+function fromLocal(L, lx, ly) {
+  const a = -L.rot * Math.PI / 180, c = Math.cos(a), s = Math.sin(a), x = L.mirror ? -lx : lx;
+  return [L.ox + x * c - ly * s, L.oy + x * s + ly * c];
+}
+function outlineBoxCorners(g2) {
+  const L = outlineLayout(g2);
+  if (!L) return null;
+  const [x0, y0, x1, y1] = L.box;
+  return [fromLocal(L, x0, y0), fromLocal(L, x1, y0), fromLocal(L, x1, y1), fromLocal(L, x0, y1)];
+}
+
 // web/canvas/geom.ts
 function bboxAdd(item, x, y, pad) {
   pad = pad || 0;
@@ -60364,6 +60643,11 @@ function G(item, g2) {
     bboxAdd(item, g2.x + g2.w, g2.y + g2.h);
   } else if (g2.t === "pad") bboxAdd(item, g2.x, g2.y, Math.hypot(g2.w, g2.h) / 2);
   else if (g2.t === "text" && !g2.noBox) {
+    const oc = outlineBoxCorners(g2);
+    if (oc) {
+      for (const [px, py] of oc) bboxAdd(item, px, py);
+      return g2;
+    }
     const w = textWidth(g2.text, g2.size, g2.w), h = g2.size;
     const x0 = g2.h === "left" ? 0 : g2.h === "right" ? -w : -w / 2, y0 = g2.v === "top" ? 0 : g2.v === "bottom" ? -h : -h / 2;
     const R2 = rotator(g2.rot || 0);
@@ -60382,6 +60666,18 @@ function buildGeom(doc, item) {
     item.schTheme = schTheme();
     buildSchGeom(doc, item);
   } else buildPcbGeom(doc, item);
+  const hasFace = (gs) => !!gs && gs.some((g2) => g2.t === "text" && !!g2.face);
+  item.fontGen = hasFace(item.geom) || hasFace(item.hiddenGeom) ? FONT_GEN : void 0;
+}
+function ensureFontGeom(doc) {
+  if (!doc || doc.fontGen === FONT_GEN) return;
+  for (const it of doc.items.values()) if (it.fontGen !== void 0 && it.fontGen !== FONT_GEN) {
+    try {
+      buildGeom(doc, it);
+    } catch (e) {
+    }
+  }
+  doc.fontGen = FONT_GEN;
 }
 function ensureSchTheme(doc) {
   if (!doc || doc.type !== "sch") return;
@@ -60432,12 +60728,14 @@ function textGeom(item, x, y, text2, size, color2, rot3, just, layer, extra) {
   const m = parseMarkup(text2);
   const g2 = { t: "text", x, y, text: m.text, bars: m.bars, size: size || 1.27, w: 0, color: color2, rot: r, h: j.h, v: j.v, layer };
   if (m.text !== text2) g2.raw = text2;
-  for (const k in extra) if (k !== "defH" && k !== "defV" && k !== "pcb" && k !== "upright") g2[k] = extra[k];
+  for (const k in extra) if (k !== "defH" && k !== "defV" && k !== "pcb" && k !== "upright" && k !== "olKind" && k !== "olLift" && k !== "olKeepH") g2[k] = extra[k];
   return G(item, g2);
 }
 function textLines(item, x, y, text2, size, color2, rot3, just, layer, extra) {
   const lines = splitLines(str(text2));
-  if (lines.length === 1) return textGeom(item, x, y, lines[0], size, color2, rot3, just, layer, extra);
+  const all2 = extra && extra.face && extra.olKind === "field" && !extra.olKeepH && lines.length > 1 ? lines.map((ln) => parseMarkup(unescapeText(ln)).text) : void 0;
+  const block = (i, e) => !e || !e.face ? e : Object.assign({}, e, { olBlock: { x, y, line: i, lines: lines.length, first: unescapeText(lines[0] || ""), kind: e.olKind, lift: e.olLift, all: all2 } });
+  if (lines.length === 1) return textGeom(item, x, y, lines[0], size, color2, rot3, just, layer, block(0, extra));
   if (extra && extra.dxfText) extra = Object.assign({}, extra, { dxfText: void 0 });
   const j = justOf(just || [], extra && extra.defH, extra && extra.defV);
   const il = size * INTERLINE;
@@ -60446,7 +60744,7 @@ function textLines(item, x, y, text2, size, color2, rot3, just, layer, extra) {
   const out = [];
   lines.forEach((ln, i) => {
     const [dx, dy] = R2(0, off0 + i * il);
-    out.push(textGeom(item, x + dx, y + dy, ln, size, color2, rot3, just, layer, extra));
+    out.push(textGeom(item, x + dx, y + dy, ln, size, color2, rot3, just, layer, block(i, extra)));
   });
   return out[0];
 }
@@ -60647,7 +60945,7 @@ function layerUiRank(name) {
   if (user) return 2e3 + Number(user[1]);
   return 3e3;
 }
-function enabledLayers(doc, colorOf2) {
+function enabledLayers(doc, colorOf3) {
   if (!doc || !doc.layers) return [];
   const out = [];
   let i = 0;
@@ -60655,7 +60953,7 @@ function enabledLayers(doc, colorOf2) {
   for (const [name, l] of doc.layers) {
     if (!/\./.test(name) && name !== "Margin") continue;
     seq.set(name, i++);
-    out.push({ name, label: l.userName || name, color: colorOf2(name), copper: /\.Cu$/.test(name) && l.type !== "user", id: l.id });
+    out.push({ name, label: l.userName || name, color: colorOf3(name), copper: /\.Cu$/.test(name) && l.type !== "user", id: l.id });
   }
   out.sort((a, b) => layerUiRank(a.name) - layerUiRank(b.name) || (seq.get(a.name) || 0) - (seq.get(b.name) || 0));
   return out;
@@ -61188,6 +61486,11 @@ function geomBox(g2) {
       return g2.rot ? [g2.x - r, g2.y - r, g2.x + r, g2.y + r] : [g2.x - g2.w / 2, g2.y - g2.h / 2, g2.x + g2.w / 2, g2.y + g2.h / 2];
     }
     case "text": {
+      const oc = outlineBoxCorners(g2);
+      if (oc) {
+        const xs = oc.map((p) => p[0]), ys = oc.map((p) => p[1]);
+        return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+      }
       const tw = textWidth(g2.text || "", g2.size || 1, g2.w || 0), th = g2.size || 1;
       const r = Math.max(tw, th);
       return [g2.x - r, g2.y - r, g2.x + r, g2.y + r];
@@ -61244,6 +61547,15 @@ function geomHit(g2, x, y, tol) {
       return Math.abs(lx) <= g2.w / 2 + tol && Math.abs(ly) <= g2.h / 2 + tol;
     }
     case "text": {
+      const OL = outlineLayout(g2);
+      if (OL) {
+        const a = OL.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), dx = x - OL.ox, dy = y - OL.oy;
+        let lx2 = dx * c - dy * sn;
+        const ly2 = dx * sn + dy * c;
+        if (OL.mirror) lx2 = -lx2;
+        const [x02, y02, x1, y1] = OL.box;
+        return lx2 >= x02 - tol && lx2 <= x1 + tol && ly2 >= y02 - tol && ly2 <= y1 + tol;
+      }
       const tw = textWidth(g2.text || "", g2.sizeX || g2.size || 1, g2.w || 0), th = g2.size || 1;
       const x0 = g2.h === "left" ? 0 : g2.h === "right" ? -tw : -tw / 2, y0 = g2.v === "top" ? 0 : g2.v === "bottom" ? -th : -th / 2;
       let [lx, ly] = rotator(-(g2.rot || 0))(x - g2.x, y - g2.y);
@@ -61946,6 +62258,7 @@ function bucket(map, z) {
 }
 function render(doc, ctx, view, opts) {
   ensureSchTheme(doc);
+  ensureFontGeom(doc);
   opts = opts || {};
   const hidden = opts.hidden || /* @__PURE__ */ new Set();
   const isPcb = doc.type === "pcb";
@@ -62631,8 +62944,12 @@ function busConnectedLabels(doc) {
   return ids;
 }
 function busPinTint(it, g2) {
-  if (it.kind === "sheet") return typeof g2.pinNo === "string" && g2.layer === "Sheets" && isBusLabel(g2.pinNo);
-  return g2.layer === "Labels";
+  if (it.kind === "sheet") {
+    if (!(typeof g2.pinNo === "string" && g2.layer === "Sheets" && isBusLabel(g2.pinNo))) return false;
+    const pin = kids(it.node, "pin").find((p) => str(p[1]) === g2.pinNo);
+    return !(pin && effectsOf(pin).color);
+  }
+  return g2.layer === "Labels" && !effectsOf(it.node).color;
 }
 function minLayerAlpha(c) {
   const m = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i.exec(c);
@@ -63542,6 +63859,13 @@ function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
       ctx.strokeStyle = halo;
       ctx.fillStyle = halo;
       if (g2.t === "text") {
+        const OL = g2.face && faceAvailable(g2.face) && !g2.knockout ? outlineLayout(g2) : null;
+        if (OL) {
+          ctx.save();
+          drawOutlineText(ctx, g2, OL, halo, base, strokesOnly ? extra : extra + minW);
+          ctx.restore();
+          continue;
+        }
         if (strokesOnly && base && HAS_PATH2D2) {
           const tg = g2;
           const pen = tg.w > 0 ? tg.w : tg.size / 8;
@@ -63603,29 +63927,6 @@ function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
   }
   ctx.restore();
 }
-var cssFamily = (face) => '"' + String(face).replace(/["'\\<>&;]/g, "") + '"';
-var FACES = /* @__PURE__ */ new Map();
-var faceCtx = null;
-function faceAvailable(face) {
-  let ok2 = FACES.get(face);
-  if (ok2 !== void 0) return ok2;
-  ok2 = false;
-  if (face && !/^kicad font$/i.test(face) && typeof document !== "undefined") {
-    try {
-      if (!faceCtx) faceCtx = document.createElement("canvas").getContext("2d");
-      const probe2 = "mmmmmmmmmmlliWW0123@#", fam = cssFamily(face);
-      const w = (f2) => {
-        faceCtx.font = "40px " + f2;
-        return faceCtx.measureText(probe2).width;
-      };
-      ok2 = w(fam + ", monospace") !== w("monospace") || w(fam + ", serif") !== w("serif");
-    } catch (e) {
-      ok2 = false;
-    }
-  }
-  FACES.set(face, ok2);
-  return ok2;
-}
 var WANTED = /* @__PURE__ */ new Set();
 function wantFace(face, bold, italic) {
   const k = face + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
@@ -63638,29 +63939,9 @@ function wantFace(face, bold, italic) {
   } catch (e) {
   }
 }
-function fontChanged(face) {
-  if (face === void 0) {
-    FACES.clear();
-    WANTED.clear();
-    FONT_DATA.clear();
-    return;
-  }
-  FACES.delete(face);
-}
-var FONT_DATA = /* @__PURE__ */ new Map();
-var fontKey = (face, bold, italic) => face.toLowerCase() + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
-function setFontData(face, bold, italic, font) {
-  if (font) FONT_DATA.set(fontKey(face, bold, italic), font);
-  else FONT_DATA.delete(fontKey(face, bold, italic));
-}
-function fontData(face, bold, italic) {
-  return FONT_DATA.get(fontKey(face, bold, italic)) || null;
-}
-function allFontData() {
-  return [...FONT_DATA].map(([k, f2]) => {
-    const [face, b, i] = k.split("|");
-    return [face, b === "b", i === "i", f2];
-  });
+function fontChanged2(face) {
+  fontChanged(face);
+  if (face === void 0) WANTED.clear();
 }
 var MIN_TEXT_PX = 2;
 function textMode() {
@@ -63750,6 +64031,14 @@ function drawText(ctx, g2, s, docType, minW, colorOverride, base, flip, bgColor)
   const color2 = colorOverride || g2.color;
   if (g2.face) wantFace(g2.face, !!g2.bold, !!g2.italic);
   const outline = !!g2.face && faceAvailable(g2.face);
+  if (outline && !g2.knockout && !g2.padText) {
+    const flipIt = flip && !SIDE_SPECIFIC.test(g2.layer || "");
+    const L = outlineLayout(flipIt ? Object.assign({}, g2, { mirror: !g2.mirror, h: flipH(g2.h) }) : g2);
+    if (L) {
+      drawOutlineText(ctx, g2, L, color2, base, 0);
+      return;
+    }
+  }
   if (!outline && textMode() === "stroke") {
     let b = base;
     if (!b && typeof ctx.getTransform === "function") {
@@ -63838,6 +64127,46 @@ function drawText(ctx, g2, s, docType, minW, colorOverride, base, flip, bgColor)
   if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
   else ctx.restore();
 }
+function drawOutlineText(ctx, g2, L, color2, base, halo) {
+  const a = -L.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = L.mirror ? -1 : 1;
+  if (base) ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * L.ox + base[4], base[3] * L.oy + base[5]);
+  else {
+    ctx.save();
+    ctx.translate(L.ox, L.oy);
+    if (a) ctx.rotate(a);
+    if (mx < 0) ctx.scale(-1, 1);
+  }
+  ctx.fillStyle = color2;
+  ctx.strokeStyle = color2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  if (g2.bars && g2.bars.length) {
+    const y = L.baseline - L.size * OUTLINE_OVERBAR;
+    ctx.lineWidth = Math.max(g2.w || L.size / 8, 0) + halo;
+    ctx.beginPath();
+    for (const [i0, i1] of g2.bars) {
+      const x0 = L.x + L.metrics.advance(L.text.slice(0, i0)) * L.emX, x1 = L.x + L.metrics.advance(L.text.slice(0, i1)) * L.emX;
+      if (x1 > x0) {
+        ctx.moveTo(x0 + 0.1 * L.sizeX, y);
+        ctx.lineTo(x1 - 0.1 * L.sizeX, y);
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.transform(L.emX / 100, 0, 0, L.em / 100, L.x, L.baseline);
+  if (L.metrics.slant) ctx.transform(1, 0, -FAKE_ITALIC_SLANT, 1, 0, 0);
+  ctx.font = L.metrics.css.replace("1px", "100px");
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  if (halo > 0) {
+    ctx.lineWidth = halo * 100 / L.em;
+    ctx.strokeText(L.text, 0, 0);
+  }
+  ctx.fillText(L.text, 0, 0);
+  if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
+  else ctx.restore();
+}
+var OUTLINE_OVERBAR = 1.23;
 function drawDrawingSheet(ctx, doc, s, minW, pageLimits = true) {
   const isPcb = doc.type === "pcb";
   const ink = isPcb ? PCB_SHEET : SCH.frame;
@@ -64006,6 +64335,10 @@ function svgGeom(g2, hairline, isPcb, bg) {
   if (t === "text") {
     if (!g2.text) return "";
     const outline = !!g2.face && faceAvailable(g2.face);
+    if (outline && !g2.knockout && !g2.padText) {
+      const L = outlineLayout(g2);
+      if (L) return svgOutlineText(g2, L, hairline, op);
+    }
     if (!outline && textMode() === "stroke") return svgStrokeText(g2, hairline, bg, op);
     const size = g2.size, base0 = g2.v === "top" ? size : g2.v === "bottom" ? 0 : size / 2;
     const tr = `translate(${fmt(g2.x)} ${fmt(g2.y)})` + (g2.rot ? ` rotate(${fmt(-g2.rot)})` : "") + (g2.mirror ? " scale(-1 1)" : "");
@@ -64054,6 +64387,22 @@ function svgGeom(g2, hairline, isPcb, bg) {
   const stroked = !g2.noStroke && (t === "line" || t === "arc" || t === "poly" && (g2.w > 0 || !g2.fill) || t === "circle" && (g2.w > 0 || !g2.fill) || t === "pad" && !g2.fill);
   if (t === "circle" && !g2.pie) return `<circle cx="${fmt(g2.x)}" cy="${fmt(g2.y)}" r="${fmt(g2.r)}"${fill}${stroked ? stroke(g2.w) : ""}${op}/>`;
   return `<path d="${p.d}"${fill}${stroked ? stroke(g2.w) : ""}${op}/>`;
+}
+function svgOutlineText(g2, L, hairline, op) {
+  const tr = `translate(${fmt(L.ox)} ${fmt(L.oy)})` + (L.rot ? ` rotate(${fmt(-L.rot)})` : "") + (L.mirror ? " scale(-1 1)" : "");
+  const css = L.metrics.css, weight = /\bbold\b/.test(css) ? ' font-weight="bold"' : "", style = /\bitalic\b/.test(css) ? ' font-style="italic"' : "";
+  const inner = `translate(${fmt(L.x)} ${fmt(L.baseline)})` + (L.metrics.slant ? " skewX(-12)" : "") + (L.emX !== L.em ? ` scale(${fmt(L.emX / L.em)} 1)` : "");
+  let bars2 = "";
+  if (g2.bars && g2.bars.length) {
+    const y = L.baseline - L.size * OUTLINE_OVERBAR;
+    let d = "";
+    for (const [i0, i1] of g2.bars) {
+      const x0 = L.x + L.metrics.advance(L.text.slice(0, i0)) * L.emX, x1 = L.x + L.metrics.advance(L.text.slice(0, i1)) * L.emX;
+      if (x1 > x0) d += `M${fmt(x0 + 0.1 * L.sizeX)} ${fmt(y)}L${fmt(x1 - 0.1 * L.sizeX)} ${fmt(y)}`;
+    }
+    if (d) bars2 = `<path d="${d}" fill="none" stroke="${g2.color}" stroke-width="${fmt(Math.max(g2.w || L.size / 8, hairline))}" stroke-linecap="round"/>`;
+  }
+  return `<g transform="${tr}"${op}><text transform="${inner}" font-family='${cssFamily(g2.face)}' font-size="${fmt(L.em)}" fill="${g2.color}"${weight}${style}>${esc(L.text)}</text>${bars2}</g>`;
 }
 function svgStrokeText(g2, hairline, bg, op) {
   const text2 = g2.raw || g2.text || "", size = g2.size, sx = g2.sizeX > 0 ? g2.sizeX : size;
@@ -65813,6 +66162,12 @@ function fieldBoxes(item, hidden) {
   for (const g2 of item.geom || []) {
     if (g2.t !== "text" || !g2.field) continue;
     if (hidden && g2.layer && hidden.has(g2.layer)) continue;
+    const OL = outlineLayout(g2);
+    if (OL) {
+      const pad2 = 0.18 * g2.size, [x0, y0, x1, y1] = OL.box;
+      out.push({ name: g2.field, pts: [fromLocal(OL, x0 - pad2, y0 - pad2), fromLocal(OL, x1 + pad2, y0 - pad2), fromLocal(OL, x1 + pad2, y1 + pad2), fromLocal(OL, x0 - pad2, y1 + pad2)], geom: g2 });
+      continue;
+    }
     const w = textWidth(g2.text || "", g2.size, g2.w), h = g2.size, pad = 0.18 * g2.size;
     const lx0 = (g2.h === "left" ? 0 : g2.h === "right" ? -w : -w / 2) - pad, lx1 = lx0 + w + 2 * pad;
     const ly0 = (g2.v === "top" ? 0 : g2.v === "bottom" ? -h : -h / 2) - pad, ly1 = ly0 + h + 2 * pad;
@@ -69860,14 +70215,14 @@ function libGraphicGeom(item, g2, col) {
     const ef = effectsOf(g2);
     const [px, py] = tf(x, y);
     const r = gk === "text" ? r0 / 10 : r0;
-    const color2 = col(ef.hide ? SCH.hidden : yes5(g2, "private") ? SCH.privateNotes : strokeColorOf(g2) || SCH.outline);
+    const color2 = col(ef.color || (ef.hide ? SCH.hidden : yes5(g2, "private") ? SCH.privateNotes : SCH.outline));
     if (gk === "text_box") {
       const s = kid(g2, "size");
       const w = s ? num(s[1]) : 5, h = s ? Math.abs(num(s[2])) : 2.5;
       const bw = widthOf(g2, 0);
-      if (bw >= 0) G(item, { t: "poly", pts: [[px, py], [px + w, py], [px + w, py + h], [px, py + h]], close: true, w: bw || SCH_PEN, color: col(SCH.outline), layer: "Symbols", z: SCH_Z.device });
+      if (bw >= 0) G(item, { t: "poly", pts: [[px, py], [px + w, py], [px + w, py + h], [px, py + h]], close: true, w: bw || SCH_PEN, color: col(strokeColorOf(g2) || SCH.outline), layer: "Symbols", z: SCH_Z.device });
       transformedText(item, IDENT, px, py, str(g2[1]), ef.size, color2, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, defH: "left", defV: "top" });
-    } else transformedText(item, IDENT, px, py, str(g2[1]), ef.size, color2, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    } else transformedText(item, IDENT, px, py, str(g2[1]), ef.size, color2, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, olKind: "field" });
   }
 }
 var ident = (c) => c;
@@ -69946,10 +70301,10 @@ function parseLibSymbol(sym, opts) {
     const shownText = (showName ? name + ": " : "") + val;
     if (!val) continue;
     const isRV = name === "Reference" || name === "Value";
-    const color2 = colAll(hide ? SCH.hidden : yes5(p, "private") ? SCH.privateNotes : isRV ? SCH.ref : SCH.field);
+    const color2 = colAll(ef.color || (hide ? SCH.hidden : yes5(p, "private") ? SCH.privateNotes : isRV ? SCH.ref : SCH.field));
     const [x, y, r] = atOf(p);
     const sink = { geom: [], bbox: null };
-    transformedText(sink, IDENT, x, -y, shownText, ef.size, color2, r, ef.just, isRV ? "Reference & value" : "Fields", { z: name === "Reference" ? SCH_Z.ref : name === "Value" ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: name });
+    transformedText(sink, IDENT, x, -y, shownText, ef.size, color2, r, ef.just, isRV ? "Reference & value" : "Fields", { z: name === "Reference" ? SCH_Z.ref : name === "Value" ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: name, olKind: "field" });
     add("f:" + name, { kind: "field", sub: "", j, unit: 0, body: 0, inherited: fieldOwner !== sym, name }, sink, "lib_field");
   }
   let bb = null;
@@ -70755,7 +71110,7 @@ var api = {
   // font hook: set to a function (face, bold, italic) => void; called the first time text in an outline font is
   // drawn, so the app can fetch the font (web/editor/fonts.ts) and call fontChanged(face) once it is on the page
   onFontWanted: null,
-  fontChanged,
+  fontChanged: fontChanged2,
   wantFace,
   faceAvailable,
   setFontData,
@@ -70763,6 +71118,15 @@ var api = {
   allFontData,
   loadFontsFor: null,
   setRenderCacheWriter,
+  // outline-font text laid out as KiCad's OUTLINE_FONT places it (outline-text.ts): metrics, layout, box, painter
+  faceMetrics,
+  readSfnt,
+  kicadAscDesc,
+  outlineLayout,
+  outlineBoxCorners,
+  drawOutlineText,
+  ensureFontGeom,
+  fieldColor,
   hopShapes,
   wireHopShape,
   hopOver,
@@ -87523,7 +87887,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -88182,7 +88546,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -91047,7 +91411,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -91663,7 +92027,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function intersectD(subject, clip2, fillRule, precision = 2) {
   return booleanOpD(ClipType.Intersection, subject, clip2, fillRule, precision);
@@ -95452,7 +95816,7 @@ function base64(data) {
   for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
   return btoa(bin);
 }
-function pluginPlot(ctx, a, colorOf2) {
+function pluginPlot(ctx, a, colorOf3) {
   const format = Number(a.format);
   if (![2, 3, 4, 5].includes(format)) throw new Error("plot: the format is PostScript (2), DXF (3), PDF (4) or SVG (5)");
   const all2 = plottableLayers(ctx.doc);
@@ -95498,7 +95862,7 @@ function pluginPlot(ctx, a, colorOf2) {
     pdfBackPopups: false
   });
   const colors = {};
-  for (const l of have) colors[l] = colorOf2(l);
+  for (const l of have) colors[l] = colorOf3(l);
   const m = modelOf(ctx), board = projectNameOf(ctx), log = new PlotLog(), date = ctx.date || /* @__PURE__ */ new Date(), p = params;
   const layer = have[0], lname = layerDisplayName(ctx.doc, layer);
   const page = boardPage(m, { params: p, layer, common: have.slice(1), layerName: lname, colors, sheetColor: "#C872AB", background: null, pageNumber: 1, pageCount: 1, interactive: false }, log);
@@ -97537,7 +97901,7 @@ function storedFill(node) {
   return m;
 }
 
-// node_modules/three/src/extras/lib/earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/lib/earcut.js
 function earcut(data, holeIndices, dim = 2) {
   const hasHoles = holeIndices && holeIndices.length;
   const outerLen = hasHoles ? holeIndices[0] * dim : data.length;
@@ -97958,7 +98322,7 @@ function signedArea2(data, start, end, dim) {
   return sum;
 }
 
-// node_modules/three/src/extras/Earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/Earcut.js
 var Earcut = class {
   /**
    * Triangulates the given shape definition by returning an array of triangles.
