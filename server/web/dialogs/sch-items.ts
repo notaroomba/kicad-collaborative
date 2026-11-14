@@ -28,8 +28,9 @@ import { HL, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
 import { openSheetProperties, openSymbolProperties, sheetPathNow } from "./sch-symbol-sheet";
 import { openPageSettings } from "./page-settings";
-import { datasheetButton, footprintButton } from "./browse-cells";
-import type { FpChooserFilters } from "../library/fpchoice";
+import { datasheetButton, docFiles, footprintButton, projectVars, sheetFileButton } from "./browse-cells";
+import { isURL, resolveUriVars, type FpChooserFilters } from "../library/fpchoice";
+import type { GridCellButton } from "./dom";
 
 type Ctx = ToolCtx & { doc: KDoc };
 interface ItemOpts { onCreate?(node: SNode, more?: SNode[]): boolean | void; cancel?(): void; title?: string; label?: string; generic?: boolean; isNew?: boolean; symbolEditor?: SymEditorTextOpts }
@@ -135,17 +136,35 @@ function fromG(r: GRow): L.FieldRow {
   return r;
 }
 /** The grid with its Add field / Delete field / Move up / Move down buttons.  -> rows() for TransferDataFromWindow */
-/** A symbol's grid (FIELDS_GRID_TABLE over a symbol): the Footprint value gets GRID_CELL_FPID_EDITOR (with the symbol's
- *  chooser filters; read-only on a power symbol) and the Datasheet value GRID_CELL_URL_EDITOR. */
-export interface FieldsGridBrowse { footprint(): FpChooserFilters | null; footprintReadOnly?: boolean }
+/** FIELDS_GRID_TABLE::GetAttr's value editors: a symbol's Footprint gets GRID_CELL_FPID_EDITOR (with the symbol's
+ *  chooser filters; read-only on a power symbol, `footprint` given only for a symbol), a sheet's Sheetfile
+ *  GRID_CELL_PATH_EDITOR (`sheetFiles`), and GRID_CELL_URL_EDITOR goes to the Datasheet and to every other field whose
+ *  value is a link (SCH_FIELD::HasHypertext, which an intersheet references field always has) or whose template field
+ *  name is flagged URL.  `files` is the embedded-files stack a kicad-embed:// link opens from (the schematic's by
+ *  default). */
+export interface FieldsGridBrowse { footprint?(): FpChooserFilters | null; footprintReadOnly?: boolean; files?(): (SNode | null)[]; sheetFiles?(): { path: string; here: string }[] }
+/** The template field names flagged URL (SCHEMATIC_SETTINGS m_TemplateFieldNames, .kicad_pro schematic.drawing.field_names). */
+function urlTemplateNames(): Set<string> {
+  try {
+    const j = E.proSettings ? JSON.parse(E.proSettings) as { schematic?: { drawing?: { field_names?: { name?: unknown; url?: unknown }[] } } } : null;
+    const list = j && j.schematic && j.schematic.drawing && j.schematic.drawing.field_names;
+    return new Set(Array.isArray(list) ? list.filter((f) => f && f.url === true).map((f) => String(f.name)) : []);
+  } catch { return new Set(); }
+}
 export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number; shown?: number[]; browse?: FieldsGridBrowse }): { rows(): L.FieldRow[]; setRows(rows: L.FieldRow[]): void } {
   const rows: GRow[] = rows0.map(toG);
   const faces = fontFaces(opts.doc);
-  const br = opts.browse, fpBtn = br ? footprintButton(() => br.footprint()) : null, dsBtn = br ? datasheetButton() : null;
-  const isFp = (r: GRow): boolean => !!br && r.mandatory && r.name === "Footprint", isDs = (r: GRow): boolean => !!br && r.mandatory && r.name === "Datasheet";
+  const br = opts.browse || {}, urlNames = urlTemplateNames(), vars = projectVars();
+  const fpBtn = br.footprint ? footprintButton(() => br.footprint!()) : null, fileBtn = br.sheetFiles ? sheetFileButton(() => br.sheetFiles!()) : null;
+  const urlBtn = datasheetButton(() => ({ vars, files: br.files ? br.files() : [docFiles(opts.doc)] }));
+  const isFp = (r: GRow): boolean => !!fpBtn && r.mandatory && r.name === "Footprint", isFile = (r: GRow): boolean => !!fileBtn && r.mandatory && /^Sheet ?file$/i.test(r.name);
+  const isUrl = (r: GRow): boolean => r.mandatory ? r.name === "Datasheet" || r.name === "Intersheetrefs"
+    : urlNames.has(r.name) || isURL(resolveUriVars(r.value, vars));
+  const urlShown = new WeakMap<GRow, boolean>();   // the editor each row was drawn with: a value that becomes (or stops being) a link redraws
+  const valueButton = (r: GRow): GridCellButton | null => { const u = !isFp(r) && !isFile(r) && isUrl(r); urlShown.set(r, u); return isFp(r) ? fpBtn : isFile(r) ? fileBtn : u ? urlBtn : null; };
   const cols = [
     { key: "name", label: "Name", width: 110, ro: (r: GRow) => r.mandatory },
-    { key: "value", label: "Value", width: 170, ro: (r: GRow) => !!br && !!br.footprintReadOnly && isFp(r), button: (r: GRow) => (isFp(r) ? fpBtn : isDs(r) ? dsBtn : null) },
+    { key: "value", label: "Value", width: 170, ro: (r: GRow) => !!br.footprintReadOnly && isFp(r), button: valueButton },
     { key: "show", label: "Show", type: "bool" as const, width: 42 },
     { key: "showName", label: "Show Name", type: "bool" as const, width: 42 },
     { key: "hT", label: "H Align", type: "choice" as const, options: [["left", "Left"], ["center", "Center"], ["right", "Right"]] as [string, string][], width: 70 },
@@ -166,7 +185,10 @@ export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readO
   const visible = () => cols.filter((_c, i) => shown.has(i));
   const g = KD().grid<GRow>(host, visible(), rows, {
     readOnly: opts.readOnly, height: opts.height || 170,
-    onChange(row, key) { if (key === "sizeT" || key === "xT" || key === "yT") { fromG(row); toG(row); g.refresh(); } },
+    onChange(row, key) {
+      if (key === "sizeT" || key === "xT" || key === "yT") { fromG(row); toG(row); g.refresh(); }
+      else if ((key === "value" || key === "name") && urlShown.has(row) && urlShown.get(row) !== (!isFp(row) && !isFile(row) && isUrl(row))) g.refresh();
+    },
     buttons: { add: () => toG(L.newRow(opts.newName(rows), [0, 0])), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true, canRemove: (r) => { if (r.mandatory) { void messageBox(L.mandatoryFieldsMessage(rows.filter((x) => x.mandatory).length)); return false; } return true; } },
   });
   g.el.style.maxWidth = "100%";

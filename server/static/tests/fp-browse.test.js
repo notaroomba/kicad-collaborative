@@ -1,7 +1,7 @@
 // fp-browse.test.js — the fields grids' footprint / datasheet browse buttons (web/library/fpchoice.ts): the symbol
 // netlist the footprint chooser gets (BuildFootprintChooserSymbolNetlist: pins of every unit, body style 1, stacked
 // numbers expanded; ki_fp_filters), the grouped-row rule, FOOTPRINT_CHOOSER_FRAME::filterFootprint and the
-// check box labels, and GetAssociatedDocument's link test.  Run: node server/static/tests/fp-browse.test.js
+// check box labels, GetAssociatedDocument's link test (kicad-embed://, ${VAR}) and IsURL.  Run: node server/static/tests/fp-browse.test.js
 "use strict";
 const path = require("path"), assert = require("assert");
 require(path.join(__dirname, "..", "kicad-canvas.js"));
@@ -75,8 +75,34 @@ test("GetAssociatedDocument: web and mail links open, '~' and blank are none, a 
   assert.strictEqual(F.datasheetLink("~").kind, "none");
   assert.strictEqual(F.datasheetLink("").kind, "none");
   assert.strictEqual(F.datasheetLink("${KIPRJMOD}/doc.pdf").kind, "other");
+  assert.deepStrictEqual(F.datasheetLink("kicad-embed://lm358.pdf"), { kind: "embed", url: "lm358.pdf" }, "an embedded file is not 'not found'");
+  assert.deepStrictEqual(F.datasheetLink("${DS}/lm358.pdf", { DS: "https://ti.com/ds" }), { kind: "url", url: "https://ti.com/ds/lm358.pdf" }, "ResolveUriByEnvVars first");
+  assert.deepStrictEqual(F.datasheetLink("${EMB}", { EMB: "kicad-embed://a.pdf" }), { kind: "embed", url: "a.pdf" });
+  assert.strictEqual(F.datasheetLink("${NOPE}/x", { DS: "y" }).url, "${NOPE}/x", "an unknown variable stays");
   assert.strictEqual(F.datasheetLink("javascript:alert(1)").kind, "other");
   assert.strictEqual(F.datasheetLink("file:///home/x.pdf").kind, "other");
+});
+
+test("SCH_FIELD::HasHypertext's IsURL: a link anywhere in the text", () => {
+  assert.ok(F.isURL("https://www.ti.com/lit/ds/lm358.pdf")); assert.ok(F.isURL("see ftp://x.org/a")); assert.ok(F.isURL("file:///home/a.pdf"));
+  assert.ok(!F.isURL("www.ti.com")); assert.ok(!F.isURL("mailto:a@b.c")); assert.ok(!F.isURL("10k")); assert.ok(!F.isURL("https://"));
+});
+test("the netlist string: every pin's number and name in order, then the filters; a grouped row needs the same string", () => {
+  assert.strictEqual(F.chooserNetlist(R), "1 \t2 \rR_*\r");
+  assert.strictEqual(F.chooserNetlist(STACKED), "1 D\t2 D\t3 D\t4 G\t5 S\t5 S2\r\r");
+  assert.strictEqual(F.chooserNetlist(OPAMP).split("\r")[0].split("\t")[0], "1 ", "'~' is no name");
+  // same pin count and filters, different pin names: KiCad sends no netlist, so no toggles
+  const R2 = K.parse(`(symbol "R2" (property "ki_fp_filters" "R_*" (at 0 0 0) (hide yes) ${FONT}) (symbol "R2_1_1" ${pin(1, "A")} ${pin(2, "B")}))`);
+  assert.deepStrictEqual(F.chooserFilters(R2), F.chooserFilters(R));
+  assert.strictEqual(F.commonChooserFilters([R, R2]), null);
+  const R3 = K.parse(`(symbol "R3" (property "ki_fp_filters" "R_*" (at 0 0 0) (hide yes) ${FONT}) (symbol "R3_1_1" ${pin(2, "")} ${pin(1, "")}))`);
+  assert.strictEqual(F.commonChooserFilters([R, R3]), null, "pin order counts");
+});
+test("SCH_PROPERTIES_PANEL's netlist keeps a stacked number as it is", () => {
+  assert.deepStrictEqual(F.chooserFilters(STACKED, false), { pins: 3, filters: [] }, "[1-3], 4 and 5: three, where the grids count five");
+  assert.strictEqual(F.chooserNetlist(STACKED, false), "[1-3] D\t4 G\t5 S\t5 S2\r\r");
+  assert.deepStrictEqual(F.netlistFilters(""), null);
+  assert.deepStrictEqual(F.netlistFilters("\r\r"), null);
 });
 
 console.log(`fp-browse.test.js: ${passed} passed, ${failed} failed`);

@@ -947,14 +947,15 @@ export function setProp(id: string, text: string): string | null {
 }
 
 
-/** SCH_PROPERTIES_PANEL's netlistCallback: the selected symbols' library symbol when they share one (else nothing);
- *  the board's panel sends an empty netlist. */
+/** SCH_PROPERTIES_PANEL's netlistCallback: the selected symbols' library symbol when they share one (else nothing),
+ *  its pins sent with their numbers as they are (a stacked "[1-4]" is one pin there, unlike the fields grids'
+ *  BuildFootprintChooserSymbolNetlist); the board's panel sends an empty netlist. */
 function selectionFilters(doc: KDoc, items: KItem[]): FpChooserFilters | null {
   if (!isSchDoc()) return null;
   const syms = items.filter((it) => it.kind === "symbol"); if (!syms.length) return null;
   const libName = (n: SNode): string => { const k = H().kid(n, "lib_name") || H().kid(n, "lib_id"); return k ? H().str(k[1]) : ""; };
   const first = libName(syms[0].node); if (syms.some((it) => libName(it.node) !== first)) return null;
-  return chooserFilters(K().resolveLib(doc, first));
+  return chooserFilters(K().resolveLib(doc, first), false);
 }
 /** PG_FPID_EDITOR / PG_URL_EDITOR::OnEvent( wxEVT_BUTTON ). */
 export function browseProp(id: string): void {
@@ -966,7 +967,8 @@ export function browseProp(id: string): void {
   if (d.name === "Datasheet") {
     // a mixed value has no one datasheet to show: the editor starts as for an empty one
     if (mixed || datasheetLink(value).kind === "none") void noFileBrowsing("property");
-    else openDatasheet(value);
+    // PG_URL_EDITOR::OnEvent calls GetAssociatedDocument with no embedded-files stack: a kicad-embed:// link stays unopened
+    else openDatasheet(value, { files: [] });
     return;
   }
   if (d.name !== "Footprint") return;

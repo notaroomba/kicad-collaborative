@@ -6,12 +6,13 @@
 import { E, appState, toast, toolCtx, cloneNode } from "./editor";
 import { KD, checkbox, download, h, promptFields, promptText, select, textInput, type GridApi, type GridColumn } from "./dom";
 import { messageBox } from "./sch-items";
-import { datasheetButton, footprintButton } from "./browse-cells";
+import { datasheetButton, docFiles, footprintButton } from "./browse-cells";
 import { commonChooserFilters, type FpChooserFilters } from "../library/fpchoice";
 import { fieldNamesAreDuplicates } from "./sch-items-logic";
 import { ATTR_FIELDS, BOM_FMT_PRESETS, BOM_PRESETS, ITEM_NO, QTY, bomExport, bomRows, fieldNames, str, symbolRows, withAllFields, type BomField, type BomFmt, type BomPreset, type BomRow, type SymRow } from "./logic";
 import { loadProject, obj, projectDocs, projectName, readDoc, saveProject, sub, submitDocOp, type Json, type JsonObj } from "./project";
 import { variantDocView, variantEditNode } from "./variant-edits";
+import * as VM from "../canvas/variant-model";
 import { currentSheetPath, setCurrentVariant, variantNamesForUI } from "../editor/variant";
 import { addVariant, type VariantPrompts, fieldsTableCopyVariant, fieldsTableDeleteVariant, fieldsTableEditVariantDescription, fieldsTableRenameVariant } from "../editor/variant-ops";
 
@@ -107,13 +108,19 @@ export function openFieldsTable(exportTab = false): void {
   const syncFmtInputs = () => { for (const [k, inp] of Object.entries(fmtInputs)) { const v = (fmt as unknown as Record<string, string | boolean>)[k]; if (inp.type === "checkbox") inp.checked = !!v; else inp.value = str(v).replace(/\t/g, "\\t"); } };
   const refreshPreview = () => { if (previewEl) previewEl.value = bomExport(rows, preset, fmt); };
   const refreshFields = () => { if (fieldGrid) { fieldGrid.rows.splice(0, fieldGrid.rows.length, ...preset.fields_ordered); fieldGrid.refresh(); } };
-  /** getFootprintChooserSymbolNetlist: the library symbols of a row's symbols, one set of filters when they agree. */
-  const rowFilters = (r: GRow): FpChooserFilters | null => commonChooserFilters((r._g.rows as Row[]).flatMap((x) => x.members).map((m) => {
+  /** getFootprintChooserSymbolNetlist: the library symbol of each of a row's symbols (the current variant's alternate
+   *  symbol, SCH_SYMBOL::GetVariantLibSymbol, when the variant overrides it with one the schematic holds), one set of
+   *  filters when their netlists agree. */
+  const memberLib = (m: Member): SNode | null => {
     const d = docs.get(m.docId), it = d && d.items.get(m.id); if (!d || !it) return null;
-    const ln = KiCadCanvas.kid(it.node, "lib_name") || KiCadCanvas.kid(it.node, "lib_id");
-    return ln ? KiCadCanvas.resolveLib(d, KiCadCanvas.str(ln[1])) : null;
-  }));
-  const dsButton = datasheetButton();
+    const ln = KiCadCanvas.kid(it.node, "lib_name") || KiCadCanvas.kid(it.node, "lib_id"), own = ln ? KiCadCanvas.str(ln[1]) : "";
+    const libId = KiCadCanvas.kid(it.node, "lib_id"), alt = VM.symbolVariantOverride(it.node, variant, pathOf(m.docId));
+    if (alt && alt !== (libId ? KiCadCanvas.str(libId[1]) : "")) { const a = KiCadCanvas.resolveLib(d, alt); if (a) return a; }
+    return own ? KiCadCanvas.resolveLib(d, own) : null;
+  };
+  const rowFilters = (r: GRow): FpChooserFilters | null => commonChooserFilters((r._g.rows as Row[]).flatMap((x) => x.members).map(memberLib));
+  /** GRID_CELL_URL_EDITOR's files stack: the schematic's embedded files ({ &m_parent->Schematic() }). */
+  const dsButton = datasheetButton(() => ({ files: [docFiles(E.kdoc as KDoc)] }));
   const refreshGrid = () => {
     if (!gridHost) return;
     const cols: GridColumn<GRow>[] = preset.fields_ordered.filter((f) => f.show).map((f) => {

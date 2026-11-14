@@ -23,6 +23,7 @@ import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
 import * as VM from "../canvas/variant-model";
 import { writeSymbolVariant } from "./variant-edits";
 import { chooserFilters } from "../library/fpchoice";
+import { docFiles, relativePath } from "./browse-cells";
 
 type Ctx = ToolCtx & { doc: KDoc };
 interface PropsHelpers {
@@ -120,7 +121,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
         { label: "General", build(pg: HTMLElement) {
           const fh = h("div"); const fb = KD().staticBox(fh, "Fields"); pg.append(fh);
           grid = fieldsGrid(fb, L.fieldRows(staged, origin, MANDATORY_SYMBOL).sort((a, c) => { const i = MANDATORY_SYMBOL.indexOf(a.name), j = MANDATORY_SYMBOL.indexOf(c.name); return (i < 0 ? 99 : i) - (j < 0 ? 99 : j); }),
-            { readOnly: ro, doc, newName: nextName, height: 200, shown: [0, 1, 2, 3, 4, 5, 6, 7], browse: { footprint: () => chooserFilters(lib), footprintReadOnly: isPower } });
+            { readOnly: ro, doc, newName: nextName, height: 200, shown: [0, 1, 2, 3, 4, 5, 6, 7], browse: { footprint: () => chooserFilters(lib), footprintReadOnly: isPower, files: () => [docFiles(doc), lib] } });
           const row = h("div", { style: "display:flex;gap:10px;margin-top:2px;align-items:stretch" });
           // General: Unit / Body style / Composed reference / Angle / Mirror, then Show pin numbers / Show pin names and Local power
           const gen = h("div", { style: "flex:7;min-width:0" }); const gb = KD().staticBox(gen, "General");
@@ -354,7 +355,12 @@ export function openSheetProperties(ctx: Ctx, item: KItem, opts: SheetOpts = {})
     title: "Sheet Properties", width: 900, readOnly: ro, cls: "kd-wide", cancel: opts.cancel,
     build(b) {
       const fh = h("div"); b.append(fh);
-      grid = fieldsGrid(fh, L.fieldRows(staged, origin, ["Sheetname", "Sheetfile", "Sheet name", "Sheet file"]), { readOnly: ro, doc, newName: nextName, height: 150, shown: [0, 1, 2, 3, 4, 5, 6, 7] });
+      // the Sheetfile cell's GRID_CELL_PATH_EDITOR: the project's other schematic files, relative to this sheet's folder
+      const sheetFiles = (): { path: string; here: string }[] => {
+        const here = projectDocs().find((d) => d.docId === appState.docId), dir = here && here.path.includes("/") ? here.path.slice(0, here.path.lastIndexOf("/")) : "";
+        return projectDocs().filter((d) => d.docType === "kicad_sch" && (!here || d.docId !== here.docId)).map((d) => ({ path: relativePath(dir, d.path), here: dir })).sort((a, b) => a.path.localeCompare(b.path));
+      };
+      grid = fieldsGrid(fh, L.fieldRows(staged, origin, ["Sheetname", "Sheetfile", "Sheet name", "Sheet file"]), { readOnly: ro, doc, newName: nextName, height: 150, shown: [0, 1, 2, 3, 4, 5, 6, 7], browse: { sheetFiles } });
       // bSizer5: Attributes (Page number, Full reference suffix, the flags) beside Style (Border width / color | Fill color)
       const row = h("div", { style: "display:flex;gap:10px;margin-top:6px;align-items:stretch" });
       const att = h("div", { style: "flex:0 0 auto;display:flex;flex-direction:column" }); const ab = KD().staticBox(att, "Attributes"); ab.style.flex = "1";
