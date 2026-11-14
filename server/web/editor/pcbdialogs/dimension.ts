@@ -5,7 +5,7 @@
 // re-derives the value text and its place, and the copy goes in as one "Edit Dimension Properties" change.
 // Driving value mode needs a length constraint bound to both ends (DimensionCanDrive), which the web editor has no
 // way to make, so the Value choice offers Driven and Arbitrary as KiCad does for an unbound dimension.
-import { comboInput } from "../../dialogs/dom";
+import { comboBox } from "../../components/kcombo";
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { box, checkField, form, h, coordField, lenField, numField, openDialog, selectField, textField, unitLabel, type Field } from "./ui";
 import { boardXref } from "./xref";
@@ -181,7 +181,7 @@ export function dimensionDialog(ctx: ToolCtx, item: KItem): boolean {
         const manual = v0.posMode === 2;
         const tx = reg("textX", coordField(v0.textX, "x", { ro: ro || !manual, key: "textX" })), ty = reg("textY", coordField(v0.textY, "y", { ro: ro || !manual, key: "textY" }));
         const angle = reg("angle", numField(v0.angle, { ro: ro || v0.keepAligned, key: "angle", digits: 3 }));
-        comboInput(angle.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);   // the orientation combo's presets
+        comboBox(angle.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);   // the orientation combo's presets
         const posMode = reg("posMode", selectField<number>(v0.posMode, [[0, "Outside"], [1, "Inline"], [2, "Manual"]], { ro, key: "posMode",
           onChange: (x) => { tx.input.disabled = ty.input.disabled = ro || x !== 2; } }));
         posMode.input.title = "Choose how to position the text relative to the dimension line";

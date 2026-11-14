@@ -4,7 +4,7 @@
 // (default, Enter, F3), Find Previous (Shift+F3), Restart Search, Close, the status line and "Show search panel".
 // The hit list is rebuilt when the search string changes, on Restart Search and after any board change
 // (the BOARD_LISTENER callbacks that clear m_upToDate); each hit is selected and brought into view.
-import { comboInput } from "../../dialogs/dom";
+import { comboBox } from "../../components/kcombo";
 import { E } from "../state";
 import { applyView, mmH, mmW, mmX0, mmY0, stage, world } from "../view";
 import { centerOn } from "../comments";
@@ -174,7 +174,7 @@ export function openBoardFind(): void {
     build(body, api) {
       const foot = api.dialog.querySelector<HTMLElement>(".kd-foot"); if (foot) foot.style.display = "none";
       combo = h("input", { id: "kd-pfind-q", type: "text", class: "kd-input", title: "Text with optional wildcards", value: searchText, style: "flex:1;min-width:0", autocomplete: "off" });
-      comboInput(combo, () => history.slice());   // the search history drop-down
+      comboBox(combo, () => history.slice());   // the search history drop-down
       combo.addEventListener("input", () => { searchText = combo!.value; });
       combo.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); search(true); } });
       const chk = (label: string, key: keyof typeof O, id: string) => {

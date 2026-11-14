@@ -8,7 +8,7 @@
 import { KICAD_FONT, faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { trackViaDialog } from "./track-via";
 import { box, checkField, errorMessage, fmtLenU, form, grid, gridButtons, h, coordField, iconToggle, lenField, messageBox, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
-import { comboInput } from "../../dialogs/dom";
+import { comboBox } from "../../components/kcombo";
 import { E } from "../state";
 import { kicadActionAvailable, runKicadAction } from "../hotkeys";
 import { dimensionDialog } from "./dimension";
@@ -447,7 +447,7 @@ const norm360 = (a: number): number => { let r = a % 360; if (r < 0) r += 360; r
  *  given (dialog_footprint_properties_base.cpp m_orientationCtrl: 0 / 90 / -90 / 180). */
 function orientationField(deg: number, ro: boolean, key: string, presets = ["0.0", "90.0", "-90.0", "180.0"]): Field<number> {
   const f = numField(norm180(deg), { ro, key, digits: 3 });
-  comboInput(f.input as HTMLInputElement, () => presets);
+  comboBox(f.input as HTMLInputElement, () => presets);
   return f;
 }
 /** DIALOG_TEXT_PROPERTIES' shared controls over one text node (gr_text, fp_text or a footprint property):

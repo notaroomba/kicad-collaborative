@@ -154,32 +154,6 @@ export function popupMenu(x: number, y: number, items: PopItem[]): HTMLElement {
   setTimeout(() => { document.addEventListener("pointerdown", away, true); document.addEventListener("keydown", esc, true); }, 0);
   return root;
 }
-/**
- * wxComboBox: a text entry with a drop-down of choices (the presets, the search history) in a themed popup menu in
- * place of a browser datalist.  The button (or Alt+Down / F4) opens it; a pick sets the text and fires input and
- * change.  The input is wrapped once it is in the page, so callers lay out the input as before.
- */
-export function comboInput(input: HTMLInputElement, choices: () => string[]): void {
-  const btn = h("button", { type: "button", class: "kd-combo-btn", tabindex: "-1", "aria-label": "Show choices", title: "", style: "border:1px solid var(--line);border-left:0;background:var(--panel);color:var(--ink-2);border-radius:0 3px 3px 0;padding:0 5px;cursor:default;align-self:stretch" }, "\u25be");
-  const show = (): void => {
-    if (input.disabled) return;
-    const list = choices(); if (!list.length) return;
-    const r = input.getBoundingClientRect();
-    const m = popupMenu(r.left, r.bottom, list.map((c) => ({ label: c, run: () => { input.value = c; input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); input.focus(); } })));
-    m.style.minWidth = Math.round(r.width + btn.getBoundingClientRect().width) + "px";
-  };
-  btn.addEventListener("mousedown", (ev) => { ev.preventDefault(); });
-  btn.addEventListener("click", show);
-  input.addEventListener("keydown", (ev) => { if ((ev.altKey && ev.key === "ArrowDown") || ev.key === "F4") { ev.preventDefault(); show(); } });
-  const sync = (): void => { btn.disabled = input.disabled; };
-  const wrap = (): void => {
-    if (!input.parentNode || input.parentElement?.classList.contains("kd-combo")) return;
-    const w = h("span", { class: "kd-combo", style: "display:inline-flex;align-items:stretch;min-width:0;" + (input.style.flex ? `flex:${input.style.flex};` : "width:100%;") });
-    input.replaceWith(w); input.style.borderTopRightRadius = input.style.borderBottomRightRadius = "0"; input.style.flex = "1"; input.style.minWidth = "0"; w.append(input, btn); sync();
-  };
-  if (input.parentNode) wrap(); else setTimeout(wrap, 0);
-  new MutationObserver(sync).observe(input, { attributes: true, attributeFilter: ["disabled"] });
-}
 export function download(name: string, text: string, type = "text/csv;charset=utf-8"): void {
   const a = h("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name }); document.body.append(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);

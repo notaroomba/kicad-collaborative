@@ -6,7 +6,7 @@
 // box per PCB_TEXTBOX::SetTextAngle (the box slides about its start, the angle is the text's), and grows the box to
 // GetMinSize when the text no longer fits.  An edited text box is one "Edit Text Box Properties" change; the text
 // box tool (DRAWING_TOOL::DrawRectangle) opens it on the box just drawn and commits "Draw Text Box" on OK.
-import { comboInput } from "../../dialogs/dom";
+import { comboBox } from "../../components/kcombo";
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { boardXref } from "./xref";
 import { syntaxHelpLink } from "../syntax-help";
@@ -175,7 +175,7 @@ export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode |
       if (inFootprint) locked.el.style.display = "none";
       const layer = reg("layer", selectField<string>(v0.layer, layerOptions(doc, v0.layer), { ro, key: "layer" }));
       const angle = reg("angle", numField(v0.angle, { ro, key: "angle", digits: 3 })); angle.input.title = "Text orientation";
-      comboInput(angle.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);   // the orientation combo's presets
+      comboBox(angle.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);   // the orientation combo's presets
       const bold = reg("bold", checkField(v0.bold, "Bold", { ro, key: "bold" })), italic = reg("italic", checkField(v0.italic, "Italic", { ro, key: "italic" }));
       const radio = (group: string[], cur: string, labels: Record<string, string>): Field<boolean>[] => group.map((a) => reg("align-" + a, checkField(cur === a, labels[a], { ro, key: "align-" + a,
         onChange: (on) => { if (on) for (const b of group) { if (b !== a) fields["align-" + b].set(false); } } })));   // onHalignButton / onValignButton: one at most

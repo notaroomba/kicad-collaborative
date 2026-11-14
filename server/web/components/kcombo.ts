@@ -6,8 +6,12 @@
 // popup opens with a "Filter:" entry above it that takes the keyboard; typing narrows the list to the entries holding
 // the text (a case-insensitive substring; spaces are refused, a leading "::" is dropped) and picks the first.
 //
+// It is the one wxComboBox of both editors: the schematic Label combo and the board dialogs' orientation presets and
+// Find history use it alike.  The options are a list, or a function read each time the list opens (a history that
+// grows while the dialog is up).
+//
 //   mouse      the button opens and closes the list; a click on an entry takes it; a click elsewhere or a scroll closes
-//   keyboard   Alt+Down / Down in the entry open the list; Up, Down move; Enter takes the highlighted entry (an empty
+//   keyboard   Alt+Down / Down / F4 in the entry open the list; Up, Down move; Enter takes the highlighted entry (an empty
 //              pick changes nothing); Escape closes; Tab closes and moves on (the host carries data-popup-open while
 //              the list is up, so dialogs leave Escape)
 import { menuScroller } from "../menufit";
@@ -20,18 +24,30 @@ let seq = 0;
 /** wxArrayString::Sort: by character code. */
 const sorted = (l: string[]): string[] => l.slice().sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
-/** Wrap `input` (already built by the dialog) into a combo box offering `options`. */
-export function comboBox(input: HTMLInputElement, options: string[], cfg: { filter?: boolean } = {}): KCombo {
+/**
+ * Wrap `input` (built by the dialog) into a combo box offering `options`.  An input not yet in the page is wrapped once
+ * it is placed, so callers lay out the input as before.
+ */
+export function comboBox(input: HTMLInputElement, options: string[] | (() => string[]), cfg: { filter?: boolean } = {}): KCombo {
   const filtered = !!cfg.filter;
-  let all = filtered ? sorted(options) : options.slice(), list = all.slice();
+  let source: () => string[] = typeof options === "function" ? options : () => options, lazy = typeof options === "function";
+  const read = (): string[] => (filtered ? sorted(source()) : source().slice());
+  let all = read(), list = all.slice();
   let pop: HTMLElement | null = null, box: HTMLElement | null = null, filt: HTMLInputElement | null = null, hi = -1, undo: (() => void)[] = [];
   const btn = document.createElement("button"); btn.type = "button"; btn.className = "btn kcombo-btn"; btn.tabIndex = -1; btn.innerHTML = CARET;
   btn.setAttribute("aria-label", "Show the list"); btn.style.cssText = "padding:0 5px;flex:none;align-self:stretch;display:flex;align-items:center";
-  const el = document.createElement("span"); el.className = "kcombo"; el.style.cssText = "display:flex;gap:2px;align-items:stretch;min-width:0;width:100%";
-  input.style.flex = "1"; input.style.minWidth = "0"; input.autocomplete = "off"; input.setAttribute("role", "combobox"); input.setAttribute("aria-expanded", "false");
-  input.replaceWith(el); el.append(input, btn);
-  const sync = (): void => { btn.disabled = input.disabled || !all.length; };
+  const el = document.createElement("span"); el.className = "kcombo";
+  el.style.cssText = "display:flex;gap:2px;align-items:stretch;min-width:0;" + (input.style.flex ? `flex:${input.style.flex};` : "width:100%;");
+  input.autocomplete = "off"; input.setAttribute("role", "combobox"); input.setAttribute("aria-expanded", "false");
+  const wrap = (): void => {
+    if (!input.parentNode || input.parentNode === el) return;
+    input.replaceWith(el); input.style.flex = "1"; input.style.minWidth = "0"; el.append(input, btn);
+  };
+  if (input.parentNode) wrap(); else setTimeout(wrap, 0);
+  // a fixed empty list has no button to press; a list read on opening may have grown by then
+  const sync = (): void => { btn.disabled = input.disabled || (!lazy && !all.length); };
   sync();
+  new MutationObserver(sync).observe(input, { attributes: true, attributeFilter: ["disabled"] });
   const rows = (): HTMLElement[] => (box ? Array.from(box.querySelectorAll<HTMLElement>(".ksel-opt")) : []);
   const highlight = (i: number): void => {
     hi = i; rows().forEach((r, k) => r.classList.toggle("hi", k === i));
@@ -74,7 +90,8 @@ export function comboBox(input: HTMLInputElement, options: string[], cfg: { filt
     if (box && filtered) box.style.maxHeight = Math.max(20, h - (box.offsetTop - p.clientTop) - 4) + "px";
   }
   function open(): void {
-    if (pop || input.disabled || !all.length) return;
+    if (pop || input.disabled) return;
+    all = read(); sync(); if (!all.length) return;
     const p = document.createElement("div"); p.className = "ksel-pop" + (filtered ? " kcombo-pop" : ""); p.id = "kcombo-pop-" + ++seq;
     p.setAttribute("data-popup-open", "");   // the filter entry has the keyboard: a dialog leaves its Escape to the popup
     const cs = getComputedStyle(input); p.style.font = cs.font; p.style.fontSize = cs.fontSize;
@@ -131,9 +148,9 @@ export function comboBox(input: HTMLInputElement, options: string[], cfg: { filt
   btn.addEventListener("pointerdown", (ev) => ev.preventDefault());
   btn.addEventListener("click", () => { if (pop) { close(); input.focus(); } else { input.focus(); open(); } });
   input.addEventListener("keydown", (ev) => {
-    if (!pop) { if (ev.key === "ArrowDown" && (ev.altKey || !ev.ctrlKey)) { if (all.length) { ev.preventDefault(); open(); } } return; }
+    if (!pop) { if ((ev.key === "ArrowDown" && (ev.altKey || !ev.ctrlKey)) || ev.key === "F4") { all = read(); if (all.length) { ev.preventDefault(); open(); } } return; }
     popKey(ev);
   });
   input.addEventListener("blur", () => { setTimeout(() => { if (document.activeElement !== input && !(pop && pop.contains(document.activeElement))) close(); }, 0); });
-  return { el, input, setOptions(next) { all = filtered ? sorted(next) : next.slice(); list = all.slice(); sync(); if (pop) { close(); open(); } }, open, close, isOpen: () => !!pop };
+  return { el, input, setOptions(next) { source = () => next; lazy = false; all = read(); list = all.slice(); sync(); if (pop) { close(); open(); } }, open, close, isOpen: () => !!pop };
 }
