@@ -360,6 +360,9 @@ export function startThread(mm: Mm, anchor: Anchor | null, body = ""): void {
   row.append(post, cancel, hint); form.append(ta, row); panel.appendChild(form);
   panelAt(mm[0], mm[1]);
   ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  // started from a click on the canvas: the mousedown that follows focuses the canvas, and the words typed next
+  // would run as hotkeys (E opened Properties), so take the focus back once that is over
+  window.setTimeout(() => { if (ta.isConnected && document.activeElement !== ta) ta.focus(); }, 0);
 }
 
 /** What a comment started at `mm` would be pinned to: the part under it, else nothing. */
