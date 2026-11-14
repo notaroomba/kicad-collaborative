@@ -1097,7 +1097,10 @@ export class Router {
     // Short hops first (decoupling, crystals).  Then a fine-pitch chip is fanned out, the longest connection first:
     // its pins leave side by side, and the one that travels furthest must turn away first for the others to nest
     // inside it.  Everything else follows, shortest first.
-    const tier = (c: Conn) => c.len < 3 ? 0 : Math.min(c.a.narrow || Infinity, c.b.narrow || Infinity) <= 0.35 ? 1 : 2;
+    // The order a person routes in: differential pairs first (layPairs, before this queue, so they take the clean
+    // direct path), then the short connections inside each block and the escapes from fine-pitch chips, then power,
+    // then the remaining signals.
+    const tier = (c: Conn) => c.len < 3 ? 0 : Math.min(c.a.narrow || Infinity, c.b.narrow || Infinity) <= 0.35 ? 1 : isSupply(c.net) ? 2 : 3;
     const order = conns.slice().sort((a, b) => cmp(gOf.get(a.net)!.rank, gOf.get(b.net)!.rank) || gOf.get(b.net)!.priority - gOf.get(a.net)!.priority || tier(a) - tier(b) || (tier(a) === 1 ? b.len - a.len : a.len - b.len) || (a.net < b.net ? -1 : a.net > b.net ? 1 : a.id - b.id));
     let best: { score: number; snap: (Pick<Conn, "cls" | "pair" | "nodes" | "shapes" | "viaCells" | "landed" | "feat" | "stubs" | "zoneEnd">)[] } | null = null; let failedLast = new Set<number>(); let pass = 0;
     const RC = (this.opts as any).connRips || 4, RB = (this.opts as any).blockerRips || 3;
