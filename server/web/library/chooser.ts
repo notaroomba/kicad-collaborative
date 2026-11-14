@@ -285,7 +285,13 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
       if (!preselect || query) return;
       const lib = preselect.slice(0, preselect.indexOf(":"));
       const g = groups.find((x) => x.type === "lib" && x.label === lib); if (!g) return;
-      if (!g.items) { void loadGroup(g); return; }
+      if (!g.items) {
+        // a library that failed to load is not asked for again here (loadGroup's own retries, when the server asked
+        // for one, still run, and the item is selected if one of them brings the library in); once none is left the
+        // preselection is dropped, as the tree has nothing to select
+        if (g.error) { if (!g.loading && !retryWaiting.has(g.key)) preselect = ""; return; }
+        void loadGroup(g); return;
+      }
       const it = visibleItems(g).find((x) => x.id === preselect || (x.library || lib) + ":" + x.name === preselect);
       preselect = "";
       if (!it) return;
@@ -388,7 +394,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     }
 
     // ---- loading
-    const retries = new Map<string, number>(), retryTimers: number[] = [];
+    const retries = new Map<string, number>(), retryTimers: number[] = [], retryWaiting = new Set<string>();
     function loadGroup(g: Group): Promise<void> {
       if (g.items || g.loading || !g.entry) return Promise.resolve();
       g.loading = true; g.error = "";
@@ -396,7 +402,7 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         g.error = "Could not load: " + (e.message || e);
         // the server asks to come back later (the upstream refused it): do, a few times
         const tries = retries.get(g.key) || 0;
-        if (e.retryAfter && tries < 3 && !closed) { retries.set(g.key, tries + 1); retryTimers.push(window.setTimeout(() => { if (!closed && !g.items) void loadGroup(g); }, Math.min(90, e.retryAfter) * 1000 + 500)); }
+        if (e.retryAfter && tries < 3 && !closed) { retries.set(g.key, tries + 1); retryWaiting.add(g.key); retryTimers.push(window.setTimeout(() => { retryWaiting.delete(g.key); if (!closed && !g.items) void loadGroup(g); }, Math.min(90, e.retryAfter) * 1000 + 500)); }
       }).then(() => { g.loading = false; if (!closed) queueRefresh(); });
     }
     function preload(list: Group[]): void {
