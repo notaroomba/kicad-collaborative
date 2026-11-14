@@ -1234,6 +1234,65 @@
       dlg.style.maxHeight = "none";
     }
   }
+  var STATE_KEY = (key) => "kd.state." + key;
+  var persistent = (body) => Array.from(body.querySelectorAll("input[data-k], k-select[data-k], textarea[data-k]")).filter((e) => !e.closest("[data-nopersist]") && !e.hasAttribute("data-nopersist"));
+  function saveControlState(key, body) {
+    const out = {};
+    for (const e of persistent(body)) {
+      const k = e.getAttribute("data-k");
+      if (e instanceof HTMLInputElement && e.type === "checkbox") out[k] = e.checked;
+      else if (e instanceof HTMLInputElement && e.type === "radio") {
+        if (e.checked) out[k] = "radio:" + e.value;
+      } else if (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) out[k] = e.dataset.units ? { text: e.value, units: e.dataset.units } : e.value;
+      else out[k] = "sel:" + String(e.value);
+    }
+    try {
+      localStorage.setItem(STATE_KEY(key), JSON.stringify(out));
+    } catch (e) {
+    }
+  }
+  function loadControlState(key, body) {
+    let st = null;
+    try {
+      st = JSON.parse(localStorage.getItem(STATE_KEY(key)) || "null");
+    } catch (e) {
+      st = null;
+    }
+    if (!st) return false;
+    const fire = (e) => {
+      e.dispatchEvent(new Event("input", { bubbles: true }));
+      e.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    for (const e of persistent(body)) {
+      const k = e.getAttribute("data-k"), v = st[k];
+      if (v === void 0 || e.disabled) continue;
+      if (e instanceof HTMLInputElement && e.type === "checkbox") {
+        if (typeof v === "boolean" && e.checked !== v) {
+          e.checked = v;
+          fire(e);
+        }
+      } else if (e instanceof HTMLInputElement && e.type === "radio") {
+        if (v === "radio:" + e.value && !e.checked) {
+          e.checked = true;
+          fire(e);
+        }
+      } else if (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) {
+        const text = typeof v === "string" ? v : typeof v === "object" && v && (!v.units || v.units === e.dataset.units) ? v.text : null;
+        if (text !== null && text !== e.value) {
+          e.value = text;
+          fire(e);
+        }
+      } else if (typeof v === "string" && v.startsWith("sel:")) {
+        const sel = e;
+        const want = v.slice(4);
+        if (sel.value !== want && Array.from(e.querySelectorAll("option")).some((o) => o.getAttribute("value") === want || o.textContent === want)) {
+          sel.value = want;
+          fire(e);
+        }
+      }
+    }
+    return true;
+  }
   function besideParent(dlg, parent) {
     const p = parent.getBoundingClientRect(), r = dlg.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight;
     let left = null;
@@ -1282,14 +1341,16 @@
     ov.appendChild(dlg);
     document.body.appendChild(ov);
     if (spec.child) ov.style.zIndex = String(60 + stack.length * 2);
+    const stateKey = spec.persist ? typeof spec.persist === "string" ? spec.persist : dialogKeyFromTitle(spec.title) : "";
     const finish = (apply) => {
       if (apply) {
         const a = document.activeElement;
         if (a && a !== document.body && dlg.contains(a)) a.blur();
         if (spec.ok && spec.ok() === false) return;
       }
+      if (!apply && spec.cancel && spec.cancel() === false) return;
+      if (stateKey) saveControlState(stateKey, body);
       closeEntry(entry);
-      if (!apply && spec.cancel) spec.cancel();
     };
     cancel.addEventListener("click", () => finish(false));
     ok.addEventListener("click", () => finish(true));
@@ -1362,6 +1423,7 @@
       }
     } };
     spec.build(body, api);
+    if (stateKey && loadControlState(stateKey, body) && spec.restored) spec.restored();
     if (spec.child && stack.length > 1) besideParent(dlg, stack[stack.length - 2].dlg);
     restoreGeometry(geomKey, dlg, resizable);
     const first = body.querySelector("input:not([type=checkbox]), k-select, textarea, input");
@@ -1484,6 +1546,7 @@
   var V_OPTS = [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]];
   function openField(ctx, item, name) {
     if (root.KDialogs.schFieldDialog && ctx.doc && ctx.doc.type === "sch" && root.KDialogs.schFieldDialog(ctx, item, name)) return null;
+    if (root.KDialogs.pcbFieldDialog && ctx.doc && ctx.doc.type === "pcb" && root.KDialogs.pcbFieldDialog(ctx, item, name)) return null;
     const p0 = fieldNode(item.node, name);
     if (!p0) {
       if (ctx.toast) ctx.toast("No field named " + name);
@@ -1511,7 +1574,7 @@
           <div class="kv"><label></label>${cb("kd-bold", fx.bold, "Bold")}<label></label>${cb("kd-italic", fx.italic, "Italic")}${isPcb ? `<label></label>${cb("kd-mirror", fx.mirror, "Mirrored")}` : ""}</div>
         </div>
         <h3>Orientation and justification</h3><div class="kd-cols">
-          <div class="kv"><label>${isPcb ? "Rotation (\xB0)" : "Orientation"}</label>${orient}${isPcb ? `<label></label>${cb("kd-upright", fieldUnlocked(p0), "Keep upright")}` : ""}</div>
+          <div class="kv"><label>${isPcb ? "Rotation (\xB0)" : "Orientation"}</label>${orient}${isPcb ? `<label></label>${cb("kd-upright", !fieldUnlocked(p0), "Keep upright")}` : ""}</div>
           <div class="kv"><label>Horizontal</label>${sel("kd-h", fx.h, H_OPTS)}<label>Vertical</label>${sel("kd-v", fx.v, V_OPTS)}</div>
         </div>
         <h3>Position</h3><div class="kd-cols">
@@ -1536,7 +1599,7 @@
         setFieldAt(p, num(g("kd-x").value, x), num(g("kd-y").value, y), nrot);
         if (isPcb) {
           setFieldLayer(p, g("kd-layer").value);
-          setFieldUnlocked(p, g("kd-upright").checked);
+          setFieldUnlocked(p, !g("kd-upright").checked);
         }
         if (JSON.stringify(staged) === JSON.stringify(item.node)) return;
         ctx.commit([Kc.replaceChange(doc, Object.assign({}, item, { node: staged, geom: [], bbox: null }))], name.toLowerCase() + " field");

@@ -118,8 +118,8 @@
   };
   var clone = (n) => K.cloneNode(n);
   var samePt = (a, b) => Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3;
-  function rotator(deg2) {
-    const r = deg2 * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  function rotator(deg3) {
+    const r = deg3 * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
     return (x, y) => [x * c + y * s, -x * s + y * c];
   }
   var flipLayerName = (l) => /^F\./.test(l) ? "B." + l.slice(2) : /^B\./.test(l) ? "F." + l.slice(2) : l;
@@ -146,7 +146,9 @@
   var LINE_W0 = Object.assign({}, LINE_W);
   var TEXT_STYLE0 = JSON.parse(JSON.stringify(TEXT_STYLE));
   var fpEditorDefaults = false;
+  var footprintEditorDefaults = () => fpEditorDefaults;
   function useFootprintEditorDefaults(on) {
+    if (on !== fpEditorDefaults) S.angleSnap = void 0;
     fpEditorDefaults = on;
     if (on) {
       Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0);
@@ -225,9 +227,9 @@
     const at = K.kid(node, "at");
     if (at && !K.kid(node, "transform") && a === 0 && at.length === 4 && typeof at[3] === "number") at.length = 3;
   }
-  function rotateFootprintNode(node, deg2) {
+  function rotateFootprintNode(node, deg3) {
     const [x, y, a0] = K.atOf(node);
-    const a1 = norm180(a0 + deg2);
+    const a1 = norm180(a0 + deg3);
     setFootprintAt(node, x, y, a1);
     for (const c of node) if (ANGLED(c)) setAngle(c, K.atOf(c)[2] - a0 + a1);
     return node;
@@ -388,18 +390,18 @@
     if (at.length >= 4) at[3] = a;
     else if (a !== 0) at.push(a);
   }
-  function rotateNode(node, cx, cy, deg2) {
+  function rotateNode(node, cx, cy, deg3) {
     const k = node[0];
-    const R = rotator(deg2);
+    const R = rotator(deg3);
     const about = (x, y) => {
       const [dx, dy] = R(x - cx, y - cy);
       return [cx + dx, cy + dy];
     };
     if (k === "footprint") {
-      rotateFootprintNode(node, deg2);
+      rotateFootprintNode(node, deg3);
       return mapNodePoints(node, about);
     }
-    if (k === "gr_rect" && norm360(deg2) % 90 !== 0) {
+    if (k === "gr_rect" && norm360(deg3) % 90 !== 0) {
       const a = pt(node, "start"), b = pt(node, "end");
       const [x0, y0, x1, y1] = corners(a, b);
       const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => about(x, y));
@@ -411,11 +413,11 @@
       node.splice(1, 0, ["pts", ...pts.map(xy)]);
       return node;
     }
-    if ((k === "gr_text_box" || k === "table_cell") && K.kid(node, "start") && K.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg2);
+    if ((k === "gr_text_box" || k === "table_cell") && K.kid(node, "start") && K.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg3);
     if (k === "table") {
       const cells = K.kid(node, "cells");
       if (!cells) return node;
-      for (const c of K.kids(cells, "table_cell")) if (K.kid(c, "start") && K.kid(c, "end")) rotateTextBoxNode(c, cx, cy, deg2);
+      for (const c of K.kids(cells, "table_cell")) if (K.kid(c, "start") && K.kid(c, "end")) rotateTextBoxNode(c, cx, cy, deg3);
       K.tableModel.normalizeTable(node, true);
       return node;
     }
@@ -427,11 +429,11 @@
         K.kid(node, "start").splice(1, 2, r6(x0), r6(y0));
         K.kid(node, "end").splice(1, 2, r6(x1), r6(y1));
       }
-      if (k === "gr_text_box") setTextBoxAngle(node, textBoxAngle(node) + deg2);
+      if (k === "gr_text_box") setTextBoxAngle(node, textBoxAngle(node) + deg3);
     }
-    if (k === "gr_text" || k === "pad" || k === "property") setAngleKid(node, angleKid(node) + deg2);
+    if (k === "gr_text" || k === "pad" || k === "property") setAngleKid(node, angleKid(node) + deg3);
     if (k === "image") {
-      const r = K.kid(node, "rotate"), a = norm360((r ? K.num(r[1]) : 0) + deg2);
+      const r = K.kid(node, "rotate"), a = norm360((r ? K.num(r[1]) : 0) + deg3);
       if (r) {
         if (a) r[1] = r6(a);
         else node.splice(node.indexOf(r), 1);
@@ -442,9 +444,9 @@
     }
     if (k === "dimension") {
       const gt = K.kid(node, "gr_text");
-      if (gt) setAngleKid(gt, angleKid(gt) + deg2);
+      if (gt) setAngleKid(gt, angleKid(gt) + deg3);
       const o = K.kid(node, "orientation");
-      if (o && norm360(deg2) % 180 === 90) o[1] = K.num(o[1]) ? 0 : 1;
+      if (o && norm360(deg3) % 180 === 90) o[1] = K.num(o[1]) ? 0 : 1;
     }
     return node;
   }
@@ -452,9 +454,9 @@
     const an = K.kid(node, "angle");
     return an ? K.num(an[1]) : 0;
   }
-  function setTextBoxAngle(node, deg2) {
+  function setTextBoxAngle(node, deg3) {
     const an = K.kid(node, "angle");
-    const a1 = r6(norm360(deg2)) % 360;
+    const a1 = r6(norm360(deg3)) % 360;
     if (an) {
       if (a1) an[1] = a1;
       else node.splice(node.indexOf(an), 1);
@@ -465,26 +467,26 @@
     const i = ly ? node.indexOf(ly) : node.length;
     node.splice(i, 0, ["angle", a1]);
   }
-  function rotateTextBoxNode(node, cx, cy, deg2) {
+  function rotateTextBoxNode(node, cx, cy, deg3) {
     const s = K.kid(node, "start"), e = K.kid(node, "end");
     if (!s || !e) return node;
     const sx = K.num(s[1]), sy = K.num(s[2]), ex = K.num(e[1]), ey = K.num(e[2]);
     const ox = (sx + ex) / 2, oy = (sy + ey) / 2;
-    const [rx, ry] = rotator(deg2)(ox - cx, oy - cy);
+    const [rx, ry] = rotator(deg3)(ox - cx, oy - cy);
     const dx = Math.round((cx + rx - ox) * 1e6) / 1e6, dy = Math.round((cy + ry - oy) * 1e6) / 1e6;
     s[1] = r6(sx + dx);
     s[2] = r6(sy + dy);
     e[1] = r6(ex + dx);
     e[2] = r6(ey + dy);
-    setTextBoxAngle(node, textBoxAngle(node) + deg2);
+    setTextBoxAngle(node, textBoxAngle(node) + deg3);
     return node;
   }
-  function setTextBoxAngleSliding(node, deg2) {
+  function setTextBoxAngleSliding(node, deg3) {
     const s = K.kid(node, "start");
-    const delta = norm360(deg2) - norm360(textBoxAngle(node));
+    const delta = norm360(deg3) - norm360(textBoxAngle(node));
     if (!delta) return node;
     if (!s || !K.kid(node, "end")) {
-      setTextBoxAngle(node, deg2);
+      setTextBoxAngle(node, deg3);
       return node;
     }
     return rotateTextBoxNode(node, K.num(s[1]), K.num(s[2]), delta);
@@ -617,7 +619,7 @@
     return out;
   }
   var moveChanges = (doc, ids, dx, dy) => dx || dy ? transformChanges(doc, ids, (n) => translateNode(n, dx, dy)) : [];
-  var rotateChanges = (doc, ids, cx, cy, deg2) => transformChanges(doc, ids, (n) => rotateNode(n, cx, cy, deg2));
+  var rotateChanges = (doc, ids, cx, cy, deg3) => transformChanges(doc, ids, (n) => rotateNode(n, cx, cy, deg3));
   var flipChanges = (doc, ids, cx) => transformChanges(doc, ids, (n) => flipNode(n, cx, doc));
   var mirrorChanges = (doc, ids, cx, cy, axis) => transformChanges(doc, ids, (n) => mirrorNode(n, cx, cy, axis));
   function moveExactChanges(doc, ids, opts) {
@@ -987,12 +989,12 @@
     return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
   }
   function pointInPoly(pts, x, y) {
-    let inside2 = false;
+    let inside3 = false;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
       const a = pts[i], b = pts[j];
-      if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside2 = !inside2;
+      if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside3 = !inside3;
     }
-    return inside2;
+    return inside3;
   }
   function inSweep(t, g) {
     const norm2 = (v) => (v % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
@@ -1076,11 +1078,11 @@
   function segSegDist(a, b, c, d) {
     return segsIntersect(a, b, c, d) ? 0 : Math.min(dPS(a, c, d), dPS(b, c, d), dPS(c, a, b), dPS(d, a, b));
   }
-  function polyPolyDist(P, Q) {
-    if (P.some(([x, y]) => pointInPoly(Q, x, y)) || Q.some(([x, y]) => pointInPoly(P, x, y))) return 0;
+  function polyPolyDist(P3, Q) {
+    if (P3.some(([x, y]) => pointInPoly(Q, x, y)) || Q.some(([x, y]) => pointInPoly(P3, x, y))) return 0;
     let d = Infinity;
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const a = P3[i], b = P3[(i + 1) % P3.length];
       for (let j = 0; j < Q.length; j++) {
         const c = Q[j], e = Q[(j + 1) % Q.length];
         if (segsIntersect(a, b, c, e)) return 0;
@@ -1089,32 +1091,32 @@
     }
     return d;
   }
-  function polySegDist(P, a, b) {
-    if (pointInPoly(P, a[0], a[1]) || pointInPoly(P, b[0], b[1])) return 0;
+  function polySegDist(P3, a, b) {
+    if (pointInPoly(P3, a[0], a[1]) || pointInPoly(P3, b[0], b[1])) return 0;
     let d = Infinity;
-    for (let i = 0; i < P.length; i++) {
-      const c = P[i], e = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const c = P3[i], e = P3[(i + 1) % P3.length];
       if (segsIntersect(a, b, c, e)) return 0;
       d = Math.min(d, dPS(a, c, e), dPS(b, c, e), dPS(c, a, b), dPS(e, a, b));
     }
     return d;
   }
-  function polysOverlap(P, Q) {
+  function polysOverlap(P3, Q) {
     const edgeDist = (R, p) => {
       let d = Infinity;
       for (let i = 0; i < R.length; i++) d = Math.min(d, dPS(p, R[i], R[(i + 1) % R.length]));
       return d;
     };
     const strictInside = (R, p) => pointInPoly(R, p[0], p[1]) && edgeDist(R, p) > 1e-6;
-    if (P.some((p) => strictInside(Q, p)) || Q.some((p) => strictInside(P, p))) return true;
+    if (P3.some((p) => strictInside(Q, p)) || Q.some((p) => strictInside(P3, p))) return true;
     const mid = (R, i) => {
       const a = R[i], b = R[(i + 1) % R.length];
       return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     };
-    if (P.some((_p, i) => strictInside(Q, mid(P, i))) || Q.some((_q, i) => strictInside(P, mid(Q, i)))) return true;
+    if (P3.some((_p, i) => strictInside(Q, mid(P3, i))) || Q.some((_q, i) => strictInside(P3, mid(Q, i)))) return true;
     const o = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const a = P3[i], b = P3[(i + 1) % P3.length];
       for (let j = 0; j < Q.length; j++) {
         const c = Q[j], d = Q[(j + 1) % Q.length];
         if (o(a, b, c) * o(a, b, d) < -1e-12 && o(c, d, a) * o(c, d, b) < -1e-12) return true;
@@ -1122,10 +1124,10 @@
     }
     return false;
   }
-  function polyPointDist(P, p) {
-    if (pointInPoly(P, p[0], p[1])) return 0;
+  function polyPointDist(P3, p) {
+    if (pointInPoly(P3, p[0], p[1])) return 0;
     let d = Infinity;
-    for (let i = 0; i < P.length; i++) d = Math.min(d, dPS(p, P[i], P[(i + 1) % P.length]));
+    for (let i = 0; i < P3.length; i++) d = Math.min(d, dPS(p, P3[i], P3[(i + 1) % P3.length]));
     return d;
   }
   function rectCore(rc) {
@@ -1157,17 +1159,17 @@
     if (a === "seg" || a === "path") {
       const segs = shapeSegs(s1);
       if (b === "seg" || b === "path") {
-        let d2 = Infinity;
+        let d3 = Infinity;
         for (const [p, q] of segs) for (const [c, e] of shapeSegs(s2)) {
-          d2 = Math.min(d2, segSegDist(p, q, c, e));
-          if (d2 === 0) return 0;
+          d3 = Math.min(d3, segSegDist(p, q, c, e));
+          if (d3 === 0) return 0;
         }
-        return d2;
+        return d3;
       }
-      const P = b === "rect" ? rectCore(s2) : s2.pts;
+      const P3 = b === "rect" ? rectCore(s2) : s2.pts;
       let d = Infinity;
       for (const [p, q] of segs) {
-        d = Math.min(d, polySegDist(P, p, q));
+        d = Math.min(d, polySegDist(P3, p, q));
         if (d === 0) return 0;
       }
       return d;
@@ -1715,10 +1717,10 @@
   }
 
   // web/fab/prims.ts
-  var rad = (deg2) => deg2 * Math.PI / 180;
-  function rot(x, y, deg2) {
-    if (!deg2) return [x, y];
-    const r = rad(deg2), c = Math.cos(r), s = Math.sin(r);
+  var rad = (deg3) => deg3 * Math.PI / 180;
+  function rot(x, y, deg3) {
+    if (!deg3) return [x, y];
+    const r = rad(deg3), c = Math.cos(r), s = Math.sin(r);
     return [x * c + y * s, -x * s + y * c];
   }
   function arcPoints2(cx, cy, r, a0, a1, acw, maxErr = 5e-3) {
@@ -1924,8 +1926,8 @@
   function applyFootprintVariant(fp, variant) {
     if (isDefaultVariant(variant)) return;
     const v = kids(fp.node, "variant").find((x) => {
-      const nm2 = K2(x, "name");
-      return !!nm2 && str(nm2[1]) === variant;
+      const nm3 = K2(x, "name");
+      return !!nm3 && str(nm3[1]) === variant;
     });
     if (!v) return;
     const flag = (key, own) => {
@@ -1937,8 +1939,8 @@
     fp.excludeFromPos = flag("exclude_from_pos_files", fp.excludeFromPos);
     const props = new Map(fp.props);
     for (const f of kids(v, "field")) {
-      const nm2 = K2(f, "name"), val = K2(f, "value");
-      if (nm2 && str(nm2[1])) props.set(str(nm2[1]), val ? str(val[1]) : "");
+      const nm3 = K2(f, "name"), val = K2(f, "value");
+      if (nm3 && str(nm3[1])) props.set(str(nm3[1]), val ? str(val[1]) : "");
     }
     fp.props = props;
     fp.value = props.get("Value") || "";
@@ -6338,12 +6340,12 @@
     return fromPaths(differenceD(toPaths(a), toPaths(b), FillRule.NonZero, PRECISION));
   }
   function pointInPoly2(pts, x, y) {
-    let inside2 = false;
+    let inside3 = false;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
       const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
-      if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside2 = !inside2;
+      if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside3 = !inside3;
     }
-    return inside2;
+    return inside3;
   }
   function fracture(paths) {
     if (paths.length < 2) return paths;
@@ -6362,9 +6364,9 @@
     });
     if (!holes.length) return paths;
     outers.sort((a, b) => a.a - b.a);
-    const inside2 = (c, x, y) => x >= c.box[0] && x <= c.box[2] && y >= c.box[1] && y <= c.box[3] && pointInPoly2(c.pts, x, y);
+    const inside3 = (c, x, y) => x >= c.box[0] && x <= c.box[2] && y >= c.box[1] && y <= c.box[3] && pointInPoly2(c.pts, x, y);
     for (const h of holes) {
-      const o = outers.find((c) => inside2(c, h[0][0], h[0][1]) || inside2(c, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
+      const o = outers.find((c) => inside3(c, h[0][0], h[0][1]) || inside3(c, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
       if (o) o.holes.push(h);
     }
     const out = [];
@@ -6476,7 +6478,7 @@
     const a = Math.atan2(y2 - y1, x2 - x1);
     return arcPoints2(x1, y1, r, a + Math.PI / 2, a + 3 * Math.PI / 2, false, MAX_ERROR).concat(arcPoints2(x2, y2, r, a - Math.PI / 2, a + Math.PI / 2, false, MAX_ERROR));
   }
-  function roundRectPoints(x, y, w, h, r, deg2) {
+  function roundRectPoints(x, y, w, h, r, deg3) {
     const hx = w / 2 - r, hy = h / 2 - r;
     const pts = [];
     if (r <= 1e-9) pts.push([-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]);
@@ -6490,7 +6492,7 @@
       corner(hx, -hy, 3 * Math.PI / 2);
     }
     return pts.map((p) => {
-      const q = rot(p[0], p[1], deg2);
+      const q = rot(p[0], p[1], deg3);
       return [x + q[0], y + q[1]];
     });
   }
@@ -19080,7 +19082,7 @@
     if (b.v === "middle" || b.v === "center") oy -= height / 2;
     else if (b.v === "bottom") oy -= height;
     const a = -b.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = b.mirror ? -1 : 1;
-    const P = (lx, ly) => {
+    const P3 = (lx, ly) => {
       const X = lx * mx;
       return [b.x + X * c - ly * sn, b.y + X * sn + ly * c];
     };
@@ -19088,9 +19090,9 @@
     const bars = [];
     laid.forEach((l, i) => {
       const ox = b.h === "center" ? -l.width / 2 : b.h === "right" ? -l.width : 0, y0 = oy + i * interline;
-      for (const k of l.contours) flat.push(k.map(([px, py]) => P(ox + px, y0 + py)));
+      for (const k of l.contours) flat.push(k.map(([px, py]) => P3(ox + px, y0 + py)));
       for (const [x1, y1, x2, y2] of l.bars) {
-        const p = P(ox + x1, y0 + y1), q = P(ox + x2, y0 + y2);
+        const p = P3(ox + x1, y0 + y1), q = P3(ox + x2, y0 + y2);
         bars.push([p[0], p[1], q[0], q[1]]);
       }
     });
@@ -19177,17 +19179,17 @@
     oc.polys = polys;
     return polys;
   }
-  function knockoutBox(pts, x, y, deg2, margin) {
+  function knockoutBox(pts, x, y, deg3, margin) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const q of pts) {
-      const [lx, ly] = rot(q[0] - x, q[1] - y, -deg2);
+      const [lx, ly] = rot(q[0] - x, q[1] - y, -deg3);
       if (lx < x0) x0 = lx;
       if (ly < y0) y0 = ly;
       if (lx > x1) x1 = lx;
       if (ly > y1) y1 = ly;
     }
     return [[x0 - margin, y0 - margin], [x1 + margin, y0 - margin], [x1 + margin, y1 + margin], [x0 - margin, y1 + margin]].map(([lx, ly]) => {
-      const [rx, ry] = rot(lx, ly, deg2);
+      const [rx, ry] = rot(lx, ly, deg3);
       return [x + rx, y + ry];
     });
   }
@@ -19262,7 +19264,7 @@
     const [ox, oy] = C.strokeOrigin(line3.advance, S2(g.h) || "center", S2(g.v) || "middle", lay / sizeX, lay / size);
     const a = -N(g.rot) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
     const x0 = N(g.x), y0 = N(g.y);
-    const P = (u, v) => {
+    const P3 = (u, v) => {
       const lx = (u + ox) * sizeX * mx, ly = (v + oy) * size;
       return [x0 + lx * c - ly * sn, y0 + lx * sn + ly * c];
     };
@@ -19270,13 +19272,13 @@
     const ends = [];
     for (const st of line3.strokes) {
       if (st.length === 2) {
-        const p = P(st[0], st[1]);
+        const p = P3(st[0], st[1]);
         ends.push(p);
         segs.push({ k: "seg", x1: p[0], y1: p[1], x2: p[0], y2: p[1], w: pen, clear });
         continue;
       }
       for (let i = 0; i + 3 < st.length; i += 2) {
-        const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]);
+        const p = P3(st[i], st[i + 1]), q = P3(st[i + 2], st[i + 3]);
         ends.push(p, q);
         segs.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen, clear });
       }
@@ -19354,7 +19356,7 @@
     if (shape.anchor === "circle") polys.push(circlePoints(0, 0, shape.w / 2, MAX_ERROR));
     else polys.push([[-shape.w / 2, -shape.h / 2], [shape.w / 2, -shape.h / 2], [shape.w / 2, shape.h / 2], [-shape.w / 2, shape.h / 2]]);
     if (!shape.primitives) return polys;
-    const widthOf2 = (p) => {
+    const widthOf3 = (p) => {
       const st = K3(p, "stroke");
       const wn = st ? K3(st, "width") : K3(p, "width");
       return wn ? num(wn[1], 0) : 0;
@@ -19374,7 +19376,7 @@
     for (const p of shape.primitives.slice(1)) {
       if (!isList2(p)) continue;
       const kind = str(p[0]);
-      const w = widthOf2(p);
+      const w = widthOf3(p);
       if (kind === "gr_poly") {
         const pts = polyPtsOf(p);
         if (pts.length < 3) continue;
@@ -19407,8 +19409,8 @@
             const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
             const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
             const a0 = Math.atan2(ay - uy, ax - ux), am = Math.atan2(by - uy, bx - ux), a1 = Math.atan2(cy - uy, cx - ux);
-            const nm2 = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-            pts = arcPoints2(ux, uy, Math.hypot(ax - ux, ay - uy), a0, a1, !(nm2(am - a0) <= nm2(a1 - a0)), MAX_ERROR);
+            const nm3 = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+            pts = arcPoints2(ux, uy, Math.hypot(ax - ux, ay - uy), a0, a1, !(nm3(am - a0) <= nm3(a1 - a0)), MAX_ERROR);
           }
         } else if (ang) {
           const cx = num(s[1]), cy = num(s[2]), sx = num(e[1]), sy = num(e[2]);
@@ -19436,7 +19438,7 @@
     let mx = 0, my = 0;
     if (onMask) mx = my = maskMargin(pad, m, shape);
     if (onPaste) [mx, my] = pasteMargin(pad, m, shape);
-    const same2 = Math.abs(mx - my) < 1e-9;
+    const same3 = Math.abs(mx - my) < 1e-9;
     const w = shape.w + 2 * mx + adj, h = shape.h + 2 * my + adj;
     if (shape.shape !== "custom" && (w <= 0 || h <= 0)) return;
     const [ox, oy] = rot(shape.offset[0], shape.offset[1], pad.rot);
@@ -19453,12 +19455,12 @@
         else out.push({ k: "oval", x, y, w, h, rot: r });
         break;
       case "rect":
-        if (mx > 0 && same2) out.push({ k: "roundrect", x, y, w, h, r: mx, rot: r });
+        if (mx > 0 && same3) out.push({ k: "roundrect", x, y, w, h, r: mx, rot: r });
         else out.push({ k: "rect", x, y, w, h, rot: r });
         break;
       case "roundrect": {
         const r0 = shape.rratio * Math.min(shape.w, shape.h);
-        const rr = Math.min(same2 ? Math.max(0, r0 + mx + adj / 2) : shape.rratio * Math.min(w, h), Math.min(w, h) / 2);
+        const rr = Math.min(same3 ? Math.max(0, r0 + mx + adj / 2) : shape.rratio * Math.min(w, h), Math.min(w, h) / 2);
         if (rr <= 1e-9) out.push({ k: "rect", x, y, w, h, rot: r });
         else if (Math.abs(w - h) < 1e-9 && Math.abs(rr - w / 2) < 1e-9) out.push({ k: "circle", x, y, d: w });
         else out.push({ k: "roundrect", x, y, w, h, r: rr, rot: r });
@@ -19471,7 +19473,7 @@
         break;
       }
       case "chamfer": {
-        if (mx <= 0 || !same2) flashPolys([chamferedRect(w, h, shape.rratio * Math.min(w, h), shape.chamferRatio, shape.chamfers)]);
+        if (mx <= 0 || !same3) flashPolys([chamferedRect(w, h, shape.rratio * Math.min(w, h), shape.chamferRatio, shape.chamfers)]);
         else flashPolys(inflate([chamferedRect(shape.w, shape.h, shape.rratio * Math.min(shape.w, shape.h), shape.chamferRatio, shape.chamfers)], mx));
         break;
       }
@@ -19725,6 +19727,18 @@
   var netnameMsg = (net) => net && net.name ? `[${unescapeName(net.name)}]` : "[<no net>]";
   function itemDescription(doc, id, units) {
     const V = (v) => msgValue(v, units), L = (l) => boardLayerName(doc, l);
+    const fi = String(id).indexOf("@field:");
+    if (fi > 0) {
+      const fp = doc.items.get(String(id).slice(0, fi));
+      if (!fp) return "";
+      const name = String(id).slice(fi + 7), ref = fp.ref || "";
+      const prop3 = fp.node.find((c) => Array.isArray(c) && c[0] === "property" && String(c[1]) === name);
+      const raw = unescapeName(prop3 ? String(prop3[2] ?? "") : name === "Value" ? fp.value || "" : "").replace(/[\n\r\t]/g, " ");
+      const content = raw.length > 36 ? raw.slice(0, 34) + "..." : raw;
+      if (name === "Reference") return `Reference field of ${ref}`;
+      if (name === "Value" || name === "Footprint" || name === "Datasheet") return `${name} field of ${ref} (${content})`;
+      return name ? `${name} field of ${ref} (${content})` : `Field of ${ref} (${content})`;
+    }
     const hash = String(id).indexOf("#"), it = doc.items.get(hash > 0 ? String(id).slice(0, hash) : id);
     if (!it) return "";
     const n = it.node;
@@ -19757,8 +19771,8 @@
     if (it.kind === "zone") {
       const names = zoneLayers(n).map(L);
       const keep = K.kid(n, "keepout");
-      const nm2 = K.kid(n, "name");
-      const zn = nm2 ? K.str(nm2[1]) : "";
+      const nm3 = K.kid(n, "name");
+      const zn = nm3 ? K.str(nm3[1]) : "";
       const ld = names.length === 1 ? `on ${names[0]}` : names.length === 2 ? `on ${names[0]} and ${names[1]}` : names.length === 3 ? `on ${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `on ${names[0]}, ${names[1]} and ${names.length - 2} more` : "";
       if (keep) return zn ? `Rule area '${zn}' ${ld}` : `Rule Area ${ld}`;
       const pr = K.kid(n, "priority");
@@ -20023,8 +20037,8 @@
         if (isLocked(n)) add("Status", "Locked");
         const names = zl.map((l) => boardLayerName(doc, l));
         add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
-        const nm2 = K.kid(n, "name");
-        if (nm2 && K.str(nm2[1])) add("Name", K.str(nm2[1]));
+        const nm3 = K.kid(n, "name");
+        if (nm3 && K.str(nm3[1])) add("Name", K.str(nm3[1]));
         if (!keep) {
           const fill = K.kid(n, "fill");
           const fm = fill && K.kid(fill, "mode") ? K.str(K.kid(fill, "mode")[1]) : "";
@@ -20086,15 +20100,15 @@
     if (opts.net && !list.length) {
       const NT = netTable(doc), name = opts.net;
       let code = 0;
-      for (const [c, nm2] of NT.byCode) if (nm2 === name) {
+      for (const [c, nm3] of NT.byCode) if (nm3 === name) {
         code = c;
         break;
       }
       if (!code) {
         let i = 0;
-        for (const nm2 of NT.byName.keys()) {
+        for (const nm3 of NT.byName.keys()) {
           i++;
-          if (nm2 === name) {
+          if (nm3 === name) {
             code = i;
             break;
           }
@@ -20460,8 +20474,8 @@
     if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return -1;
     return (Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8;
   }
-  var dirAngle = (d1, d2) => {
-    const d = Math.abs(d1 - d2) % 8;
+  var dirAngle = (d1, d22) => {
+    const d = Math.abs(d1 - d22) % 8;
     return d > 4 ? 8 - d : d;
   };
   var isDiagDir = (d) => d >= 0 && d % 2 === 1;
@@ -20976,19 +20990,19 @@
       lengthN: (dp.mineIsP ? dp.lenOther : dp.lenMine) * TUNE_IU,
       collides: collides2
     });
-    const P = dp.mineIsP;
+    const P3 = dp.mineIsP;
     return {
-      final: P ? r.finalP : r.finalN,
-      finalCoupled: P ? r.finalN : r.finalP,
-      tuned: P ? r.tunedP : r.tunedN,
+      final: P3 ? r.finalP : r.finalN,
+      finalCoupled: P3 ? r.finalN : r.finalP,
+      tuned: P3 ? r.tunedP : r.tunedN,
       status: r.status,
       length: r.length,
       hasMeanders: r.hasMeanders,
       settings: r.settings,
       start: r.start,
       end: r.end,
-      baseline: P ? r.baselineP : r.baselineN,
-      baselineCoupled: P ? r.baselineN : r.baselineP
+      baseline: P3 ? r.baselineP : r.baselineN,
+      baselineCoupled: P3 ? r.baselineN : r.baselineP
     };
   }
   function tunePieces(ch) {
@@ -21084,9 +21098,9 @@
       }
       const kept = /* @__PURE__ */ new Set();
       for (const pc of tunePieces(fin)) {
-        const same2 = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-        if (same2 && !kept.has(same2.id)) {
-          kept.add(same2.id);
+        const same3 = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+        if (same3 && !kept.has(same3.id)) {
+          kept.add(same3.id);
           continue;
         }
         const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, net);
@@ -21125,7 +21139,7 @@
       const c = kid3(k);
       return c ? K.str(c[1]) : "";
     };
-    const ptsOf = (k) => {
+    const ptsOf2 = (k) => {
       const c = kid3(k);
       const p = c && K.kid(c, "pts");
       return p ? p.slice(1).filter((xy3) => Array.isArray(xy3) && xy3[0] === "xy").map((xy3) => [K.num(xy3[1]), K.num(xy3[2])]) : null;
@@ -21154,8 +21168,8 @@
     return {
       st,
       layer: lay ? K.str(lay[1]) : "F.Cu",
-      base: ptsOf("base_line"),
-      coupled: ptsOf("base_line_coupled"),
+      base: ptsOf2("base_line"),
+      coupled: ptsOf2("base_line_coupled"),
       mode: str11("tuning_mode") || "single",
       origin: xyOf("origin"),
       end: xyOf("end"),
@@ -21314,10 +21328,10 @@
       }
       const kept = /* @__PURE__ */ new Set();
       for (const pc of tunePieces(fin)) {
-        const same2 = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-        if (same2 && !kept.has(same2.id)) {
-          kept.add(same2.id);
-          if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same2.id);
+        const same3 = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+        if (same3 && !kept.has(same3.id)) {
+          kept.add(same3.id);
+          if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same3.id);
           continue;
         }
         const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, ln.width, ln.layer, ln.net) : segmentNode(scratch, pc.a, pc.b, ln.width, ln.layer, ln.net);
@@ -21620,35 +21634,35 @@
     }
   }
   function offsetSide(pts, d) {
-    const P = pts.filter((p, i) => !i || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-9);
-    if (P.length < 2) return [];
+    const P3 = pts.filter((p, i) => !i || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-9);
+    if (P3.length < 2) return [];
     const U2 = [];
-    for (let i = 0; i + 1 < P.length; i++) U2.push(unit(P[i], P[i + 1]));
+    for (let i = 0; i + 1 < P3.length; i++) U2.push(unit(P3[i], P3[i + 1]));
     const out = [];
     const off = (p, u) => {
       const n = perp(u);
       return [p[0] + n[0] * d, p[1] + n[1] * d];
     };
-    out.push(off(P[0], U2[0]));
-    for (let k = 1; k + 1 < P.length; k++) {
+    out.push(off(P3[0], U2[0]));
+    for (let k = 1; k + 1 < P3.length; k++) {
       const u0 = U2[k - 1], u1 = U2[k];
       const cr = u0[0] * u1[1] - u0[1] * u1[0];
       if (Math.abs(cr) < 1e-12) {
-        out.push(off(P[k], u1));
+        out.push(off(P3[k], u1));
         continue;
       }
       if (cr * d > 0) {
         const n0 = perp(u0), n1 = perp(u1);
         const den = 1 + n0[0] * n1[0] + n0[1] * n1[1];
-        out.push([P[k][0] + (n0[0] + n1[0]) / den * d, P[k][1] + (n0[1] + n1[1]) / den * d]);
+        out.push([P3[k][0] + (n0[0] + n1[0]) / den * d, P3[k][1] + (n0[1] + n1[1]) / den * d]);
       } else {
-        const q0 = off(P[k], u0), q1 = off(P[k], u1);
+        const q0 = off(P3[k], u0), q1 = off(P3[k], u1);
         out.push(q0);
-        arcPts(P[k], Math.abs(d), Math.atan2(q0[1] - P[k][1], q0[0] - P[k][0]), Math.atan2(q1[1] - P[k][1], q1[0] - P[k][0]), out);
+        arcPts(P3[k], Math.abs(d), Math.atan2(q0[1] - P3[k][1], q0[0] - P3[k][0]), Math.atan2(q1[1] - P3[k][1], q1[0] - P3[k][0]), out);
         out.push(q1);
       }
     }
-    out.push(off(P[P.length - 1], U2[U2.length - 1]));
+    out.push(off(P3[P3.length - 1], U2[U2.length - 1]));
     return out;
   }
   function roundOutline(pts, amp) {
@@ -22021,9 +22035,9 @@
         const ch = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], v = vsub(m, ch), justOff = Math.hypot(s[0] - e[0], s[1] - e[1]) / 100;
         const A = vadd(ch, resized(v, justOff)), u = resized(v, 1);
         const t = Math.max(0, (raw[0] - A[0]) * u[0] + (raw[1] - A[1]) * u[1]);
-        const nm2 = vadd(A, vmul(u, t));
-        if (Math.abs(crossZ(nm2[0] - s[0], nm2[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
-        return { start: s, mid: nm2, end: e };
+        const nm3 = vadd(A, vmul(u, t));
+        if (Math.abs(crossZ(nm3[0] - s[0], nm3[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
+        return { start: s, mid: nm3, end: e };
       }
       const r = Math.max(ARC_MIN_RADIUS, Math.hypot(raw[0] - c[0], raw[1] - c[1]));
       return arcFromCenter(c, vadd(c, resized(vsub(s, c), r)), vadd(c, resized(vsub(e, c), r)));
@@ -22455,8 +22469,8 @@
     });
     return out;
   }
-  function chMirror(ch, P, dir) {
-    const s = { A: P, B: vadd(P, dir) };
+  function chMirror(ch, P3, dir) {
+    const s = { A: P3, B: vadd(P3, dir) };
     const m = (p) => {
       const q = lineProject(s, p);
       return [2 * q[0] - p[0], 2 * q[1] - p[1]];
@@ -22499,7 +22513,7 @@
     const optCr = Math.trunc(shapeSpacing(m) * st.crPct / 200);
     return Math.min(Math.max(optCr, minCr), maxCr);
   }
-  function genMeanderShape(m, P, dir, side, type, baseOffset) {
+  function genMeanderShape(m, P3, dir, side, type, baseOffset) {
     let cr = cornerRadius(m), offset = baseOffset;
     const spc = shapeSpacing(m), amplitude = m.amp, tbl = m.targetBaseLen;
     if (side) offset *= -1;
@@ -22553,10 +22567,10 @@
       miter(corner, true);
       forward(sides);
     };
-    start(vadd(P, dvb), dir);
+    start(vadd(P3, dvb), dir);
     switch (type) {
       case MT_EMPTY:
-        chAppend(lc, vadd(vadd(P, dvb), dir));
+        chAppend(lc, vadd(vadd(P3, dvb), dir));
         break;
       case MT_START:
         if (tbl) top = Math.max(top, tbl - sCorner - uCorner * 2 + offset);
@@ -22567,17 +22581,17 @@
         break;
       case MT_FINISH:
         if (tbl) top = Math.max(top, tbl - cr - spc);
-        start(vsubI(P, dub), dir);
+        start(vsubI(P3, dub), dir);
         turn(false);
         forward(Math.min(sCorner, uCorner));
         forward(Math.abs(offset));
         uShape(startSide, uCorner, top);
         miter(sCorner, false);
-        chAppend(lc, vadd(vadd(P, dvb), vresize(dir, tbl >= spc + cr ? tbl : 2 * spc - cr)));
+        chAppend(lc, vadd(vadd(P3, dvb), vresize(dir, tbl >= spc + cr ? tbl : 2 * spc - cr)));
         break;
       case MT_TURN:
         if (tbl) top = Math.max(top, tbl - uCorner * 2 + offset * 2);
-        start(vsubI(P, dub), dir);
+        start(vsubI(P3, dub), dir);
         turn(false);
         forward(Math.abs(offset));
         uShape(turnSide, uCorner, top);
@@ -22588,12 +22602,12 @@
         miter(sCorner, false);
         uShape(startSide, uCorner, top);
         miter(sCorner, false);
-        chAppend(lc, vadd(vadd(P, dvb), vresize(dir, 2 * spc)));
+        chAppend(lc, vadd(vadd(P3, dvb), vresize(dir, 2 * spc)));
         break;
       default:
         break;
     }
-    return side ? chMirror(lc, P, dir) : lc;
+    return side ? chMirror(lc, P3, dir) : lc;
   }
   function updateBaseSegment(m) {
     const l1 = m.line, l2 = m.line2;
@@ -22601,9 +22615,9 @@
     const a = m.dual && l2.length ? mid(l1[0].p, l2[0].p) : l1[0].p, b = m.dual && l2.length ? mid(l1[l1.length - 1].p, l2[l2.length - 1].p) : l1[l1.length - 1].p;
     m.clipped = { A: lineProject(m.baseSeg, a), B: lineProject(m.baseSeg, b) };
   }
-  function genLines(m, P, dir, side, type) {
-    m.line = genMeanderShape(m, P, dir, side, type, m.dual ? m.offset : 0);
-    m.line2 = m.dual ? genMeanderShape(m, P, dir, side, type, -m.offset) : [];
+  function genLines(m, P3, dir, side, type) {
+    m.line = genMeanderShape(m, P3, dir, side, type, m.dual ? m.offset : 0);
+    m.line2 = m.dual ? genMeanderShape(m, P3, dir, side, type, -m.offset) : [];
   }
   var baselineLength = (m) => vlen(vsubI(m.clipped.B, m.clipped.A));
   var currentLength = (m) => chLength(m.line);
@@ -22629,17 +22643,17 @@
     resizeShape(c, minAmplitude(c));
     return currentLength(c);
   }
-  function fitShape(m, type, seg, P, side) {
+  function fitShape(m, type, seg, P3, side) {
     const st = m.pl.st;
     if (type === MT_CHECK_START || type === MT_CHECK_FINISH) {
       const prim1 = type === MT_CHECK_START ? MT_START : MT_TURN, prim2 = type === MT_CHECK_START ? MT_TURN : MT_FINISH;
       const m1 = newShape(m.pl, m.width, m.dual, m.offset), m2 = newShape(m.pl, m.width, m.dual, m.offset);
-      const c1 = fitShape(m1, prim1, seg, P, side);
+      const c1 = fitShape(m1, prim1, seg, P3, side);
       const c2 = c1 && fitShape(m2, prim2, seg, m1.clipped.B, !side);
       if (c1 && c2) {
         Object.assign(m, shapeCopy(m1));
         m.type = prim1;
-        m.p0 = P.slice();
+        m.p0 = P3.slice();
         m.side = side;
         updateBaseSegment(m);
         return true;
@@ -22649,10 +22663,10 @@
     const minAmpl = minAmplitude(m), maxAmpl = Math.max(st.maxAmp, minAmpl), minCr = Math.trunc(m.width / 2);
     for (let ampl = maxAmpl; ampl >= minAmpl; ampl -= st.step) {
       m.amp = ampl;
-      genLines(m, P, vsubI(seg.B, seg.A), side, type);
+      genLines(m, P3, vsubI(seg.B, seg.A), side, type);
       m.type = type;
       m.baseSeg = { A: seg.A.slice(), B: seg.B.slice() };
-      m.p0 = P.slice();
+      m.p0 = P3.slice();
       m.side = side;
       updateBaseSegment(m);
       if (m.meanCr < minCr) continue;
@@ -22842,45 +22856,45 @@
       return n.i + Math.hypot(n.q[0] - s[0], n.q[1] - s[1]) / Math.max(1e-12, Math.hypot(pts[n.i + 1][0] - s[0], pts[n.i + 1][1] - s[1]));
     };
     let na = near(a), nb = near(b);
-    let P = pts;
+    let P3 = pts;
     if (at(na) > at(nb)) {
-      P = pts.slice().reverse();
-      const ra = { i: P.length - 2 - na.i, q: na.q }, rb = { i: P.length - 2 - nb.i, q: nb.q };
+      P3 = pts.slice().reverse();
+      const ra = { i: P3.length - 2 - na.i, q: na.q }, rb = { i: P3.length - 2 - nb.i, q: nb.q };
       na = ra;
       nb = rb;
     }
-    const pre = P.slice(0, na.i + 1).map((p) => ({ p: p.slice() }));
+    const pre = P3.slice(0, na.i + 1).map((p) => ({ p: p.slice() }));
     chAppend(pre, na.q);
     const mid = [{ p: na.q.slice() }];
-    for (let i = na.i + 1; i <= nb.i; i++) chAppend(mid, P[i]);
+    for (let i = na.i + 1; i <= nb.i; i++) chAppend(mid, P3[i]);
     chAppend(mid, nb.q);
     const post2 = [{ p: nb.q.slice() }];
-    for (let i = nb.i + 1; i < P.length; i++) chAppend(post2, P[i]);
+    for (let i = nb.i + 1; i < P3.length; i++) chAppend(post2, P3[i]);
     return { pre, mid, post: post2, start: na.q, end: nb.q };
   }
-  function meanderMove(P) {
-    const st = P.st;
+  function meanderMove(P3) {
+    const st = P3.st;
     const pl = {
       st,
-      clearance: P.clearance,
-      width: P.width,
+      clearance: P3.clearance,
+      width: P3.width,
       result: null,
       checkFit(m) {
-        if (P.collides && P.collides(m.line)) return false;
+        if (P3.collides && P3.collides(m.line)) return false;
         return checkSelfIntersections(this.result, m, m.width + st.spacing);
       }
     };
-    const sp = splitLine(P.pts, P.origin, P.end);
-    const L = newMLine(pl, P.width);
+    const sp = splitLine(P3.pts, P3.origin, P3.end);
+    const L = newMLine(pl, P3.width);
     pl.result = L;
     for (let i = 0; i + 1 < sp.mid.length; i++) {
       const s = { A: sp.mid[i].p, B: sp.mid[i + 1].p };
-      const side = st.initialSide === 0 ? segSide(s, P.cursor || P.end) < 0 : st.initialSide < 0;
+      const side = st.initialSide === 0 ? segSide(s, P3.cursor || P3.end) < 0 : st.initialSide < 0;
       mlAddCorner(L, s.A);
       meanderSegment(L, s, side);
       mlAddCorner(L, s.B);
     }
-    const lineLen = P.lineLength;
+    const lineLen = P3.lineLength;
     let lastLength = lineLen, status = TUNED, hasMeanders = false;
     let tuned = sp.mid;
     if (lineLen > st.target.max) status = TOO_LONG;
@@ -22914,8 +22928,8 @@
     const [a, b] = l2(s) < l2(o) ? [o, s] : [s, o];
     const p = a.A[1] - a.B[1], q = a.B[0] - a.A[0], l = p * p + q * q;
     if (!l) return false;
-    const d1 = p * (b.A[0] - a.A[0]) + q * (b.A[1] - a.A[1]), d2 = p * (b.B[0] - a.A[0]) + q * (b.B[1] - a.A[1]);
-    return Math.abs(Math.sign(d1) * d1 * d1 / l - Math.sign(d2) * d2 * d2 / l) <= thr * thr;
+    const d1 = p * (b.A[0] - a.A[0]) + q * (b.A[1] - a.A[1]), d22 = p * (b.B[0] - a.A[0]) + q * (b.B[1] - a.A[1]);
+    return Math.abs(Math.sign(d1) * d1 * d1 / l - Math.sign(d22) * d22 * d22 / l) <= thr * thr;
   }
   function commonParallelProjection(p, n) {
     const d = vsubI(p.B, p.A), tc = (x) => (x[0] - p.A[0]) * d[0] + (x[1] - p.A[1]) * d[1];
@@ -22930,10 +22944,10 @@
     return { pClip, nClip: { A: lineProject(n, pClip.A), B: lineProject(n, pClip.B) } };
   }
   var DP_PARALLELITY_THRESHOLD = 10;
-  function coupledSegmentPairs(P, N2, width, gap) {
+  function coupledSegmentPairs(P3, N2, width, gap) {
     const out = [];
-    for (let i = 0; i + 1 < P.length; i++) for (let j = 0; j + 1 < N2.length; j++) {
-      const sp = { A: P[i], B: P[i + 1] }, sn = { A: N2[j], B: N2[j + 1] };
+    for (let i = 0; i + 1 < P3.length; i++) for (let j = 0; j + 1 < N2.length; j++) {
+      const sp = { A: P3[i], B: P3[i + 1] }, sn = { A: N2[j], B: N2[j + 1] };
       const dist = segSegDist(sp.A, sp.B, sn.A, sn.B) - width;
       if (!approxParallelT(sp, sn, DP_PARALLELITY_THRESHOLD) || dist < gap - 1e4 || dist > gap + 1e4) continue;
       const c = commonParallelProjection(sp, sn);
@@ -22942,29 +22956,29 @@
     }
     return out;
   }
-  function dpMeanderMove(P) {
-    const st = P.st, w = P.width;
-    const spP = splitLine(P.ptsP, P.origin, P.end), spN = splitLine(P.ptsN, P.origin, P.end);
+  function dpMeanderMove(P3) {
+    const st = P3.st, w = P3.width;
+    const spP = splitLine(P3.ptsP, P3.origin, P3.end), spN = splitLine(P3.ptsN, P3.origin, P3.end);
     const tunedP0 = chSimplify(spP.mid), tunedN0 = chSimplify(spN.mid);
-    const dpLen = Math.max(P.lengthP, P.lengthN);
+    const dpLen = Math.max(P3.lengthP, P3.lengthN);
     const statusOf = (len) => len > st.target.max ? TOO_LONG : len < st.target.min ? TOO_SHORT : TUNED;
     const asChain = (pts) => pts.map((p) => ({ p: p.slice() }));
     const base = { settings: st, start: spP.start, end: spP.end, baselineP: spP.mid, baselineN: spN.mid, hasMeanders: false };
-    const original = (status2) => Object.assign({}, base, { finalP: asChain(P.ptsP), finalN: asChain(P.ptsN), tunedP: tunedP0, tunedN: tunedN0, status: status2, length: dpLen });
+    const original = (status2) => Object.assign({}, base, { finalP: asChain(P3.ptsP), finalN: asChain(P3.ptsN), tunedP: tunedP0, tunedN: tunedN0, status: status2, length: dpLen });
     if (tunedP0.length < 2 || tunedN0.length < 2) return original(TOO_SHORT);
     const pp = tunedP0.map((n) => n.p), np = tunedN0.map((n) => n.p);
-    const pairs = coupledSegmentPairs(pp, np, w, P.gap);
+    const pairs = coupledSegmentPairs(pp, np, w, P3.gap);
     if (!pairs.length) return original(statusOf(dpLen));
-    let offset = Math.trunc((P.gap + w) / 2);
+    let offset = Math.trunc((P3.gap + w) / 2);
     const c0 = pairs[0];
     if (segSide(c0.coupledP, [(c0.coupledP.A[0] + c0.coupledN.A[0]) / 2, (c0.coupledP.A[1] + c0.coupledN.A[1]) / 2]) > 0) offset = -offset;
     const pl = {
       st,
-      clearance: P.clearance,
+      clearance: P3.clearance,
       width: w,
       result: null,
       checkFit(m) {
-        if (P.collides && (P.collides(m.line) || P.collides(m.line2))) return false;
+        if (P3.collides && (P3.collides(m.line) || P3.collides(m.line2))) return false;
         return checkSelfIntersections(this.result, m, w + w * 3);
       }
     };
@@ -22984,7 +22998,7 @@
     };
     for (const sp of pairs) {
       const b = { A: [(sp.coupledP.A[0] + sp.coupledN.A[0]) / 2, (sp.coupledP.A[1] + sp.coupledN.A[1]) / 2], B: [(sp.coupledP.B[0] + sp.coupledN.B[0]) / 2, (sp.coupledP.B[1] + sp.coupledN.B[1]) / 2] };
-      const side = st.initialSide === 0 ? segSide(b, P.cursor || P.end) < 0 : st.initialSide < 0;
+      const side = st.initialSide === 0 ? segSide(b, P3.cursor || P3.end) < 0 : st.initialSide < 0;
       addCornersUntil(sp.indexP, sp.indexN);
       meanderSegment(L, b, side);
     }
@@ -23467,18 +23481,18 @@
     if (b) return { t: "poly", pts: [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]] };
     return null;
   }
-  function shapeHitsPoly(sh, P) {
-    if (sh.t === "poly") return polyPolyDist(sh.pts, P) <= 1e-9;
-    return shapeGap(sh, { t: "poly", pts: P }) <= 1e-9;
+  function shapeHitsPoly(sh, P3) {
+    if (sh.t === "poly") return polyPolyDist(sh.pts, P3) <= 1e-9;
+    return shapeGap(sh, { t: "poly", pts: P3 }) <= 1e-9;
   }
-  function shapeInsidePoly(sh, P) {
+  function shapeInsidePoly(sh, P3) {
     const core = sh.t === "circle" ? [[sh.x, sh.y]] : sh.t === "seg" ? [sh.a, sh.b] : sh.t === "rect" ? rectCore(sh) : sh.pts;
-    if (!core.every((p) => pointInPoly(P, p[0], p[1]))) return false;
+    if (!core.every((p) => pointInPoly(P3, p[0], p[1]))) return false;
     const off = shapeOffset(sh);
     if (off <= 0 && sh.t !== "poly" && sh.t !== "rect") return true;
     const segs = sh.t === "circle" ? [] : sh.t === "rect" || sh.t === "poly" ? core.map((p, i) => [p, core[(i + 1) % core.length]]) : shapeSegs(sh);
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const a = P3[i], b = P3[(i + 1) % P3.length];
       if (sh.t === "circle") {
         if (dPS([sh.x, sh.y], a, b) < off - 1e-9) return false;
         continue;
@@ -23669,7 +23683,7 @@
         for (const f of fps) {
           if (f.bbox && (bb[0] > f.bbox[2] || bb[2] < f.bbox[0] || bb[1] > f.bbox[3] || bb[3] < f.bbox[1])) continue;
           const cy = courtyardLoops(f);
-          for (const l of side) for (const P of cy[l] || []) if (shapeHitsPoly(sh, P)) return bool(true);
+          for (const l of side) for (const P3 of cy[l] || []) if (shapeHitsPoly(sh, P3)) return bool(true);
         }
         return bool(false);
       }
@@ -23688,10 +23702,10 @@
           if (it.kind === "footprint" && fn !== "enclosedByArea") {
             const cy = courtyardLoops(it.item || { id: "", kind: "footprint", node: it.node });
             const sides = [zl.some((l) => /^F\.|^\*\.|F&B/.test(l)) ? "F.CrtYd" : "", zl.some((l) => /^B\.|^\*\.|F&B/.test(l)) ? "B.CrtYd" : ""].filter(Boolean);
-            for (const P of zonePolys(z.node)) for (const l of sides) for (const Q of cy[l] || []) if (polyPolyDist(Q, P) <= 1e-9) return bool(true);
+            for (const P3 of zonePolys(z.node)) for (const l of sides) for (const Q of cy[l] || []) if (polyPolyDist(Q, P3) <= 1e-9) return bool(true);
             continue;
           }
-          for (const P of zonePolys(z.node)) if (fn === "enclosedByArea" ? shapeInsidePoly(sh, P) : shapeHitsPoly(sh, P)) return bool(true);
+          for (const P3 of zonePolys(z.node)) if (fn === "enclosedByArea" ? shapeInsidePoly(sh, P3) : shapeHitsPoly(sh, P3)) return bool(true);
         }
         return bool(false);
       }
@@ -24183,16 +24197,16 @@
       return null;
     };
     const at = (it) => xy3(it, "start");
-    for (const [name, P] of byNet) {
+    for (const [name, P3] of byNet) {
       const m = matchDpSuffix(name);
       if (m.rv <= 0) continue;
       const N2 = byNet.get(m.complement);
       if (!N2) continue;
-      const gapR = find("diff_pair_gap", P[0], N2[0]), uncR = find("diff_pair_uncoupled", P[0], N2[0]);
+      const gapR = find("diff_pair_gap", P3[0], N2[0]), uncR = find("diff_pair_uncoupled", P3[0], N2[0]);
       if (!gapR && !uncR) continue;
       const I = (p) => [p[0] * 1e6, p[1] * 1e6];
       const coupled = [];
-      for (const sp of P) {
+      for (const sp of P3) {
         if (sp.kind !== "segment" || inPattern.has(sp.id)) continue;
         let best = null;
         for (const sn of N2) {
@@ -24217,12 +24231,12 @@
         if (!d.failMin && !d.failMax) totalCoupled += d.len;
       }
       const sum = (l) => l.filter((it) => !inPattern.has(it.id)).reduce((t, it) => t + len(it), 0);
-      const total = Math.max(sum(P), sum(N2)), uncoupled = total - totalCoupled;
+      const total = Math.max(sum(P3), sum(N2)), uncoupled = total - totalCoupled;
       let uncFail = false;
       if (uncR && uncR.c.max != null && uncR.c.max >= 0 && uncoupled > uncR.c.max + 1e-6) {
         uncFail = true;
         const [x, y] = at(N2[0]);
-        out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P.concat(N2).map((it) => it.id)));
+        out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P3.concat(N2).map((it) => it.id)));
       }
       if (gapR && (uncFail || !uncR)) for (const d of coupled) {
         if (!d.failMin && !d.failMax) continue;
@@ -24333,7 +24347,7 @@
         else rows.set(gy, [i]);
       }
     }
-    const inside2 = (x, y) => {
+    const inside3 = (x, y) => {
       let c = false;
       for (const i of rows.get(cell(y)) || []) {
         const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -24345,7 +24359,7 @@
       let best = Infinity;
       for (const sh of e.shapes) {
         const b = shapeBBox(sh);
-        if (inside2((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) return -1;
+        if (inside3((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) return -1;
         const seen = /* @__PURE__ */ new Set();
         const r = reach + Math.max(0, e.grow);
         for (let gx = cell(b[0] - r); gx <= cell(b[2] + r); gx++) for (let gy = cell(b[1] - r); gy <= cell(b[3] + r); gy++) for (const i of cells.get(gx + "," + gy) || []) {
@@ -24595,12 +24609,12 @@
         break;
       }
       if (crosses2 || !ol.outline || e.shapes.length < 2) continue;
-      const inside2 = (sh) => {
+      const inside3 = (sh) => {
         const b = shapeBBox(sh);
         return pointInPoly(ol.outline, (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
       };
-      const first = inside2(e.shapes[0]);
-      if (e.shapes.every((sh) => inside2(sh) === first)) continue;
+      const first = inside3(e.shapes[0]);
+      if (e.shapes.every((sh) => inside3(sh) === first)) continue;
       const cx = (e.bbox[0] + e.bbox[2]) / 2, cy = (e.bbox[1] + e.bbox[3]) / 2;
       let best = ol.outline[0], bd = Infinity, bi = -1;
       for (let i = 0; i < ol.outline.length; i++) {
@@ -24931,8 +24945,8 @@
     return rIU + Math.round(Math.abs(rIU * (1 - 1 / Math.cos(a))));
   }
   var iu = (v) => Math.round(v * 1e6);
-  var rotIU = (x, y, deg2) => {
-    const a = deg2 * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  var rotIU = (x, y, deg3) => {
+    const a = deg3 * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
     return [Math.round(x * c + y * s), Math.round(y * c - x * s)];
   };
   var circleOutside = (x, y, r, err = ARC_HIGH_DEF) => circleApprox(x, y, r, err, "outside");
@@ -24968,13 +24982,13 @@
     let pts = poly;
     for (const [lim, sign] of [[hw, 1], [-hw, -1]]) {
       const res = [];
-      const inside2 = (p) => sign * p[1] <= sign * lim;
+      const inside3 = (p) => sign * p[1] <= sign * lim;
       for (let i = 0; i < pts.length; i++) {
-        const P = pts[i], Q = pts[(i + 1) % pts.length], pi = inside2(P), qi = inside2(Q);
-        if (pi) res.push(P);
+        const P3 = pts[i], Q = pts[(i + 1) % pts.length], pi = inside3(P3), qi = inside3(Q);
+        if (pi) res.push(P3);
         if (pi !== qi) {
-          const t = (lim - P[1]) / (Q[1] - P[1]);
-          res.push([Math.round(P[0] + t * (Q[0] - P[0])), lim]);
+          const t = (lim - P3[1]) / (Q[1] - P3[1]);
+          res.push([Math.round(P3[0] + t * (Q[0] - P3[0])), lim]);
         }
       }
       pts = res;
@@ -25000,8 +25014,8 @@
     if (sq(a) < sq(b)) [a, b] = [b, a];
     const p = a[0][1] - a[1][1], q = a[1][0] - a[0][0], r = -p * a[0][0] - q * a[0][1], l = p * p + q * q;
     if (l === 0) return false;
-    const d1 = p * b[0][0] + q * b[0][1] + r, d2 = p * b[1][0] + q * b[1][1] + r;
-    return d1 * d1 / l <= th * th && d2 * d2 / l <= th * th;
+    const d1 = p * b[0][0] + q * b[0][1] + r, d22 = p * b[1][0] + q * b[1][1] + r;
+    return d1 * d1 / l <= th * th && d22 * d22 / l <= th * th;
   }
   function insideAny(polys, x, y) {
     for (const pts of polys) {
@@ -25168,7 +25182,7 @@
     inc = Math.min(360 / MIN_SEGCOUNT_FOR_CIRCLE, inc);
     return Math.max(rnd(Math.abs(arcDeg) / inc), 2);
   }
-  var rot2 = (p, deg2) => rotator(deg2)(p[0], p[1]);
+  var rot2 = (p, deg3) => rotator(deg3)(p[0], p[1]);
   var resize2 = (v, len) => {
     const l = Math.hypot(v[0], v[1]);
     return l ? [rnd(v[0] * len / l), rnd(v[1] * len / l)] : [0, 0];
@@ -25436,8 +25450,8 @@
   var boxIn = (outer, inner) => outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3];
   function segSegDist2(a, b, c, d) {
     const cross2 = (o, p, q) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
-    const d1 = cross2(c, d, a), d2 = cross2(c, d, b), d3 = cross2(a, b, c), d4 = cross2(a, b, d);
-    if ((d1 > 0 && d2 < 0 || d1 < 0 && d2 > 0) && (d3 > 0 && d4 < 0 || d3 < 0 && d4 > 0)) return 0;
+    const d1 = cross2(c, d, a), d22 = cross2(c, d, b), d3 = cross2(a, b, c), d4 = cross2(a, b, d);
+    if ((d1 > 0 && d22 < 0 || d1 < 0 && d22 > 0) && (d3 > 0 && d4 < 0 || d3 < 0 && d4 > 0)) return 0;
     return Math.min(dPS(a, c, d), dPS(b, c, d), dPS(c, a, b), dPS(d, a, b));
   }
   function slotToOutline(polys, slot) {
@@ -25529,8 +25543,8 @@
   function segIntersect(a0, a1, b0, b1) {
     const e = 1e-9;
     if (Math.max(a0[0], a1[0]) < Math.min(b0[0], b1[0]) - e || Math.max(b0[0], b1[0]) < Math.min(a0[0], a1[0]) - e || Math.max(a0[1], a1[1]) < Math.min(b0[1], b1[1]) - e || Math.max(b0[1], b1[1]) < Math.min(a0[1], a1[1]) - e) return null;
-    const d1 = [a1[0] - a0[0], a1[1] - a0[1]], d2 = [b1[0] - b0[0], b1[1] - b0[1]], off = [b0[0] - a0[0], b0[1] - a0[1]];
-    const det = d2[0] * d1[1] - d2[1] * d1[0];
+    const d1 = [a1[0] - a0[0], a1[1] - a0[1]], d22 = [b1[0] - b0[0], b1[1] - b0[1]], off = [b0[0] - a0[0], b0[1] - a0[1]];
+    const det = d22[0] * d1[1] - d22[1] * d1[0];
     if (Math.abs(det) < 1e-12) {
       if (Math.abs(d1[0] * off[1] - d1[1] * off[0]) > 1e-9) return null;
       const ax = Math.abs(d1[0]) >= Math.abs(d1[1]) ? 0 : 1, o = 1 - ax;
@@ -25543,7 +25557,7 @@
       r[o] = other;
       return r;
     }
-    const t = (d2[0] * off[1] - d2[1] * off[0]) / det, u = (d1[0] * off[1] - d1[1] * off[0]) / det;
+    const t = (d22[0] * off[1] - d22[1] * off[0]) / det, u = (d1[0] * off[1] - d1[1] * off[0]) / det;
     if (t < -e || t > 1 + e || u < -e || u > 1 + e) return null;
     return [a0[0] + t * d1[0], a0[1] + t * d1[1]];
   }
@@ -25552,7 +25566,7 @@
     if (!rules.some((r) => r.constraints.some((c) => c.type === "track_angle"))) return out;
     const segs = conds.filter((c) => c.kind === "segment");
     const pads = conds.filter((c) => c.kind === "pad");
-    const same2 = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
+    const same3 = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
     const touches = (a, b) => a.anchors.some((p) => dPS(p, b.anchors[0], b.anchors[1]) <= b.width / 2 + 1e-9);
     for (const a of segs) {
       const la = layerOf(a.item.node);
@@ -25571,10 +25585,10 @@
           return [d[0] / l, d[1] / l];
         };
         let da = unit2(a0, a1), db = unit2(b0, b1), below90 = false;
-        if (same2(a1, p0)) da = [-da[0], -da[1]];
-        else if (!same2(a0, p0)) below90 = true;
-        if (same2(b1, p0)) db = [-db[0], -db[1]];
-        else if (!same2(b0, p0)) below90 = true;
+        if (same3(a1, p0)) da = [-da[0], -da[1]];
+        else if (!same3(a0, p0)) below90 = true;
+        if (same3(b1, p0)) db = [-db[0], -db[1]];
+        else if (!same3(b0, p0)) below90 = true;
         let actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
         if (below90 && actual > 90) actual -= 90;
         const fmin = r.min != null && actual < r.min, fmax = r.max != null && actual > r.max;
@@ -25811,9 +25825,9 @@
       let best = Infinity, ret = null;
       const test = (p) => {
         const di = Math.abs(p.i - a.i);
-        const d2 = (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
-        if (di > 1 && d2 < limit2 && d2 < best && d2 > 0 && this.locallyInside(p, a) && this.isSubstantial(p, a) && this.isSubstantial(a, p)) {
-          best = d2;
+        const d22 = (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
+        if (di > 1 && d22 < limit2 && d22 < best && d22 > 0 && this.locallyInside(p, a) && this.isSubstantial(p, a) && this.isSubstantial(a, p)) {
+          best = d22;
           ret = p;
         }
       };
@@ -26151,12 +26165,12 @@
       const layer = layerOf(g, "");
       if (!chains[layer]) continue;
       const kind = g[0].slice(3);
-      const P = (key) => {
+      const P3 = (key) => {
         const p = pt(g, key);
         return p ? tf(p[0], p[1]) : null;
       };
       if (kind === "line") {
-        const a = P("start"), b = P("end");
+        const a = P3("start"), b = P3("end");
         if (a && b) chains[layer].push([a, b]);
       } else if (kind === "rect") {
         const s0 = pt(g, "start"), e = pt(g, "end");
@@ -26165,7 +26179,7 @@
           chains[layer].push(pts.concat([pts[0]]));
         }
       } else if (kind === "circle") {
-        const c = P("center"), e = P("end");
+        const c = P3("center"), e = P3("end");
         if (c && e) {
           const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
           const pts = [];
@@ -26173,7 +26187,7 @@
           chains[layer].push(pts.concat([pts[0]]));
         }
       } else if (kind === "arc") {
-        const a = P("start"), m = P("mid"), b = P("end");
+        const a = P3("start"), m = P3("mid"), b = P3("end");
         if (a && m && b) {
           const arc = K.arcFrom3(a, m, b);
           chains[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
@@ -26265,8 +26279,8 @@
         if (l === "*.Cu" || l === "F&B.Cu") copper.forEach((c) => layers.add(c));
         else layers.add(l);
       }
-      const nm2 = K.kid(z, "name");
-      out.push({ id, name: nm2 ? K.str(nm2[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
+      const nm3 = K.kid(z, "name");
+      out.push({ id, name: nm3 ? K.str(nm3[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
     };
     for (const it of doc.items.values()) {
       if (it.kind === "zone") take(it.node, it.id, ident, null);
@@ -26282,14 +26296,14 @@
     if (k.name) return ref ? `keepout area '${k.name}' of ${ref}` : `keepout area '${k.name}'`;
     return ref ? `keepout area of ${ref}` : "keepout area";
   }
-  function pointInPolyShape(shape, P) {
+  function pointInPolyShape(shape, P3) {
     const probe = shape.t === "circle" ? [[shape.x, shape.y]] : shape.t === "rect" ? [[shape.x, shape.y]] : shape.t === "seg" ? [shape.a, shape.b, [(shape.a[0] + shape.b[0]) / 2, (shape.a[1] + shape.b[1]) / 2]] : shape.t === "path" ? shape.pts.concat(shape.pts.slice(1).map((p, i) => [(p[0] + shape.pts[i][0]) / 2, (p[1] + shape.pts[i][1]) / 2])) : shape.pts;
-    return probe.some((p) => pointInPoly(P, p[0], p[1]) && polyEdgeDist(P, p) > DRC_EPS);
+    return probe.some((p) => pointInPoly(P3, p[0], p[1]) && polyEdgeDist(P3, p) > DRC_EPS);
   }
-  var polyEdgeDist = (P, p) => {
+  var polyEdgeDist = (P3, p) => {
     let d = Infinity;
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const a = P3[i], b = P3[(i + 1) % P3.length];
       const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
       const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
       d = Math.min(d, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
@@ -26307,7 +26321,7 @@
       const core = coreDist({ t: "poly", pts: kos[i].pts }, shape);
       return core === 0 && pointInPolyShape(shape, kos[i].pts) || core < shapeOffset(shape) - DRC_EPS;
     };
-    const firstInside = (shape, pts, P) => pts.find((p) => pointInPoly(P, p[0], p[1])) || (shape.t === "seg" ? shape.a : pts[0]);
+    const firstInside = (shape, pts, P3) => pts.find((p) => pointInPoly(P3, p[0], p[1])) || (shape.t === "seg" ? shape.a : pts[0]);
     for (const it of doc.items.values()) {
       const n = it.node;
       if (it.kind === "segment" || it.kind === "arc") {
@@ -26456,11 +26470,11 @@
     }
     return out;
   }
-  function crossings(P, Q, qb) {
+  function crossings(P3, Q, qb) {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const a = P3[i], b = P3[(i + 1) % P3.length];
       if (Math.max(a[0], b[0]) < qb[0] || Math.min(a[0], b[0]) > qb[2] || Math.max(a[1], b[1]) < qb[1] || Math.min(a[1], b[1]) > qb[3]) continue;
       for (let j = 0; j < Q.length; j++) {
         const c = Q[j], d = Q[(j + 1) % Q.length];
@@ -26743,18 +26757,18 @@
     const take = (kind, node, tf, layer) => {
       if (layer !== "Edge.Cuts") return;
       const w = K.kid(node, "stroke") ? K.num((K.kid(K.kid(node, "stroke"), "width") || [0, 0])[1]) : widthOf(node, 0);
-      const P = (key) => {
+      const P3 = (key) => {
         const p = pt(node, key);
         return p ? tf(p[0], p[1]) : null;
       };
       if (kind === "line") {
-        const a = P("start"), b = P("end");
+        const a = P3("start"), b = P3("end");
         if (a && b) {
           shapes.push({ t: "seg", a, b, r: w / 2 });
           chains.push([a, b]);
         }
       } else if (kind === "rect") {
-        const a = P("start"), b = P("end");
+        const a = P3("start"), b = P3("end");
         if (a && b) {
           const c = tf(pt(node, "start")[0], pt(node, "end")[1]), d = tf(pt(node, "end")[0], pt(node, "start")[1]);
           const pts = [a, d, b, c];
@@ -26762,7 +26776,7 @@
           chains.push(pts.concat([a]));
         }
       } else if (kind === "circle") {
-        const c = P("center"), e = P("end");
+        const c = P3("center"), e = P3("end");
         if (c && e) {
           const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
           const pts = [];
@@ -26772,7 +26786,7 @@
           chains.push(pts);
         }
       } else if (kind === "arc") {
-        const a = P("start"), m = P("mid"), b = P("end");
+        const a = P3("start"), m = P3("mid"), b = P3("end");
         if (a && m && b) {
           const arc = K.arcFrom3(a, m, b);
           const pts = arc ? arcPoints(arc, a, b) : [a, b];
@@ -26816,26 +26830,26 @@
     tol = tol || 0.01;
     const loops = [], open = chains.map((c) => c.slice());
     let dangling = false;
-    const same2 = (a, b) => Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
+    const same3 = (a, b) => Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
     while (open.length) {
       let cur = open.pop();
-      if (cur.length > 2 && same2(cur[0], cur[cur.length - 1])) {
+      if (cur.length > 2 && same3(cur[0], cur[cur.length - 1])) {
         loops.push(cur.slice(0, -1));
         continue;
       }
       let grew = true;
-      while (grew && !same2(cur[0], cur[cur.length - 1])) {
+      while (grew && !same3(cur[0], cur[cur.length - 1])) {
         grew = false;
         const tail = cur[cur.length - 1];
         for (let i = 0; i < open.length; i++) {
           const c = open[i];
-          if (same2(c[0], tail)) {
+          if (same3(c[0], tail)) {
             cur = cur.concat(c.slice(1));
             open.splice(i, 1);
             grew = true;
             break;
           }
-          if (same2(c[c.length - 1], tail)) {
+          if (same3(c[c.length - 1], tail)) {
             cur = cur.concat(c.slice(0, -1).reverse());
             open.splice(i, 1);
             grew = true;
@@ -26843,7 +26857,7 @@
           }
         }
       }
-      if (cur.length > 2 && same2(cur[0], cur[cur.length - 1])) loops.push(cur.slice(0, -1));
+      if (cur.length > 2 && same3(cur[0], cur[cur.length - 1])) loops.push(cur.slice(0, -1));
       else dangling = true;
     }
     return { loops, dangling };
@@ -26884,12 +26898,12 @@
       const layer = layerOf(g, "");
       if (!out[layer]) continue;
       const kind = g[0].slice(3);
-      const P = (key) => {
+      const P3 = (key) => {
         const p = pt(g, key);
         return p ? tf(p[0], p[1]) : null;
       };
       if (kind === "line") {
-        const a = P("start"), b = P("end");
+        const a = P3("start"), b = P3("end");
         if (a && b) out[layer].push([a, b]);
       } else if (kind === "rect") {
         const s = pt(g, "start"), e = pt(g, "end");
@@ -26898,7 +26912,7 @@
           out[layer].push(pts.concat([pts[0]]));
         }
       } else if (kind === "circle") {
-        const c = P("center"), e = P("end");
+        const c = P3("center"), e = P3("end");
         if (c && e) {
           const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
           const pts = [];
@@ -26906,7 +26920,7 @@
           out[layer].push(pts.concat([pts[0]]));
         }
       } else if (kind === "arc") {
-        const a = P("start"), m = P("mid"), b = P("end");
+        const a = P3("start"), m = P3("mid"), b = P3("end");
         if (a && m && b) {
           const arc = K.arcFrom3(a, m, b);
           out[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
@@ -26921,10 +26935,10 @@
     return res;
   }
   function segCross(p1, p2, p3, p4) {
-    const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]];
-    const den = d1[0] * d2[1] - d1[1] * d2[0];
+    const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d22 = [p4[0] - p3[0], p4[1] - p3[1]];
+    const den = d1[0] * d22[1] - d1[1] * d22[0];
     if (Math.abs(den) < 1e-12) return null;
-    const t = ((p3[0] - p1[0]) * d2[1] - (p3[1] - p1[1]) * d2[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
+    const t = ((p3[0] - p1[0]) * d22[1] - (p3[1] - p1[1]) * d22[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
     if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
     return [p1[0] + t * d1[0], p1[1] + t * d1[1]];
   }
@@ -27040,7 +27054,7 @@
       if (!fps[i].bbox || !fps[j].bbox || !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
       for (const layer of ["F.CrtYd", "B.CrtYd"]) {
         let hit = false;
-        for (const P of cy[i][layer]) for (const Q of cy[j][layer]) if (polysOverlap(P, Q)) hit = true;
+        for (const P3 of cy[i][layer]) for (const Q of cy[j][layer]) if (polysOverlap(P3, Q)) hit = true;
         if (hit) {
           const [x, y] = boxCenter(fps[i].bbox, fps[j].bbox);
           out.push(marker("courtyards_overlap", "error", x, y, `Courtyards overlap (${fps[i].ref || "footprint"} and ${fps[j].ref || "footprint"} on ${layer})`, [fps[i].id, fps[j].id]));
@@ -27307,8 +27321,8 @@
       const it = doc.items.get(lastId);
       if (it && it.kind === "pad" && typeFromPad(it.node) === t) return strip(clone(it.node));
     }
-    const same2 = pads.find((p) => typeFromPad(p) === t);
-    if (same2) return strip(clone(same2));
+    const same3 = pads.find((p) => typeFromPad(p) === t);
+    if (same3) return strip(clone(same3));
     return defaultPad(t);
   }
   function strip(n) {
@@ -27706,10 +27720,10 @@
   }
   var pairClr = (s, a, b, layer, kindB) => S.dru && S.dru.rules.length ? rulePairClearance(S.shoveDoc || null, s, a, b, layer || null, kindB) : Math.max(netClearance(s, a), netClearance(s, b), s.minClearance || 0);
   var sameNetKey = (a, b) => !!a && a === b;
-  function insideConvex(P, p) {
+  function insideConvex(P3, p) {
     let sign = 0;
-    for (let i = 0; i < P.length; i++) {
-      const a = P[i], b = P[(i + 1) % P.length];
+    for (let i = 0; i < P3.length; i++) {
+      const a = P3[i], b = P3[(i + 1) % P3.length];
       const c = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
       if (Math.abs(c) < 1e-9 * Math.max(1, Math.hypot(b[0] - a[0], b[1] - a[1]))) return false;
       const sg = c > 0 ? 1 : -1;
@@ -27719,10 +27733,10 @@
     return true;
   }
   function segIntersect2(p1, p2, p3, p4) {
-    const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]];
-    const den = d1[0] * d2[1] - d1[1] * d2[0];
+    const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d22 = [p4[0] - p3[0], p4[1] - p3[1]];
+    const den = d1[0] * d22[1] - d1[1] * d22[0];
     if (Math.abs(den) < 1e-12) return null;
-    const t = ((p3[0] - p1[0]) * d2[1] - (p3[1] - p1[1]) * d2[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
+    const t = ((p3[0] - p1[0]) * d22[1] - (p3[1] - p1[1]) * d22[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
     const E = 1e-9;
     if (t < -E || t > 1 + E || u < -E || u > 1 + E) return null;
     return { t: Math.max(0, Math.min(1, t)), u: Math.max(0, Math.min(1, u)), p: [p1[0] + d1[0] * t, p1[1] + d1[1] * t] };
@@ -27939,29 +27953,29 @@
     st.lines.set(L.key, L);
     for (const id of L.ids) st.lineOf.set(id, L);
   }
-  function pusherHulls(s, P, V) {
-    const c = pairClr(s, P.net, V.net);
+  function pusherHulls(s, P3, V) {
+    const c = pairClr(s, P3.net, V.net);
     const out = [];
-    for (const [a, b] of lineSegs(P)) out.push(octagon([a, b], P.w / 2 + c + V.w / 2 + HULL_EPS));
-    if (P.via) out.push(octagon([P.via.at], P.via.r + c + V.w / 2 + HULL_EPS));
+    for (const [a, b] of lineSegs(P3)) out.push(octagon([a, b], P3.w / 2 + c + V.w / 2 + HULL_EPS));
+    if (P3.via) out.push(octagon([P3.via.at], P3.via.r + c + V.w / 2 + HULL_EPS));
     return out;
   }
-  function clearOf(s, P, V) {
-    const c = pairClr(s, P.net, V.net) - ROUTE_EPS;
+  function clearOf(s, P3, V) {
+    const c = pairClr(s, P3.net, V.net) - ROUTE_EPS;
     for (const [a, b] of lineSegs(V)) {
       const sv = { t: "seg", a, b, r: V.w / 2 };
-      for (const [p, q] of lineSegs(P)) if (shapeGap(sv, { t: "seg", a: p, b: q, r: P.w / 2 }) < c) return false;
-      if (P.via && shapeGap(sv, { t: "circle", x: P.via.at[0], y: P.via.at[1], r: P.via.r }) < c) return false;
+      for (const [p, q] of lineSegs(P3)) if (shapeGap(sv, { t: "seg", a: p, b: q, r: P3.w / 2 }) < c) return false;
+      if (P3.via && shapeGap(sv, { t: "circle", x: P3.via.at[0], y: P3.via.at[1], r: P3.via.r }) < c) return false;
     }
     return true;
   }
-  function shoveDirectionOk(P, orig, shoved) {
-    const cp = P.pts.length ? P.pts[0] : P.via.at;
+  function shoveDirectionOk(P3, orig, shoved) {
+    const cp = P3.pts.length ? P3.pts[0] : P3.via.at;
     const poly = orig.concat(shoved.slice().reverse());
     return !pointInPoly(poly, cp[0], cp[1]);
   }
-  function shoveLine(s, P, V) {
-    const hulls = pusherHulls(s, P, V);
+  function shoveLine(s, P3, V) {
+    const hulls = pusherHulls(s, P3, V);
     if (!hulls.length || V.pts.length < 2) return null;
     for (let attempt = 0; attempt < 4; attempt++) {
       const order = attempt >= 2 ? hulls.slice().reverse() : hulls, dir = attempt % 2 ? 1 : -1;
@@ -27977,9 +27991,9 @@
       }
       if (!ok) continue;
       if (!peq(path[0], V.pts[0]) || !peq(path[path.length - 1], V.pts[V.pts.length - 1])) continue;
-      if (!shoveDirectionOk(P, V.pts, path)) continue;
+      if (!shoveDirectionOk(P3, V.pts, path)) continue;
       if (selfIntersecting(path)) continue;
-      if (!clearOf(s, P, { pts: path, w: V.w, net: V.net })) continue;
+      if (!clearOf(s, P3, { pts: path, w: V.w, net: V.net })) continue;
       return path;
     }
     return null;
@@ -28184,9 +28198,9 @@
   var ANG_STRAIGHT = 8;
   var ANG_HALF_FULL = 16;
   var ANG_UNDEFINED = 32;
-  function angleType(d1, d2) {
-    if (d1 < 0 || d2 < 0) return ANG_UNDEFINED;
-    const d = Math.abs(d1 - d2);
+  function angleType(d1, d22) {
+    if (d1 < 0 || d22 < 0) return ANG_UNDEFINED;
+    const d = Math.abs(d1 - d22);
     return d === 1 || d === 7 ? ANG_OBTUSE : d === 2 || d === 6 ? ANG_RIGHT : d === 3 || d === 5 ? ANG_ACUTE : d === 4 ? ANG_HALF_FULL : ANG_STRAIGHT;
   }
   function cornerCost(pts) {
@@ -28371,8 +28385,8 @@
     const p1 = path[v1], p2 = path[v2], in1 = inBox(area4, p1), in2 = inBox(area4, p2);
     if (in1 && in2) return true;
     const horiz = (a0, a1, b0, b1) => {
-      const d1 = dir8(a0, a1), d2 = dir8(b0, b1);
-      return d1 >= 0 && d1 === d2;
+      const d1 = dir8(a0, a1), d22 = dir8(b0, b1);
+      return d1 >= 0 && d1 === d22;
     };
     if (v1 < path.length - 1 && !in1 && in2 && inBox(area4, path[v1 + 1])) return horiz(bypass[0], bypass[1], path[v1], path[v1 + 1]);
     if (in1 && !in2 && inBox(area4, path[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path[v2 - 1], path[v2]);
@@ -28533,11 +28547,11 @@
       for (let i = 0; i + 1 < pts.length; i++) {
         const a = pts[i], b = pts[i + 1];
         if (peq(a, b)) continue;
-        const same2 = olds.find((o) => !kept.has(o.id) && (() => {
+        const same3 = olds.find((o) => !kept.has(o.id) && (() => {
           const [p, q] = trackEnds(o);
           return peq(p, a) && peq(q, b) || peq(p, b) && peq(q, a);
         })());
-        if (same2) kept.add(same2.id);
+        if (same3) kept.add(same3.id);
         else fresh.push([a, b]);
       }
       for (const o of olds) if (!kept.has(o.id)) changes.push(removedChange(o));
@@ -28729,16 +28743,16 @@
       return out;
     }
     if (k === "gr_poly" || k === "zone" || k === "gr_curve") {
-      const P = K.kid(k === "zone" ? K.kid(n, "polygon") || n : n, "pts");
-      if (P) {
-        for (const xy3 of P.slice(1)) if (isList(xy3) && xy3[0] === "xy") add([K.num(xy3[1]), K.num(xy3[2])], "corner");
+      const P3 = K.kid(k === "zone" ? K.kid(n, "polygon") || n : n, "pts");
+      if (P3) {
+        for (const xy3 of P3.slice(1)) if (isList(xy3) && xy3[0] === "xy") add([K.num(xy3[1]), K.num(xy3[2])], "corner");
       }
       return out;
     }
     if (k === "dimension") {
-      const P = K.kid(n, "pts");
-      if (P) {
-        for (const xy3 of P.slice(1)) if (isList(xy3) && xy3[0] === "xy") add([K.num(xy3[1]), K.num(xy3[2])], "none");
+      const P3 = K.kid(n, "pts");
+      if (P3) {
+        for (const xy3 of P3.slice(1)) if (isList(xy3) && xy3[0] === "xy") add([K.num(xy3[1]), K.num(xy3[2])], "none");
       }
       return out;
     }
@@ -29017,8 +29031,8 @@
     const p0 = t.trail[0];
     const refLength = Math.hypot(p[0] - p0[0], p[1] - p0[1]);
     const rev = t.trail.slice().reverse();
-    const straight = simplifyPts(legPts(p0, p, false).concat(rev)), diag = simplifyPts(legPts(p0, p, true).concat(rev));
-    const areaS = polyAreaAbs(straight), areaD2 = polyAreaAbs(diag);
+    const straight2 = simplifyPts(legPts(p0, p, false).concat(rev)), diag = simplifyPts(legPts(p0, p, true).concat(rev));
+    const areaS = polyAreaAbs(straight2), areaD2 = polyAreaAbs(diag);
     const IU2 = 1e6;
     const ratio = areaS * IU2 * IU2 / (areaD2 * IU2 * IU2 + 1);
     if (t.forced && refLength < 10 * t.tol) {
@@ -29029,7 +29043,7 @@
     if (!t.forced && refLength > 6 * t.tol) {
       if (polyAreaAbs(t.trail) > t.tol * refLength) areaOk = true;
     }
-    const straightDir = dir8(straight[0], straight[1]), diagDir = dir8(diag[0], diag[1]);
+    const straightDir = dir8(straight2[0], straight2[1]), diagDir = dir8(diag[0], diag[1]);
     let nd;
     if (!t.forced && areaOk && ratio > 1.3 + 0.25) nd = diagDir;
     else if (!t.forced && areaOk && ratio < 1 / 1.3 - 0.25) nd = straightDir;
@@ -29082,10 +29096,10 @@
     }
     return null;
   }
-  function polyNearest(P, p) {
-    let best = P[0], bd = Infinity;
-    for (let i = 0; i < P.length; i++) {
-      const q = closestOnSeg(p, P[i], P[(i + 1) % P.length]);
+  function polyNearest(P3, p) {
+    let best = P3[0], bd = Infinity;
+    for (let i = 0; i < P3.length; i++) {
+      const q = closestOnSeg(p, P3[i], P3[(i + 1) % P3.length]);
       const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
       if (d < bd) {
         bd = d;
@@ -29094,8 +29108,8 @@
     }
     return best;
   }
-  function boxNearest(P, p) {
-    const xs = P.map((q) => q[0]), ys = P.map((q) => q[1]);
+  function boxNearest(P3, p) {
+    const xs = P3.map((q) => q[0]), ys = P3.map((q) => q[1]);
     return [Math.max(Math.min(...xs), Math.min(Math.max(...xs), p[0])), Math.max(Math.min(...ys), Math.min(Math.max(...ys), p[1]))];
   }
   function leadingRatline(ctx, rt) {
@@ -29841,8 +29855,9 @@
   function startPendingDrag(ctx, pd) {
     const ids = pd.ids.filter((id) => ctx.doc.items.has(id));
     if (!ids.length) return false;
-    const its = routableItems(ctx.doc, ids);
-    if (its) return beginInlineDrag(ctx, its, pd.mm, false, pd.app ? "app" : "select");
+    const mode2 = S.trackDragAction || "drag";
+    const its = mode2 === "move" ? null : routableItems(ctx.doc, ids);
+    if (its) return beginInlineDrag(ctx, its, pd.mm, mode2 === "dragFree", pd.app ? "app" : "select");
     if (ids.length > 1) return beginCarryMove(ctx, { at: pd.mm, sticky: false });
     return beginSelectDrag(ctx, ctx.doc.items.get(ids[0]), pd.mm);
   }
@@ -30131,7 +30146,7 @@
         const A = a.bbox, B = b.bbox;
         if (A[2] < B[0] || B[2] < A[0] || A[3] < B[1] || B[3] < A[1]) continue;
         const cb = cyOf(b);
-        for (const layer of ["F.CrtYd", "B.CrtYd"]) for (const P of ca[layer]) for (const Q of cb[layer]) if (polysOverlap(P, Q)) {
+        for (const layer of ["F.CrtYd", "B.CrtYd"]) for (const P3 of ca[layer]) for (const Q of cb[layer]) if (polysOverlap(P3, Q)) {
           mark(a, ca[layer]);
           mark(b, cb[layer]);
         }
@@ -30593,16 +30608,16 @@
       const shown = S.hiddenSeverities && S.hiddenSeverities.size ? S.markers.filter((m) => !S.hiddenSeverities.has(m.severity)) : S.markers;
       if (shown.length) K.drawMarkers(c, shown, "pcb", K.markerScale("pcb", view), K.PCB_BG);
     }
-    if (S.move && S.move.moved && S.showCourtyardConflicts !== false) {
+    if (S.move && S.move.moved && S.showCourtyardCollisions !== false && S.showCourtyardConflicts !== false) {
       const m = S.move, key = m.last[0] + "," + m.last[1] + (m.xformed ? "x" : "");
       if (!m.conflicts || m.conflicts.key !== key) m.conflicts = { key, fps: courtyardConflicts(doc, new Set(m.ids)) };
       if (m.conflicts.fps.size) {
         c.globalAlpha = 1;
         c.fillStyle = CONFLICTS_SHADOW;
         c.beginPath();
-        for (const polys of m.conflicts.fps.values()) for (const P of polys) {
-          c.moveTo(P[0][0], P[0][1]);
-          for (let i = 1; i < P.length; i++) c.lineTo(P[i][0], P[i][1]);
+        for (const polys of m.conflicts.fps.values()) for (const P3 of polys) {
+          c.moveTo(P3[0][0], P3[0][1]);
+          for (let i = 1; i < P3.length; i++) c.lineTo(P3[i][0], P3[i][1]);
           c.closePath();
         }
         c.fill("nonzero");
@@ -30904,14 +30919,14 @@
     else cands = DIRS8;
     const want = toward && !samePt(toward, M) ? vunit(vsub(toward, M)) : perp4;
     let best = null;
-    for (const d2 of cands) {
-      const n2 = [-d2[1], d2[0]];
+    for (const d3 of cands) {
+      const n2 = [-d3[1], d3[0]];
       const tP2 = (aP[0] - M[0]) * n2[0] + (aP[1] - M[1]) * n2[1];
       if (Math.abs(tP2) < 1e-6) continue;
-      const ang = Math.acos(Math.max(-1, Math.min(1, d2[0] * want[0] + d2[1] * want[1])));
-      const offPerp = Math.acos(Math.min(1, Math.abs(d2[0] * perp4[0] + d2[1] * perp4[1])));
+      const ang = Math.acos(Math.max(-1, Math.min(1, d3[0] * want[0] + d3[1] * want[1])));
+      const offPerp = Math.acos(Math.min(1, Math.abs(d3[0] * perp4[0] + d3[1] * perp4[1])));
       const score = ang + 1.2 * offPerp;
-      if (!best || score < best.score - 1e-9) best = { d: d2, n: n2, tP: tP2, score };
+      if (!best || score < best.score - 1e-9) best = { d: d3, n: n2, tP: tP2, score };
     }
     if (!best) return null;
     const { d, n, tP } = best;
@@ -31014,10 +31029,10 @@
     }
     while (!tail && centre2.length > 2 && Math.hypot(centre2[centre2.length - 1][0] - centre2[centre2.length - 2][0], centre2[centre2.length - 1][1] - centre2[centre2.length - 2][1]) < 2 * h * TAN_22_5 + 1e-3) centre2 = centre2.slice(0, -1);
     const lastDir = centre2.length > 1 ? vunit(vsub(centre2[centre2.length - 1], centre2[centre2.length - 2])) : gw.d;
-    let P = chainAppend(gw.entryP.map((q) => q.slice()), offsetPts(centre2, gw.sideP * h, gw.d));
+    let P3 = chainAppend(gw.entryP.map((q) => q.slice()), offsetPts(centre2, gw.sideP * h, gw.d));
     let N2 = chainAppend(gw.entryN.map((q) => q.slice()), offsetPts(centre2, -gw.sideP * h, gw.d));
     if (tail) {
-      chainAppend(P, tail.entryP.slice().reverse());
+      chainAppend(P3, tail.entryP.slice().reverse());
       chainAppend(N2, tail.entryN.slice().reverse());
     }
     let vias = null;
@@ -31028,24 +31043,24 @@
       const k = Math.abs(hv2 - h);
       const c2 = vadd(e, vmul(lastDir, k));
       const vP = rp(vadd(c2, vmul(n, gw.sideP * hv2))), vN = rp(vadd(c2, vmul(n, -gw.sideP * hv2)));
-      chainAppend(P, [vP]);
+      chainAppend(P3, [vP]);
       chainAppend(N2, [vN]);
       vias = { P: vP, N: vN };
     }
-    P = simplifyPts(P);
+    P3 = simplifyPts(P3);
     N2 = simplifyPts(N2);
-    rt.dpLines = { P, N: N2, centre: centre2, lastDir, vias };
+    rt.dpLines = { P: P3, N: N2, centre: centre2, lastDir, vias };
     rt.reached = reached;
     rt.head = centre2;
     rt.target = centre2[centre2.length - 1].slice();
     const hits = /* @__PURE__ */ new Set();
-    for (const L of [P, N2]) for (const ob of pathHits(O, L, sz.width / 2)) hits.add(ob);
+    for (const L of [P3, N2]) for (const ob of pathHits(O, L, sz.width / 2)) hits.add(ob);
     if (vias) for (const L of viaSpanLayers(routeDoc(ctx, rt), rt.placingVia.span)) {
       const OL = L === rt.layer ? O : indexObstacles(routeObstacles(routeDoc(ctx, rt), settingsOf(ctx), rt.netKey, L, null).list.filter((ob) => ob.net !== rt.netKeyN));
       for (const v of [vias.P, vias.N]) for (const ob of pathHits(OL, [v], rt.placingVia.diameter / 2)) hits.add(ob);
     }
     rt.collisions = hits.size ? Array.from(hits) : null;
-    rt.dpFit = !hits.size && P.length > 1 && N2.length > 1;
+    rt.dpFit = !hits.size && P3.length > 1 && N2.length > 1;
     rt.els = [];
     rt.ratline = dpRatlines(routeCtx(ctx, rt), rt);
   }
@@ -31153,12 +31168,12 @@
     }
     const doc = routeDoc(ctx, rt);
     const seg = (pts) => pts.slice(0, -1).map((a, i) => ({ t: "seg", a: a.slice(), b: pts[i + 1].slice() }));
-    let P = L.P, N2 = L.N;
-    if (!rs.fix_all_segments && !opts.finish && !rt.dpTargetPair && !L.vias && P.length > 2 && N2.length > 2) {
-      P = P.slice(0, -1);
+    let P3 = L.P, N2 = L.N;
+    if (!rs.fix_all_segments && !opts.finish && !rt.dpTargetPair && !L.vias && P3.length > 2 && N2.length > 2) {
+      P3 = P3.slice(0, -1);
       N2 = N2.slice(0, -1);
     }
-    const ops = trackOps(doc, seg(P), rt.dpSizes.width, rt.layer, rt.net).concat(trackOps(doc, seg(N2), rt.dpSizes.width, rt.layer, rt.netN));
+    const ops = trackOps(doc, seg(P3), rt.dpSizes.width, rt.layer, rt.net).concat(trackOps(doc, seg(N2), rt.dpSizes.width, rt.layer, rt.netN));
     let nextPair;
     if (L.vias) {
       const v = rt.placingVia;
@@ -31171,10 +31186,10 @@
       }
       nextPair = { P: { kind: "via", p: L.vias.P.slice(), dir: null }, N: { kind: "via", p: L.vias.N.slice(), dir: null } };
     } else {
-      const dP = vunit(vsub(P[P.length - 1], P[P.length - 2])), dN = vunit(vsub(N2[N2.length - 1], N2[N2.length - 2]));
-      nextPair = { P: { kind: "track", p: P[P.length - 1].slice(), dir: dP }, N: { kind: "track", p: N2[N2.length - 1].slice(), dir: dN } };
+      const dP = vunit(vsub(P3[P3.length - 1], P3[P3.length - 2])), dN = vunit(vsub(N2[N2.length - 1], N2[N2.length - 2]));
+      nextPair = { P: { kind: "track", p: P3[P3.length - 1].slice(), dir: dP }, N: { kind: "track", p: N2[N2.length - 1].slice(), dir: dN } };
     }
-    const prevDir = P.length > 1 ? dir8(P[P.length - 2], P[P.length - 1]) : -1;
+    const prevDir = P3.length > 1 ? dir8(P3[P3.length - 2], P3[P3.length - 1]) : -1;
     rt.stages.push({ ops, from: rt.last.slice(), layer: rt.layer, net: rt.net, netKey: rt.netKey, placingVia: rt.placingVia, startIds: rt.startIds, split: null, dir: rt.tracer.lastSegDir, dpStart: rt.dpStart });
     rt.bdoc = null;
     rt.obs = null;
@@ -31187,7 +31202,7 @@
     rt.target = rt.last.slice();
     rt.ratline = null;
     rt.collisions = null;
-    if (P.length > 2) rt.diagFirst = !isDiagDir(dir8(P[P.length - 3], P[P.length - 2]));
+    if (P3.length > 2) rt.diagFirst = !isDiagDir(dir8(P3[P3.length - 3], P3[P3.length - 2]));
     if (L.vias) {
       rt.layer = rt.placingVia.toLayer;
       S.layer = rt.layer;
@@ -31568,8 +31583,8 @@
     for (const k of FP_FLAG_KEYS) flags[k] = boolOf(kid2(v, k), base[k]);
     const fields = /* @__PURE__ */ new Map();
     for (const f of kids2(v, "field")) {
-      const nm2 = str5((kid2(f, "name") || [])[1]);
-      if (nm2) fields.set(nm2, str5((kid2(f, "value") || [])[1]));
+      const nm3 = str5((kid2(f, "name") || [])[1]);
+      if (nm3) fields.set(nm3, str5((kid2(f, "value") || [])[1]));
     }
     return { name: str5((kid2(v, "name") || [])[1]), flags, fields };
   }
@@ -32307,9 +32322,9 @@
     if (fn(f, node) === false) return null;
     return replacedChange(it, node);
   }
-  function rotateFieldChange(doc, ref, deg2) {
+  function rotateFieldChange(doc, ref, deg3) {
     return fieldChange(doc, ref, (f) => {
-      setAngleKid(f, angleKid(f) + deg2);
+      setAngleKid(f, angleKid(f) + deg3);
     });
   }
   function flipFieldChange(doc, ref) {
@@ -32423,9 +32438,9 @@
         const v = R.steppedVia(sn ? K.num(sn[1]) : 0, fwd);
         if (!v) continue;
         const node = clone(it.node);
-        const s2 = K.kid(node, "size"), d2 = K.kid(node, "drill");
+        const s2 = K.kid(node, "size"), d22 = K.kid(node, "drill");
         if (s2) s2[1] = r6(v.diameter);
-        if (d2 && v.drill > 0) d2[1] = r6(v.drill);
+        if (d22 && v.drill > 0) d22[1] = r6(v.drill);
         changes.push(replacedChange(it, node));
       }
       if (changes.length) ctx.commit(changes, fwd ? "Increase Via Size" : "Decrease Via Size");
@@ -32897,11 +32912,11 @@
   }
   function snapTarget(doc, x, y, tol, layer, net, strict) {
     let best = null, bd = Infinity;
-    const take = (px, py, n, kind, inside2, extra) => {
+    const take = (px, py, n, kind, inside3, extra) => {
       const d = Math.hypot(px - x, py - y);
-      if (!inside2 && d > tol) return;
+      if (!inside3 && d > tol) return;
       if (hasNet(net) && hasNet(n) && !sameNet(n, net)) return;
-      if (strict && !sameNet(n, net) && !(kind === "pad" && inside2)) return;
+      if (strict && !sameNet(n, net) && !(kind === "pad" && inside3)) return;
       if (d < bd) {
         bd = d;
         best = Object.assign({ x: px, y: py, net: n, kind, onLayer: layer }, extra);
@@ -32932,8 +32947,8 @@
       const k = ((x - a[0]) * dx + (y - a[1]) * dy) / l2;
       if (k <= 0 || k >= 1) continue;
       const q = rp([a[0] + k * dx, a[1] + k * dy]);
-      const inside2 = Math.hypot(q[0] - x, q[1] - y) <= widthOf(it.node, 0.25) / 2;
-      take(q[0], q[1], netOf(it.node), "trackMid", inside2, { id: it.id });
+      const inside3 = Math.hypot(q[0] - x, q[1] - y) <= widthOf(it.node, 0.25) / 2;
+      take(q[0], q[1], netOf(it.node), "trackMid", inside3, { id: it.id });
     }
     return best;
   }
@@ -33283,8 +33298,8 @@
   function uniqueZoneName(doc, base) {
     const used = /* @__PURE__ */ new Set();
     for (const it of doc.items.values()) if (it.kind === "zone") {
-      const nm2 = K.kid(it.node, "name");
-      if (nm2) used.add(K.str(nm2[1]));
+      const nm3 = K.kid(it.node, "name");
+      if (nm3) used.add(K.str(nm3[1]));
     }
     if (!base || !used.has(base)) return base;
     let root2 = base;
@@ -33302,11 +33317,11 @@
       if (isList(c) && c[0] === "attr") n.splice(i, 1);
     }
     freshUuid(n);
-    const nm2 = K.kid(n, "name");
-    if (nm2) {
-      const u = uniqueZoneName(doc, K.str(nm2[1]));
-      if (u) nm2[1] = u;
-      else n.splice(n.indexOf(nm2), 1);
+    const nm3 = K.kid(n, "name");
+    if (nm3) {
+      const u = uniqueZoneName(doc, K.str(nm3[1]));
+      if (u) nm3[1] = u;
+      else n.splice(n.indexOf(nm3), 1);
     }
     return n;
   }
@@ -33356,19 +33371,19 @@
       return;
     }
     if (!S.draw && (t === "zone" || t === "rulearea") && newItemDialogs.zone) {
-      const tpl = zoneTemplate(ctx, t === "rulearea"), d2 = { shape: t, start: p, cur: p.slice(), pts: [p], pending: true, template: null, layer: zoneLayers(tpl)[0] };
-      S.draw = d2;
+      const tpl = zoneTemplate(ctx, t === "rulearea"), d3 = { shape: t, start: p, cur: p.slice(), pts: [p], pending: true, template: null, layer: zoneLayers(tpl)[0] };
+      S.draw = d3;
       ctx.requestRender();
       newItemDialogs.zone(ctx, tpl, (node2) => {
-        if (S.draw !== d2) return;
+        if (S.draw !== d3) return;
         if (!node2) {
           S.draw = null;
           ctx.requestRender();
           return;
         }
-        d2.template = node2;
-        d2.pending = false;
-        d2.layer = zoneLayers(node2)[0] || d2.layer;
+        d3.template = node2;
+        d3.pending = false;
+        d3.layer = zoneLayers(node2)[0] || d3.layer;
         ctx.requestRender();
       });
       return;
@@ -33661,17 +33676,19 @@
     } catch (e) {
     }
   }
+  var FP_ANGLE_SNAP_KEY = "kc.fpedit.angleSnapMode";
+  var snapKey = () => footprintEditorDefaults() ? FP_ANGLE_SNAP_KEY : ANGLE_SNAP_KEY;
   function angleSnapMode() {
     if (!S.angleSnap) {
-      const v = lsGet(ANGLE_SNAP_KEY);
-      S.angleSnap = ANGLE_SNAP_MODES.includes(v) ? v : "free";
+      const v = lsGet(snapKey());
+      S.angleSnap = ANGLE_SNAP_MODES.includes(v) ? v : footprintEditorDefaults() ? "45" : "free";
     }
     return S.angleSnap;
   }
   function setAngleSnap(ctx, mode2) {
     if (!ANGLE_SNAP_MODES.includes(mode2)) return angleSnapMode();
     S.angleSnap = mode2;
-    lsSet(ANGLE_SNAP_KEY, mode2);
+    lsSet(snapKey(), mode2);
     if (ctx && S.draw && S.drawRaw) {
       drawTrack(S.draw, S.drawRaw, S.drawCtrl);
     }
@@ -33790,6 +33807,7 @@
   }
 
   // web/tools/pcb-tools/guess.ts
+  var fieldCandidateId = (fpId, name) => `${fpId}@field:${name}`;
   function itemAt(ctx, mm) {
     const doc = ctx.doc, [x, y] = mm;
     const it = hitTestItem(doc, x, y, HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1));
@@ -33801,6 +33819,14 @@
   var CRTYD_RE = /\.(CrtYd|Courtyard)$/;
   var TEXTISH = /* @__PURE__ */ new Set(["gr_text", "gr_text_box", "text", "property", "fp_text"]);
   function candidateEntry(doc, id, hidden2) {
+    const fi = typeof id === "string" ? id.indexOf("@field:") : -1;
+    if (fi > 0) {
+      const item2 = doc.items.get(id.slice(0, fi));
+      if (!item2) return null;
+      const name = id.slice(fi + 7), fb = K.fieldBoxes(item2, hidden2 || null).find((f) => f.name === name);
+      if (!fb) return null;
+      return { id, item: item2, pad: false, field: name, geoms: [{ t: "poly", pts: fb.pts, fill: true, w: 0, layer: fb.geom.layer }] };
+    }
     const h = typeof id === "string" ? id.indexOf("#") : -1;
     const item = doc.items.get(h > 0 ? id.slice(0, h) : id);
     if (!item) return null;
@@ -33829,6 +33855,11 @@
       if (edge <= maxSlop) return maxSlop / 2;
       for (const g of e.geoms) if (g.fill && g.t === "poly" && g.pts && g.pts.length > 2 && pointInPolyMm(g.pts, x, y)) return 0;
       return Infinity;
+    }
+    if (e.field) {
+      let f = Infinity;
+      for (const g of e.geoms) f = Math.min(f, geomDistance(g, x, y, maxSlop));
+      return f < Infinity ? Math.max(0, f - maxSlop / 2) : f;
     }
     if (it.kind === "footprint" && !e.pad) {
       const hb = hullBox(e.geoms);
@@ -33909,6 +33940,10 @@
       const b = it.bbox;
       return b ? (b[2] - b[0]) * (b[3] - b[1]) : 0;
     }
+    if (e.field) {
+      const g = e.geoms[0];
+      return g && g.pts ? polyAreaMm(g.pts) : 0;
+    }
     if (it.kind === "footprint" && !e.pad) {
       const hb = hullBox(e.geoms);
       return hb ? (hb[2] - hb[0]) * (hb[3] - hb[1]) : 0;
@@ -33926,7 +33961,7 @@
     if (!layer) return false;
     const cu = /\.Cu$/.test(layer);
     const hits = (l) => l === layer || cu && (l === "*.Cu" || l === "F&B.Cu");
-    if (!e.pad) {
+    if (!e.pad && !e.field) {
       const l = K.kid(e.item.node, "layer");
       if (l && hits(K.str(l[1]))) return true;
       const ls = K.kid(e.item.node, "layers");
@@ -33945,8 +33980,8 @@
     let list = ids.map((id) => candidateEntry(doc, id, opts.hidden)).filter(Boolean);
     if (list.length < 2) return list.map((e) => e.id);
     let preferred = [];
-    if (SILK_RE.test(active)) preferred = list.filter((e) => !e.pad && e.item.kind !== "footprint" && e.item.kind !== "zone" && (TEXTISH.has(e.item.kind) || /^gr_|^table/.test(e.item.kind)) && SILK_RE.test(layerOf(e.item.node, "")));
-    else if (CRTYD_RE.test(active) && opts.highContrast) preferred = list.filter((e) => !e.pad && e.item.kind === "footprint");
+    if (SILK_RE.test(active)) preferred = list.filter((e) => e.field ? SILK_RE.test(String(e.geoms[0].layer || "")) : !e.pad && e.item.kind !== "footprint" && e.item.kind !== "zone" && (TEXTISH.has(e.item.kind) || /^gr_|^table/.test(e.item.kind)) && SILK_RE.test(layerOf(e.item.node, "")));
+    else if (CRTYD_RE.test(active) && opts.highContrast) preferred = list.filter((e) => !e.pad && !e.field && e.item.kind === "footprint");
     if (preferred.length) {
       list = preferred;
       if (list.length === 1) return [list[0].id];
@@ -33966,9 +34001,9 @@
       if (byArea[i][1] > byArea[i - 1][1] * 1.5) rejecting = true;
       if (rejecting) rejected.add(byArea[i][0]);
     }
-    for (const [e, a] of byArea) if (e.item.kind === "footprint" && !e.pad && a > 0) {
+    for (const [e, a] of byArea) if (e.item.kind === "footprint" && !e.pad && !e.field && a > 0) {
       let cov = 0;
-      for (const [o, oa] of byArea) if (o !== e && !(o.pad && o.item === e.item) && o.item.kind !== "zone") cov += oa;
+      for (const [o, oa] of byArea) if (o !== e && !((o.pad || o.field) && o.item === e.item) && o.item.kind !== "zone") cov += oa;
       if (cov / a > 0.7) rejected.delete(e);
     }
     if (list.length > rejected.size) list = list.filter((e) => !rejected.has(e));
@@ -34324,8 +34359,8 @@
       }
     }, ms);
   }
-  function dimensionLabel(prefix, mm, deg2) {
-    if (deg2) return `${prefix}: ${mm.toFixed(1)}\xB0`;
+  function dimensionLabel(prefix, mm, deg3) {
+    if (deg3) return `${prefix}: ${mm.toFixed(1)}\xB0`;
     const u = sizeUnits();
     return `${prefix}: ${u === "mil" ? (mm / 0.0254).toFixed(1) + " mils" : u === "in" ? (mm / 25.4).toFixed(4) + " in" : mm.toFixed(3) + " mm"}`;
   }
@@ -35242,8 +35277,8 @@
     const sg = Math.sign(len);
     return [(v[0] < 0 ? -kiRound(nx) : kiRound(nx)) * sg, (v[1] < 0 ? -kiRound(ny) : kiRound(ny)) * sg];
   };
-  function kiRotate(v, deg2) {
-    const a = norm360(deg2);
+  function kiRotate(v, deg3) {
+    const a = norm360(deg3);
     if (a === 0) return v.slice();
     if (a === 90) return [v[1], -v[0]];
     if (a === 180) return [-v[0], -v[1]];
@@ -35309,11 +35344,11 @@
     return Math.min(pen, kiRound(Math.min(Math.abs(m.textW), Math.abs(m.textH)) * 0.25));
   }
   var dimUnits = (m) => m.unitsMode < 3 ? DIM_UNIT_NAMES[m.unitsMode] : sizeUnits() === "mil" ? "mil" : sizeUnits() === "in" ? "in" : "mm";
-  function dimValueString(m, nm2) {
+  function dimValueString(m, nm3) {
     const u = dimUnits(m);
     let p = m.precision;
     if (p >= 6) p = u === "in" ? p - 4 : u === "mil" ? Math.max(0, p - 7) : u === "mm" ? p - 5 : p - 4;
-    const v = u === "in" ? nm2 / 254e5 : u === "mil" ? nm2 / 25400 : nm2 / 1e6;
+    const v = u === "in" ? nm3 / 254e5 : u === "mil" ? nm3 / 25400 : nm3 / 1e6;
     let s = v.toFixed(Math.max(0, p));
     if (m.suppressZeroes && p > 0) while (s.endsWith("0")) {
       s = s.slice(0, -1);
@@ -35324,8 +35359,8 @@
     }
     return s;
   }
-  function dimBaseText(m, nm2) {
-    let t = m.override !== null ? m.override : dimValueString(m, nm2);
+  function dimBaseText(m, nm3) {
+    let t = m.override !== null ? m.override : dimValueString(m, nm3);
     const u = dimUnits(m);
     if (m.unitsFormat === 1) t += DIM_UNIT_SUFFIX[u];
     else if (m.unitsFormat === 2) t += " (" + DIM_UNIT_SUFFIX[u].trim() + ")";
@@ -35468,11 +35503,11 @@
     return node;
   }
   function dimEditPoints(node) {
-    const m = dimUpdate(dimRead(node)), P = (p) => fromNm(p), out = [{ key: "start", p: P(m.start) }, { key: "end", p: P(m.end) }];
+    const m = dimUpdate(dimRead(node)), P3 = (p) => fromNm(p), out = [{ key: "start", p: P3(m.start) }, { key: "end", p: P3(m.end) }];
     if (m.type === "center") return out;
-    out.push({ key: "text", p: P(m.textPos) });
-    if (m.type === "aligned" || m.type === "orthogonal") out.push({ key: "cbstart", p: P(m.crossbarStart) }, { key: "cbend", p: P(m.crossbarEnd) });
-    if (m.type === "radial") out.push({ key: "knee", p: P(dimKnee(m)) });
+    out.push({ key: "text", p: P3(m.textPos) });
+    if (m.type === "aligned" || m.type === "orthogonal") out.push({ key: "cbstart", p: P3(m.crossbarStart) }, { key: "cbend", p: P3(m.crossbarEnd) });
+    if (m.type === "radial") out.push({ key: "knee", p: P3(dimKnee(m)) });
     return out;
   }
   function angle45From(ref, raw, grid) {
@@ -36825,37 +36860,39 @@
     const remove = /* @__PURE__ */ new Set(), replace = /* @__PURE__ */ new Map(), items = [];
     const report = (code, text, ids) => items.push({ code, text, ids });
     const alive = (c) => !remove.has(c.id);
+    const keep = (c) => !!(opts.filter && c.item && opts.filter(c.item));
     let conds = conductors(doc);
     const tracks = () => conds.filter((c) => (c.kind === "segment" || c.kind === "arc") && alive(c));
     const nodeOf = (c) => replace.get(c.id) || c.item.node;
     const layerOfC = (c) => c.layers.values().next().value;
     const near = (p, q) => Math.abs(p[0] - q[0]) < EPS && Math.abs(p[1] - q[1]) < EPS;
     const touchesPt = (p, layer, self) => conds.filter(alive).some((c) => c !== self && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS);
-    for (const c of tracks()) if (c.kind === "segment" && c.length < EPS) {
+    for (const c of tracks()) if (c.kind === "segment" && c.length < EPS && !keep(c)) {
       remove.add(c.id);
       report("null_segment", "Remove zero-length track", [c.id]);
     }
     if (opts.shorts) for (const c of tracks()) {
+      if (keep(c)) continue;
       const nets = /* @__PURE__ */ new Set();
       for (const o of conds) if (o.kind === "pad" && o.net && alive(o) && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) nets.add(o.net);
       if (nets.size > 1) {
         remove.add(c.id);
-        report("shorting_track", `Remove track shorting ${Array.from(nets).join(" and ")}`, [c.id]);
+        report("shorting_track", "Remove track shorting two nets", [c.id]);
       }
     }
     if (opts.vias) {
       const vias = conds.filter((c) => c.kind === "via");
-      for (let i = 0; i < vias.length; i++) for (let j = i + 1; j < vias.length; j++) if (alive(vias[j]) && near(vias[i].anchors[0], vias[j].anchors[0]) && Array.from(vias[i].layers).join() === Array.from(vias[j].layers).join()) {
+      for (let i = 0; i < vias.length; i++) for (let j = i + 1; j < vias.length; j++) if (alive(vias[j]) && !keep(vias[j]) && near(vias[i].anchors[0], vias[j].anchors[0]) && Array.from(vias[i].layers).join() === Array.from(vias[j].layers).join()) {
         remove.add(vias[j].id);
         report("redundant_via", "Remove redundant via", [vias[j].id]);
       }
     }
     if (opts.inPads) {
-      for (const c of tracks()) if (c.kind === "segment") {
+      for (const c of tracks()) if (c.kind === "segment" && !keep(c)) {
         const [a, b] = c.anchors;
         const layer = layerOfC(c);
-        const inside2 = (p) => conds.find((o) => o.kind === "pad" && o.layers.has(layer) && boxesTouch(o.bbox, [p[0], p[1], p[0], p[1]], 0) && coreDist(o.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= shapeOffset(o.shape) + 1e-9);
-        const pa = inside2(a), pb = inside2(b);
+        const inside3 = (p) => conds.find((o) => o.kind === "pad" && o.layers.has(layer) && boxesTouch(o.bbox, [p[0], p[1], p[0], p[1]], 0) && coreDist(o.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= shapeOffset(o.shape) + 1e-9);
+        const pa = inside3(a), pb = inside3(b);
         if (pa && pb && pa === pb) {
           remove.add(c.id);
           report("track_in_pad", "Remove track inside pad", [c.id]);
@@ -36870,6 +36907,7 @@
         outer: for (let i = 0; i < segs.length; i++) for (let j = 0; j < segs.length; j++) {
           if (i === j) continue;
           const p = segs[i], q = segs[j];
+          if (keep(p) || keep(q)) continue;
           if (layerOfC(p) !== layerOfC(q) || p.net && q.net && p.net !== q.net) continue;
           const pn = nodeOf(p), qn = nodeOf(q);
           const a = pt(pn, "start"), b = pt(pn, "end"), c = pt(qn, "start"), d = pt(qn, "end");
@@ -36882,7 +36920,7 @@
           const tc = along(c), td = along(d), lo = Math.min(tc, td), hi = Math.max(tc, td);
           if (lo >= -EPS && hi <= L + EPS && widthOf(qn, 0.25) <= widthOf(pn, 0.25) + 1e-9) {
             remove.add(q.id);
-            report(Math.abs(lo) < EPS && Math.abs(hi - L) < EPS ? "duplicate_track" : "contained_track", Math.abs(lo) < EPS && Math.abs(hi - L) < EPS ? "Remove duplicate track" : "Remove track contained in another", [q.id]);
+            report(Math.abs(lo) < EPS && Math.abs(hi - L) < EPS ? "duplicate_track" : "contained_track", "Remove duplicate track", [q.id]);
             changed = true;
             break outer;
           }
@@ -36896,7 +36934,7 @@
           K.kid(merged, "end").splice(1, 2, r6(joint[2][0]), r6(joint[2][1]));
           replace.set(p.id, merged);
           remove.add(q.id);
-          report("merge_collinear", "Merge collinear tracks", [p.id, q.id]);
+          report("merge_collinear", "Merge co-linear tracks", [p.id, q.id]);
           p.shape = { t: "seg", a: joint[1], b: joint[2], r: p.shape.r };
           p.anchors = [joint[1], joint[2]];
           p.bbox = shapeBBox(p.shape);
@@ -36911,17 +36949,18 @@
       while (again) {
         again = false;
         if (opts.dangling) for (const c of tracks()) {
+          if (keep(c)) continue;
           const layer = layerOfC(c);
           if (c.anchors.some((p) => !touchesPt(p, layer, c))) {
             remove.add(c.id);
-            report("dangling_track", "Remove dangling track", [c.id]);
+            report("dangling_track", "Remove track not connected at both ends", [c.id]);
             again = true;
           }
         }
         if (opts.danglingVias) {
-          for (const c of conds) if (c.kind === "via" && alive(c) && !conds.filter(alive).some((o) => o !== c && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) {
+          for (const c of conds) if (c.kind === "via" && alive(c) && !keep(c) && !conds.filter(alive).some((o) => o !== c && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) {
             remove.add(c.id);
-            report("dangling_via", "Remove dangling via", [c.id]);
+            report("dangling_via", "Remove via connected on less than 2 layers", [c.id]);
             again = true;
           }
         }
@@ -36937,6 +36976,47 @@
     for (const id of plan.remove) {
       const it = doc.items.get(id);
       if (it) out.push(removedChange(it));
+    }
+    return out;
+  }
+  function unusedPadLayerChanges(doc, ids, o) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const pick = ids ? new Set(ids) : null;
+    const depth = (a, b) => Math.abs(copper.indexOf(a) - copper.indexOf(b));
+    const setFlags = (n, keepTag, pad) => {
+      const before = JSON.stringify(n);
+      for (const k of ["remove_unused_layers", "keep_end_layers", "start_end_only"]) {
+        const i = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === k);
+        if (i > 0) n.splice(i, 1);
+      }
+      let at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "layers");
+      at = at > 0 ? at + 1 : n.length;
+      const add = [];
+      if (o.remove) add.push(["remove_unused_layers", "yes"], [keepTag, o.keepOutside ? "yes" : "no"]);
+      else if (pad) add.push(["remove_unused_layers", "no"]);
+      n.splice(at, 0, ...add);
+      return JSON.stringify(n) !== before;
+    };
+    const out = [];
+    for (const it of doc.items.values()) {
+      if (it.kind === "via" && o.vias && (!pick || pick.has(it.id))) {
+        const ls = K.kid(it.node, "layers");
+        const a = ls ? K.str(ls[1]) : "F.Cu", b = ls ? K.str(ls[2]) : "B.Cu";
+        const through = !it.node.includes("blind") && !it.node.includes("micro") && !it.node.includes("buried");
+        if (through ? copper.length <= 2 : depth(a, b) <= 1) continue;
+        const n = clone(it.node);
+        if (setFlags(n, "keep_end_layers", false)) out.push(replacedChange(it, n));
+      } else if (it.kind === "footprint" && o.pads) {
+        const whole = !pick || pick.has(it.id), n = clone(it.node);
+        let changed = false;
+        for (const p of K.kids(n, "pad")) {
+          if (K.str(p[2]) !== "thru_hole") continue;
+          const u = K.kid(p, "uuid");
+          if (!whole && !(pick && u && pick.has(K.str(u[1])))) continue;
+          if (setFlags(p, "keep_end_layers", true)) changed = true;
+        }
+        if (changed) out.push(replacedChange(it, n));
+      }
     }
     return out;
   }
@@ -37173,10 +37253,10 @@ Press <esc> to cancel all; double-click to finish`;
             round();
             return;
           }
-          const P = a, Q = b;
-          const off = [r6(P[0] - Q[0]), r6(P[1] - Q[1])];
+          const P3 = a, Q = b;
+          const off = [r6(P3[0] - Q[0]), r6(P3[1] - Q[1])];
           openOffsetDialog(ctx, off, (o) => {
-            const mv = [Q[0] - P[0] + o[0], Q[1] - P[1] + o[1]];
+            const mv = [Q[0] - P3[0] + o[0], Q[1] - P3[1] + o[1]];
             const ch = offsetChanges(ctx, ids, mv);
             if (ch.length) ctx.commit(ch, "Set Relative Position Interactively");
             ctx.requestRender();
@@ -37736,14 +37816,28 @@ Press <esc> to cancel all; double-click to finish`;
     return true;
   });
   act("moveExactly", "Move Exactly\u2026", "Shift+M", (ctx) => {
-    if (!canEdit(ctx)) return true;
+    if (!canEdit(ctx) || S.route) return true;
     const sel = requestSelection(ctx, { rerun: (c) => runAction("moveExactly", c) });
     if (!sel) return true;
     const ids = sel.ids;
+    const run2 = (v) => {
+      commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: v.dx, dy: v.dy, rotation: v.rotation, about: v.about }), "Move Exactly");
+      if (sel.hover) applySelection(ctx, []);
+    };
+    if (routingDialogs.moveExact) {
+      const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean);
+      routingDialogs.moveExact({ single: ids.length === 1, bbox: bboxUnion(items) }, run2);
+      return true;
+    }
     return openForm({
-      title: "Move Item Exactly",
-      fields: [{ k: "dx", label: "Move X (mm)", type: "num", value: 0 }, { k: "dy", label: "Move Y (mm)", type: "num", value: 0 }, { k: "rotation", label: "Rotate (\xB0)", type: "num", value: 0 }, { k: "about", label: "Rotate around", type: "select", value: "center", options: [["center", "Selection center"], ["anchor", "Item anchor"]] }],
-      apply: (v) => commitSel(ctx, moveExactChanges(ctx.doc, ids, { dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about }), "move exactly")
+      title: "Move Item",
+      fields: [
+        { k: "dx", label: "Move X:", type: "num", value: 0, unit: "mm" },
+        { k: "dy", label: "Move Y:", type: "num", value: 0, unit: "mm" },
+        { k: "rotation", label: "Rotate:", type: "num", value: 0, unit: "deg" },
+        { k: "about", label: "", type: "select", value: ids.length > 1 ? "center" : "anchor", options: [[ids.length > 1 ? "center" : "anchor", ids.length > 1 ? "Rotate around selection center" : "Rotate around item anchor"]] }
+      ],
+      apply: (v) => run2({ dx: num0(v.dx, 0), dy: num0(v.dy, 0), rotation: num0(v.rotation, 0), about: v.about === "anchor" ? "anchor" : "center" })
     });
   });
   alias("moveExact", "moveExactly");
@@ -37823,21 +37917,29 @@ Press <esc> to cancel all; double-click to finish`;
     const sel = requestSelection(ctx, { rerun: (c) => runAction("positionRelative", c) });
     if (!sel) return true;
     const ids = sel.ids;
-    const fps = Array.from(ctx.doc.items.values()).filter((it) => it.kind === "footprint" && !ids.includes(it.id)).sort((a2, b) => (a2.ref || "").localeCompare(b.ref || "", void 0, { numeric: true }));
     const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean);
     const a = topLeftAnchor(items);
+    const run2 = (ref, dx, dy) => {
+      commitSel(ctx, positionRelativeChanges(ctx.doc, ids, ref, dx, dy), "Position Relative");
+      if (sel.hover) applySelection(ctx, []);
+    };
+    if (routingDialogs.positionRelative) {
+      routingDialogs.positionRelative({ ctx, selAnchor: [a[0], a[1]] }, run2);
+      return true;
+    }
+    const fps = Array.from(ctx.doc.items.values()).filter((it) => it.kind === "footprint" && !ids.includes(it.id)).sort((p, q) => (p.ref || "").localeCompare(q.ref || "", void 0, { numeric: true }));
     return openForm({
       title: "Position Relative To Reference Item",
       fields: [
         { k: "ref", label: "Reference", type: "select", value: "origin", options: [["origin", "Grid origin (0, 0)"], ["point", "Point below"]].concat(fps.map((f) => [f.id, `${f.ref || f.lib} (${fmt(f.x)}, ${fmt(f.y)})`])) },
         { k: "px", label: "Point X (mm)", type: "num", value: r6(a[0]) },
         { k: "py", label: "Point Y (mm)", type: "num", value: r6(a[1]) },
-        { k: "dx", label: "Offset X (mm)", type: "num", value: 0 },
-        { k: "dy", label: "Offset Y (mm)", type: "num", value: 0 }
+        { k: "dx", label: "Offset X:", type: "num", value: 0, unit: "mm" },
+        { k: "dy", label: "Offset Y:", type: "num", value: 0, unit: "mm" }
       ],
       apply: (v) => {
         const ref = v.ref === "origin" ? [0, 0] : v.ref === "point" ? [num0(v.px, 0), num0(v.py, 0)] : anchorOf(ctx.doc.items.get(v.ref));
-        return commitSel(ctx, positionRelativeChanges(ctx.doc, ids, ref, num0(v.dx, 0), num0(v.dy, 0)), "position relative");
+        run2(ref, num0(v.dx, 0), num0(v.dy, 0));
       }
     });
   });
@@ -37862,29 +37964,33 @@ Press <esc> to cancel all; double-click to finish`;
   alias("distributeHorizontallyCenters", "distributeHCenters");
   alias("distributeVerticallyCenters", "distributeVCenters");
   var moveInFlight = (ctx) => !!S.move || !!(ctx.handoffDrag && ctx.handoffDrag() && S.move);
-  function rotateBy(ctx, deg2) {
+  function rotateBy(ctx, deg3) {
     if (S.route) return true;
-    if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg2);
+    if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg3);
     if (!canEdit(ctx)) return true;
     const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
     if (fr) {
-      const ch2 = rotateFieldChange(ctx.doc, fr, deg2);
+      const ch2 = rotateFieldChange(ctx.doc, fr, deg3);
       if (ch2) ctx.commit([ch2], "rotate");
       ctx.requestRender();
       return true;
     }
-    const sel = requestSelection(ctx, { rerun: (c2) => rotateBy(c2, deg2) });
+    const sel = requestSelection(ctx, { rerun: (c2) => rotateBy(c2, deg3) });
     if (!sel) return true;
     const c = modificationPoint(ctx, sel.items, true);
-    const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg2);
+    const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg3);
     if (ch.length) ctx.commit(ch, "rotate");
     endHover(ctx, sel);
     ctx.requestRender();
     return true;
   }
-  act("rotateSelection", "Rotate Counterclockwise", "R", (ctx) => rotateBy(ctx, 90));
+  var rotationStep = (ctx) => {
+    const a = ctx && ctx.fpEditor ? S.fpRotationAngle : S.rotationAngle;
+    return typeof a === "number" && a > 0 ? a : 90;
+  };
+  act("rotateSelection", "Rotate Counterclockwise", "R", (ctx) => rotateBy(ctx, rotationStep(ctx)));
   alias("rotateCcw", "rotateSelection");
-  act("rotateSelectionCw", "Rotate Clockwise", "", (ctx) => rotateBy(ctx, -90));
+  act("rotateSelectionCw", "Rotate Clockwise", "", (ctx) => rotateBy(ctx, -rotationStep(ctx)));
   alias("rotateCw", "rotateSelectionCw");
   function flipBy(ctx) {
     if (S.route) {
@@ -37990,49 +38096,69 @@ Press <esc> to cancel all; double-click to finish`;
     if (!canEdit(ctx)) return true;
     const doc = ctx.doc;
     const copper = copperOf(doc);
-    const layers = copper.concat(gfxLayers(doc).filter((l) => !copper.includes(l)));
-    return openForm({ title: "Swap Layers", width: 380, fields: layers.map((l) => ({ k: l, label: l, type: "select", value: l, options: layers })), apply: (v) => {
+    const run2 = (map) => {
+      const ch = swapLayerChanges(doc, map);
+      if (ch.length) ctx.commit(ch, "Swap Layers");
+      ctx.requestRender();
+    };
+    if (routingDialogs.swapLayers) {
+      routingDialogs.swapLayers({ copper }, run2);
+      return true;
+    }
+    return openForm({ title: "Swap Layers", width: 380, fields: copper.map((l) => ({ k: l, label: l, type: "select", value: l, options: copper })), apply: (v) => {
       const map = {};
-      for (const l of layers) if (v[l] && v[l] !== l) map[l] = v[l];
-      if (!Object.keys(map).length) {
-        ctx.toast("No layers swapped");
-        return;
-      }
-      const ch = transformChanges(doc, Array.from(doc.items.keys()), (n, it) => {
-        if (it.kind === "footprint" || it.kind === "group") return false;
-        let did = false;
-        const l = K.kid(n, "layer");
-        if (l && map[K.str(l[1])]) {
-          l[1] = map[K.str(l[1])];
-          did = true;
-        }
-        const ls = K.kid(n, "layers");
-        if (ls) {
-          for (let i = 1; i < ls.length; i++) if (map[K.str(ls[i])]) {
-            ls[i] = map[K.str(ls[i])];
-            did = true;
-          }
-        }
-        if (it.kind === "zone") for (const fp of K.kids(n, "filled_polygon")) {
-          const fl = K.kid(fp, "layer");
-          if (fl && map[K.str(fl[1])]) {
-            fl[1] = map[K.str(fl[1])];
-            did = true;
-          }
-        }
-        if (it.kind === "dimension") {
-          const gt = K.kid(n, "gr_text");
-          const gl = gt && K.kid(gt, "layer");
-          if (gl && map[K.str(gl[1])]) {
-            gl[1] = map[K.str(gl[1])];
-            did = true;
-          }
-        }
-        return did ? void 0 : false;
-      });
-      commitSel(ctx, ch, "swap layers");
+      for (const l of copper) if (v[l] && v[l] !== l) map[l] = v[l];
+      run2(map);
     } });
   });
+  function swapLayerChanges(doc, map) {
+    const m = {};
+    for (const [a, b] of Object.entries(map)) if (b && a !== b) m[a] = b;
+    if (!Object.keys(m).length) return [];
+    const inGenerator = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K.groupMemberIds(it.node)) inGenerator.add(id);
+    return transformChanges(doc, Array.from(doc.items.keys()), (n, it) => {
+      if (it.kind === "footprint" || it.kind === "group") return false;
+      if ((it.kind === "segment" || it.kind === "arc" || it.kind === "via") && inGenerator.has(it.id)) return false;
+      if (it.kind === "via" && !n.includes("blind") && !n.includes("micro") && !n.includes("buried")) return false;
+      let did = false;
+      const l = K.kid(n, "layer");
+      if (l && m[K.str(l[1])]) {
+        l[1] = m[K.str(l[1])];
+        did = true;
+      }
+      const ls = K.kid(n, "layers");
+      if (ls) {
+        const seen = /* @__PURE__ */ new Set();
+        const out = [];
+        for (let i = 1; i < ls.length; i++) {
+          const v = K.str(ls[i]), w = m[v] || v;
+          if (w !== v) did = true;
+          if (!seen.has(w)) {
+            seen.add(w);
+            out.push(w);
+          }
+        }
+        if (did) ls.splice(1, ls.length - 1, ...out);
+      }
+      if (it.kind === "zone") for (const fp of K.kids(n, "filled_polygon")) {
+        const fl = K.kid(fp, "layer");
+        if (fl && m[K.str(fl[1])]) {
+          fl[1] = m[K.str(fl[1])];
+          did = true;
+        }
+      }
+      if (it.kind === "dimension") {
+        const gt = K.kid(n, "gr_text");
+        const gl = gt && K.kid(gt, "layer");
+        if (gl && m[K.str(gl[1])]) {
+          gl[1] = m[K.str(gl[1])];
+          did = true;
+        }
+      }
+      return did ? void 0 : false;
+    });
+  }
   act("changeTrackWidth", "Change Track Width / Via Size\u2026", "", (ctx) => {
     const ids = selectionOrToast(ctx, "Select tracks or vias first");
     if (!ids) return true;
@@ -38107,6 +38233,11 @@ Press <esc> to cancel all; double-click to finish`;
   }, { toggle: () => !!K.pcbSizes.state.curvedRatsnest, menu: "-" });
   var routingDialogs = {};
   var ROUTER_ACTION = { menu: false };
+  act("ACT_CustomTrackWidth", "Custom Track/Via Size...", "Q", (ctx) => {
+    if (routingDialogs.customTrackVia) routingDialogs.customTrackVia(ctx);
+    else ctx.toast("Custom Track/Via Size: dialogs are unavailable here");
+    return true;
+  }, Object.assign({ tip: "Shows a dialog for changing the track width and via size." }, ROUTER_ACTION));
   act("routerHighlightMode", "Router Highlight Mode", "", () => {
     setRouterSettings({ mode: RM_MARK });
     return true;
@@ -38329,22 +38460,56 @@ Press <esc> to cancel all; double-click to finish`;
   act("cleanupTracks", "Cleanup Tracks & Vias\u2026", "", (ctx) => {
     if (!canEdit(ctx)) return true;
     const doc = ctx.doc;
-    const preview2 = cleanupPlan(doc, {});
-    const opts = [["shorts", "Delete tracks connecting different nets"], ["vias", "Delete redundant vias"], ["merge", "Merge co-linear tracks"], ["dangling", "Delete tracks unconnected at one end"], ["danglingVias", "Delete dangling vias"], ["inPads", "Delete tracks fully inside pads"]];
+    const settings = settingsOf(ctx), selNow = new Set(expandGroups(doc, Array.from(S.sel)));
+    const netName3 = (it) => netOf(it.node).name;
+    const layerOf3 = (it) => {
+      const l = K.kid(it.node, "layer");
+      if (l) return K.str(l[1]);
+      const ls = K.kid(it.node, "layers");
+      return ls ? K.str(ls[1]) : "";
+    };
+    const opts = (o) => ({
+      shorts: o.shorts,
+      vias: o.vias,
+      danglingVias: o.danglingVias,
+      merge: o.merge,
+      dangling: o.dangling,
+      inPads: o.inPads,
+      filter: (it) => o.selectedOnly && !selNow.has(it.id) || o.net !== null && netName3(it) !== o.net || o.netclass !== null && netclassName(settings, netName3(it)) !== o.netclass || o.layer !== null && layerOf3(it) !== o.layer
+    });
+    const req = {
+      nets: boardNets(doc).map((n) => n.name),
+      netclasses: ["Default", ...Object.keys(settings.netclasses).filter((n) => n !== "Default")],
+      copper: copperOf(doc),
+      activeLayer: ctx.activeLayer || S.layer,
+      highlightNet: typeof S.highlightNet === "string" ? S.highlightNet : null,
+      currentNetclass: "Default",
+      plan: (o) => cleanupPlan(doc, opts(o)).items.map((i) => ({ text: i.text, ids: i.ids })),
+      apply: (o) => {
+        applySelection(ctx, []);
+        highlightIds(ctx, null);
+        const plan = cleanupPlan(doc, opts(o));
+        const ch = cleanupChanges(doc, plan);
+        if (ch.length) ctx.commit(ch, "Board Cleanup");
+        if (o.refill) runAction("zoneFillAll", ctx);
+        ctx.requestRender();
+        return plan.items.length;
+      },
+      focus: (ids) => highlightIds(ctx, ids ? new Set(ids) : null)
+    };
+    if (routingDialogs.cleanup) {
+      routingDialogs.cleanup(req);
+      return true;
+    }
+    const all = { shorts: true, vias: true, danglingVias: true, merge: true, dangling: true, inPads: false, refill: false, net: null, netclass: null, layer: null, selectedOnly: false };
+    const preview2 = req.plan(all);
+    const labels = [["shorts", "Delete tracks connecting different nets"], ["vias", "Delete redundant vias"], ["danglingVias", "Delete vias connected on only one layer"], ["merge", "Merge co-linear tracks"], ["dangling", "Delete tracks unconnected at one end"], ["inPads", "Delete tracks fully inside pads"]];
     return openForm({
       title: "Cleanup Tracks and Vias",
       width: 480,
-      fields: opts.map(([k, label]) => ({ k, label, type: "check", value: true })).concat([{ k: "list", type: "table", columns: [{ label: "Action", width: "1fr" }, { label: "Items", width: "60px" }], rows: preview2.items.map((i) => [i.text, i.ids.length]), empty: "Nothing to clean up with every option on.", onRow: (i) => highlightIds(ctx, new Set(preview2.items[i].ids)) }]),
+      fields: labels.map(([k, label]) => ({ k, label, type: "check", value: all[k] })).concat([{ k: "list", type: "table", columns: [{ label: "Action", width: "1fr" }, { label: "Items", width: "60px" }], rows: preview2.map((i) => [i.text, i.ids.length]), empty: "No changes.", onRow: (i) => req.focus(preview2[i].ids) }]),
       apply: (v) => {
-        const plan = cleanupPlan(doc, v);
-        const ch = cleanupChanges(doc, plan);
-        highlightIds(ctx, null);
-        if (!ch.length) {
-          ctx.toast("Nothing to clean up");
-          return;
-        }
-        ctx.commit(ch, "cleanup tracks");
-        ctx.toast(`Cleanup: ${plural(plan.items.length, "change")}`);
+        req.apply(Object.assign({}, all, v));
       }
     });
   });
@@ -38441,11 +38606,12 @@ Press <esc> to cancel all; double-click to finish`;
     ctx.requestRender();
     return true;
   });
-  act("highlightNet", "Highlight Net", "`", (ctx) => {
+  function highlightNetAt(ctx, at) {
+    bind(ctx);
     const nl = netlist2(ctx.doc);
-    let keys = selectionNets(ctx, nl);
+    let keys = at ? /* @__PURE__ */ new Set() : selectionNets(ctx, nl);
     if (!keys.size) {
-      const p = cursorPoint(ctx);
+      const p = at || cursorPoint(ctx);
       const k = nl.table.key(netUnder(ctx.doc, p[0], p[1], null));
       if (k) keys = /* @__PURE__ */ new Set([k]);
     }
@@ -38465,7 +38631,8 @@ Press <esc> to cancel all; double-click to finish`;
     for (const k of keys) for (const id of netHighlightIds(ctx.doc, k, nl)) ids.add(id);
     highlightIds(ctx, ids);
     return true;
-  });
+  }
+  act("highlightNet", "Highlight Net", "`", (ctx) => highlightNetAt(ctx));
   act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => {
     S.highlightNet = null;
     highlightIds(ctx, null);
@@ -38788,6 +38955,12 @@ Press <esc> to cancel all; double-click to finish`;
   };
   act("placeFootprint", "Place Footprints", "A", libraryAction());
   act("showFootprintBrowser", "Footprint Library Browser", "", libraryAction({ browser: true }));
+  var dragImpl = null;
+  function setDragImpl(f) {
+    dragImpl = f;
+  }
+  act("drag45Degree", "Drag 45 Degree Mode", "D", (ctx) => !!dragImpl && dragImpl(ctx, false), { tip: "Drags a track segment, or a mixed selection as one block, keeping connected tracks at 45 degrees." });
+  act("dragFreeAngle", "Drag Free Angle", "G", (ctx) => !!dragImpl && dragImpl(ctx, true), { tip: "Drags the nearest joint in the track without restricting the track angle." });
   Object.freeze(ACTIONS);
   function setRoutingDialogsImpl(d) {
     routingDialogs = d;
@@ -38816,6 +38989,31 @@ Press <esc> to cancel all; double-click to finish`;
         ctx.requestRender();
       }
     });
+  }
+
+  // web/units.ts
+  var UNITS = {
+    mm: { name: "mm", f: (v) => v, d: 4 },
+    in: { name: "in", f: (v) => v / 25.4, d: 4 },
+    mil: { name: "mils", f: (v) => v / 0.0254, d: 2 }
+  };
+  var UNIT_TEXT = { mm: " mm", mil: " mils", in: " in" };
+  function cExp(v, n) {
+    const [m, e] = v.toExponential(n).split("e");
+    const x = Number(e);
+    return `${m}e${x < 0 ? "-" : "+"}${String(Math.abs(x)).padStart(2, "0")}`;
+  }
+  function messageText(mm, units, scale, label = true) {
+    const u = UNITS[units] ? units : "mm", short = scale === "sch", iu2 = short ? 1e4 : 1e6;
+    const v = UNITS[u].f(Math.round(mm * iu2) / iu2);
+    const digits = u === "mm" ? short ? 3 : 4 : u === "mil" ? short ? 0 : 2 : short ? 3 : 4;
+    let text = v.toFixed(digits);
+    if (v !== 0 && !/[1-9]/.test(text)) text = cExp(v, 3);
+    if (short && u === "mm") {
+      const n = text.length;
+      if (n > 4 && text[n - 4] === "." && text[n - 1] === "0") text = text.slice(0, -1);
+    }
+    return label ? text + UNIT_TEXT[u] : text;
   }
 
   // web/tools/pcb-tools/find.ts
@@ -38901,8 +39099,8 @@ Press <esc> to cancel all; double-click to finish`;
       if (on(o.texts)) {
         for (const it of items) if (it.kind === "gr_text" && edaMatches(unescapeKiCad(K.str(it.node[1])), o)) hits.push({ kind: "item", id: it.id, what: "text" });
         for (const it of items) if (it.kind === "zone") {
-          const nm2 = K.kid(it.node, "name");
-          if (edaMatches(nm2 ? K.str(nm2[1]) : "", o)) hits.push({ kind: "item", id: it.id, what: "zone" });
+          const nm3 = K.kid(it.node, "name");
+          if (edaMatches(nm3 ? K.str(nm3[1]) : "", o)) hits.push({ kind: "item", id: it.id, what: "zone" });
         }
       }
     }
@@ -38934,6 +39132,145 @@ Press <esc> to cancel all; double-click to finish`;
       if (it !== 0) it--;
     }
     return { pos: it, endReached: end };
+  }
+
+  // web/tools/pcb-tools/net-lengths.ts
+  function copperStack2(copper) {
+    const inner = copper.filter((l) => /^In\d+\.Cu$/.test(l)).sort((a, b) => parseInt(a.slice(2), 10) - parseInt(b.slice(2), 10));
+    return ["F.Cu", ...inner, "B.Cu"];
+  }
+  function stackupItems(general, setup, copper) {
+    const st = setup ? K.kid(setup, "stackup") : null;
+    const out = [];
+    if (st) {
+      for (const l of K.kids(st, "layer")) {
+        const name = K.str(l[1]), diel2 = /^dielectric \d+$/.test(name);
+        if (!diel2 && !/\.Cu$/.test(name)) continue;
+        const th = [];
+        let cur = K.kid(l, "thickness");
+        th.push(cur ? K.num(cur[1], 0) : 0);
+        for (let j = 2; j < l.length; j++) if (l[j] === "addsublayer") {
+          cur = null;
+          for (let k = j + 1; k < l.length && l[k] !== "addsublayer"; k++) {
+            const c = l[k];
+            if (Array.isArray(c) && c[0] === "thickness") cur = c;
+          }
+          th.push(cur ? K.num(cur[1], 0) : 0);
+        }
+        out.push({ layer: diel2 ? null : name, th });
+      }
+      if (out.length) return out;
+    }
+    const stack = copperStack2(copper), n = stack.length;
+    const thick = general && K.kid(general, "thickness") ? K.num(K.kid(general, "thickness")[1], 1.6) : 1.6;
+    const diel = (thick - 0.035 * n - 0.01 * 2) / Math.max(1, n - 1);
+    stack.forEach((l, i) => {
+      out.push({ layer: l, th: [0.035] });
+      if (i < n - 1) out.push({ layer: null, th: [diel] });
+    });
+    return out;
+  }
+  function layerDistance(items, a, b) {
+    if (a === b) return 0;
+    const ia = items.findIndex((it) => it.layer === a), ib = items.findIndex((it) => it.layer === b);
+    if (ia < 0 || ib < 0) return 0;
+    const [first, second] = ia < ib ? [a, b] : [b, a];
+    const outer = (l) => l === "F.Cu" || l === "B.Cu";
+    let total = 0, start = false;
+    for (const it of items) {
+      let half = false;
+      if (!start && it.layer === first) {
+        start = true;
+        if (!outer(first)) half = true;
+      } else if (!start) continue;
+      if (it.layer === second && !outer(second)) half = true;
+      for (const t of it.th) total += half ? t / 2 : t;
+      if (it.layer === second) break;
+    }
+    return total;
+  }
+  var inside2 = (p, c) => shapeGap({ t: "circle", x: p[0], y: p[1], r: 0 }, c.shape) <= 1e-9;
+  function insideRun(a, b, c) {
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (!len) return 0;
+    if (inside2(b, c)) return len;
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 40; i++) {
+      const m = (lo + hi) / 2;
+      if (inside2([a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m], c)) lo = m;
+      else hi = m;
+    }
+    return lo * len;
+  }
+  var samePt2 = (a, b) => Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+  function netLengths(doc, header2, opts = {}, nl) {
+    nl = nl || netlist2(doc);
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const own = doc;
+    const stack = copperStack2(copper), items = stackupItems(header2?.general ?? own.generalNode ?? null, header2?.setup ?? own.setupNode ?? null, copper);
+    const useHeight = opts.useHeight !== false;
+    const unrouted = /* @__PURE__ */ new Map();
+    for (const l of ratsnest(doc, nl)) unrouted.set(l.net, (unrouted.get(l.net) || 0) + l.length);
+    const rows = [];
+    for (const net of nl.nets.values()) {
+      if (!opts.includeZeroPadNets && !net.pads.length) continue;
+      const layerLengths = {};
+      let track = 0, viaLen = 0, die = 0;
+      const ends = /* @__PURE__ */ new Map();
+      const key = (p, l) => `${l}:${p[0].toFixed(6)},${p[1].toFixed(6)}`;
+      for (const t of net.tracks) {
+        const l = [...t.layers][0];
+        for (const p of t.anchors) ends.set(key(p, l), (ends.get(key(p, l)) || 0) + 1);
+      }
+      for (const t of net.tracks) {
+        const l = [...t.layers][0], [a, b] = t.anchors;
+        let len = t.length;
+        if (t.kind === "segment") {
+          for (const [p, q] of [[a, b], [b, a]]) {
+            if ((ends.get(key(p, l)) || 0) > 1) continue;
+            const via = net.vias.find((v) => v.layers.has(l) && inside2(p, v));
+            if (via) {
+              len -= insideRun(p, q, via);
+              continue;
+            }
+            const pad = net.pads.find((c) => c.kind === "pad" && c.layers.has(l) && samePt2([c.pad.x, c.pad.y], p) && inside2(p, c));
+            if (pad) len -= insideRun(p, q, pad);
+          }
+        }
+        len = Math.max(0, len);
+        track += len;
+        layerLengths[l] = (layerLengths[l] || 0) + len;
+      }
+      for (const v of net.vias) {
+        if (!useHeight) continue;
+        const span = /* @__PURE__ */ new Set();
+        for (const t of net.tracks) {
+          const l = [...t.layers][0];
+          if (v.layers.has(l) && t.anchors.some((p) => inside2(p, v))) span.add(l);
+        }
+        const pad = net.pads.find((c) => c.kind === "pad" && shapeGap(c.shape, v.shape) <= 1e-9 && [...c.layers].some((l) => v.layers.has(l)));
+        if (pad && pad.kind === "pad") {
+          const smd = pad.pad.type === "smd" || pad.pad.type === "connect";
+          span.add(smd ? stack.find((l) => pad.layers.has(l)) || "F.Cu" : K.str((K.kid(pad.item.node, "layer") || [])[1]) || "F.Cu");
+        }
+        const used = stack.filter((l) => span.has(l));
+        if (used.length >= 2) viaLen += layerDistance(items, used[0], used[used.length - 1]);
+      }
+      for (const p of net.pads) if (p.kind === "pad") die += K.num((K.kid(p.pad.node, "die_length") || [])[1], 0);
+      rows.push({
+        name: net.name,
+        code: net.code,
+        padCount: net.pads.length,
+        viaCount: useHeight ? net.vias.length : 0,
+        trackLength: track,
+        viaLength: viaLen,
+        dieLength: die,
+        unroutedLength: unrouted.get(net.key) || 0,
+        totalLength: track + viaLen + die,
+        layerLengths
+      });
+    }
+    return rows.sort((a, b) => a.code - b.code || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
   // web/tools/pcb-tools/tools.ts
@@ -41108,37 +41445,37 @@ Press <esc> to cancel all; double-click to finish`;
     const ls = layersOf2(n);
     const d = drill(n);
     const has2 = (l) => onLayer2(ls, l);
-    const P = (msg) => out.push({ code: "padstack", msg });
+    const P3 = (msg) => out.push({ code: "padstack", msg });
     const techSide = () => {
-      if (has2("F.Cu") && has2("B.Mask") || has2("B.Cu") && has2("F.Mask")) P(`${t} pad has copper and mask layers on different sides of the board`);
-      if (has2("F.Cu") && has2("B.Paste") || has2("B.Cu") && has2("F.Paste")) P(`${t} pad has copper and paste layers on different sides of the board`);
+      if (has2("F.Cu") && has2("B.Mask") || has2("B.Cu") && has2("F.Mask")) P3(`${t} pad has copper and mask layers on different sides of the board`);
+      if (has2("F.Cu") && has2("B.Paste") || has2("B.Cu") && has2("F.Paste")) P3(`${t} pad has copper and paste layers on different sides of the board`);
     };
     const s = K.kid(n, "size");
-    if (s && (num6(s[1]) <= 0 || num6(s[2]) <= 0) && str9(n[3]) !== "custom") P("Pad size must be greater than zero");
-    if (!has2("F.Cu") && !has2("B.Cu") && (d.w || d.h) && attr !== "np_thru_hole") P("plated through holes normally have a copper pad on at least one outer layer");
+    if (s && (num6(s[1]) <= 0 || num6(s[2]) <= 0) && str9(n[3]) !== "custom") P3("Pad size must be greater than zero");
+    if (!has2("F.Cu") && !has2("B.Cu") && (d.w || d.h) && attr !== "np_thru_hole") P3("plated through holes normally have a copper pad on at least one outer layer");
     const pr = prop(n);
-    if ((pr === "pad_prop_fiducial_glob" || pr === "pad_prop_fiducial_loc") && attr === "np_thru_hole") P("'fiducial' pads are normally plated");
-    if (pr === "pad_prop_testpoint" && attr === "np_thru_hole") P("'testpoint' pads are normally plated");
-    if (pr === "pad_prop_heatsink" && attr === "np_thru_hole") P("'heatsink' pads are normally plated");
-    if (pr === "pad_prop_castellated" && attr !== "thru_hole") P("'castellated' pads are normally PTH");
-    if (pr === "pad_prop_bga" && attr !== "smd") P("'BGA' property is for SMD pads");
-    if (pr === "pad_prop_mechanical" && attr !== "thru_hole") P("'mechanical' pads are normally PTH");
-    if (pr === "pad_prop_pressfit" && (attr !== "thru_hole" || d.w <= 0)) P("'press-fit' pads are normally PTH with round holes");
+    if ((pr === "pad_prop_fiducial_glob" || pr === "pad_prop_fiducial_loc") && attr === "np_thru_hole") P3("'fiducial' pads are normally plated");
+    if (pr === "pad_prop_testpoint" && attr === "np_thru_hole") P3("'testpoint' pads are normally plated");
+    if (pr === "pad_prop_heatsink" && attr === "np_thru_hole") P3("'heatsink' pads are normally plated");
+    if (pr === "pad_prop_castellated" && attr !== "thru_hole") P3("'castellated' pads are normally PTH");
+    if (pr === "pad_prop_bga" && attr !== "smd") P3("'BGA' property is for SMD pads");
+    if (pr === "pad_prop_mechanical" && attr !== "thru_hole") P3("'mechanical' pads are normally PTH");
+    if (pr === "pad_prop_pressfit" && (attr !== "thru_hole" || d.w <= 0)) P3("'press-fit' pads are normally PTH with round holes");
     const cu = ls.filter((l) => /\.Cu$/.test(l));
     const cuCount = cu.some((l) => l === "*.Cu") ? 2 : cu.some((l) => l === "F&B.Cu") ? 2 : cu.length;
     if (attr === "np_thru_hole" || attr === "thru_hole") {
       if (d.w <= 0 || d.h <= 0 && d.oval) out.push({ code: "through_hole_pad_without_hole", msg: "" });
     } else if (attr === "connect" || attr === "smd") {
-      if (attr === "connect" && (has2("F.Paste") || has2("B.Paste"))) P("connector pads normally have no solder paste; use a SMD pad instead");
-      if (d.w > 0 || d.h > 0) P(`${t} pad has a hole`);
-      if (cuCount > 1) P(`${t} pad has more than one copper layer`);
+      if (attr === "connect" && (has2("F.Paste") || has2("B.Paste"))) P3("connector pads normally have no solder paste; use a SMD pad instead");
+      if (d.w > 0 || d.h > 0) P3(`${t} pad has a hole`);
+      if (cuCount > 1) P3(`${t} pad has more than one copper layer`);
       if (cuCount) {
-        if (!has2("F.Cu") && !has2("B.Cu")) P(`${t} pad has no outer layers`);
+        if (!has2("F.Cu") && !has2("B.Cu")) P3(`${t} pad has no outer layers`);
         techSide();
       }
     } else if (attr === "non_component") {
-      if (d.w > 0 || d.h > 0) P(`${t} pad has a hole`);
-      if (!cuCount) P(`${t} pad has no copper layers`);
+      if (d.w > 0 || d.h > 0) P3(`${t} pad has a hole`);
+      if (!cuCount) P3(`${t} pad has no copper layers`);
     }
     return out;
   }
@@ -41501,6 +41838,1050 @@ Press <esc> to cancel all; double-click to finish`;
     popup2(ctx, mm);
   }
 
+  // web/tools/pcb-tools/graphics-cleaner.ts
+  var EPSILON = 5e-4;
+  var WELD_GAP = 0.01;
+  var SHAPE_KINDS = /^gr_(line|rect|circle|arc|poly|curve|ellipse|ellipse_arc)$/;
+  var P = (n, key) => {
+    const k = K.kid(n, key);
+    return k ? [K.num(k[1]), K.num(k[2])] : null;
+  };
+  var setP = (n, key, p) => {
+    const k = K.kid(n, key);
+    if (k) {
+      k[1] = r6(p[0]);
+      k[2] = r6(p[1]);
+    }
+  };
+  var ptsOf = (n) => K.ptsOf(n);
+  var setPts = (n, i, p) => {
+    const pts = K.kid(n, "pts");
+    const xy3 = pts ? pts.filter((c) => Array.isArray(c) && c[0] === "xy")[i] : void 0;
+    if (xy3) {
+      xy3[1] = r6(p[0]);
+      xy3[2] = r6(p[1]);
+    }
+  };
+  var layerOf2 = (n) => {
+    const l = K.kid(n, "layer");
+    return l ? K.str(l[1]) : "";
+  };
+  var widthOf2 = (n) => {
+    const s = K.kid(n, "stroke");
+    const w = s ? K.kid(s, "width") : K.kid(n, "width");
+    return w ? K.num(w[1]) : 0;
+  };
+  var equivalent = (a, b, eps = EPSILON) => !!a && !!b && Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
+  var d2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+  var nv = (n, key) => {
+    const k = K.kid(n, key);
+    return k ? K.num(k[1]) : 0;
+  };
+  function ellipseOf(n) {
+    return { c: P(n, "center") || [0, 0], a: nv(n, "major_radius"), b: nv(n, "minor_radius"), rot: nv(n, "rotation_angle"), t0: nv(n, "start_angle"), t1: nv(n, "end_angle") };
+  }
+  function ellipseEnds(n, arc) {
+    const e = ellipseOf(n), phi = e.rot * Math.PI / 180, cp = Math.cos(phi), sp = Math.sin(phi);
+    if (!arc) return [e.c, [e.c[0] + e.a * cp, e.c[1] + e.a * sp]];
+    const at = (deg3) => {
+      const t = deg3 * Math.PI / 180, lx = e.a * Math.cos(t), ly = e.b * Math.sin(t);
+      return [e.c[0] + lx * cp - ly * sp, e.c[1] + lx * sp + ly * cp];
+    };
+    return [at(e.t0), at(e.t1)];
+  }
+  function startOf(s) {
+    switch (s.kind) {
+      case "circle":
+        return P(s.node, "center");
+      case "curve":
+        return ptsOf(s.node)[0] || null;
+      case "poly":
+        return [0, 0];
+      case "ellipse":
+      case "ellipse_arc":
+        return ellipseEnds(s.node, s.kind === "ellipse_arc")[0];
+    }
+    return P(s.node, "start");
+  }
+  function endOf(s) {
+    switch (s.kind) {
+      case "curve":
+        return ptsOf(s.node)[3] || null;
+      case "poly":
+        return [0, 0];
+      case "ellipse":
+      case "ellipse_arc":
+        return ellipseEnds(s.node, s.kind === "ellipse_arc")[1];
+    }
+    return P(s.node, "end");
+  }
+  function setStart(s, p) {
+    if (s.kind === "curve") setPts(s.node, 0, p);
+    else setP(s.node, "start", p);
+    s.dirty = true;
+  }
+  function setEnd(s, p) {
+    if (s.kind === "curve") setPts(s.node, 3, p);
+    else setP(s.node, "end", p);
+    s.dirty = true;
+  }
+  function isNullShape(s) {
+    switch (s.kind) {
+      case "line":
+      case "rect":
+      case "arc":
+        return equivalent(startOf(s), endOf(s));
+      case "circle": {
+        const c = startOf(s), e = endOf(s);
+        return !c || !e || Math.hypot(e[0] - c[0], e[1] - c[1]) === 0;
+      }
+      case "poly":
+        return ptsOf(s.node).length === 0;
+      case "curve": {
+        const p = ptsOf(s.node);
+        if (p.length < 4) return true;
+        return K.bezierPts(p).length < 2 || K.bezierPts(p).length === 2 && equivalent(p[0], p[3]);
+      }
+      case "ellipse":
+      case "ellipse_arc": {
+        const e = ellipseOf(s.node);
+        return Math.round(e.a * 1e6) === 0 || Math.round(e.b * 1e6) === 0;
+      }
+    }
+    return false;
+  }
+  function areEquivalent(a, b) {
+    if (a.kind !== b.kind || layerOf2(a.node) !== layerOf2(b.node) || widthOf2(a.node) !== widthOf2(b.node)) return false;
+    switch (a.kind) {
+      case "line":
+      case "rect":
+      case "circle":
+        return equivalent(startOf(a), startOf(b)) && equivalent(endOf(a), endOf(b));
+      case "arc":
+        return equivalent(P(a.node, "mid"), P(b.node, "mid")) && equivalent(startOf(a), startOf(b)) && equivalent(endOf(a), endOf(b));
+      case "curve": {
+        const p = ptsOf(a.node), q = ptsOf(b.node);
+        return p.length === 4 && q.length === 4 && p.every((x, i) => equivalent(x, q[i]));
+      }
+      case "ellipse":
+      case "ellipse_arc": {
+        const e = ellipseOf(a.node), f = ellipseOf(b.node), iu2 = (v) => Math.round(v * 1e6);
+        return equivalent(e.c, f.c) && iu2(e.a) === iu2(f.a) && iu2(e.b) === iu2(f.b) && e.rot === f.rot && (a.kind !== "ellipse_arc" || e.t0 === f.t0 && e.t1 === f.t1);
+      }
+    }
+    return false;
+  }
+  function connectBoardShapes(shapes, eps) {
+    if (!shapes.length) return;
+    const chainable = shapes.filter((s) => s.kind === "line" || s.kind === "arc" || s.kind === "curve");
+    const ends = [];
+    for (const s of shapes) {
+      const a = startOf(s), b = endOf(s);
+      if (a && b) ends.push([a.slice(), s], [b.slice(), s]);
+    }
+    const skip2 = /* @__PURE__ */ new Set();
+    const findNext = (shape, p) => {
+      const near = ends.map((e, i) => [d2(p, e[0]), i]).sort((x, y) => x[0] - y[0] || x[1] - y[1]).slice(0, 2);
+      let best = null, bestD = eps * eps;
+      for (const [d, i] of near) {
+        const c = ends[i][1];
+        if (c === shape || skip2.has(c)) continue;
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+      return best;
+    };
+    const pick4 = (p0, p1) => {
+      const d = [d2(p0[0], p1[0]), d2(p0[0], p1[1]), d2(p0[1], p1[0]), d2(p0[1], p1[1])];
+      return d.indexOf(Math.min(...d));
+    };
+    const moveCurveEnd = (s, i, p) => {
+      const pts = ptsOf(s.node), at = i === 0 ? 0 : 3, ctl = i === 0 ? 1 : 2, dx = p[0] - pts[at][0], dy = p[1] - pts[at][1];
+      setPts(s.node, ctl, [pts[ctl][0] + dx, pts[ctl][1] + dy]);
+      setPts(s.node, at, p);
+      s.dirty = true;
+    };
+    const setEndAt = (s, i, p) => {
+      if (s.kind === "curve") moveCurveEnd(s, i, p);
+      else if (i === 0) setStart(s, p);
+      else setEnd(s, p);
+    };
+    const connectPair = (a, b) => {
+      const pa = [startOf(a), endOf(a)], pb = [startOf(b), endOf(b)];
+      if (a.kind === "line" && b.kind === "line") {
+        const idx2 = pick4(pa, pb), i0 = idx2 >> 1, i1 = idx2 & 1;
+        const ux = pa[1][0] - pa[0][0], uy = pa[1][1] - pa[0][1], vx = pb[1][0] - pb[0][0], vy = pb[1][1] - pb[0][1];
+        const cross2 = ux * vy - uy * vx;
+        const n180 = (d) => {
+          while (d <= -180) d += 360;
+          while (d > 180) d -= 360;
+          return d;
+        };
+        const dirOf = (x, y) => n180(Math.atan2(y, x) * 180 / Math.PI);
+        const angle = Math.abs(n180(dirOf(-ux, -uy) - dirOf(-vx, -vy))) * Math.PI / 180;
+        const segsCross = () => {
+          const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+          return o(pa[0], pa[1], pb[0]) * o(pa[0], pa[1], pb[1]) <= 0 && o(pb[0], pb[1], pa[0]) * o(pb[0], pb[1], pa[1]) <= 0;
+        };
+        let ok = false;
+        if ((segsCross() || angle > Math.PI / 4) && Math.abs(cross2) > 1e-12) {
+          const t = ((pb[0][0] - pa[0][0]) * vy - (pb[0][1] - pa[0][1]) * vx) / cross2;
+          const x = [pa[0][0] + t * ux, pa[0][1] + t * uy];
+          setEndAt(a, i0, x);
+          setEndAt(b, i1, x);
+          ok = true;
+        }
+        if (!ok && d2(pa[i0], pb[i1]) <= WELD_GAP * WELD_GAP) {
+          const m = [(pa[i0][0] + pb[i1][0]) / 2, (pa[i0][1] + pb[i1][1]) / 2];
+          setEndAt(a, i0, m);
+          setEndAt(b, i1, m);
+        }
+        return;
+      }
+      const joins = (s) => s.kind === "line" || s.kind === "arc" || s.kind === "curve";
+      if (!joins(a) || !joins(b)) return;
+      if (a.kind === b.kind) {
+        const idx2 = pick4(pa, pb), i0 = idx2 >> 1, i1 = idx2 & 1, m = [(pa[i0][0] + pb[i1][0]) / 2, (pa[i0][1] + pb[i1][1]) / 2];
+        setEndAt(a, i0, m);
+        setEndAt(b, i1, m);
+        return;
+      }
+      const rank = (s) => s.kind === "line" ? 0 : s.kind === "curve" ? 1 : 2;
+      const mover = rank(a) < rank(b) ? a : b, fixed = mover === a ? b : a;
+      const pm = mover === a ? pa : pb, pf = mover === a ? pb : pa, idx = pick4(pm, pf);
+      setEndAt(mover, idx >> 1, pf[idx & 1].slice());
+    };
+    const candidates = new Set(chainable);
+    while (candidates.size) {
+      const g = candidates.values().next().value;
+      const walkFrom = (cur, start) => {
+        let prev = start;
+        for (; ; ) {
+          const next = findNext(cur, prev);
+          if (!next) break;
+          connectPair(cur, next);
+          const ns = startOf(next), ne = endOf(next);
+          prev = d2(prev, ns) < d2(prev, ne) ? ne : ns;
+          cur = next;
+          skip2.add(cur);
+          candidates.delete(cur);
+        }
+      };
+      const ptEnd = endOf(g), ptStart = startOf(g);
+      const atEnd = findNext(g, ptEnd), atStart = findNext(g, ptStart);
+      const minD = (r, s) => Math.min(d2(r, startOf(s)), d2(r, endOf(s)));
+      const fromEnd = atEnd && atStart ? minD(ptEnd, atEnd) <= minD(ptStart, atStart) : !!atEnd || !atStart;
+      if (fromEnd) {
+        walkFrom(g, endOf(g));
+        walkFrom(g, startOf(g));
+      } else {
+        walkFrom(g, startOf(g));
+        walkFrom(g, endOf(g));
+      }
+      candidates.delete(g);
+    }
+  }
+  function graphicsCleanup(doc, o, dryRun) {
+    const pick = o.ids ? new Set(o.ids) : null;
+    const shapes = [];
+    for (const it of doc.items.values()) if (SHAPE_KINDS.test(it.kind) && (!pick || pick.has(it.id))) shapes.push({ id: it.id, item: it, node: clone(it.node), kind: it.kind.slice(3), dirty: false });
+    const items = [], deleted = /* @__PURE__ */ new Set(), removed = /* @__PURE__ */ new Set(), added = [];
+    if (o.deleteRedundant) {
+      shapes.forEach((s, i) => {
+        if (deleted.has(s)) return;
+        if (isNullShape(s)) {
+          items.push({ code: "null_graphic", text: "Remove zero-size graphic", ids: [s.id] });
+          removed.add(s);
+          return;
+        }
+        for (let j = i + 1; j < shapes.length; j++) {
+          const t = shapes[j];
+          if (deleted.has(t)) continue;
+          if (areEquivalent(s, t)) {
+            items.push({ code: "duplicate_graphic", text: "Remove duplicated graphic", ids: [t.id] });
+            deleted.add(t);
+            removed.add(t);
+          }
+        }
+      });
+    }
+    if (o.fixBoardOutlines && !dryRun) connectBoardShapes(shapes.filter((s) => layerOf2(s.node) === "Edge.Cuts" && !removed.has(s)), o.tolerance ?? 2);
+    if (o.mergeRects) {
+      const key = (p) => `${Math.round(p[0] * 1e6)},${Math.round(p[1] * 1e6)}`;
+      const sides = [], ptMap = /* @__PURE__ */ new Map();
+      for (const s of shapes) {
+        if (s.kind !== "line" || isNullShape(s)) continue;
+        let a = startOf(s), b = endOf(s);
+        if (a[0] !== b[0] && a[1] !== b[1]) continue;
+        if (a[0] > b[0] || a[1] > b[1]) [a, b] = [b, a];
+        const side = { start: a, end: b, s };
+        sides.push(side);
+        const k = key(a);
+        if (!ptMap.has(k)) ptMap.set(k, []);
+        ptMap.get(k).push(side);
+      }
+      for (const side of sides) {
+        if (deleted.has(side.s)) continue;
+        const viable = (c) => layerOf2(c.s.node) === layerOf2(side.s.node) && widthOf2(c.s.node) === widthOf2(side.s.node) && !deleted.has(c.s);
+        let left = null, top = null, right = null, bottom = null;
+        if (side.start[0] === side.end[0]) {
+          left = side;
+          top = (ptMap.get(key(left.start)) || []).find((c) => c !== left && viable(c)) || null;
+        } else if (side.start[1] === side.end[1]) {
+          top = side;
+          left = (ptMap.get(key(top.start)) || []).find((c) => c !== top && viable(c)) || null;
+        }
+        if (!top || !left) continue;
+        right = (ptMap.get(key(top.end)) || []).find((c) => c !== top && c !== left && viable(c)) || null;
+        bottom = (ptMap.get(key(left.end)) || []).find((c) => c !== top && c !== left && viable(c)) || null;
+        if (!right || !bottom || key(right.end) !== key(bottom.end)) continue;
+        for (const x of [left, top, right, bottom]) {
+          deleted.add(x.s);
+          removed.add(x.s);
+        }
+        items.push({ code: "lines_to_rect", text: "Convert lines to rectangle", ids: [left.s.id, top.s.id, right.s.id, bottom.s.id] });
+        const stroke = K.kid(top.s.node, "stroke");
+        added.push([
+          "gr_rect",
+          ["start", r6(top.start[0]), r6(top.start[1])],
+          ["end", r6(bottom.end[0]), r6(bottom.end[1])],
+          stroke ? clone(stroke) : ["stroke", ["width", widthOf2(top.s.node)], ["type", "default"]],
+          ["fill", "no"],
+          ["layer", layerOf2(top.s.node)],
+          ["uuid", K.newUuid()]
+        ]);
+      }
+    }
+    const changes = [];
+    if (!dryRun) {
+      for (const s of shapes) {
+        if (removed.has(s)) changes.push(removedChange(s.item));
+        else if (s.dirty && K.serialize(s.node) !== K.serialize(s.item.node)) changes.push(replacedChange(s.item, s.node));
+      }
+      for (const n of added) changes.push(addedChange(doc, n));
+    }
+    return { items, changes };
+  }
+
+  // web/tools/pcb-tools/teardrop-edit.ts
+  var PM = () => K.padModel;
+  var VIA_ORDER = [
+    "at",
+    "size",
+    "drill",
+    "backdrill",
+    "tertiary_drill",
+    "front_post_machining",
+    "back_post_machining",
+    "layers",
+    "remove_unused_layers",
+    "keep_end_layers",
+    "start_end_only",
+    "locked",
+    "free",
+    "zone_layer_connections",
+    "tenting",
+    "capping",
+    "covering",
+    "plugging",
+    "filling",
+    "padstack",
+    "teardrops",
+    "net",
+    "uuid",
+    "tstamp"
+  ];
+  var same2 = (a, b) => Object.keys(b).every((k) => typeof a[k] === "number" ? Math.abs(a[k] - b[k]) < 1e-9 : a[k] === b[k]);
+  function writeTd(n, td, via) {
+    const text = same2(td, PM().TD_DEFAULTS) ? null : PM().formatTeardrops(td);
+    if (!via) {
+      PM().setPadChild(n, "teardrops", text);
+      return;
+    }
+    const at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "teardrops");
+    if (text === null) {
+      if (at > 0) n.splice(at, 1);
+      return;
+    }
+    const node = K.parse(text);
+    if (at > 0) {
+      n[at] = node;
+      return;
+    }
+    const rank = VIA_ORDER.indexOf("teardrops");
+    let ins = n.length;
+    for (let j = 1; j < n.length; j++) {
+      const c = n[j];
+      if (Array.isArray(c) && VIA_ORDER.indexOf(String(c[0])) > rank) {
+        ins = j;
+        break;
+      }
+    }
+    n.splice(ins, 0, node);
+  }
+  function isRound(n, via) {
+    if (via) return true;
+    const shape = K.str(n[3]), size = K.kid(n, "size"), ps = K.kid(n, "padstack");
+    if (ps && K.kids(ps, "layer").some((l) => {
+      const s = K.kid(l, "shape"), z = K.kid(l, "size");
+      const sh = s ? K.str(s[1]) : shape;
+      return !(sh === "circle" || sh === "oval" && z && K.num(z[1]) === K.num(z[2]));
+    })) return false;
+    return shape === "circle" || shape === "oval" && !!size && K.num(size[1]) === K.num(size[2]);
+  }
+  function firstCopper(n) {
+    const ls = K.kid(n, "layers");
+    const names = ls ? ls.slice(1).map((x) => K.str(x)) : [];
+    for (const l of names) {
+      if (l === "*.Cu" || l === "F&B.Cu") return "F.Cu";
+      if (/\.Cu$/.test(l)) return l;
+    }
+    return "F.Cu";
+  }
+  function teardropEditChanges(doc, o) {
+    const removeAll = o.action === "removeAll";
+    const process = (n, via) => {
+      const before = PM().readTeardrops(n);
+      let td;
+      if (o.action === "remove" || removeAll) td = { ...before, enabled: false };
+      else if (o.action === "default") td = { ...isRound(n, via) ? o.defaults.round : o.defaults.rect, enabled: true };
+      else {
+        td = { ...before, ...o.specified || {} };
+        for (const k of Object.keys(td)) if (td[k] === void 0) td[k] = before[k];
+        if (!o.existingOnly) td.enabled = true;
+      }
+      if (same2(td, before)) return false;
+      writeTd(n, td, via);
+      return true;
+    };
+    const visit = (n, via, picked, always) => {
+      if (o.selected && !picked) return false;
+      if (always) return process(n, via);
+      if (o.skip && o.skip({ net: netOf(n).name, layer: firstCopper(n) })) return false;
+      if (o.roundOnly && !isRound(n, via)) return false;
+      if (o.existingOnly && !PM().readTeardrops(n).enabled) return false;
+      return process(n, via);
+    };
+    const out = [], edited = /* @__PURE__ */ new Map();
+    for (const it of doc.items.values()) {
+      if (it.kind === "via" && (o.vias || removeAll)) {
+        const n = clone(it.node);
+        if (visit(n, true, !!o.selected && o.selected.has(it.id), removeAll)) {
+          out.push(replacedChange(it, n));
+          edited.set(it.id, n);
+        }
+      } else if (it.kind === "footprint") {
+        const n = clone(it.node);
+        let changed = false;
+        for (const p of K.kids(n, "pad")) {
+          const u = K.kid(p, "uuid"), picked = !!o.selected && (o.selected.has(it.id) || !!u && o.selected.has(K.str(u[1])));
+          const type = K.str(p[2]);
+          if (removeAll) {
+            if (visit(p, false, picked, true)) changed = true;
+            continue;
+          }
+          if (o.pthPads && type === "thru_hole") {
+            if (visit(p, false, picked, false)) changed = true;
+          } else if (o.smdPads && (type === "smd" || type === "connect" || type === "non_component")) {
+            if (visit(p, false, picked, false)) changed = true;
+          }
+        }
+        if (changed) {
+          out.push(replacedChange(it, n));
+          edited.set(it.id, n);
+        }
+      }
+    }
+    if (o.action === "remove" || removeAll) {
+      const disabled = [];
+      for (const it of doc.items.values()) {
+        const n = edited.get(it.id) || it.node;
+        if (it.kind === "via") {
+          const a = K.kid(n, "at"), s = K.kid(n, "size");
+          if (a && !PM().readTeardrops(n).enabled) disabled.push({ at: [K.num(a[1]), K.num(a[2])], r: (s ? K.num(s[1]) : 0.8) / 2, net: netOf(n).name });
+        } else if (it.kind === "footprint") {
+          const [fx, fy, deg3] = K.atOf(n), rot3 = deg3 * Math.PI / 180, tr = K.kid(n, "transform"), sc = tr && K.kid(tr, "scale");
+          const sx = sc ? K.num(sc[1], 1) || 1 : 1, sy = sc ? K.num(sc[2], 1) || 1 : 1;
+          for (const p of K.kids(n, "pad")) {
+            if (PM().readTeardrops(p).enabled) continue;
+            const a = K.kid(p, "at"), s = K.kid(p, "size");
+            if (!a) continue;
+            const x = K.num(a[1]) * sx, y = K.num(a[2]) * sy, c = Math.cos(rot3), sn = Math.sin(rot3);
+            disabled.push({ at: [fx + x * c + y * sn, fy - x * sn + y * c], r: s ? Math.max(K.num(s[1]), K.num(s[2])) / 2 : 1, net: netOf(p).name });
+          }
+        }
+      }
+      for (const it of doc.items.values()) {
+        if (it.kind !== "zone") continue;
+        const attr = K.kid(it.node, "attr"), td = attr && K.kid(attr, "teardrop");
+        if (!td) continue;
+        const tt = K.kid(td, "type"), type = tt ? K.str(tt[1]) : "padvia";
+        if (type === "track_end") {
+          if (removeAll || o.trackToTrack) out.push(removedChange(it));
+          continue;
+        }
+        if (removeAll) {
+          out.push(removedChange(it));
+          continue;
+        }
+        const nn = K.kid(it.node, "net_name"), net = nn ? K.str(nn[1]) : netOf(it.node).name, pts = K.ptsOf(K.kid(it.node, "polygon") || it.node);
+        if (disabled.some((d) => d.net === net && pts.some((p) => Math.hypot(p[0] - d.at[0], p[1] - d.at[1]) <= d.r + 1e-3))) out.push(removedChange(it));
+      }
+    }
+    return out;
+  }
+
+  // web/tools/pcb-tools/repair.ts
+  var TRACKS = /* @__PURE__ */ new Set(["segment", "arc", "via"]);
+  var uuidKid = (n) => K.kid(n, "uuid") || K.kid(n, "tstamp");
+  function repairBoard(doc) {
+    const ids = /* @__PURE__ */ new Set();
+    let duplicates = 0;
+    const tops = [];
+    for (const it of doc.items.values()) tops.push({ id: it.id, kind: it.kind, node: it.node, work: null, newId: null });
+    for (const d of doc.dupItems || []) tops.push({ id: d.id, kind: String(d.node[0]), node: d.node, work: null, newId: null });
+    const nodeOf = (t) => t.work || (t.work = clone(t.node));
+    const claim = (n, onDup) => {
+      const u = uuidKid(n);
+      if (!u) return;
+      const v = K.str(u[1]);
+      if (ids.has(v)) {
+        duplicates++;
+        onDup();
+        return;
+      }
+      ids.add(v);
+    };
+    const fps = tops.filter((t) => t.kind === "footprint");
+    const inFp = (t, pick) => {
+      t.node.forEach((c, i) => {
+        if (i === 0 || !Array.isArray(c) || !pick(c)) return;
+        claim(c, () => {
+          const u = uuidKid(nodeOf(t)[i]);
+          if (u) u[1] = K.newUuid();
+        });
+      });
+    };
+    const retag = (t) => () => {
+      t.newId = K.newUuid();
+      const u = uuidKid(nodeOf(t));
+      if (u) u[1] = t.newId;
+    };
+    for (const t of fps) claim(t.node, retag(t));
+    for (const t of fps) inFp(t, (c) => c[0] === "pad");
+    for (const t of tops) if (TRACKS.has(t.kind)) claim(t.node, retag(t));
+    for (const t of fps) inFp(t, (c) => c[0] !== "pad" && !!uuidKid(c));
+    for (const t of tops) if (t.kind !== "footprint" && !TRACKS.has(t.kind)) claim(t.node, retag(t));
+    const removals = [], rest = [];
+    const byId = /* @__PURE__ */ new Map();
+    for (const t of tops) {
+      const l = byId.get(t.id);
+      if (l) l.push(t);
+      else byId.set(t.id, [t]);
+    }
+    for (const [id, copies] of byId) {
+      const it = doc.items.get(id);
+      if (!it) continue;
+      const keeper = copies.find((t) => !t.newId) || null, moved = copies.filter((t) => t.newId);
+      if (!moved.length) {
+        if (keeper && keeper.work) rest.push(replacedChange(it, keeper.work));
+        continue;
+      }
+      for (let i = keeper ? 1 : 0; i < copies.length; i++) removals.push(removedChange(it));
+      if (keeper) rest.push(upsertChange({ id, kind: keeper.kind, node: keeper.work || keeper.node }, "ADDED"));
+      for (const t of moved) {
+        const c = addedChange(doc, nodeOf(t));
+        if (!keeper && t === copies[0]) c.replaces = id;
+        rest.push(c);
+      }
+    }
+    const steps = [removals, rest].filter((s) => s.length);
+    return { changes: removals.concat(rest), steps, duplicates, details: duplicates ? [`${duplicates} duplicate IDs replaced.`] : [] };
+  }
+
+  // web/tools/pcb-tools/shape-geom.ts
+  var deg2 = (r) => r * 180 / Math.PI;
+  var rad2 = (d) => d * Math.PI / 180;
+  var angleOf2 = (v) => {
+    let a = deg2(Math.atan2(v[1], v[0]));
+    if (a < 0) a += 360;
+    return a;
+  };
+  var norm3605 = (a) => {
+    let r = a % 360;
+    if (r < 0) r += 360;
+    return r;
+  };
+  var r62 = (v) => Math.round(v * 1e6) / 1e6;
+  var P2 = (x, y) => [r62(x), r62(y)];
+  function arcCenter(a, m, b) {
+    const c = K.arcFrom3(a, m, b);
+    return c ? [c.x, c.y] : null;
+  }
+  function arcAngles(g) {
+    const c = arcCenter(g.start, g.mid, g.end);
+    if (!c) return null;
+    const sa = angleOf2([g.start[0] - c[0], g.start[1] - c[1]]);
+    let ea = angleOf2([g.end[0] - c[0], g.end[1] - c[1]]);
+    if (Math.abs(ea - sa) < 1e-9) ea = sa + 360;
+    while (ea < sa) ea += 360;
+    return { c, r: Math.hypot(g.start[0] - c[0], g.start[1] - c[1]), sa, ea, sweep: ea - sa };
+  }
+  var onCircle = (c, r, a) => P2(c[0] + r * Math.cos(rad2(a)), c[1] + r * Math.sin(rad2(a)));
+  function arcFrom(c, r, sa, sweep) {
+    if (sweep < 0) {
+      sa += sweep;
+      sweep = -sweep;
+    }
+    return { kind: "arc", start: onCircle(c, r, sa), mid: onCircle(c, r, sa + sweep / 2), end: onCircle(c, r, sa + sweep) };
+  }
+  var straight = (a, m, b) => Math.abs((m[0] - a[0]) * (b[1] - a[1]) - (m[1] - a[1]) * (b[0] - a[0])) < 1e-12;
+  function geomPages(kind) {
+    switch (kind) {
+      case "rect":
+        return [
+          {
+            title: "By Corners",
+            groups: [{ title: "Start Point", x: "sx", y: "sy" }, { title: "End Point", x: "ex", y: "ey" }],
+            get: (g) => {
+              const r = g;
+              return { sx: r.start[0], sy: r.start[1], ex: r.end[0], ey: r.end[1] };
+            },
+            set: (v) => ({ kind: "rect", start: P2(v.sx, v.sy), end: P2(v.ex, v.ey) }),
+            validate: (v) => v.sx === v.ex && v.sy === v.ey ? "Rectangle cannot be zero-sized." : null
+          },
+          {
+            title: "By Corner and Size",
+            groups: [{ title: "Start Point", x: "cx", y: "cy" }, { title: "Size", x: "w", y: "h", size: true }],
+            get: (g) => {
+              const r = g;
+              return { cx: r.start[0], cy: r.start[1], w: Math.abs(r.end[0] - r.start[0]), h: Math.abs(r.end[1] - r.start[1]) };
+            },
+            set: (v) => ({ kind: "rect", start: P2(v.cx, v.cy), end: P2(v.cx + v.w, v.cy + v.h) })
+          },
+          {
+            title: "By Center and Size",
+            groups: [{ title: "Center", x: "mx", y: "my" }, { title: "Size", x: "w", y: "h", size: true }],
+            get: (g) => {
+              const r = g;
+              return { mx: (r.start[0] + r.end[0]) / 2, my: (r.start[1] + r.end[1]) / 2, w: Math.abs(r.end[0] - r.start[0]), h: Math.abs(r.end[1] - r.start[1]) };
+            },
+            set: (v) => ({ kind: "rect", start: P2(v.mx - v.w / 2, v.my - v.h / 2), end: P2(v.mx + v.w / 2, v.my + v.h / 2) })
+          }
+        ];
+      case "line":
+        return [
+          {
+            title: "By Endpoints",
+            groups: [{ title: "Start Point", x: "sx", y: "sy" }, { title: "End Point", x: "ex", y: "ey" }],
+            get: (g) => {
+              const l = g;
+              return { sx: l.start[0], sy: l.start[1], ex: l.end[0], ey: l.end[1] };
+            },
+            set: (v) => ({ kind: "line", start: P2(v.sx, v.sy), end: P2(v.ex, v.ey) })
+          },
+          {
+            title: "By Length and Angle",
+            groups: [{ title: "Start Point", x: "px", y: "py" }, { title: "Length", field: "len", kind: "len" }, { title: "Angle", field: "ang", kind: "angle" }],
+            // updatePolar: the angle is -EDA_ANGLE( end - start ), counter-clockwise on screen
+            get: (g) => {
+              const l = g;
+              const d = [l.end[0] - l.start[0], l.end[1] - l.start[1]];
+              let a = -deg2(Math.atan2(d[1], d[0]));
+              if (a <= -180) a += 360;
+              if (a > 180) a -= 360;
+              return { px: l.start[0], py: l.start[1], len: Math.hypot(d[0], d[1]), ang: r62(a) };
+            },
+            set: (v) => ({ kind: "line", start: P2(v.px, v.py), end: P2(v.px + v.len * Math.cos(rad2(v.ang)), v.py - v.len * Math.sin(rad2(v.ang))) })
+          },
+          {
+            title: "By Start/Midpoint",
+            groups: [{ title: "Start Point", x: "qx", y: "qy" }, { title: "Mid Point", x: "mx", y: "my" }],
+            get: (g) => {
+              const l = g;
+              return { qx: l.start[0], qy: l.start[1], mx: (l.start[0] + l.end[0]) / 2, my: (l.start[1] + l.end[1]) / 2 };
+            },
+            set: (v) => ({ kind: "line", start: P2(v.qx, v.qy), end: P2(2 * v.mx - v.qx, 2 * v.my - v.qy) })
+          }
+        ];
+      case "arc":
+        return [
+          {
+            title: "By Center/Start/Angle",
+            groups: [{ title: "Center", x: "cx", y: "cy" }, { title: "Start Point", x: "sx", y: "sy" }, { title: "Included Angle", field: "ang", kind: "angle" }],
+            get: (g) => {
+              const a = arcAngles(g), s = g.start;
+              return a ? { cx: a.c[0], cy: a.c[1], sx: s[0], sy: s[1], ang: r62(a.sweep) } : { cx: 0, cy: 0, sx: s[0], sy: s[1], ang: 0 };
+            },
+            set: (v) => {
+              const r = Math.hypot(v.sx - v.cx, v.sy - v.cy);
+              if (!(r > 0) || !v.ang) return null;
+              return arcFrom([v.cx, v.cy], r, angleOf2([v.sx - v.cx, v.sy - v.cy]), v.ang);
+            },
+            validate: (v) => !v.ang ? "Arc angle must be greater than 0" : null
+          },
+          {
+            title: "By Start/Mid/End",
+            groups: [{ title: "Start Point", x: "sx2", y: "sy2" }, { title: "Mid Point", x: "mx", y: "my" }, { title: "End Point", x: "ex", y: "ey" }],
+            get: (g) => {
+              const a = g;
+              return { sx2: a.start[0], sy2: a.start[1], mx: a.mid[0], my: a.mid[1], ex: a.end[0], ey: a.end[1] };
+            },
+            // collinear typed points have no arc: the previous geometry stays
+            set: (v) => {
+              const s = P2(v.sx2, v.sy2), m = P2(v.mx, v.my), e = P2(v.ex, v.ey);
+              return straight(s, m, e) ? null : { kind: "arc", start: s, mid: m, end: e };
+            },
+            validate: (v) => v.sx2 === v.mx && v.sy2 === v.my || v.mx === v.ex && v.my === v.ey ? "Arc must have at least 2 distinct points" : null
+          },
+          {
+            title: "By Center/Radius/Angles",
+            groups: [{ title: "Center", x: "rcx", y: "rcy" }, { title: "Radius", field: "rad", kind: "len" }, { title: "Start Angle", field: "sa", kind: "angle" }, { title: "End Angle", field: "ea", kind: "angle" }],
+            get: (g) => {
+              const a = arcAngles(g);
+              return a ? { rcx: a.c[0], rcy: a.c[1], rad: a.r, sa: r62(norm3605(a.sa)), ea: r62(norm3605(a.ea)) } : { rcx: 0, rcy: 0, rad: 0, sa: 0, ea: 0 };
+            },
+            set: (v) => {
+              if (!(v.rad > 0)) return null;
+              let sweep = norm3605(v.ea - v.sa);
+              if (sweep === 0) sweep = 360;
+              return arcFrom([v.rcx, v.rcy], v.rad, v.sa, sweep);
+            },
+            validate: (v) => !(v.rad > 0) ? "Radius must be greater than 0" : null
+          }
+        ];
+      case "circle":
+        return [
+          {
+            title: "By Center/Radius",
+            groups: [{ title: "Center", x: "cx", y: "cy" }, { title: "Radius", field: "r", kind: "len" }],
+            get: (g) => {
+              const c = g;
+              return { cx: c.center[0], cy: c.center[1], r: Math.hypot(c.end[0] - c.center[0], c.end[1] - c.center[1]) };
+            },
+            set: (v) => ({ kind: "circle", center: P2(v.cx, v.cy), end: P2(v.cx + v.r, v.cy) }),
+            validate: (v) => !(v.r > 0) ? "Radius must be greater than 0" : null
+          },
+          {
+            title: "By Center/Point",
+            groups: [{ title: "Center", x: "pcx", y: "pcy" }, { title: "Point on Circle", x: "px", y: "py" }],
+            get: (g) => {
+              const c = g;
+              return { pcx: c.center[0], pcy: c.center[1], px: c.end[0], py: c.end[1] };
+            },
+            set: (v) => ({ kind: "circle", center: P2(v.pcx, v.pcy), end: P2(v.px, v.py) })
+          }
+        ];
+      case "bezier":
+        return [
+          {
+            title: "Bezier Control Points",
+            groups: [{ title: "Start Point", x: "sx", y: "sy" }, { title: "End Point", x: "ex", y: "ey" }, { title: "Control Point 1", x: "c1x", y: "c1y" }, { title: "Control Point 2", x: "c2x", y: "c2y" }],
+            get: (g) => {
+              const p = g.pts;
+              return { sx: p[0][0], sy: p[0][1], c1x: p[1][0], c1y: p[1][1], c2x: p[2][0], c2y: p[2][1], ex: p[3][0], ey: p[3][1] };
+            },
+            set: (v) => ({ kind: "bezier", pts: [P2(v.sx, v.sy), P2(v.c1x, v.c1y), P2(v.c2x, v.c2y), P2(v.ex, v.ey)] })
+          }
+        ];
+    }
+  }
+  function shapeGeomOf(n) {
+    const p = (k) => {
+      const c = K.kid(n, k);
+      return c ? [K.num(c[1]), K.num(c[2])] : [0, 0];
+    };
+    switch (String(n[0]).replace(/^(gr|fp)_/, "")) {
+      case "rect":
+        return { kind: "rect", start: p("start"), end: p("end") };
+      case "line":
+        return { kind: "line", start: p("start"), end: p("end") };
+      case "arc":
+        return { kind: "arc", start: p("start"), mid: p("mid"), end: p("end") };
+      case "circle":
+        return { kind: "circle", center: p("center"), end: p("end") };
+      case "curve": {
+        const pts = K.ptsOf(n);
+        return pts.length === 4 ? { kind: "bezier", pts: [pts[0], pts[1], pts[2], pts[3]] } : null;
+      }
+    }
+    return null;
+  }
+  function setShapeGeom(n, g) {
+    const set = (k, v) => {
+      const c = K.kid(n, k);
+      if (c) {
+        c[1] = r62(v[0]);
+        c[2] = r62(v[1]);
+      }
+    };
+    if (g.kind === "rect" || g.kind === "line") {
+      set("start", g.start);
+      set("end", g.end);
+    } else if (g.kind === "circle") {
+      set("center", g.center);
+      set("end", g.end);
+    } else if (g.kind === "arc") {
+      let { start, end } = g;
+      const m = g.mid;
+      if ((m[0] - start[0]) * (end[1] - m[1]) - (m[1] - start[1]) * (end[0] - m[0]) < 0) [start, end] = [end, start];
+      set("start", start);
+      set("mid", m);
+      set("end", end);
+    } else {
+      const pts = K.kid(n, "pts");
+      if (!pts) return;
+      const xy3 = pts.filter((c) => Array.isArray(c) && c[0] === "xy");
+      g.pts.forEach((p, i) => {
+        if (xy3[i]) {
+          xy3[i][1] = r62(p[0]);
+          xy3[i][2] = r62(p[1]);
+        }
+      });
+    }
+  }
+
+  // web/tools/pcb-tools/reannotate.ts
+  var SORTYFIRST = 256;
+  var DESCENDINGFIRST = 16;
+  var DESCENDINGSECOND = 1;
+  var SORTXFIRST = 0;
+  var ASCENDINGFIRST = 0;
+  var ASCENDINGSECOND = 0;
+  var FRONT_DIRS = [
+    SORTYFIRST + ASCENDINGFIRST + ASCENDINGSECOND,
+    SORTYFIRST + ASCENDINGFIRST + DESCENDINGSECOND,
+    SORTYFIRST + DESCENDINGFIRST + ASCENDINGSECOND,
+    SORTYFIRST + DESCENDINGFIRST + DESCENDINGSECOND,
+    SORTXFIRST + ASCENDINGFIRST + ASCENDINGSECOND,
+    SORTXFIRST + ASCENDINGFIRST + DESCENDINGSECOND,
+    SORTXFIRST + DESCENDINGFIRST + ASCENDINGSECOND,
+    SORTXFIRST + DESCENDINGFIRST + DESCENDINGSECOND
+  ];
+  var BACK_DIRS = [
+    SORTYFIRST + ASCENDINGFIRST + DESCENDINGSECOND,
+    SORTYFIRST + ASCENDINGFIRST + ASCENDINGSECOND,
+    SORTYFIRST + DESCENDINGFIRST + DESCENDINGSECOND,
+    SORTYFIRST + DESCENDINGFIRST + ASCENDINGSECOND,
+    SORTXFIRST + DESCENDINGFIRST + ASCENDINGSECOND,
+    SORTXFIRST + DESCENDINGFIRST + DESCENDINGSECOND,
+    SORTXFIRST + ASCENDINGFIRST + ASCENDINGSECOND,
+    SORTXFIRST + ASCENDINGFIRST + DESCENDINGSECOND
+  ];
+  var MINGRID = 1e3;
+  var MAXERROR = 10;
+  var ACTION_MESSAGE = ["", "(not updated)", "(unannotated; not updated)", "(excluded)"];
+  var nm = (mm) => Math.round(mm * 1e6);
+  function roundToGrid2(c, grid) {
+    if (!grid) grid = MINGRID;
+    const r = c % grid;
+    c -= r;
+    if (Math.abs(r) > grid / 2) c += c < 0 ? -grid : grid;
+    return c;
+  }
+  function strNumCmp2(a, b) {
+    const re = /(\d+)|(\D+)/g, xa = a.match(re) || [], xb = b.match(re) || [];
+    for (let i = 0; i < Math.min(xa.length, xb.length); i++) {
+      const p = xa[i], q = xb[i], np = /^\d/.test(p), nq = /^\d/.test(q);
+      if (np && nq) {
+        const d = Number(p) - Number(q);
+        if (d) return d < 0 ? -1 : 1;
+      } else {
+        const d = p.toUpperCase().localeCompare(q.toUpperCase());
+        if (d) return d < 0 ? -1 : 1;
+      }
+    }
+    return xa.length - xb.length;
+  }
+  var matches = (s, pat) => new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$").test(s);
+  var refDesNumber = (r) => {
+    const m = /\d+/.exec(r);
+    return m ? Number(m[0]) : -1;
+  };
+  function refField(n) {
+    for (const c of n) if (Array.isArray(c) && (c[0] === "property" && K.str(c[1]) === "Reference" || c[0] === "fp_text" && K.str(c[1]) === "reference")) return c;
+    return null;
+  }
+  function scaleOf2(n) {
+    const t = K.kid(n, "transform"), sc = t && K.kid(t, "scale");
+    return sc ? [K.num(sc[1], 1) || 1, K.num(sc[2], 1) || 1] : [1, 1];
+  }
+  var isLocked2 = (n) => n.includes("locked") || (() => {
+    const l = K.kid(n, "locked");
+    return !!l && K.str(l[1]) !== "no";
+  })();
+  function geographicalReannotate(doc, o) {
+    const report = [], show = (severity, text) => {
+      for (const t of text.split("\n")) report.push({ severity, text: t });
+    };
+    const fmt3 = o.fmt || ((v) => v.toFixed(4) + " mm");
+    const coord = (x, y) => `${fmt3(x / 1e6)}, ${fmt3(y / 1e6)}`;
+    const excludes = o.exclude.split(/[,\s]+/).filter(Boolean);
+    const grid = nm(o.grid);
+    const front = [], back = [];
+    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
+    for (const fp of fps) {
+      const n = fp.node, [fx, fy, rot3] = K.atOf(n), [sx, sy] = scaleOf2(n);
+      const rf = refField(n), ref = rf && !Array.isArray(rf[2]) ? K.str(rf[2]) : "";
+      let x = fx, y = fy;
+      if (!o.useFootprintLocation && rf) {
+        const ra = K.kid(rf, "at");
+        if (ra) {
+          const r = rot3 * Math.PI / 180, lx = K.num(ra[1]) * sx, ly = K.num(ra[2]) * sy;
+          x = fx + lx * Math.cos(r) + ly * Math.sin(r);
+          y = fy - lx * Math.sin(r) + ly * Math.cos(r);
+        }
+      }
+      const layer = K.kid(n, "layer"), isFront2 = !layer || K.str(layer[1]) === "F.Cu";
+      const info = { id: fp.id, ref, fpid: K.str(n[1]), x: nm(x), y: nm(y), rx: roundToGrid2(nm(x), grid), ry: roundToGrid2(nm(y), grid), front: isFront2, action: 0 /* UPDATE */, prefix: "" };
+      let firstnum = -1;
+      if (!ref) info.action = 1 /* EMPTY */;
+      else {
+        firstnum = ref.search(/\d/);
+        if (firstnum < 0) info.action = 2 /* INVALID */;
+      }
+      info.prefix = firstnum < 0 ? ref : ref.slice(0, firstnum);
+      for (const ex of excludes) {
+        if (ex.endsWith("*") ? matches(ref, ex) : ex === info.prefix) {
+          info.action = 3 /* EXCLUDE */;
+          break;
+        }
+      }
+      const outOfScope = isLocked2(n) && o.excludeLocked || o.scope === "selection" && !(o.selected && o.selected.has(fp.id)) || o.scope === "front" && !isFront2 || o.scope === "back" && isFront2;
+      if (info.action === 0 /* UPDATE */ && outOfScope) info.action = 3 /* EXCLUDE */;
+      (isFront2 ? front : back).push(info);
+    }
+    const sorter = (dirs) => {
+      const code = dirs[o.sortCode >= 0 && o.sortCode < 8 ? o.sortCode : 0];
+      const yFirst = !!(code & SORTYFIRST), descFirst = !!(code & DESCENDINGFIRST), descSecond = !!(code & DESCENDINGSECOND);
+      return (a, b) => {
+        let x0 = a.rx, x1 = b.rx, y0 = a.ry, y1 = b.ry;
+        if (yFirst) {
+          [x0, y0] = [y0, x0];
+          [x1, y1] = [y1, x1];
+        }
+        if (descFirst) [x0, x1] = [x1, x0];
+        if (descSecond) [y0, y1] = [y1, y0];
+        return x0 !== x1 ? x0 < x1 ? -1 : 1 : y0 !== y1 ? y0 < y1 ? -1 : 1 : 0;
+      };
+    };
+    front.sort(sorter(FRONT_DIRS));
+    back.sort(sorter(BACK_DIRS));
+    const prefixes = [];
+    const prefixInfo = (p, start = 1) => {
+      let f = prefixes.find((x) => x.prefix === p);
+      if (!f) {
+        f = { prefix: p, last: Math.max(start - 1, 0), unavailable: /* @__PURE__ */ new Set() };
+        prefixes.push(f);
+      }
+      return f;
+    };
+    for (const side of [front, back]) for (const f of side) {
+      if (f.action === 0 /* UPDATE */) continue;
+      if (f.action === 3 /* EXCLUDE */) prefixInfo(f.prefix).unavailable.add(refDesNumber(f.ref));
+    }
+    const changes = [], bad = [];
+    const build = (side, startText, prefix, remove) => {
+      const start = Math.max(0, parseInt(startText, 10) || 0);
+      const have = prefix.length > 0, add = have && !remove;
+      remove = remove && have;
+      let msg = (side[0].front ? "Front Footprints" : "Back Footprints") + " " + (o.useFootprintLocation ? "(sorted by footprint location)" : "(sorted by reference designator location)");
+      msg += "\n-------------------------------------------------------------";
+      side.forEach((f, i) => {
+        msg += `
+${i + 1} ${f.ref || "unannotated footprint"} at ${coord(f.x, f.y)} (rounded to ${coord(f.rx, f.ry)})`;
+      });
+      show("info", msg);
+      if (start !== 0) for (const p of prefixes) p.last = start - 1;
+      for (const f of side) {
+        const c = { id: f.id, action: f.action, from: f.ref, to: f.ref };
+        if (c.action === 1 /* EMPTY */ || c.action === 2 /* INVALID */) {
+          changes.push(c);
+          bad.push({ ref: f.ref, fpid: f.fpid, x: f.x / 1e6, y: f.y / 1e6 });
+          continue;
+        }
+        if (c.action === 0 /* UPDATE */) {
+          let p = f.prefix;
+          const present = p.indexOf(prefix) === 0;
+          if (add && !present) p = prefix + p;
+          if (remove && present) p = p.slice(prefix.length);
+          const info = prefixInfo(p, start);
+          let num7 = info.last + 1;
+          while (info.unavailable.has(num7)) num7++;
+          const base = info.prefix + num7;
+          c.to = base;
+          info.last = num7;
+        }
+        changes.push(c);
+      }
+    };
+    if (front.length) build(front, o.frontStart, o.frontPrefix, o.removeFrontPrefix);
+    if (back.length) build(back, o.backStart, o.backPrefix, o.removeBackPrefix);
+    changes.sort((a, b) => strNumCmp2(a.from, b.from));
+    let plan = "Reference Designator Prefixes in Use\n-------------------------------------------------------------\n";
+    plan += prefixes.map((p, i) => p.prefix + ((i + 1) % 16 === 0 ? "\n" : " ")).join("");
+    if (excludes.length) plan += `
+(Excluding ${excludes.join(" ")} from reannotation.)`;
+    show("info", plan);
+    let log = "Change Log\n-------------------------------------------------------------";
+    for (const c of changes) log += c.action !== 0 /* UPDATE */ ? `
+${c.from || "unannotated footprint"}  ${ACTION_MESSAGE[c.action]}` : `
+${c.from || "unannotated footprint"} -> ${c.to || "unannotated footprint"}`;
+    show("action", log);
+    let errors = 0;
+    for (let i = 0; i < changes.length && errors <= MAXERROR; i++) {
+      if (changes[i].action === 1 /* EMPTY */ || changes[i].action === 2 /* INVALID */) continue;
+      for (let j = i + 1; j < changes.length; j++) {
+        if (changes[i].to === changes[j].to) {
+          show("error", `Duplicate instances of ${changes[j].to}`);
+          if (errors++ > MAXERROR) {
+            show("error", "Aborted: too many errors");
+            break;
+          }
+        }
+      }
+    }
+    const ok = errors === 0;
+    if (!ok) show("error", "Selected options resulted in errors! Change them and try again.");
+    else if (bad.length) {
+      let m = `PCB has ${bad.length} empty or invalid reference designations.
+You may wish to run DRC with 'Test for parity between PCB and schematic' checked.`;
+      for (const b of bad) m += `
+    RefDes: ${b.ref || "unannotated footprint"}; footprint: ${b.fpid || "unknown"} at ${coord(nm(b.x), nm(b.y))} on PCB.`;
+      show("warning", m);
+    }
+    const out = [], renames = [];
+    if (ok) for (const c of changes) {
+      if (c.to === c.from) continue;
+      const it = doc.items.get(c.id);
+      if (!it) continue;
+      const n = clone(it.node), rf = refField(n);
+      if (!rf) continue;
+      rf[2] = c.to;
+      out.push(replacedChange(it, n));
+      renames.push({ id: c.id, from: c.from, to: c.to });
+    }
+    return { ok, bad, report, changes: out, renames };
+  }
+  function reannotateOrder(sortCode, pts) {
+    const infos = pts.map((p, i) => ({ i, rx: p[0], ry: p[1] }));
+    const code = FRONT_DIRS[sortCode] ?? FRONT_DIRS[0];
+    const yFirst = !!(code & SORTYFIRST), descFirst = !!(code & DESCENDINGFIRST), descSecond = !!(code & DESCENDINGSECOND);
+    infos.sort((a, b) => {
+      let x0 = a.rx, x1 = b.rx, y0 = a.ry, y1 = b.ry;
+      if (yFirst) {
+        [x0, y0] = [y0, x0];
+        [x1, y1] = [y1, x1];
+      }
+      if (descFirst) [x0, x1] = [x1, x0];
+      if (descSecond) [y0, y1] = [y1, y0];
+      return x0 !== x1 ? x0 < x1 ? -1 : 1 : y0 !== y1 ? y0 < y1 ? -1 : 1 : 0;
+    });
+    return infos.map((x) => x.i);
+  }
+
   // web/tools/pcb-tools/drc-exclusions.ts
   var DRCET = { unconnected_items: "UNCONNECTED_ITEMS", shorting_items: "SHORTING_ITEMS", items_not_allowed: "ALLOWED_ITEMS", text_on_edge_cuts: "TEXT_ON_EDGECUTS", clearance: "CLEARANCE", creepage: "CREEPAGE", tracks_crossing: "TRACKS_CROSSING", copper_edge_clearance: "EDGE_CLEARANCE", copper_outside_board: "COPPER_OUTSIDE_BOARD", isolated_copper: "ISOLATED_COPPER", starved_thermal: "STARVED_THERMAL", via_dangling: "DANGLING_VIA", track_dangling: "DANGLING_TRACK", hole_clearance: "HOLE_CLEARANCE", hole_to_hole: "DRILLED_HOLES_TOO_CLOSE", holes_co_located: "DRILLED_HOLES_COLOCATED", connection_width: "CONNECTION_WIDTH", track_width: "TRACK_WIDTH", track_angle: "TRACK_ANGLE", track_segment_length: "TRACK_SEGMENT_LENGTH", annular_width: "ANNULAR_WIDTH", drill_out_of_range: "DRILL_OUT_OF_RANGE", via_diameter: "VIA_DIAMETER", padstack: "PADSTACK", padstack_invalid: "PADSTACK_INVALID", microvia_drill_out_of_range: "MICROVIA_DRILL_OUT_OF_RANGE", malformed_microvia_stack_span: "MALFORMED_MICROVIA_STACK_SPAN", microvia_stack_not_filled: "MICROVIA_STACK_NOT_FILLED", microvia_stack_depth: "MICROVIA_STACK_DEPTH", hole_aspect_ratio: "HOLE_ASPECT_RATIO", microvia_crosses_core: "MICROVIA_CROSSES_CORE", courtyards_overlap: "OVERLAPPING_FOOTPRINTS", missing_courtyard: "MISSING_COURTYARD", malformed_courtyard: "MALFORMED_COURTYARD", pth_inside_courtyard: "PTH_IN_COURTYARD", npth_inside_courtyard: "NPTH_IN_COURTYARD", item_on_disabled_layer: "DISABLED_LAYER_ITEM", invalid_outline: "INVALID_OUTLINE", duplicate_footprints: "DUPLICATE_FOOTPRINT", missing_footprint: "MISSING_FOOTPRINT", extra_footprint: "EXTRA_FOOTPRINT", net_conflict: "NET_CONFLICT", footprint_symbol_mismatch: "SCHEMATIC_PARITY", footprint_filters_mismatch: "FOOTPRINT_FILTERS", footprint_symbol_field_mismatch: "SCHEMATIC_FIELDS_PARITY", lib_footprint_issues: "LIB_FOOTPRINT_ISSUES", lib_footprint_mismatch: "LIB_FOOTPRINT_MISMATCH", unresolved_variable: "UNRESOLVED_VARIABLE", assertion_failure: "ASSERTION_FAILURE", generic_warning: "GENERIC_WARNING", generic_error: "GENERIC_ERROR", copper_sliver: "COPPER_SLIVER", solder_mask_bridge: "SOLDERMASK_BRIDGE", silk_over_copper: "SILK_MASK_CLEARANCE", silk_edge_clearance: "SILK_EDGE_CLEARANCE", silk_overlap: "SILK_CLEARANCE", text_height: "TEXT_HEIGHT", text_thickness: "TEXT_THICKNESS", length_out_of_range: "LENGTH_OUT_OF_RANGE", net_chain_stub_length: "NET_CHAIN_STUB_TOO_LONG", net_chain_return_path: "NET_CHAIN_RETURN_PATH_BREAK", net_chain_tuning_profiles: "NET_CHAIN_TUNING_PROFILES", skew_out_of_range: "SKEW_OUT_OF_RANGE", too_many_vias: "VIA_COUNT_OUT_OF_RANGE", diff_pair_gap_out_of_range: "DIFF_PAIR_GAP_OUT_OF_RANGE", diff_pair_uncoupled_length_too_long: "DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG", footprint: "FOOTPRINT", footprint_type_mismatch: "FOOTPRINT_TYPE_MISMATCH", through_hole_pad_without_hole: "PAD_TH_WITH_NO_HOLE", footprint_scaled_with_pads: "FOOTPRINT_SCALED_WITH_PADS", mirrored_text_on_front_layer: "MIRRORED_TEXT_ON_FRONT_LAYER", nonmirrored_text_on_back_layer: "NONMIRRORED_TEXT_ON_BACK_LAYER", missing_tuning_profile: "MISSING_TUNING_PROFILE", tuning_profile_track_geometries: "TUNING_PROFILE_IMPLICIT_RULES", track_on_post_machined_layer: "TRACK_ON_POST_MACHINED_LAYER", track_not_centered_on_via: "TRACK_NOT_CENTERED_ON_VIA" };
   var LAYER_STORED = /* @__PURE__ */ new Set(["copper_sliver", "generic_warning", "generic_error", "unconnected_items", "starved_thermal"]);
@@ -41511,10 +42892,10 @@ Press <esc> to cancel all; double-click to finish`;
     const u = it && (K.kid(it.node, "uuid") || K.kid(it.node, "tstamp"));
     return u ? K.str(u[1]) : id.replace(/#.*$/, "");
   }
-  var nm = (mm) => String(Math.round(mm * 1e6));
+  var nm2 = (mm) => String(Math.round(mm * 1e6));
   function exclusionOf(doc, m, comment) {
     const marker2 = { error_type: "DRCET_" + (DRCET[m.code] || "UNKNOWN") };
-    const x = nm(m.x), y = nm(m.y);
+    const x = nm2(m.x), y = nm2(m.y);
     const pos = {};
     if (x !== "0") pos.x_nm = x;
     if (y !== "0") pos.y_nm = y;
@@ -41626,6 +43007,36 @@ Press <esc> to cancel all; double-click to finish`;
     const also = S.padAlso && S.padAlso.anchor === S.padSel ? S.padAlso.keys : [];
     return [S.padSel, ...also.filter((k) => k !== S.padSel)];
   }
+  function dragKey(ctx, free) {
+    bind(ctx);
+    if (!ctx.doc) return false;
+    const editing = () => {
+      if (ctx.viewOnly) {
+        ctx.toast("View-only access");
+        return false;
+      }
+      return true;
+    };
+    const ids = selectionIds(ctx);
+    const it = liveSelected();
+    if (!S.sel.size && it && ids.size === 1 && ctx.doc.items.get(it.id)?.kind === "footprint") return editing() && beginCarryMove(ctx, { drag: true });
+    if (ids.size && !routableItems(ctx.doc, ids)) return false;
+    if (!ids.size && !dragCandidate(ctx, cursorPoint(ctx))) {
+      if (!editing()) return true;
+      const sel = requestSelection(ctx, { filter: (x) => x.kind === "footprint" || x.kind === "group" });
+      if (sel && sel.items.length === 1 && sel.items[0].kind === "footprint") {
+        applySelection(ctx, sel.ids);
+        beginCarryMove(ctx, { ids: sel.ids, drag: true, hover: true });
+      }
+      return true;
+    }
+    if (editing()) {
+      S.dragFree = free;
+      ctx.setTool("drag");
+    }
+    return true;
+  }
+  setDragImpl(dragKey);
   var pcb = {
     id: "pcb",
     tools: TOOLS,
@@ -41964,26 +43375,11 @@ Press <esc> to cancel all; double-click to finish`;
         case "g":
         case "G":
           if (shift) return false;
-          {
-            const ids = selectionIds(ctx);
-            const it = liveSelected();
-            if (!S.sel.size && it && ids.size === 1 && ctx.doc.items.get(it.id)?.kind === "footprint") return editing() && beginCarryMove(ctx, { drag: true });
-            if (ids.size && !routableItems(ctx.doc, ids)) return false;
-            if (!ids.size && !dragCandidate(ctx, cursorPoint(ctx))) {
-              if (!editing()) return true;
-              const sel = requestSelection(ctx, { filter: (x) => x.kind === "footprint" || x.kind === "group" });
-              if (sel && sel.items.length === 1 && sel.items[0].kind === "footprint") {
-                applySelection(ctx, sel.ids);
-                beginCarryMove(ctx, { ids: sel.ids, drag: true, hover: true });
-              }
-              return true;
-            }
-            if (editing()) {
-              S.dragFree = k === "g" || k === "G";
-              ctx.setTool("drag");
-            }
-            return true;
-          }
+          return dragKey(ctx, k === "g" || k === "G");
+        case "q":
+        case "Q":
+          if (!shift && !(ev.ctrlKey || ev.metaKey || ev.altKey) && (S.route || S.modTool === "route" || S.modTool === "routediff")) return runAction("ACT_CustomTrackWidth", ctx);
+          return false;
         case "t":
         case "T":
           if (!shift) {
@@ -42332,7 +43728,8 @@ Press <esc> to cancel all; double-click to finish`;
     diffPairMenu(ctx) {
       bind(ctx);
       const R = sizesOf(ctx);
-      const fmt3 = (v) => fmtSize(v);
+      const u = sizeUnits();
+      const fmt3 = (v) => messageText(v, u === "mil" ? "mil" : u === "in" ? "in" : "mm", "pcb", true);
       const pick = (i) => () => {
         R.setDiffPairIndex(i);
         if (S.route && S.route.dp && lastCtx) {
@@ -42352,6 +43749,97 @@ Press <esc> to cancel all; double-click to finish`;
       ];
       R.diffPairLabels(fmt3).forEach((label, k) => rows.push({ label, checked: !R.useCustomDiffPair && R.diffPairIndex === k + 1, run: pick(k + 1) }));
       return rows;
+    },
+    /**
+     * TRACK_WIDTH_MENU ("Select Track/Via Width", router_tool.cpp): Use Starting Track Width, Use Net Class Values, Use
+     * Custom Values..., the pre-defined track widths ("Track netclass width" first) and via sizes ("Via netclass values"
+     * first), each a check item.  [{ label, tip, checked, run() } | { sep: true }].
+     */
+    trackWidthMenu(ctx) {
+      bind(ctx);
+      const R = sizesOf(ctx);
+      const u = sizeUnits(), fmt3 = (v) => messageText(v, u === "mil" ? "mil" : u === "in" ? "in" : "mm", "pcb", true);
+      const useIndex = !R.useConnectedWidth && !R.useCustomTrackVia;
+      const changed = () => {
+        if (lastCtx) {
+          const rt = S.route;
+          if (rt) {
+            rt.width = R.routeWidth(netNameOf(lastCtx, rt.net), rt.connected);
+            updateHead(lastCtx);
+          }
+          lastCtx.requestRender();
+        }
+      };
+      const rows = [
+        {
+          label: "Use Starting Track Width",
+          tip: "Route using the width of the starting track.",
+          checked: R.useConnectedWidth && !R.useCustomTrackVia,
+          run: () => {
+            R.setUseCustomTrackVia(false);
+            R.setUseConnectedWidth(true);
+            R.tempOverride = false;
+            changed();
+          }
+        },
+        {
+          label: "Use Net Class Values",
+          tip: "Use track and via sizes from the net class",
+          checked: useIndex && R.trackIndex === 0 && R.viaIndex === 0,
+          run: () => {
+            R.setUseConnectedWidth(false);
+            R.setViaIndex(0);
+            R.setTrackIndex(0);
+            changed();
+          }
+        },
+        {
+          label: "Use Custom Values...",
+          tip: "Specify custom track and via sizes",
+          checked: R.useCustomTrackVia,
+          run: () => {
+            R.setUseCustomTrackVia(true);
+            R.tempOverride = true;
+            runAction("ACT_CustomTrackWidth", lastCtx || ctx);
+          }
+        },
+        { sep: true }
+      ];
+      R.sizes.trackWidths.forEach((w, i) => rows.push({
+        label: i === 0 ? "Track netclass width" : `Track ${fmt3(w)}`,
+        checked: useIndex && R.trackIndex === i,
+        run: () => {
+          R.tempOverride = true;
+          R.setTrackIndex(i);
+          changed();
+        }
+      }));
+      rows.push({ sep: true });
+      R.sizes.vias.forEach((v, i) => rows.push({
+        label: i === 0 ? "Via netclass values" : v.drill > 0 ? `Via ${fmt3(v.diameter)}, hole ${fmt3(v.drill)}` : `Via ${fmt3(v.diameter)}`,
+        checked: useIndex && R.viaIndex === i,
+        run: () => {
+          R.setViaIndex(i);
+          changed();
+        }
+      }));
+      return rows;
+    },
+    /** PCB_ACTIONS::trackViaSizeChanged: a route in progress takes the new sizes. */
+    /** PCB_SELECTION_TOOL with m_CtrlClickHighlight: a Ctrl+click runs highlightNet at the click (not the selection). */
+    highlightNetAt(ctx, at) {
+      return highlightNetAt(ctx, at);
+    },
+    trackViaSizeChanged(ctx) {
+      ctx = ctx || lastCtx;
+      if (!ctx) return;
+      bind(ctx);
+      const rt = S.route;
+      if (rt) {
+        rt.width = sizesOf(ctx).routeWidth(netNameOf(ctx, rt.net), rt.connected);
+        updateHead(ctx);
+      }
+      ctx.requestRender();
     },
     /** The net being routed (the first of a pair), "" with none: what the size dialogs resolve the netclass of. */
     routedNet() {
@@ -42378,6 +43866,10 @@ Press <esc> to cancel all; double-click to finish`;
     ratsnest,
     localRatsnest,
     netInspector,
+    netLengths,
+    copperStack: copperStack2,
+    stackupItems,
+    layerDistance,
     netItemIds,
     netHighlightIds,
     msgPanelInfo,
@@ -42572,6 +44064,7 @@ Press <esc> to cancel all; double-click to finish`;
     undoRedoInFlight,
     nextLineMode,
     guessCandidates,
+    fieldCandidateId,
     hitTestDistance,
     matchDpSuffix,
     dpNetPair,
@@ -42618,6 +44111,17 @@ Press <esc> to cancel all; double-click to finish`;
     setCustomRules,
     parseDru,
     evalRuleConstraint,
+    /** PANEL_SETUP_RULES::OnShowMatching: the ids of the board items (footprints for their pads) a named rule's condition and layer select. */
+    ruleMatchingItems: (doc, s, text, name) => {
+      const rule = parseDru(text).rules.find((r) => r.name === name);
+      if (!rule) return null;
+      const ids = /* @__PURE__ */ new Set();
+      for (const it of ruleItems(doc)) {
+        const host = it.item || it.parent;
+        if (host && !ids.has(host.id) && ruleMatches(rule, doc, s, it, null)) ids.add(host.id);
+      }
+      return [...ids];
+    },
     parseCondition,
     wildMatch,
     tuneStatus,
@@ -42778,6 +44282,7 @@ Press <esc> to cancel all; double-click to finish`;
     mirrorChanges,
     moveExactChanges,
     positionRelativeChanges,
+    swapLayerChanges,
     topLeftAnchor,
     alignChanges,
     distributeChanges,
@@ -42822,6 +44327,10 @@ Press <esc> to cancel all; double-click to finish`;
     ratsnest,
     localRatsnest,
     netInspector,
+    netLengths,
+    copperStack: copperStack2,
+    stackupItems,
+    layerDistance,
     netItemIds,
     netHighlightIds,
     msgPanelInfo,
@@ -42848,6 +44357,7 @@ Press <esc> to cancel all; double-click to finish`;
     ovalApprox,
     splitCollinearOutlines,
     designSettings,
+    netclassName,
     netclassOf,
     netClearance,
     DEFAULT_SETTINGS,
@@ -42861,6 +44371,15 @@ Press <esc> to cancel all; double-click to finish`;
     breakTrackChanges,
     cleanupPlan,
     cleanupChanges,
+    unusedPadLayerChanges,
+    graphicsCleanup,
+    teardropEditChanges,
+    repairBoard,
+    geomPages,
+    shapeGeomOf,
+    setShapeGeom,
+    geographicalReannotate,
+    reannotateOrder,
     layersBlock,
     referencePoint,
     clipboardText,
