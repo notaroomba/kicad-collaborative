@@ -240,6 +240,27 @@ test("fine-pitch pads: tracks neck down and leave the pads off the grid, within 
   apply(doc, res); assert.deepEqual(errors(doc, settings), []); assert.equal(P.ratsnest(doc).length, 0);
 });
 
+test("placement keeps a clear straight path for a differential pair from the connector through its ESD part to the chip", () => {
+  const doc = board(
+    part("J1", 110, 55, [["5", -2, 1.5, "CC1", 0.3, 1.2], ["6", 2, 1.5, "CC2", 0.3, 1.2], ["1", -1, 1.5, "VBUS", 0.6, 1.2], ["2", -0.25, 1.5, "USB_D+", 0.3, 1.2], ["3", 0.25, 1.5, "USB_D-", 0.3, 1.2], ["4", 1, 1.5, "GND", 0.6, 1.2]], `(fp_rect (start -4 -3) (end 4 2.5) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd") (uuid "cy-J1"))`),
+    cap("U6", 100, 60, "USB_D+", "USB_D-"),
+    ic("U2", 120, 60, ["VBUS", "IO1", "IO2", "CHG", "VSYS", "IO3", "CC1", "CC2"]), cap("C1", 95, 45, "VBUS", "GND"), cap("C2", 96, 45, "VSYS", "GND"), cap("R1", 97, 45, "CHG", "LED"), cap("D1", 98, 45, "LED", "VSYS"),
+    ic("U1", 105, 65, ["USB_D+", "USB_D-", "GND", "VSYS", "CHG", "IO1", "IO2", "IO3"]), cap("C3", 99, 45, "VSYS", "GND"));
+  const spec = [{ ref: "J1", edge: "top" }, { ref: "U6" }, { ref: "U2", group: "chg", anchor: true }, { ref: "C1", group: "chg", near: "U2" }, { ref: "C2", group: "chg", near: "U2" }, { ref: "R1", group: "chg" }, { ref: "D1", group: "chg" },
+    { ref: "U1", group: "mcu", anchor: true }, { ref: "C3", group: "mcu", near: "U1" }];
+  const res = R.place(K, P, doc, null, { footprints: spec, outline: [90, 40, 120, 66] });
+  assert.equal(res.score.courtyardClashes, 0);
+  const at = (ref) => res.placements.find((q) => q.ref === ref);
+  // the pair's path: the connector, the ESD part and the chip, in a line; nothing of the charger block stands on it
+  const line = [at("J1"), at("U6"), at("U1")].map((q) => [q.x, q.y]);
+  const others = res.placements.filter((q) => ["U2", "C1", "C2", "R1", "D1"].includes(q.ref));
+  for (let i = 0; i + 1 < line.length; i++) for (const o of others) {
+    const [a, b] = [line[i], line[i + 1]]; const n = 40; let hit = false;
+    for (let k = 0; k <= n; k++) { const x = a[0] + (b[0] - a[0]) * k / n, y = a[1] + (b[1] - a[1]) * k / n; if (Math.abs(x - o.x) < 1.2 && Math.abs(y - o.y) < 1.2) hit = true; }
+    assert.ok(!hit, `${o.ref} at (${o.x}, ${o.y}) stands on the pair's path ${JSON.stringify(line)}`);
+  }
+});
+
 test("placement: two pinned parts in one group both land exactly where asked, unsnapped", () => {
   const doc = placeBoard();
   const res = R.place(K, P, doc, null, { footprints: SPEC.map((s) => s.ref === "U1" ? { ...s, fixed: { x: 100.013, y: 50.57, rot: 0 } } : s.ref === "L1" ? { ...s, fixed: { x: 121.57, y: 62.86, rot: 90 } } : s) });

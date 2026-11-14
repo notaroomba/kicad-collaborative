@@ -86761,8 +86761,74 @@ function place(K7, P, doc, settings, opts = {}) {
     };
     const inside2 = (q, o, m) => q[0] >= o[0] + m - 1e-6 && q[1] >= o[1] + m - 1e-6 && q[2] <= o[2] - m + 1e-6 && q[3] <= o[3] - m + 1e-6;
     const edgeOk = (b, bb) => bb[0] >= O2[0] - 1e-6 - (b.edge === "left" ? 1e3 : 0) && bb[1] >= O2[1] - 1e-6 - (b.edge === "top" ? 1e3 : 0) && bb[2] <= O2[2] + 1e-6 + (b.edge === "right" ? 1e3 : 0) && bb[3] <= O2[3] + 1e-6 + (b.edge === "bottom" ? 1e3 : 0);
+    const pairOf = (net) => {
+      const q = pairName(net);
+      return q ? q.base : null;
+    };
+    const pairsIn = (b) => {
+      const out = /* @__PURE__ */ new Set();
+      for (const p of b.parts) for (const d of p.pads) if (d.net) {
+        const k = pairOf(d.net);
+        if (k) out.add(k);
+      }
+      return out;
+    };
+    let lanes = [];
+    const LANE = 0.7;
+    const rebuildLanes = () => {
+      lanes = [];
+      const at2 = /* @__PURE__ */ new Map();
+      for (const o of blocks) if (o.placed) for (const p of o.parts) for (const d of p.pads) {
+        const k = d.net ? pairOf(d.net) : null;
+        if (!k) continue;
+        const [px, py] = rotv(o.rot, p.x, p.y), [dx, dy] = rotv(o.rot + p.rot, d.x, d.y);
+        let m = at2.get(k);
+        if (!m) at2.set(k, m = /* @__PURE__ */ new Map());
+        let l = m.get(p.ref);
+        if (!l) m.set(p.ref, l = []);
+        l.push([o.x + px + dx, o.y + py + dy]);
+      }
+      for (const [base, m] of at2) {
+        const pts = Array.from(m.values()).map((l) => [l.reduce((s, q) => s + q[0], 0) / l.length, l.reduce((s, q) => s + q[1], 0) / l.length]);
+        if (pts.length < 2) continue;
+        const inT = pts.map((_, i) => i === 0);
+        for (let n2 = 1; n2 < pts.length; n2++) {
+          let bi = -1, bj = -1, bd = Infinity;
+          for (let i = 0; i < pts.length; i++) if (inT[i]) {
+            for (let j = 0; j < pts.length; j++) if (!inT[j]) {
+              const d = Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]);
+              if (d < bd) {
+                bd = d;
+                bi = i;
+                bj = j;
+              }
+            }
+          }
+          if (bj < 0) break;
+          inT[bj] = true;
+          lanes.push({ base, a: pts[bi], b: pts[bj] });
+        }
+      }
+    };
+    const inLane = (b, q) => {
+      if (!lanes.length) return false;
+      const mine = pairsIn(b);
+      for (const ln of lanes) {
+        if (mine.has(ln.base)) continue;
+        const L = Math.hypot(ln.b[0] - ln.a[0], ln.b[1] - ln.a[1]), n2 = Math.max(1, Math.ceil(L / 0.25));
+        for (let i = 0; i <= n2; i++) {
+          const x = ln.a[0] + (ln.b[0] - ln.a[0]) * i / n2, y = ln.a[1] + (ln.b[1] - ln.a[1]) * i / n2;
+          if (x > q[0] - LANE && x < q[2] + LANE && y > q[1] - LANE && y < q[3] + LANE) return true;
+        }
+      }
+      return false;
+    };
     const free = (b, rot3, x, y, bb) => {
       let mine = null;
+      if (lanes.length) {
+        mine = partBoxes(b, rot3, x, y);
+        if (mine.some((a) => inLane(b, a.b))) return false;
+      }
       for (const o of blocks) {
         if (o === b || !o.placed) continue;
         const ob = shift(turnBox(o.box, o.rot), o.x, o.y);
@@ -86925,10 +86991,12 @@ function place(K7, P, doc, settings, opts = {}) {
       }
     };
     const sizeOf = (b) => b.parts.reduce((s, p) => s + p.pads.length, 0);
-    const order = blocks.slice().sort((a, b) => +b.fixed - +a.fixed || +!!b.edge - +!!a.edge || +long(b) - +long(a) || sizeOf(b) - sizeOf(a) || (a.name < b.name ? -1 : 1));
+    const order = blocks.slice().sort((a, b) => +b.fixed - +a.fixed || +!!b.edge - +!!a.edge || +(pairsIn(b).size > 0) - +(pairsIn(a).size > 0) || +long(b) - +long(a) || sizeOf(b) - sizeOf(a) || (a.name < b.name ? -1 : 1));
+    lanes = [];
     for (const b of order) {
       settle(b);
       rebuildPads();
+      rebuildLanes();
     }
     for (let round = 0; round < 2; round++) for (const b of blocks.slice()) {
       if (b.fixed) continue;
@@ -86941,6 +87009,7 @@ function place(K7, P, doc, settings, opts = {}) {
       if (!put(b) || wasLegal && costAt(blockPads(b), b.rot, b.x, b.y) > before - 1e-9) Object.assign(b, keep);
       b.placed = true;
       rebuildPads();
+      rebuildLanes();
     }
     const placements3 = [];
     const finalBox = /* @__PURE__ */ new Map();

@@ -9,7 +9,7 @@
 // Who belongs to which group, the anchors and the edges come from the caller (the assistant's model, or a person);
 // without them, small parts join the larger part they share their most specific net with.
 // Pure: reads the board, returns positions; nothing is written here.
-import { isSupply, refOf } from "./route";
+import { isSupply, pairName, refOf } from "./route";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Pt = [number, number];
@@ -209,8 +209,25 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   };
   const inside = (q: Box, o: Box, m: number) => q[0] >= o[0] + m - 1e-6 && q[1] >= o[1] + m - 1e-6 && q[2] <= o[2] - m + 1e-6 && q[3] <= o[3] - m + 1e-6;
   const edgeOk = (b: Block, bb: Box) => bb[0] >= O[0] - 1e-6 - (b.edge === "left" ? 1e3 : 0) && bb[1] >= O[1] - 1e-6 - (b.edge === "top" ? 1e3 : 0) && bb[2] <= O[2] + 1e-6 + (b.edge === "right" ? 1e3 : 0) && bb[3] <= O[3] + 1e-6 + (b.edge === "bottom" ? 1e3 : 0);
+  // A differential pair needs a clear straight path from the connector through its ESD part and series parts to the
+  // chip: once the blocks it runs between are down, the line between them is kept free of every other part.
+  const pairOf = (net: string) => { const q = pairName(net); return q ? q.base : null; };
+  const pairsIn = (b: Block) => { const out = new Set<string>(); for (const p of b.parts) for (const d of p.pads) if (d.net) { const k = pairOf(d.net); if (k) out.add(k); } return out; };
+  let lanes: { base: string; a: Pt; b: Pt }[] = []; const LANE = 0.7;
+  const rebuildLanes = () => {
+    lanes = []; const at = new Map<string, Map<string, Pt[]>>();   // pair -> part -> its pair pads
+    for (const o of blocks) if (o.placed) for (const p of o.parts) for (const d of p.pads) { const k = d.net ? pairOf(d.net) : null; if (!k) continue; const [px, py] = rotv(o.rot, p.x, p.y), [dx, dy] = rotv(o.rot + p.rot, d.x, d.y);
+      let m = at.get(k); if (!m) at.set(k, m = new Map()); let l = m.get(p.ref); if (!l) m.set(p.ref, l = []); l.push([o.x + px + dx, o.y + py + dy]); }
+    for (const [base, m] of at) { const pts = Array.from(m.values()).map((l) => [l.reduce((s, q) => s + q[0], 0) / l.length, l.reduce((s, q) => s + q[1], 0) / l.length] as Pt); if (pts.length < 2) continue;
+      const inT = pts.map((_, i) => i === 0); for (let n = 1; n < pts.length; n++) { let bi = -1, bj = -1, bd = Infinity; for (let i = 0; i < pts.length; i++) if (inT[i]) for (let j = 0; j < pts.length; j++) if (!inT[j]) { const d = Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]); if (d < bd) { bd = d; bi = i; bj = j; } } if (bj < 0) break; inT[bj] = true; lanes.push({ base, a: pts[bi], b: pts[bj] }); } }
+  };
+  const inLane = (b: Block, q: Box) => { if (!lanes.length) return false; const mine = pairsIn(b);
+    for (const ln of lanes) { if (mine.has(ln.base)) continue; const L = Math.hypot(ln.b[0] - ln.a[0], ln.b[1] - ln.a[1]), n = Math.max(1, Math.ceil(L / 0.25));
+      for (let i = 0; i <= n; i++) { const x = ln.a[0] + (ln.b[0] - ln.a[0]) * i / n, y = ln.a[1] + (ln.b[1] - ln.a[1]) * i / n; if (x > q[0] - LANE && x < q[2] + LANE && y > q[1] - LANE && y < q[3] + LANE) return true; } }
+    return false; };
   const free = (b: Block, rot: number, x: number, y: number, bb: Box) => {
     let mine: Geo[] | null = null;
+    if (lanes.length) { mine = partBoxes(b, rot, x, y); if (mine.some((a) => inLane(b, a.b))) return false; }
     for (const o of blocks) { if (o === b || !o.placed) continue; const ob = shift(turnBox(o.box, o.rot), o.x, o.y); if (!hit(bb, ob, gap + ESCAPE)) continue; mine = mine || partBoxes(b, rot, x, y); const theirs = partBoxes(o, o.rot, o.x, o.y); for (const a of mine) for (const t of theirs) if (clash(a, t, gap)) return false; }
     for (const t of stillBoxes) { if (!hit(bb, t.b, gap + ESCAPE)) continue; mine = mine || partBoxes(b, rot, x, y); for (const a of mine) if (clash(a, t, gap)) return false; }
     return true;
@@ -285,11 +302,13 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     }
   };
   const sizeOf = (b: Block) => b.parts.reduce((s, p) => s + p.pads.length, 0);
-  const order = blocks.slice().sort((a, b) => +b.fixed - +a.fixed || +!!b.edge - +!!a.edge || +long(b) - +long(a) || sizeOf(b) - sizeOf(a) || (a.name < b.name ? -1 : 1));
-  for (const b of order) { settle(b); rebuildPads(); }
+  // the blocks a differential pair runs through go down first (after pinned parts and edge connectors), so its path is laid out before anything can stand in it
+  const order = blocks.slice().sort((a, b) => +b.fixed - +a.fixed || +!!b.edge - +!!a.edge || +(pairsIn(b).size > 0) - +(pairsIn(a).size > 0) || +long(b) - +long(a) || sizeOf(b) - sizeOf(a) || (a.name < b.name ? -1 : 1));
+  lanes = [];
+  for (const b of order) { settle(b); rebuildPads(); rebuildLanes(); }
   for (let round = 0; round < 2; round++) for (const b of blocks.slice()) {
     if (b.fixed) continue; const keep = { x: b.x, y: b.y, rot: b.rot }; const wasLegal = legal(b, keep.rot, keep.x, keep.y); b.placed = false; rebuildPads(); hug = long(b) && !b.edge ? b : null; const before = costAt(blockPads(b), keep.rot, keep.x, keep.y);
-    if (!put(b) || (wasLegal && costAt(blockPads(b), b.rot, b.x, b.y) > before - 1e-9)) Object.assign(b, keep); b.placed = true; rebuildPads();
+    if (!put(b) || (wasLegal && costAt(blockPads(b), b.rot, b.x, b.y) > before - 1e-9)) Object.assign(b, keep); b.placed = true; rebuildPads(); rebuildLanes();
   }
 
   // ---- out
