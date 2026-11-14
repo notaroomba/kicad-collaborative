@@ -721,6 +721,7 @@ export function Home() {
   const tab: Tab = homeTab === "explore" ? "explore" : homeTab === "trash" ? "trash" : homeTab === "time" ? "time" : "projects";
   const tick = useApp((s) => s.homeTick) || 0;
   const [share, setShare] = useState<ShareTarget | null>(null);
+  const phone = useMedia(PHONE);
   const [upload, setUpload] = useState<null | { files?: API.UploadFile[] }>(null);
   const [join, setJoin] = useState(false);
   const [account, setAccount] = useState<MenuAt | null>(null);
@@ -835,9 +836,8 @@ export function Home() {
               {me ? <a aria-label="Connect AI" className="hp-side-btn" id="homeConnect" href="/connect"><Ic name="link" size={18} /><span>Connect AI</span></a> : null}
             </div>
             <div className="hp-side-foot">
-              <a aria-label="Get the desktop app" className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>
+              {me ? null : <a aria-label="Get the desktop app" className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>}
               {accountBtn}
-              {me ? <button type="button" aria-label="Log out" className="hp-side-btn hp-logout" onClick={() => signOut()}><Ic name="signout" size={18} /><span>Log out</span></button> : null}
             </div>
           </aside>
           <main className="hp-main" id="homeMain">
@@ -867,11 +867,15 @@ export function Home() {
           toast(`“${r.name}” is online${left ? ` (${left} non-KiCad file${left === 1 ? "" : "s"} left out)` : ""}`, { action: { label: "Open", run: () => go(editUrl(r.projectId)) } }); }} /> : null}
       {join ? <JoinDialog me={me} onClose={() => setJoin(false)} /> : null}
       {account && me ? <Menu at={account} title={me.login} onClose={() => setAccount(null)} items={[
-        { id: "trash", label: "Trash", icon: "trash", run: () => go("/trash") },
-        { id: "time", label: "Time spent", icon: "clock", run: () => go("/time") },
+        // The sidebar holds the navigation; on a phone it is hidden, so the account menu carries those pages instead.
+        ...(phone ? [
+          { id: "trash", label: "Trash", icon: "trash", run: () => go("/trash") },
+          { id: "sync", label: "Import from GitHub", icon: "branch", run: () => { location.href = "/github"; } },
+          { id: "time", label: "Time spent", icon: "clock", run: () => go("/time") },
+          { id: "mcp", label: "Connect AI", icon: "link", run: () => { location.href = "/connect"; } },
+          "-" as const,
+        ] as MenuEntry[] : []),
         { id: "waka", label: "WakaTime settings", icon: "clock", run: () => { go("/time"); setTimeout(() => document.getElementById("wakatime")?.scrollIntoView({ block: "start" }), 300); } },
-        { id: "sync", label: "GitHub sync", icon: "branch", run: () => { location.href = "/github"; } },
-        { id: "mcp", label: "Connect an AI assistant (MCP)", icon: "link", run: () => { location.href = "/connect"; } },
         { id: "gh", label: "GitHub profile", icon: "open", run: () => { window.open(`https://github.com/${me.login}`, "_blank", "noopener"); } },
         { id: "app", label: "Get the desktop app", icon: "desktop", run: () => { window.open(RELEASES, "_blank", "noopener"); } },
         ...(me.admin ? ["-" as const, { id: "admin", label: "Admin dashboard", icon: "chart", run: () => { location.href = "/admin"; } }] : []),
