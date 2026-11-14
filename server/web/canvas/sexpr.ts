@@ -146,6 +146,18 @@ export function colorOf(node: SNode): string | null {
   return rgba(num(c[1]), num(c[2]), num(c[3]), a);
 }
 
+/**
+ * A text's (font (color r g b a)) as a CSS colour; null when absent or exactly 0 0 0 0 (COLOR4D::UNSPECIFIED, the
+ * layer colour then applies).  Any other colour is the text's own, a zero alpha included: KiCad then draws no glyphs
+ * (SCH_PAINTER's transparentColor), and neither does a fully transparent fill / stroke here.
+ */
+export function fontColorOf(font: SNode): string | null {
+  const c = kid(font, "color"); if (!c) return null;
+  const r = num(c[1]), g = num(c[2]), b = num(c[3]), a = num(c[4], 1);
+  if (!r && !g && !b && !a) return null;
+  return rgba(r, g, b, Math.max(0, a));
+}
+
 export function strokeColorOf(node: SNode): string | null { const s = kid(node, "stroke"); return s ? colorOf(s) : null; }
 
 /** (stroke (width w) (type t) (color …)) → {w, color, dash, type}; w = def when unspecified; type = dash|dot|dash_dot|dash_dot_dot or null */
@@ -210,7 +222,7 @@ export function effectsOf(node: SNode): TextEffects {
       const t = kid(f, "thickness"); if (t) r.thick = num(t[1]);
       r.bold = yesNo(f, "bold"); r.italic = yesNo(f, "italic");
       const fc = kid(f, "face"); if (fc && str(fc[1])) r.face = str(fc[1]);   // an outline (TrueType) font by name
-      const col = colorOf(f); if (col) r.color = col;   // the text colour lives in (font (color …)), not on the item
+      const col = fontColorOf(f); if (col) r.color = col;   // the text colour lives in (font (color …)), not on the item
     }
     const j = kid(e, "justify"); if (j) { r.just = j.slice(1).map(str); if (r.just.includes("mirror")) r.mirror = true; }
     if (has(e, "hide")) r.hide = true; const h = kid(e, "hide"); if (h && str(h[1]) === "yes") r.hide = true;

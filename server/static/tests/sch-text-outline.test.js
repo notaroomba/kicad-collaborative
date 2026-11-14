@@ -65,8 +65,16 @@ test("(color 0 0 0 0) is unspecified and a text without colour keeps its layer c
   const d = doc(`(text "U" (at 10 10 0) ${FONT("(color 0 0 0 0)")} (uuid "t1")) (text "K" (at 20 10 0) ${FONT("(color 0 0 0 1)")} (uuid "t2")) (text "N" (at 30 10 0) ${FONT()} (uuid "t3"))`);
   const by = (id) => texts(d.items.get(id))[0].color;
   same(by("t1"), rgb(K.SCH.notes)); same(by("t3"), rgb(K.SCH.notes)); same(by("t2"), [0, 0, 0, 1]);
-  assert.strictEqual(K.effectsOf(K.parse('(text "x" (effects (font (color 0 0 0 0))))')[0]).color, undefined);
+  assert.strictEqual(K.effectsOf(K.parse('(text "x" (effects (font (color 0 0 0 0))))')).color, undefined);
   assert.strictEqual(K.fieldColor({}, "#123456"), "#123456");
+});
+
+test("a zero alpha on any other colour is the text's own (transparent: KiCad draws no glyphs), not the layer colour", () => {
+  assert.strictEqual(K.effectsOf(K.parse('(text "x" (effects (font (color 255 0 0 0))))')).color, "rgba(255,0,0,0)");
+  const d = doc(`(text "T" (at 10 10 0) ${FONT("(color 255 0 0 0)")} (uuid "t1")) (label "L" (at 30 30 0) ${FONT("(color 0 0 255 0)")} (uuid "l1"))
+    (global_label "G" (shape input) (at 40 40 0) ${FONT("(color 0 0 0 0)")} (uuid "g1"))`);
+  same(texts(d.items.get("t1"))[0].color, [255, 0, 0, 0]); same(texts(d.items.get("l1"))[0].color, [0, 0, 255, 0]);
+  same(texts(d.items.get("g1"))[0].color, rgb(K.SCH.glabel), "0 0 0 0 alone is unspecified");
 });
 
 test("fields: symbol, sheet and label fields take their own colour (SCH_FIELD::GetFieldColor), hidden ones too", () => {
