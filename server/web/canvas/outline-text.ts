@@ -103,9 +103,12 @@ export function readSfnt(buf: ArrayBuffer): SfntInfo | null {
     const head = T.get("head"), hhea = T.get("hhea"), hmtx = T.get("hmtx"), cmap = T.get("cmap"), os2 = T.get("OS/2");
     if (head === undefined || hhea === undefined) return null;
     const upm = dv.getUint16(head + 18) || 1000;
-    // FreeType (sfnt_load_face): the hhea ascender / descender, else OS/2's typographic ones, else its Windows ones
+    // FreeType (sfnt_load_face): OS/2's typographic ascender / descender when its fsSelection sets USE_TYPO_METRICS
+    // (bit 7), else the hhea ones, else (both zero) the typographic ones, else the Windows ones
+    const os2ok = os2 !== undefined && dv.getUint16(os2) !== 0xffff;
     let asc = dv.getInt16(hhea + 4), desc = dv.getInt16(hhea + 6);
-    if (!asc && !desc && os2 !== undefined) {
+    if (os2ok && dv.getUint16(os2 + 62) & 0x80) { asc = dv.getInt16(os2 + 68); desc = dv.getInt16(os2 + 70); }
+    else if (!asc && !desc && os2ok) {
       const ta = dv.getInt16(os2 + 68), td = dv.getInt16(os2 + 70);
       if (ta || td) { asc = ta; desc = td; } else { asc = dv.getUint16(os2 + 74); desc = -dv.getUint16(os2 + 76); }
     }

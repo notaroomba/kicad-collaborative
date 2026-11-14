@@ -114,12 +114,13 @@ test("colours survive a round trip through the writer", () => {
 
 // ---------------------------------------------------------------- an outline face, as a font file
 /** A minimal TrueType file: head, hhea, OS/2, hmtx, cmap (format 4); 'A'..'Z' and ' ' map to glyphs of the given advance. */
-function makeFont({ upm = 1000, asc = 800, desc = -200, adv = 600 } = {}) {
+function makeFont({ upm = 1000, asc = 800, desc = -200, adv = 600, typoAsc = 0, typoDesc = 0, useTypo = false } = {}) {
   const tables = {};
   const u16 = (v) => [(v >> 8) & 255, v & 255], i16 = (v) => u16(v & 0xffff), u32 = (v) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255];
   tables.head = [...u32(0x10000), ...u32(0), ...u32(0), ...u32(0x5f0f3cf5), ...u16(0), ...u16(upm), ...new Array(36).fill(0)];
   tables.hhea = [...u32(0x10000), ...i16(asc), ...i16(desc), ...i16(0), ...new Array(24).fill(0), ...u16(28)];
   tables["OS/2"] = new Array(96).fill(0);
+  tables["OS/2"].splice(62, 2, ...u16(useTypo ? 0x80 : 0)); tables["OS/2"].splice(68, 4, ...i16(typoAsc), ...i16(typoDesc));
   const hm = []; for (let g = 0; g < 28; g++) hm.push(...u16(g ? adv : 500), ...i16(0)); tables.hmtx = hm;
   // cmap: segments ' ' (gid 27), 'A'-'Z' (gid 1..26), 0xFFFF
   const segs = [[32, 32, 27 - 32], [65, 90, 1 - 65], [0xffff, 0xffff, 1]], n = segs.length;
@@ -135,6 +136,15 @@ test("readSfnt: units per em, FreeType's ascender / descender and advance widths
   const f = K.readSfnt(makeFont({ upm: 2048, asc: 1950, desc: -550, adv: 1200 }));
   assert.strictEqual(f.upm, 2048); assert.strictEqual(f.asc, 1950); assert.strictEqual(f.desc, -550);
   assert.strictEqual(f.advance("Q".codePointAt(0)), 1200); assert.strictEqual(f.advance(32), 1200);
+});
+
+test("readSfnt: OS/2 USE_TYPO_METRICS (fsSelection bit 7) makes FreeType take the typographic ascender / descender", () => {
+  const o = { upm: 2048, asc: 1854, desc: -434, typoAsc: 1491, typoDesc: -431 };
+  const plain = K.readSfnt(makeFont(o)), typo = K.readSfnt(makeFont(Object.assign({ useTypo: true }, o)));
+  assert.deepStrictEqual([plain.asc, plain.desc], [1854, -434], "bit clear: hhea");
+  assert.deepStrictEqual([typo.asc, typo.desc], [1491, -431], "bit set: sTypoAscender / sTypoDescender");
+  const z = K.readSfnt(makeFont({ asc: 0, desc: 0, typoAsc: 700, typoDesc: -300 }));
+  assert.deepStrictEqual([z.asc, z.desc], [700, -300], "hhea zero: the typographic ones");
 });
 
 const FACE = "Test Face";
