@@ -192,8 +192,13 @@ export async function projectFootprintByLibId(lib: string, name: string, docs: P
 
 async function projectIndex(kind: LibKind, lib: ProjectLib): Promise<LibItem[]> {
   if (kind === "footprint") {
-    return lib.docs.map((d): LibItem => { const name = d.path.split("/").pop()!.replace(/\.kicad_mod$/i, ""); return { id: `${lib.name}:${name}`, name, library: lib.name, source: "project" }; })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // each footprint is read for what the tree node carries (FOOTPRINT_INFO: description, keywords and the unique pad
+    // count the chooser's pin-count filter compares, LIB_TREE_NODE::m_PinCount); one that cannot be read is listed by name
+    const rows = await Promise.all(lib.docs.map(async (d): Promise<LibItem> => {
+      const name = d.path.split("/").pop()!.replace(/\.kicad_mod$/i, ""), row: LibItem = { id: `${lib.name}:${name}`, name, library: lib.name, source: "project" };
+      try { const info = footprintInfo(await docText(d.docId)); return Object.assign(row, { description: info.description, keywords: info.keywords, pads: info.pads }); } catch { return row; }
+    }));
+    return rows.sort((a, b) => a.name.localeCompare(b.name));
   }
   const rows: LibItem[] = [];
   for (const d of lib.docs) {

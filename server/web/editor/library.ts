@@ -64,9 +64,11 @@ type RenderFn = (doc: KDoc, ctx: CanvasRenderingContext2D, view: KView, opts: Re
 
 const K = (): KiCadCanvasApi => window.KiCadCanvas;
 const ctxNow = (): ToolCtx => (toolCtx as unknown as () => ToolCtx)();
-interface AppStateLike { docs?: { docId: string; path: string; docType: string }[]; project?: { name?: string } | null }
+interface AppStateLike { docs?: { docId: string; path: string; docType: string }[]; project?: { name?: string; docs?: { docId: string; path: string; docType: string }[] } | null }
 const appState = (): AppStateLike => state as unknown as AppStateLike;
-const docsNow = (): { docId: string; path: string; docType: string }[] => appState().docs || [];
+// every document of the project (its .kicad_sym / .pretty libraries and fp-lib-table among them): appState().docs keeps
+// only the schematics and boards the editor opens (bootpick.ts editorDocs)
+const docsNow = (): { docId: string; path: string; docType: string }[] => { const s = appState(); return (s.project && s.project.docs) || s.docs || []; };
 const sourceCtx = (): SourceContext => ({ docs: docsNow(), doc: (E.kdoc as KDoc | null) || null });
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const cursorMm = (): Pt => { const c = (E.lastCursorMm as Pt) || [0, 0]; const s = snapMm([c[0], c[1]]) as Pt; return [s[0], s[1]]; };
