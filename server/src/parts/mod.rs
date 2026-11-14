@@ -20,6 +20,7 @@
 //! same manufacturer part number when there is one.
 
 pub mod easyeda;
+pub mod tidy;
 pub mod vendors;
 
 use std::io::{Cursor, Write};

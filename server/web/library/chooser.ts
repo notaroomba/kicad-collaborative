@@ -79,6 +79,9 @@ const CSS = `
 .klib-row.lib .klib-item { font-weight: 600; }
 .klib-row.note .klib-item { color: var(--ink-2); font-style: italic; font-weight: 400; }
 .klib-row.sel.note .klib-item { color: var(--on-accent); }
+.klib-spin { display: inline-block; width: 10px; height: 10px; margin: 0 6px 0 2px; border: 2px solid color-mix(in srgb, var(--ink) 25%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: klib-spin .7s linear infinite; vertical-align: -1px; }
+.klib-row.sel .klib-spin { border-color: color-mix(in srgb, var(--on-accent) 35%, transparent); border-top-color: var(--on-accent); }
+@keyframes klib-spin { to { transform: rotate(360deg); } }
 .klib-tw { display: inline-block; width: 16px; text-align: center; color: var(--ink-2); font-size: 9px; }
 .klib-row.sel .klib-tw { color: var(--on-accent); }
 .klib-details { height: 132px; flex: none; overflow: auto; border: 1px solid var(--line); border-top: 0; background: var(--panel); padding: 6px 10px; line-height: 1.45; }
@@ -211,7 +214,8 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         const count = g.items ? items.length : -1;
         out.push({ key: g.key, depth: 0, group: g, label: g.label, description: g.description, expandable: count !== 0 || g.loading || !!g.error || !g.items, expanded: open });
         if (!open) continue;
-        if (g.loading && !items.length) out.push({ key: g.key + "/@loading", depth: 1, group: g, label: g.type === "source" ? "Searching…" : "Loading…", description: "", expandable: false, expanded: false });
+        // a vendor search keeps its "Searching…" row above the previous results until the new ones arrive
+        if (g.loading && (!items.length || g.type === "source")) out.push({ key: g.key + "/@loading", depth: 1, group: g, label: g.type === "source" ? `Searching ${g.label.replace(/\s*\(.*$/, "")}…` : "Loading…", description: g.type === "source" && query ? `for "${query}"` : "", expandable: false, expanded: false });
         if (g.error) out.push({ key: g.key + "/@error", depth: 1, group: g, label: g.error, description: "", expandable: false, expanded: false });
         for (const { it } of items) {
           const k = itemKey(g, it), units = isSym ? it.units || 1 : 1, itemOpen = units > 1 && expanded.has(k);
@@ -234,14 +238,15 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
         const r = rows[i], note = !r.item && r.depth === 1;
         const tw = r.expandable ? (r.expanded ? "▼" : "▶") : "";
         html += `<div class="klib-row${r.depth === 0 ? " lib" : ""}${note ? " note" : ""}${r.key === selKey ? " sel" : ""}" style="top:${i * ROW_H}px" data-i="${i}" title="${esc(r.item ? (r.item.library ? r.item.library + ":" : "") + r.item.name : r.label)}">`
-          + `<span class="klib-item" style="padding-left:${4 + r.depth * 16}px"><span class="klib-tw">${tw}</span>${esc(r.label)}</span><span class="klib-desc">${esc(r.description)}</span></div>`;
+          + `<span class="klib-item" style="padding-left:${4 + r.depth * 16}px"><span class="klib-tw">${tw}</span>${(r.depth === 0 || r.key.endsWith("/@loading")) && r.group.loading ? '<span class="klib-spin"></span>' : ""}${esc(r.label)}</span><span class="klib-desc">${esc(r.description)}</span></div>`;
       }
       rowsEl.innerHTML = html;
     }
     const queueDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(drawRows); } };
     function setTitle(): void {
       titleEl.textContent = baseTitle + ` (${loadedCount} items loaded)`;
-      status.textContent = tableError ? tableError : pending > 0 ? `Loading libraries… ${pending} to go` : "";
+      const searching = [...sourceGroups.values()].some((g) => g.loading && groups.includes(g));
+      status.textContent = tableError ? tableError : pending > 0 ? `Loading libraries… ${pending} to go` : searching ? "Searching vendor catalogues…" : "";
     }
     let refreshTimer = 0;
     function refresh(selectBest = false): void {
@@ -279,7 +284,8 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
       }
       const it = row.item;
       renderDetails(it, row.unit, null);
-      mainMsg.textContent = "Loading…";
+      clearPreview(mainCanvas, kind);
+      mainMsg.innerHTML = `<span class="klib-spin"></span>${esc(it.source ? `Fetching ${it.name} from ${row.group.label.replace(/\s*\(.*$/, "")}…` : "Loading…")}`;
       fetchItem(kind, it, ctx).then((got) => {
         if (closed || token !== previewToken) return;
         shown = { row, got }; mainMsg.textContent = "";
@@ -422,7 +428,10 @@ export function openChooser(kind: LibKind, ctx: SourceContext, opts: ChooserOpti
     input.addEventListener("input", () => {
       query = input.value.trim(); filterBox.classList.toggle("has-text", !!input.value);
       tree.scrollTop = 0; refresh(true);
+      // show the vendor search as busy from the first keystroke, not only once the debounce fires
+      if (query) for (const g of sourceGroups.values()) if (g.src && groups.includes(g)) { g.loading = true; g.error = ""; }
       window.clearTimeout(sourceTimer); sourceTimer = window.setTimeout(searchSources, 250);
+      if (query) queueRefresh();
     });
     $<HTMLElement>(".klib-clear").addEventListener("click", () => { input.value = ""; input.dispatchEvent(new Event("input")); input.focus(); });
     $<HTMLElement>(".klib-cancel").addEventListener("click", () => close(null));

@@ -44,6 +44,8 @@ pub struct SymbolOut {
     pub bbox: [f64; 4],
     pub hide_pin_names: bool,
     pub hide_pin_numbers: bool,
+    /// The pins were rearranged into KiCad library style ([`super::tidy`]).
+    pub tidied: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +464,9 @@ struct PinStats {
     count: usize,
     names_hidden: usize,
     numbers_hidden: usize,
+    /// the pins as read, and what else the unit draws, for [`super::tidy::arrange`]
+    pins: Vec<super::tidy::RawPin>,
+    art: super::tidy::Art,
 }
 
 /// One unit's shapes → its graphics and pins, appended to `out`.
@@ -527,6 +532,12 @@ fn symbol_shapes(shapes: &[Value], cx: &mut SymCtx, out: &mut String, stats: &mu
                     _ => (kx, ky - l),
                 };
                 cx.bbox.add(ex, ey);
+                stats.pins.push(super::tidy::RawPin {
+                    etype: pin_type(g(2), stats.passive).to_string(),
+                    style: style.to_string(),
+                    name: name.to_string(),
+                    number: number.to_string(),
+                });
                 out.push_str(&format!(
                     "\t\t\t(pin {} {} (at {} {} {}) (length {}) (name {} {FONT}) (number {} {FONT}))\n",
                     pin_type(g(2), stats.passive),
@@ -540,6 +551,7 @@ fn symbol_shapes(shapes: &[Value], cx: &mut SymCtx, out: &mut String, stats: &mu
                 ));
             }
             "R" => {
+                stats.art.rects += 1;
                 let (x, y, w, h) = (f(g(1)), f(g(2)), f(g(5)), f(g(6)));
                 let (x0, y0) = cx.pt(x, y);
                 let (x1, y1) = cx.pt(x + w, y + h);
@@ -549,6 +561,7 @@ fn symbol_shapes(shapes: &[Value], cx: &mut SymCtx, out: &mut String, stats: &mu
                 out.push_str(&format!("\t\t\t(rectangle (start {} {}) (end {} {}) {STROKE} {fill})\n", fnum(x0), fnum(y0), fnum(x1), fnum(y1)));
             }
             "C" => {
+                stats.art.dots += 1;
                 let (x, y, r) = (f(g(1)), f(g(2)), f(g(3)));
                 let (kx, ky) = cx.pt(x, y);
                 cx.pt(x - r, y - r);
@@ -562,6 +575,7 @@ fn symbol_shapes(shapes: &[Value], cx: &mut SymCtx, out: &mut String, stats: &mu
                 ));
             }
             "E" => {
+                stats.art.dots += 1;
                 let (x, y, rx, ry) = (f(g(1)), f(g(2)), f(g(3)), f(g(4)));
                 if (rx - ry).abs() < 1e-6 {
                     let (kx, ky) = cx.pt(x, y);
@@ -585,6 +599,7 @@ fn symbol_shapes(shapes: &[Value], cx: &mut SymCtx, out: &mut String, stats: &mu
                 }
             }
             "PL" | "PG" => {
+                stats.art.other += 1;
                 let mut pts = parse_points(g(1));
                 if pts.len() < 2 {
                     continue;
@@ -596,6 +611,7 @@ fn symbol_shapes(shapes: &[Value], cx: &mut SymCtx, out: &mut String, stats: &mu
                 out.push_str(&format!("\t\t\t(polyline (pts {}) {STROKE} {})\n", s.join(" "), fill_of(g(5), g(2))));
             }
             "A" | "PT" => {
+                stats.art.other += 1;
                 let fill = fill_of(g(if fl[0] == "A" { 6 } else { 5 }), g(if fl[0] == "A" { 3 } else { 2 }));
                 let path = parse_path(g(1));
                 // consecutive straight runs become one polyline; arcs and curves their own shapes
@@ -698,9 +714,9 @@ fn grid_shift(shapes: &[Value], ox: f64, oy: f64) -> (f64, f64) {
     (0.0, 0.0)
 }
 
-fn convert_symbol(name: &str, prefix: &str, units: &[&Value]) -> Option<SymbolOut> {
+fn convert_symbol(name: &str, prefix: &str, units: &[&Value], tidy: bool) -> Option<SymbolOut> {
     let mut body = String::new();
-    let mut stats = PinStats { passive: passive_part(prefix), count: 0, names_hidden: 0, numbers_hidden: 0 };
+    let mut stats = PinStats { passive: passive_part(prefix), count: 0, names_hidden: 0, numbers_hidden: 0, pins: Vec::new(), art: Default::default() };
     let mut bbox = BBox::empty();
     let mut n_units = 0;
     for data in units {
@@ -725,7 +741,19 @@ fn convert_symbol(name: &str, prefix: &str, units: &[&Value]) -> Option<SymbolOu
     if n_units == 0 {
         return None;
     }
+    // one plain box: redraw it in KiCad library style (power up, ground down, ports in order)
+    let mut tidied = false;
+    if tidy && n_units == 1 {
+        if let Some(t) = super::tidy::arrange(&stats.pins, &stats.art, prefix) {
+            body = format!("\t\t(symbol {}\n{}\t\t)\n", q(&format!("{name}_1_1")), t.unit);
+            bbox = BBox::empty();
+            bbox.add(t.bbox[0], t.bbox[1]);
+            bbox.add(t.bbox[2], t.bbox[3]);
+            tidied = true;
+        }
+    }
     Some(SymbolOut {
+        tidied,
         name: name.to_string(),
         body,
         units: n_units,
@@ -1166,8 +1194,19 @@ pub fn clean_maker(s: &str) -> String {
     if head.is_empty() { s.trim().to_string() } else { head.to_string() }
 }
 
+/// Whether imported box symbols are redrawn in KiCad library style.  Off unless the
+/// server runs with `KC_TIDY_SYMBOLS=1`, until the owner has reviewed the results.
+pub fn tidy_enabled() -> bool {
+    std::env::var("KC_TIDY_SYMBOLS").map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on")).unwrap_or(false)
+}
+
 /// Convert the `result` object of EasyEDA's `/api/products/<Cnnn>/components` answer.
 pub fn convert(result: &Value) -> Result<Converted, String> {
+    convert_with(result, tidy_enabled())
+}
+
+/// [`convert`], choosing whether box symbols are tidied ([`super::tidy`]).
+pub fn convert_with(result: &Value, tidy: bool) -> Result<Converted, String> {
     let data = result.get("dataStr").ok_or("the vendor answer has no symbol data")?;
     let cpara = data.get("head").and_then(|h| h.get("c_para")).cloned().unwrap_or(Value::Null);
     let title = vstr(result, "title");
@@ -1187,7 +1226,7 @@ pub fn convert(result: &Value) -> Result<Converted, String> {
     if units.is_empty() {
         units.push(data);
     }
-    let symbol = convert_symbol(&name, &prefix, &units);
+    let symbol = convert_symbol(&name, &prefix, &units, tidy);
 
     let pkg = result.get("packageDetail");
     let pkg_data = pkg.and_then(|p| p.get("dataStr"));
@@ -1354,7 +1393,7 @@ mod tests {
                 "P~show~0~2~430~290~0~gge6~0^^430~290^^M 430 290 h -10~#880000^^1~416~294~0~OUT~end~~~#0000FF^^1~420~289~0~2~start~~~#0000FF^^0~423~290^^0~M 420 287 L 417 290 L 420 293"
             ]
         });
-        let sym = convert_symbol("T", "U", &[&data]).unwrap();
+        let sym = convert_symbol("T", "U", &[&data], false).unwrap();
         assert_eq!(sym.pins, 2);
         // left pin: 30 units left of the origin, runs toward +x
         assert!(sym.body.contains("(at -7.62 2.54 0) (length 2.54) (name \"VCC\""), "{}", sym.body);
@@ -1493,5 +1532,29 @@ mod fixture_tests {
         assert!(fp.contains("np_thru_hole circle"), "locating holes");
         assert!(fp.contains("custom (at"), "polygon pads");
         assert!(fp.contains("(attr through_hole)"));
+    }
+
+    /// Writes each part's library symbol as the vendor drew it and as tidied, for review:
+    /// `TIDY_IN=<dir of easyeda_C*.json> TIDY_OUT=<dir> cargo test dump_tidy_examples -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_tidy_examples() {
+        let (Ok(inp), Ok(out)) = (std::env::var("TIDY_IN"), std::env::var("TIDY_OUT")) else { return };
+        for e in std::fs::read_dir(&inp).unwrap().flatten() {
+            let path = e.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
+            }
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let r = v.get("result").unwrap_or(&v);
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            for (tag, tidy) in [("before", false), ("after", true)] {
+                let Ok(c) = convert_with(r, tidy) else { continue };
+                let Some(s) = c.symbol.as_ref() else { continue };
+                let sx = symbol_sexpr(s, &c.prefix, &c.name, "", "", "", &[]);
+                std::fs::write(format!("{out}/{stem}.{tag}.kicad_sym"), &sx).unwrap();
+                println!("{stem} {tag} tidied={} pins={}", s.tidied, s.pins);
+            }
+        }
     }
 }
