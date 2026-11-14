@@ -857,7 +857,7 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Connect an AI assistant — Junction</title>{STYLE}
 <style>
-  body {{ display: block; }}
+  body {{ display: block; place-items: normal; }}
   main {{ max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }}
   header.top {{ display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }}
   header.top .mark svg {{ width: 26px; height: 26px; display: block; }}

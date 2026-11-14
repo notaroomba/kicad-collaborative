@@ -514,7 +514,7 @@ pub async fn gallery_page(State(state): State<AppState>) -> AppResult<Response> 
 <style>
   body {{ max-width: 1080px; }}
   .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }}
-  body {{ display: block; margin: 0 auto; }}
+  body {{ display: block; place-items: normal; margin: 0 auto; }}
   .grid {{ margin-top: var(--s-4); }}
   .tile {{ border: 1px solid var(--line); border-radius: var(--r-3); background: var(--panel); overflow: hidden; }}
   .tile img {{ display: block; width: 100%; aspect-ratio: 4/3; object-fit: contain;
@@ -627,7 +627,7 @@ document.getElementById("cloneBtn").onclick = async () => {{
     Ok(Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{name} — Junction</title>{STYLE}<style>
-  body {{ display: block; max-width: 860px; margin: 0 auto; }}
+  body {{ display: block; place-items: normal; max-width: 860px; margin: 0 auto; }}
   .card {{ width: 100%; }}
   .desc {{ white-space: pre-wrap; }}
   #descForm textarea {{ width: 100%; }}
@@ -692,7 +692,7 @@ pub async fn live_page(
         r##"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{name} live — Junction</title>{STYLE}
 <style>
-  body {{ display: block; max-width: 1100px; margin: 0 auto; }}
+  body {{ display: block; place-items: normal; max-width: 1100px; margin: 0 auto; }}
   #stage {{ position: relative; background: var(--sheet); border: 1px solid var(--line); border-radius: var(--r-2);
             touch-action: none; overflow: hidden; }}
   #world {{ transform-origin: 0 0; position: relative; }}
