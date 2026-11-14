@@ -107,7 +107,7 @@ def main():
         have = set(json.load(f)["icons"])
     with open(TABLES, encoding="utf-8") as f:
         t = f.read()
-    menus = t[t.index("export const MENUS"):t.index("export const HOME_MENUS")]
+    menus = t[t.index("const COLLAB_FILE"):t.index("export const HOME_MENUS")]   # the shared File / Help blocks above MENUS too
     listed = set(re.findall(r"\"([A-Za-z0-9]+)(?:\|[^\"]*)?\"", menus))
     names = set(EXTRA_ICONS)
     for a in actions.values():

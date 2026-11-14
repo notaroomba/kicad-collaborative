@@ -870,7 +870,7 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
   .url code, pre {{ font-family: var(--mono); font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }}
   .url code {{ padding: 9px 12px; flex: 1; overflow-wrap: anywhere; }}
   pre {{ padding: 12px 14px; overflow-x: auto; margin: 8px 0; }}
-  .card {{ background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 4px 18px 14px; margin: 12px 0; }}
+  .card {{ width: auto; box-shadow: none; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 4px 18px 14px; margin: 12px 0; }}
   .card h3 {{ font-size: 15px; margin: 14px 0 4px; }}
   ol {{ padding-left: 20px; line-height: 1.6; margin: 6px 0; }}
   table.apps {{ width: 100%; border-collapse: collapse; }}

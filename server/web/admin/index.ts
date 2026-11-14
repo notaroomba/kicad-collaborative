@@ -51,7 +51,9 @@ function ago(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 const sum = (d: Day[]): number => d.reduce((a, [, n]) => a + n, 0);
-const DOC_NAMES: Record<string, string> = { sch: "Schematics", pcb: "Boards", kicad_sch: "Schematics", kicad_pcb: "Boards", schematic: "Schematics", board: "Boards", pro: "Project files", kicad_pro: "Project files" };
+const DOC_NAMES: Record<string, string> = { sch: "Schematics", pcb: "Boards", kicad_sch: "Schematics", kicad_pcb: "Boards", schematic: "Schematics", board: "Boards", pro: "Project files", kicad_pro: "Project files",
+  footprint: "Footprints", kicad_mod: "Footprints", symbol_lib: "Symbol libraries", kicad_sym: "Symbol libraries", kicad_symbol_lib: "Symbol libraries", lib_table: "Library tables",
+  kicad_wks: "Drawing sheets", wks: "Drawing sheets", kicad_dru: "Design rules", dru: "Design rules", kicad_prl: "Local settings", text: "Text files", other: "Other files" };
 
 // ---- tiny DOM helper ----
 type Kids = (Node | string | null | undefined | false)[];
@@ -191,7 +193,10 @@ function render(): void {
       b.addEventListener("click", () => { range = n; try { localStorage.setItem("admin.range", String(n)); } catch { /* no storage */ } render(); });
       return b;
     }));
-  const docs = d.projects.documents.map(([t, n]) => [DOC_NAMES[t] || t, n] as Pair);
+  // kinds that share a name (sch / kicad_sch) are one row
+  const docSum = new Map<string, number>();
+  for (const [t, n] of d.projects.documents) { const k = DOC_NAMES[t] || t; docSum.set(k, (docSum.get(k) || 0) + Number(n)); }
+  const docs = [...docSum].sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, n] as Pair);
   const tokens = d.ai.inputTokens30d + d.ai.outputTokens30d;
 
   app.replaceChildren(
@@ -204,7 +209,7 @@ function render(): void {
       tile("Active (30 days)", num(d.activity.mau), `${num(d.activity.wau)} this week · ${num(d.activity.dau)} today`),
       tile("Online now", num(d.activity.liveUsers), `in ${num(d.activity.liveProjects)} project${d.activity.liveProjects === 1 ? "" : "s"}`, d.activity.liveUsers > 0),
       tile("Projects", num(d.projects.total), `${num(d.projects.public)} public · ${num(d.projects.private)} private`),
-      tile("Edits (30 days)", compact(d.collaboration.edits30d), `${num(d.collaboration.multiplayerProjects30d)} projects edited together`),
+      tile("Edits (30 days)", compact(d.collaboration.edits30d), `${num(d.collaboration.multiplayerProjects30d)} project${d.collaboration.multiplayerProjects30d === 1 ? "" : "s"} edited together`),
       tile("Design time (30 days)", `${num(d.activity.hours30d)} h`, `${(d.activity.mau ? d.activity.hours30d / d.activity.mau : 0).toFixed(1)} h per active person`),
       tile("AI requests (30 days)", num(d.ai.requests30d), `${compact(tokens)} tokens · ${num(d.ai.mcpChanges30d)} MCP edits`),
       tile("Database", bytes(d.storage.databaseBytes), `${num(d.storage.snapshots)} file snapshots`)),
@@ -214,7 +219,7 @@ function render(): void {
         line("Users", d.users.signups, d.users.before, "users"),
         h("div", { style: "height:14px" }),
         bars("Sign-ups", d.users.signups, "sign-ups")),
-      box("Activity", `${num(d.activity.openDocsHere)} documents open on this server`,
+      box("Activity", `${num(d.activity.openDocsHere)} document${d.activity.openDocsHere === 1 ? "" : "s"} open on this server`,
         bars("Active people", d.activity.daily, "people", true),
         h("div", { style: "height:14px" }),
         facts([[num(d.activity.dau), "today"], [num(d.activity.wau), "this week"], [num(d.activity.mau), "in 30 days"], [d.activity.wau ? (d.activity.dau / d.activity.wau).toFixed(2) : "–", "daily / weekly"]]),

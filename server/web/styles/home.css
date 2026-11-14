@@ -108,7 +108,7 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
 /* Explore: the copy button gets a row of its own, clear of the owner line */
 .hp-item.grid.pub .hp-item-meta { padding-right: 0; }
 .hp-item.grid.pub .hp-item-acts { position: static; padding: 0 10px 10px; }
-.hp-item-owner { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hp-item-owner { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 3ch; flex: 0 1 auto; }   /* "you" never shrinks to "y…" */
 .hp-item-when { white-space: nowrap; }
 .hp-item-tags { display: flex; gap: 5px; }
 .hp-item.grid .hp-item-tags { position: absolute; left: 8px; top: 8px; }
@@ -118,6 +118,7 @@ textarea.hp-input { resize: vertical; min-height: 72px; }
 .hp-item-people, .hp-item-pub { display: none; }
 .hp-item-gh { display: inline-flex; align-items: center; gap: 3px; flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hp-item-gh svg { flex: none; }
+.hp-item-gh > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .hp-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; background: none; border: 0; border-radius: var(--r-2); color: var(--ink-2); font: 11px var(--mono); }
 @media (hover: hover) { .hp-chip:hover { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); } }
 .hp-rename { padding: 2px 6px; margin: -3px 0 -3px -7px; font-weight: 600; width: calc(100% + 14px); }

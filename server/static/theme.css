@@ -145,7 +145,9 @@
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 :where(p) a:not([class]) { text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; }
-button, input, select, textarea, k-select { font: inherit; color: inherit; }
+/* in a layer: unlayered, this reset beat every layered rule (the Tailwind components and utilities) that colours a
+   button, e.g. the Plugin Manager's selected "All" chip drew its label in the chip's own colour */
+@layer base { button, input, select, textarea, k-select { font: inherit; color: inherit; } }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }

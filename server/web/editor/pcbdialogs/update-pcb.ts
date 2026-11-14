@@ -82,11 +82,11 @@ function boardFootprintIds(doc: KDoc): Set<string> {
 }
 
 /** The plan as collaboration changes: one undo step. */
-function planChanges(doc: KDoc, plan: UpdatePlan): KChange[] {
+function planChanges(doc: KDoc, plan: UpdatePlan, addedIds?: string[]): KChange[] {
   const changes: KChange[] = [];
   for (const id of plan.removed) { const it = doc.items.get(id); if (it) changes.push(KiCadCanvas.removeChange(it)); }
   for (const [id, node] of plan.modified) { const it = doc.items.get(id); if (it) changes.push(KiCadCanvas.replaceChange(doc, { ...it, node })); }
-  for (const node of plan.added) { const it = KiCadCanvas.createItem(doc, node); if (it) changes.push(KiCadCanvas.addChange(doc, it)); }
+  for (const node of plan.added) { const it = KiCadCanvas.createItem(doc, node); if (it) { changes.push(KiCadCanvas.addChange(doc, it)); if (addedIds && it.kind === "footprint") addedIds.push(it.id); } }
   return changes;
 }
 
@@ -110,6 +110,9 @@ export async function openUpdatePcb(ctx: ToolCtx): Promise<void> {
   const report = reportPanel("260px");
   const fields = new Map<keyof UpdateOptions, Field<boolean>>();
   let netlist: Netlist | null = null, plan: UpdatePlan | null = null, busy = false, okBtn: HTMLButtonElement | null = null;
+  // PCB_EDIT_FRAME::OnNetlistChanged selects the new footprints and ~DIALOG_UPDATE_PCB starts the move tool with
+  // them (m_runDragCommand): closing the dialog hands them to the cursor for placing
+  const newFootprints: string[] = [];
   const options = (): UpdateOptions => {
     const o: UpdateOptions = { newUuid: () => KiCadCanvas.newUuid(), footprintFor: (fpid) => { const v = libCache.get(fpid); return v && v !== "missing" ? NL().footprintFromLibrary(v, fpid, () => KiCadCanvas.newUuid()) : v === undefined ? null : v; } };
     for (const [k, f] of fields) (o as Record<string, unknown>)[k] = f.get();
@@ -143,14 +146,20 @@ export async function openUpdatePcb(ctx: ToolCtx): Promise<void> {
     },
     ok() {
       if (!plan || E.viewOnly) return false;
-      const changes = planChanges(doc, plan);
-      if (changes.length) { ctx.commit(changes, "update PCB from schematic"); ctx.toast(`Update PCB: ${changes.length} item${changes.length === 1 ? "" : "s"} changed`); }
+      const added: string[] = [];
+      const changes = planChanges(doc, plan, added);
+      if (changes.length) { newFootprints.splice(0, newFootprints.length, ...added); ctx.commit(changes, "update PCB from schematic"); ctx.toast(`Update PCB: ${changes.length} item${changes.length === 1 ? "" : "s"} changed`); }
       const done = plan.report.slice();
       done.push({ severity: "info", text: changes.length ? "Changes applied to the board." : "No changes to apply." });
       report.set(done);
       plan = null;
       if (okBtn) okBtn.disabled = true;
       return false;                       // KiCad keeps the dialog open with the report; Close dismisses it
+    },
+    cancel() {
+      if (!newFootprints.length || E.viewOnly) return;
+      const ids = newFootprints.slice();
+      window.setTimeout(() => { void import("../tools").then((T) => { (ctx as unknown as { setSelection(ids: string[]): void }).setSelection(ids); T.runModuleAction("move"); }); }, 0);
     } });
   if (!dlg) return;
   okBtn = dlg.okButton; if (okBtn) okBtn.disabled = true;
