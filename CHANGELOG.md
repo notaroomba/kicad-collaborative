@@ -4,6 +4,64 @@ Releases of Junction, which was called KiCad Collaborative up to 1.0.9. The
 version here is the product version (`packaging/VERSION`), not the KiCad
 version it is based on.
 
+## 2.1.0 (2026-11-14)
+
+A desktop update with new features since 2.0.0. It reads and writes the same
+files as 2.0.0, so people in a project can update one at a time.
+
+### Desktop
+- Online Projects is a docked pane in the project manager instead of a modal
+  dialog: shown by default, toggled from the left toolbar, View > Panels and
+  File > Online Projects. A This Project card says whether the open project is
+  local only or synced, with its live session state.
+- WakaTime: the editors send heartbeats like WakaTime's own plugins, set up in
+  Preferences > Common > WakaTime. Works with WakaTime, Hackatime, Wakapi or any
+  WakaTime-API server, reads and keeps `~/.wakatime.cfg`, and uses wakatime-cli
+  when it is installed.
+- Fonts: every Google Font is in the font list and downloads when picked; a
+  font missing on this computer is fetched while the app runs and the text is
+  redrawn without a restart. Fonts only you have are shared with the project so
+  collaborators draw the same letters, and stored glyph outlines are kept on
+  load and on copy.
+- Collaborator cursors are bigger, with a filled name tag.
+
+### Files
+- Saving keeps KiCad 9 and 10 boards and schematics readable by KiCad 9 and 10.
+  Fixed: boards with a layer stackup were raised to a newer format, KiCad 9
+  boards were written with nets by name, zones lost their fill thickness flag,
+  teardrops lost their ids and old plot layer selections were renumbered.
+- A file stamped by a newer KiCad opens when everything in it is known; an
+  unknown construct still stops the load, so nothing is dropped silently.
+- No more notice when an older KiCad file opens, since it is saved back at its
+  own version.
+
+### Web editor and server (already live)
+- Many more KiCad dialogs and tools in the browser: Board Setup with an editable
+  stackup, Zone Manager, Teardrops, Cleanup Graphics, Remove Unused Pads,
+  Geographical Reannotate, Repair Board, Net Inspector, hierarchy-wide ERC,
+  inter-sheet references, KiCad's menu bars, mouse and touchpad preferences.
+- WakaTime heartbeats from the browser editor, GitHub sync through the
+  "KiCAD Junction" GitHub App, and router and placement improvements for
+  AI-designed boards.
+
+### Packaging
+- The macOS DMG is now built in CI with Windows and Linux, and every release
+  run installs and launches all three builds on clean machines before it
+  publishes.
+- The Linux tarball runs from wherever it is extracted (2.0.0 looked for its
+  libraries and data under /usr), and lists the Ubuntu packages it needs in
+  `usr/share/junction/ubuntu-packages.txt`.
+
+### Downloads
+
+| Platform | File | Notes |
+|---|---|---|
+| macOS (Apple Silicon, macOS 14+) | `Junction-2.1.0-macos.dmg` | Ad-hoc signed: first launch is right-click, Open. Replace the old app in Applications. |
+| Windows x64 | `Junction-2.1.0-windows-x64.exe` | Installer; upgrades 2.0.0 or KiCad Collaborative in place. |
+| Linux x64 (Ubuntu 24.04+) | `Junction-2.1.0-linux-x64.tar.gz` | Extract anywhere, install the packages listed in `usr/share/junction/ubuntu-packages.txt` (`sudo apt install $(cat usr/share/junction/ubuntu-packages.txt)`), run `usr/bin/junction`. |
+
+Symbol and footprint libraries are not bundled; point the library tables at an existing KiCad 10 install.
+
 ## 2.0.0 (2026-11-12)
 
 First release since 1.0.9. It is a major version because the desktop app is

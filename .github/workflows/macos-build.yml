@@ -1,0 +1,99 @@
+name: macos-build
+
+# Builds the macOS DMG (Apple Silicon) with Homebrew dependencies, the same way
+# packaging/macos/package_macos.py was run by hand before.  Releases run it
+# through release.yml, which also launch-tests the DMG and publishes it.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build:
+    # Homebrew bottles target the runner's macOS, so the oldest runner sets the
+    # oldest macOS the DMG supports.
+    runs-on: macos-14
+    timeout-minutes: 360
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          brew update > /dev/null
+          brew install cmake ninja ccache pkgconf \
+            boost cairo pixman glew glm libgit2 libngspice opencascade \
+            protobuf abseil wxwidgets zstd nng curl openssl@3 \
+            freetype harfbuzz fontconfig gettext sqlite tbb \
+            glslang spirv-tools spirv-cross vulkan-headers python@3.12 || true
+          # brew exits non-zero when a formula is already installed and only
+          # needs linking; check what the build needs is really there.
+          for f in cmake ninja ccache boost cairo glew glm libgit2 libngspice opencascade protobuf wxwidgets zstd nng curl sqlite glslang spirv-tools spirv-cross vulkan-headers; do
+            brew list --versions "$f" > /dev/null || { echo "missing $f"; exit 1; }
+          done
+          wx-config --version
+          "$(brew --prefix curl)/bin/curl-config" --protocols | grep -qiE "^WSS?$" || { echo "Homebrew curl lacks WebSocket support"; exit 1; }
+
+      - name: ccache (restore)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-macos-${{ github.sha }}
+          restore-keys: ccache-macos-
+
+      - name: Configure
+        run: |
+          B=$(brew --prefix)
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_PREFIX_PATH="$B" \
+            -DwxWidgets_CONFIG_EXECUTABLE="$B/bin/wx-config" \
+            -DOCC_INCLUDE_DIR="$B/opt/opencascade/include/opencascade" \
+            -DOCC_LIBRARY_DIR="$B/opt/opencascade/lib" \
+            -DSQLite3_ROOT="$B/opt/sqlite" \
+            -DCURL_INCLUDE_DIR="$B/opt/curl/include" \
+            -DCURL_LIBRARY="$B/opt/curl/lib/libcurl.dylib" \
+            -DOPENSSL_ROOT_DIR="$B/opt/openssl@3" \
+            -DPYTHON_EXECUTABLE="$B/opt/python@3.12/bin/python3.12" \
+            -DKICAD_SCRIPTING_WXPYTHON=OFF \
+            -DKICAD_BUILD_I18N=OFF \
+            -DKICAD_BUILD_QA_TESTS=OFF \
+            -DKICAD_UPDATE_CHECK=OFF \
+            -DKICAD_USE_PCH=ON \
+            -DKICAD_INSTALL_DEMOS=OFF \
+            -DKICAD_APPLE_MAKE_RELOCATEABLE_BUNDLE=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      # Save right after the compile so a later failure keeps the warm cache.
+      - name: ccache (save)
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-macos-${{ github.sha }}
+
+      - name: Package DMG
+        run: |
+          python3 packaging/macos/package_macos.py build dist
+          ls -la dist
+
+      - name: Check the bundle loads nothing from Homebrew
+        run: |
+          app=dist/staging/Junction.app
+          bad=$(find "$app/Contents" -type f -perm -u+x -exec sh -c 'otool -L "$1" 2>/dev/null' _ {} \; | grep -E "/opt/homebrew|/usr/local/(opt|Cellar)|$PWD/build" || true)
+          if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+          codesign --verify --deep --strict "$app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: junction-macos
+          path: dist/Junction-*-macos.dmg
+          if-no-files-found: error

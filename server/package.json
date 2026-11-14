@@ -1,6 +1,6 @@
 {
   "name": "kicad-collab-web",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "React + TypeScript chrome for the Junction web editor (bundled into static/dist/ui.js)",
   "scripts": {

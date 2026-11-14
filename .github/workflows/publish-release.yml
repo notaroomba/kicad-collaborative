@@ -1,0 +1,21 @@
+name: publish-release
+
+# Publishes a draft release that release.yml made, once its launch
+# screenshots have been checked, and marks it as the latest release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag of the draft release, e.g. v2.1.0"
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

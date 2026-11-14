@@ -484,6 +484,33 @@ wxString PATHS::GetStockPlugins3DPath()
         fn.Assign( tfname, "" );
         fn.AppendDir( wxT( "kicad" ) );
         fn.AppendDir( wxT( "plugins" ) );
+
+        // The Junction Linux tarball runs from wherever it was extracted, so the
+        // compiled-in plugin directory is absent; look beside the executable instead.
+        if( !fn.DirExists() )
+        {
+            for( const wxString& libDir : { wxString( wxT( "lib/x86_64-linux-gnu" ) ),
+                                            wxString( wxT( "lib64" ) ),
+                                            wxString( wxT( "lib" ) ) } )
+            {
+                wxFileName rel;
+                rel.AssignDir( wxFileName( wxStandardPaths::Get().GetExecutablePath() ).GetPath() );
+                rel.RemoveLastDir();
+                rel.AppendDir( libDir.BeforeFirst( '/' ) );
+
+                if( libDir.Contains( wxT( "/" ) ) )
+                    rel.AppendDir( libDir.AfterFirst( '/' ) );
+
+                rel.AppendDir( wxT( "kicad" ) );
+                rel.AppendDir( wxT( "plugins" ) );
+
+                if( rel.DirExists() )
+                {
+                    fn = rel;
+                    break;
+                }
+            }
+        }
     }
 #endif
 

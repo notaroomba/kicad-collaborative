@@ -1,12 +1,10 @@
 name: windows-installer
 
+# Builds the Windows installer.  Releases run it through release.yml, which
+# also launch-tests the installed app and publishes it.
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
-    paths:
-      - "packaging/windows/**"
-      - ".github/workflows/windows-installer.yml"
+  workflow_call:
 
 jobs:
   build:

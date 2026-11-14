@@ -1,9 +1,10 @@
 name: linux-build
 
+# Builds the Linux tarball.  Releases run it through release.yml, which also
+# launch-tests the result and publishes it.
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_call:
 
 jobs:
   build:
@@ -79,11 +80,32 @@ jobs:
           cp -a /opt/collab-curl/lib/libcurl.so* pkgroot/usr/lib/kicad-collab/
           cat > pkgroot/usr/bin/junction << 'EOF'
           #!/bin/sh
+          # Runs Junction from wherever the tarball was extracted: KiCad's own
+          # libraries and data are found beside this script, not under /usr.
           here=$(dirname "$(readlink -f "$0")")
-          export LD_LIBRARY_PATH="$here/../lib/kicad-collab${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          exec "$here/kicad" "$@"
+          root=$(dirname "$here")
+          export LD_LIBRARY_PATH="$root/lib/kicad-collab:$root/lib/x86_64-linux-gnu:$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export KICAD_STOCK_DATA_HOME="${KICAD_STOCK_DATA_HOME:-$root/share/kicad}"
+          tool=kicad
+          case "$1" in
+            eeschema|pcbnew|gerbview|pl_editor|pcb_calculator|bitmap2component|kicad-cli) tool=$1; shift ;;
+          esac
+          exec "$here/$tool" "$@"
           EOF
           chmod +x pkgroot/usr/bin/junction
+          # The Ubuntu packages that provide every library the binaries load,
+          # so a user can install them in one apt command.
+          mkdir -p pkgroot/usr/share/junction
+          find pkgroot/usr -type f \( -perm -u+x -o -name '*.so*' -o -name '*.kiface' \) -exec sh -c 'file -b "$1" | grep -q ELF && echo "$1"' _ {} \; > elfs.txt
+          export LD_LIBRARY_PATH="$PWD/pkgroot/usr/lib/kicad-collab:$PWD/pkgroot/usr/lib/x86_64-linux-gnu:$PWD/pkgroot/usr/lib"
+          xargs -a elfs.txt ldd 2>/dev/null | awk '/=> \//{print $3}' | sort -u | grep -v "^$PWD/" > libs.txt
+          # Merged /usr: dpkg may record a library under /lib or /usr/lib.
+          while read -r lib; do
+            alt=$(echo "$lib" | sed -e 's#^/usr/lib/#/lib/#;t' -e 's#^/lib/#/usr/lib/#')
+            dpkg -S "$lib" 2>/dev/null || dpkg -S "$alt" 2>/dev/null || dpkg -S "$(readlink -f "$lib")" 2>/dev/null || echo "UNOWNED: $lib" >&2
+          done < libs.txt | cut -d: -f1 | sort -u > pkgroot/usr/share/junction/ubuntu-packages.txt
+          echo "Runtime packages:"; cat pkgroot/usr/share/junction/ubuntu-packages.txt
+          if xargs -a elfs.txt ldd 2>/dev/null | grep "not found"; then echo "unresolved libraries"; exit 1; fi
           tar -C pkgroot -czf Junction-$VERSION-linux-x64.tar.gz usr
           ls -la Junction-$VERSION-linux-x64.tar.gz
 

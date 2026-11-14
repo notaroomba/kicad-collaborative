@@ -1,0 +1,186 @@
+name: release
+
+# One release run: build macOS, Windows and Linux, launch every build on a
+# clean machine and screenshot it, then create the vX.Y.Z tag and the GitHub
+# release with the three downloads.  The version is packaging/VERSION and the
+# notes are its section of CHANGELOG.md.  A run from the Actions tab makes a
+# draft unless "draft" is unticked; publish-release.yml publishes a draft.
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the release as a draft"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux:
+    uses: ./.github/workflows/linux-build.yml
+  windows:
+    uses: ./.github/workflows/windows-installer.yml
+  macos:
+    uses: ./.github/workflows/macos-build.yml
+
+  test-linux:
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: junction-linux
+      - name: Install only the packages the tarball lists
+        run: |
+          mkdir -p "$HOME/Apps"
+          tar -C "$HOME/Apps" -xzf Junction-*-linux-x64.tar.gz
+          echo "Packages:"; cat "$HOME/Apps/usr/share/junction/ubuntu-packages.txt"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $(cat "$HOME/Apps/usr/share/junction/ubuntu-packages.txt")
+          # Test harness only: a virtual display, a software GL/Vulkan driver
+          # (a desktop already has one) and screenshot tools.
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils imagemagick libgl1-mesa-dri mesa-vulkan-drivers xdotool
+      - name: Launch the project manager and both editors
+        run: |
+          set -x
+          export HOME=$(mktemp -d)   # a first launch: no settings yet
+          J=/home/runner/Apps/usr/bin/junction
+          mkdir -p shots
+          Xvfb :99 -screen 0 1600x1000x24 & sleep 3
+          export DISPLAY=:99
+          fail=0
+          for tool in kicad pcbnew eeschema; do
+            if [ $tool = kicad ]; then "$J" > shots/$tool.log 2>&1 & else "$J" $tool > shots/$tool.log 2>&1 & fi
+            pid=$!
+            sleep 45
+            import -window root shots/$tool.png
+            xwininfo -root -tree | grep -E '"[^"]+"' | grep -v -E 'has no name' | head -20 > shots/$tool-windows.txt || true
+            if kill -0 $pid 2>/dev/null; then echo "$tool is running"; else echo "$tool EXITED"; cat shots/$tool.log; fail=1; fi
+            kill $pid 2>/dev/null; sleep 3; kill -9 $pid 2>/dev/null || true
+          done
+          "$J" kicad-cli version | tee shots/kicad-cli-version.txt
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launch-linux
+          path: shots
+
+  test-windows:
+    needs: windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: junction-windows-installer
+          path: dl
+      - name: Install silently and launch the project manager and both editors
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Recurse dl -Filter "Junction-*-windows-x64.exe" | Select-Object -First 1
+          Start-Process $installer.FullName -ArgumentList "/S" -Wait
+          $bin = "C:\Program Files\Junction\bin"
+          if (-not (Test-Path "$bin\kicad.exe")) { throw "installer did not put kicad.exe in $bin" }
+          New-Item -ItemType Directory -Force shots | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($path) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+          }
+          $fail = $false
+          foreach ($tool in "kicad", "pcbnew", "eeschema") {
+            $p = Start-Process "$bin\$tool.exe" -PassThru
+            Start-Sleep -Seconds 45
+            Shot "shots\$tool.png"
+            Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle | Out-File "shots\$tool-windows.txt"
+            if ($p.HasExited) { Write-Host "$tool EXITED with $($p.ExitCode)"; $fail = $true } else { Write-Host "$tool is running" }
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+          }
+          & "$bin\kicad-cli.exe" version | Tee-Object shots\kicad-cli-version.txt
+          if ($fail) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launch-windows
+          path: shots
+
+  test-macos:
+    needs: macos
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: junction-macos
+      - name: Hide Homebrew, which the app must not need
+        run: |
+          # The DMG has to run on a Mac without Homebrew: move the prefix away.
+          sudo mv /opt/homebrew /opt/homebrew-hidden
+      - name: Open the DMG and launch the app
+        run: |
+          mkdir -p shots
+          hdiutil attach Junction-*-macos.dmg -mountpoint /Volumes/Junction -nobrowse
+          ditto /Volumes/Junction/Junction.app "$HOME/Applications/Junction.app"
+          hdiutil detach /Volumes/Junction
+          app="$HOME/Applications/Junction.app"
+          "$app/Contents/MacOS/kicad" > shots/kicad.log 2>&1 &
+          pid=$!
+          sleep 60
+          screencapture -x shots/kicad.png || true
+          if kill -0 $pid 2>/dev/null; then echo "Junction is running"; else echo "Junction EXITED"; cat shots/kicad.log; exit 1; fi
+          kill $pid
+          "$app/Contents/MacOS/kicad-cli" version | tee shots/kicad-cli-version.txt
+      - name: Put Homebrew back
+        if: always()
+        run: sudo mv /opt/homebrew-hidden /opt/homebrew || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launch-macos
+          path: shots
+
+  release:
+    needs: [test-linux, test-windows, test-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+          pattern: junction-*
+          merge-multiple: true
+      - name: Create the tag and the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
+        run: |
+          VERSION=$(tr -d '[:space:]' < packaging/VERSION)
+          TAG=v$VERSION
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+            echo "tag $GITHUB_REF_NAME does not match packaging/VERSION $VERSION"; exit 1
+          fi
+          # The release notes are this version's section of CHANGELOG.md.
+          awk -v v="$VERSION" '
+            $0 ~ "^## "v"( |$)" { on=1; next }
+            on && /^## / { exit }
+            on { print }' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+          ls -la dl
+          flags=""
+          [ "$DRAFT" = true ] && flags="--draft"
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "Junction $VERSION" \
+            --notes-file notes.md $flags \
+            dl/Junction-$VERSION-macos.dmg \
+            dl/Junction-$VERSION-windows-x64.exe \
+            dl/Junction-$VERSION-linux-x64.tar.gz
