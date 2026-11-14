@@ -73,10 +73,11 @@ export function libGraphicGeom(item: GeomSink, g: SNode, col: (c: string) => str
   } else if (gk === "text" || gk === "text_box") {
     const [x, y, r0] = atOf(g); const ef = effectsOf(g); const [px, py] = tf(x, y);
     const r = gk === "text" ? r0 / 10 : r0;   // saveText writes the angle in tenths of a degree, a text box in degrees
-    const color = col(ef.hide ? SCH.hidden : yes(g, "private") ? SCH.privateNotes : (strokeColorOf(g) || SCH.outline));
+    // getRenderColor, isSymbolChild: the text's own (font (color …)) when set, else the layer colour
+    const color = col(ef.color || (ef.hide ? SCH.hidden : yes(g, "private") ? SCH.privateNotes : SCH.outline));
     if (gk === "text_box") {
       const s = kid(g, "size"); const w = s ? num(s[1]) : 5, h = s ? Math.abs(num(s[2])) : 2.5;   // saveTextBox writes -height (library Y up)
-      const bw = widthOf(g, 0); if (bw >= 0) G(item, { t: "poly", pts: [[px, py], [px + w, py], [px + w, py + h], [px, py + h]], close: true, w: bw || SCH_PEN, color: col(SCH.outline), layer: "Symbols", z: SCH_Z.device });
+      const bw = widthOf(g, 0); if (bw >= 0) G(item, { t: "poly", pts: [[px, py], [px + w, py], [px + w, py + h], [px, py + h]], close: true, w: bw || SCH_PEN, color: col(strokeColorOf(g) || SCH.outline), layer: "Symbols", z: SCH_Z.device });
       transformedText(item, IDENT, px, py, str(g[1]), ef.size, color, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, defH: "left", defV: "top" });
     } else transformedText(item, IDENT, px, py, str(g[1]), ef.size, color, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
   }
@@ -157,7 +158,7 @@ export function parseLibSymbol(sym: SNode, opts?: LibSymbolOpts): Doc {
     const showName = yes(p, "show_name");
     const shownText = (showName ? name + ": " : "") + val; if (!val) continue;
     const isRV = name === "Reference" || name === "Value";
-    const color = colAll(hide ? SCH.hidden : yes(p, "private") ? SCH.privateNotes : isRV ? SCH.ref : SCH.field);
+    const color = colAll(ef.color || (hide ? SCH.hidden : yes(p, "private") ? SCH.privateNotes : isRV ? SCH.ref : SCH.field));   // SCH_FIELD::GetFieldColor
     const [x, y, r] = atOf(p);
     const sink: GeomSink = { geom: [], bbox: null };
     transformedText(sink, IDENT, x, -y, shownText, ef.size, color, r, ef.just, isRV ? "Reference & value" : "Fields", { z: name === "Reference" ? SCH_Z.ref : name === "Value" ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: name });

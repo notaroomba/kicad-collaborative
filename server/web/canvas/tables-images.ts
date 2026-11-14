@@ -3,7 +3,7 @@ import { root } from "./env";
 import { SCH, SCH_Z, Z_BITMAP, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
 import { layerOf, pcbTextGeom } from "./geom-pcb";
-import { atOf, boolOf, boxOf, colorOf, cornersInSequence, effectsOf, fillOf, justOf, kid, kids, num, rotPt, str, strokeOf } from "./sexpr";
+import { atOf, boolOf, boxOf, colorOf, cornersInSequence, effectsOf, faceOf, fillOf, justOf, kid, kids, num, rotPt, str, strokeOf } from "./sexpr";
 import { SCH_PEN, textPen } from "./text";
 import { linebreakText } from "./stroke-font";
 import { unescapeText } from "./text";
@@ -146,7 +146,7 @@ export function buildTableGeom(doc: Doc, item: Item, n: SNode): void {
       const vert = ((Math.round(b.rot) % 180) + 180) % 180 === 90; let tx: number, ty: number;
       if (vert) { ty = j.h === "left" ? b.y1 - bm : j.h === "right" ? b.y0 + tm : (b.y0 + b.y1) / 2; tx = j.v === "top" ? b.x0 + lm : j.v === "bottom" ? b.x1 - rm : (b.x0 + b.x1) / 2; }
       else { tx = j.h === "left" ? b.x0 + lm : j.h === "right" ? b.x1 - rm : (b.x0 + b.x1) / 2; ty = j.v === "top" ? b.y0 + tm : j.v === "bottom" ? b.y1 - bm : (b.y0 + b.y1) / 2; }
-      textLines(item, tx, ty, text, ef.size, colorOf(cn) || SCH.notes, b.rot, [j.h, j.v], layer, { z, w: textPen(ef, ef.size) });
+      textLines(item, tx, ty, text, ef.size, ef.color || SCH.notes, b.rot, [j.h, j.v], layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     }
   }
   // borders: SCH_TABLE::DrawBorders / PCB_TABLE::DrawBorders

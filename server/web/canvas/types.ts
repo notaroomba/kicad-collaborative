@@ -14,6 +14,8 @@ export interface TextEffects {
   size: number; sizeX: number; thick: number; hide: boolean; just: string[]; mirror: boolean; bold: boolean; italic: boolean;
   /** an outline (TrueType) font by name */
   face?: string;
+  /** (effects (font (color r g b a))): EDA_TEXT::GetTextColor as css, absent when COLOR4D::UNSPECIFIED (alpha 0) */
+  color?: string;
 }
 
 /** A centre / radius / start and end angle arc through three points (arcFrom3). */

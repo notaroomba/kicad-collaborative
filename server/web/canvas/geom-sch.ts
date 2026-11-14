@@ -92,6 +92,12 @@ export function intersheetRefsText(refs: NonNullable<Doc["intersheetRefs"]>, lab
   return refs.prefix + ref + refs.suffix;
 }
 const INTERSHEET_FIELD = /^intersheet ?refs$/i;
+/**
+ * SCH_PAINTER::getRenderColor for a field (SCH_FIELD::GetFieldColor): its own (font (color …)) when set, else the
+ * layer's colour (LAYER_HIDDEN for a hidden one shown by show_hidden_fields, which still takes the field's own colour).
+ * A label's field would fall back to the label's netclass colour first; netclass colours are not resolved here.
+ */
+export function fieldColor(ef: Pick<TextEffects, "color">, layerColor: string): string { return ef.color || layerColor; }
 export function labelFields(item: Item, n: SNode, color: string, layer: string, z: number, doc?: Doc | null, labelLen = 0): void {
   for (const p of kids(n, "property")) {
     const ef = effectsOf(p); let val = str(p[2]);
@@ -111,14 +117,14 @@ export function labelFields(item: Item, n: SNode, color: string, layer: string, 
         else if (spin === "U") { py = ly - d; pr = 90; just = ["left"]; } else { py = ly + d; pr = 90; just = ["right"]; }
       }
       // LAYER_INTERSHEET_REFS draws in LAYER_GLOBLABEL's colour (RENDER_SETTINGS::GetLayerColor)
-      textLines(item, px, py, val, ef.size, colorOf(p) || SCH.glabel, pr, just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
+      textLines(item, px, py, val, ef.size, ef.color || SCH.glabel, pr, just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
       continue;
     }
     if (!val || /^\$\{.*\}$/.test(val)) continue;
     const [px, py, pr] = atOf(p);
     // a hidden field: kept aside in LAYER_HIDDEN for show_hidden_fields, outside the hit boxes
     const sink: GeomSink = ef.hide ? { geom: [], bbox: null } : item;
-    textLines(sink, px, py, val, ef.size, ef.hide ? SCH.hidden : color, pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
+    textLines(sink, px, py, val, ef.size, fieldColor(ef, ef.hide ? SCH.hidden : color), pr, ef.just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
     if (ef.hide && sink.geom.length) { for (const g of sink.geom) { g.hiddenText = true; g.noBox = true; } (item.hiddenGeom = item.hiddenGeom || []).push(...sink.geom); }
   }
 }
@@ -163,7 +169,7 @@ export function buildSchGeom(doc: Doc, item: Item): void {
   } else if (k === "text") {
     const [x, y, rot] = atOf(n); const ef = effectsOf(n);
     // SCH_TEXT::GetSchematicTextOffset: a fixed 0.25 mm lift; angles are kept upright (KeepUpright)
-    textLines(item, x, y - 0.25, expandDocVars(doc, str(n[1])), ef.size, colorOf(n) || SCH.notes, rot, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textLines(item, x, y - 0.25, expandDocVars(doc, str(n[1])), ef.size, ef.color || SCH.notes, rot, ef.just, "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
   } else if (k === "text_box") {
     const [x, y, rot] = atOf(n); const s = kid(n, "size"); const w = s ? num(s[1]) : 10, h = s ? num(s[2]) : 5; const ef = effectsOf(n);
     const x0 = Math.min(x, x + w), y0 = Math.min(y, y + h), x1 = Math.max(x, x + w), y1 = Math.max(y, y + h);
@@ -180,7 +186,7 @@ export function buildSchGeom(doc: Doc, item: Item): void {
     else { tx = j.h === "left" ? x0 + lm : j.h === "right" ? x1 - rm : (x0 + x1) / 2; ty = j.v === "top" ? y0 + tm : j.v === "bottom" ? y1 - bm : (y0 + y1) / 2; }
     // SCH_TEXTBOX::GetShownText: wrapped to the box's inner width (its height when the text runs vertically)
     const col = vert ? (y1 - y0) - tm - bm : (x1 - x0) - lm - rm;
-    textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, ef.color || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
   } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier" || k === "ellipse" || k === "ellipse_arc") {
     shapeGeom(item, n, k, (x: number, y: number) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n, 0) || SCH_PEN);
   } else if (k === "rule_area") {
@@ -285,10 +291,10 @@ export function buildLabelGeom(item: Item, n: SNode, k: string, doc?: Doc | null
   const shapeN = kid(n, "shape"); const shape = shapeN ? str(shapeN[1]) : "";
   if (k === "label") {
     const d = off + lpen; const tx = st.rot ? x - d : x, ty = st.rot ? y : y - d;
-    textGeom(item, tx, ty, text, size, colorOf(n) || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textGeom(item, tx, ty, text, size, ef.color || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     labelFields(item, n, SCH.field, "Fields", SCH_Z.fields);
   } else if (k === "global_label") {
-    const color = colorOf(n) || SCH.glabel; const margin = schFormat.labelSizeRatio * size;   // SCHEMATIC_SETTINGS::m_LabelSizeRatio
+    const color = ef.color || SCH.glabel; const margin = schFormat.labelSizeRatio * size;   // SCHEMATIC_SETTINGS::m_LabelSizeRatio
     let horiz = margin; if (shape === "input" || shape === "bidirectional" || shape === "tri_state") horiz += size * 0.75;
     const vert = size * 0.0715;
     const to = spin === "L" ? [-horiz, vert] : spin === "U" ? [vert, -horiz] : spin === "R" ? [horiz, vert] : [vert, horiz];
@@ -305,14 +311,14 @@ export function buildLabelGeom(item: Item, n: SNode, k: string, doc?: Doc | null
     const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);   // GetBodyBoundingBox().GetSizeMax()
     labelFields(item, n, SCH.field, "Fields", SCH_Z.fields, doc, Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)));
   } else if (k === "hierarchical_label") {
-    const color = colorOf(n) || SCH.hlabel; const d = off + ef.sizeX;
+    const color = ef.color || SCH.hlabel; const d = off + ef.sizeX;
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
     textGeom(item, x + to[0], y + to[1], text, size, color, st.rot, [st.h, "middle"], "Labels", { z: SCH_Z.hierlabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     G(item, { t: "poly", pts: hierShape(x, y, size, shape || "input", spin), close: false, w: pen, color, layer: "Labels", z: SCH_Z.hierlabel });
     labelFields(item, n, SCH.field, "Fields", SCH_Z.fields);
   } else {
     // directive label / netclass flag: SCH_DIRECTIVE_LABEL::CreateGraphicShape
-    const color = colorOf(n) || SCH.netclass; const lenN = kid(n, "length"); const pinLen = lenN ? num(lenN[1]) : 2.54;
+    const color = ef.color || SCH.netclass; const lenN = kid(n, "length"); const pinLen = lenN ? num(lenN[1]) : 2.54;
     const symSize = 0.508; let s = symSize; let pts: Pt[], kind = shape || "round";
     if (kind === "dot") { s = symSize * 0.7; pts = [[0, 0], [0, pinLen - s], [0, pinLen]]; }
     else if (kind === "round") pts = [[0, 0], [0, pinLen - s], [0, pinLen]];
@@ -348,7 +354,7 @@ export function buildSheetGeom(item: Item, n: SNode): void {
     if (name === "Sheetname") item.name = val; if (name === "Sheetfile") item.file = val;
     if (ef.hide || !val) continue;
     const [px, py, pr] = atOf(p);
-    const color = col(name === "Sheetname" ? SCH.sheetName : name === "Sheetfile" ? SCH.sheetFile : SCH.sheetFields);
+    const color = col(fieldColor(ef, name === "Sheetname" ? SCH.sheetName : name === "Sheetfile" ? SCH.sheetFile : SCH.sheetFields));
     textLines(item, px, py, (name === "Sheetfile" ? "File: " : "") + val, ef.size, color, pr, ef.just, "Sheets", { z: SCH_Z.sheetFields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
   }
   for (const pin of kids(n, "pin")) {
@@ -357,10 +363,11 @@ export function buildSheetGeom(item: Item, n: SNode): void {
     const side = ((Math.round(pr) % 360) + 360) % 360; const spin = side === 0 ? "L" : side === 90 ? "B" : side === 180 ? "R" : "U";
     let shape = str(pin[2]) || "input"; if (shape === "input") shape = "output"; else if (shape === "output") shape = "input";
     const g0 = item.geom.length;
-    G(item, { t: "poly", pts: hierShape(px, py, size, shape, spin), close: false, w: SCH_PEN, color: col(SCH.sheetLabel), layer: "Sheets", z: SCH_Z.sheet });
+    const pinColor = col(ef.color || SCH.sheetLabel);   // SCH_SHEET_PIN is a label: its own text colour, shape and text alike
+    G(item, { t: "poly", pts: hierShape(px, py, size, shape, spin), close: false, w: SCH_PEN, color: pinColor, layer: "Sheets", z: SCH_Z.sheet });
     const d = 0.15 * size + ef.sizeX; const st = spinText(spin);
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
-    textGeom(item, px + to[0], py + to[1], str(pin[1]), size, col(SCH.sheetLabel), st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    textGeom(item, px + to[0], py + to[1], str(pin[1]), size, pinColor, st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = str(pin[1]);   // "sheetId#pin:<name>" in a net highlight
   }
   if (dnp && schFormat.showDnpMarkers) {   // m_ShowDNPMarkers
@@ -429,10 +436,10 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g);
-          if (!ef.hide) { const [px, py] = tf(tx, ty); transformedText(item, Ti, px, py, str(g[1]), ef.size, col(strokeColorOf(g) || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha }); take("body"); }
+          if (!ef.hide) { const [px, py] = tf(tx, ty); transformedText(item, Ti, px, py, str(g[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha }); take("body"); }
         } else if (gk === "text_box") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g); const sz = kid(g, "size"); const [px, py] = tf(tx, ty);
-          if (!ef.hide) { transformedText(item, Ti, px, py, str(g[1]), ef.size, col(SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, defH: "left", defV: "top" }); take("body"); }
+          if (!ef.hide) { transformedText(item, Ti, px, py, str(g[1]), ef.size, col(ef.color || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, defH: "left", defV: "top" }); take("body"); }
         } else if (gk === "pin") {
           if (pinHidden(g)) {
             // kept aside, untouched bbox: drawn only under the showHiddenPins render option, in KiCad's hidden-item colour
@@ -462,7 +469,7 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
     const isRef = name === "Reference", isVal = name === "Value";
     // a hidden field is kept aside in LAYER_HIDDEN, drawn under show_hidden_fields (outside the hit boxes)
     const sink: GeomSink = ef.hide ? { geom: [], bbox: null } : item;
-    const color = ef.hide ? SCH.hidden : col(isRef || isVal ? SCH.ref : SCH.field);
+    const color = col(fieldColor(ef, ef.hide ? SCH.hidden : isRef || isVal ? SCH.ref : SCH.field));
     // SCH_FIELD::GetShownText: the reference of a multi-unit symbol carries its unit letter (U2 → U2A)
     let shown = isRef && unitCount > 1 ? val + unitLetter(unit) : val;
     // SCH_SYMBOL::ResolveTextVar: ${REFERENCE}, ${VALUE}, ${UNIT} and the symbol's other fields by name

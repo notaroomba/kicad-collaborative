@@ -1,7 +1,7 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, SCH_DEFAULT, SCH_Z, parseColor, pcbColor, pcbZ, rgba } from "./colors";
-import { atOf, flipH, kid, kids, num, pointInPoly, ptsOf, splitLines, str } from "./sexpr";
+import { atOf, effectsOf, flipH, kid, kids, num, pointInPoly, ptsOf, splitLines, str } from "./sexpr";
 import { isBusLabel } from "./busname";
 import { ensureSchTheme } from "./geom";
 import { displayNetName } from "./geom-pcb";
@@ -803,8 +803,12 @@ export function busConnectedLabels(doc: Doc): Set<string> | null {
 }
 /** Is this geometry of a bus-tinted item drawn in the bus colour: a label's own shape and text, or a bus-named sheet pin. */
 export function busPinTint(it: Item, g: Geom): boolean {
-  if (it.kind === "sheet") return typeof g.pinNo === "string" && g.layer === "Sheets" && isBusLabel(g.pinNo);
-  return g.layer === "Labels";
+  // getRenderColor( LAYER_BUS ): a label's own text colour still wins over the bus colour
+  if (it.kind === "sheet") {
+    if (!(typeof g.pinNo === "string" && g.layer === "Sheets" && isBusLabel(g.pinNo))) return false;
+    const pin = kids(it.node, "pin").find((p) => str(p[1]) === g.pinNo); return !(pin && effectsOf(pin).color);
+  }
+  return g.layer === "Labels" && !effectsOf(it.node).color;
 }
 
 /** A layer colour as PCB_RENDER_SETTINGS::LoadColors draws it: an alpha below 0.2 is raised to 0.2. */

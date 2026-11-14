@@ -210,6 +210,7 @@ export function effectsOf(node: SNode): TextEffects {
       const t = kid(f, "thickness"); if (t) r.thick = num(t[1]);
       r.bold = yesNo(f, "bold"); r.italic = yesNo(f, "italic");
       const fc = kid(f, "face"); if (fc && str(fc[1])) r.face = str(fc[1]);   // an outline (TrueType) font by name
+      const col = colorOf(f); if (col) r.color = col;   // the text colour lives in (font (color …)), not on the item
     }
     const j = kid(e, "justify"); if (j) { r.just = j.slice(1).map(str); if (r.just.includes("mirror")) r.mirror = true; }
     if (has(e, "hide")) r.hide = true; const h = kid(e, "hide"); if (h && str(h[1]) === "yes") r.hide = true;
