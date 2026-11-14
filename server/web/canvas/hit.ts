@@ -3,6 +3,7 @@ import { SCH, SCH_LAYERS, pcbColor, pcbZ } from "./colors";
 import { boxUnion } from "./geom";
 import { kids, pointInPoly, rotator } from "./sexpr";
 import { textWidth } from "./text";
+import { outlineBoxCorners, outlineLayout } from "./outline-text";
 import type { Box, CircleGeom, Doc, Geom, Item, PadGeom, PolyGeom, Pt } from "./types";
 
 /** A movable item as the chrome lists it (movableItems). */
@@ -31,7 +32,11 @@ export function geomBox(g: Geom): Box | null {
   case "rect": return [g.x - w, g.y - w, g.x + g.w + w, g.y + g.h + w];
   case "image": return [g.x - g.w / 2, g.y - g.h / 2, g.x + g.w / 2, g.y + g.h / 2];
   case "pad": { const r = g.rot ? Math.hypot(g.w, g.h) / 2 : 0; return g.rot ? [g.x - r, g.y - r, g.x + r, g.y + r] : [g.x - g.w / 2, g.y - g.h / 2, g.x + g.w / 2, g.y + g.h / 2]; }
-  case "text": { const tw = textWidth(g.text || "", g.size || 1, g.w || 0), th = g.size || 1; const r = Math.max(tw, th); return [g.x - r, g.y - r, g.x + r, g.y + r]; }
+  case "text": {
+    const oc = outlineBoxCorners(g);   // an outline face: its own text box (EDA_TEXT::GetTextBox)
+    if (oc) { const xs = oc.map((p) => p[0]), ys = oc.map((p) => p[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; }
+    const tw = textWidth(g.text || "", g.size || 1, g.w || 0), th = g.size || 1; const r = Math.max(tw, th); return [g.x - r, g.y - r, g.x + r, g.y + r];
+  }
   default: return null;
   }
 }
@@ -62,6 +67,12 @@ export function geomHit(g: Geom, x: number, y: number, tol: number): boolean {
     return Math.abs(lx) <= g.w / 2 + tol && Math.abs(ly) <= g.h / 2 + tol;
   }
   case "text": {   // the text's own box — its width along the reading direction, placed by the justification and turned with it (EDA_TEXT::TextHitTest)
+    const OL = outlineLayout(g);
+    if (OL) {   // an outline face: the box its metrics give (outline-text.ts), in the text's own frame
+      const a = OL.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), dx = x - OL.ox, dy = y - OL.oy;
+      let lx = dx * c - dy * sn; const ly = dx * sn + dy * c; if (OL.mirror) lx = -lx;
+      const [x0, y0, x1, y1] = OL.box; return lx >= x0 - tol && lx <= x1 + tol && ly >= y0 - tol && ly <= y1 + tol;
+    }
     const tw = textWidth(g.text || "", g.sizeX || g.size || 1, g.w || 0), th = g.size || 1;
     const x0 = g.h === "left" ? 0 : g.h === "right" ? -tw : -tw / 2, y0 = g.v === "top" ? 0 : g.v === "bottom" ? -th : -th / 2;
     let [lx, ly] = rotator(-(g.rot || 0))(x - g.x, y - g.y); if (g.mirror) lx = -lx;

@@ -3,7 +3,8 @@ import { root } from "./env";
 import { PCB_BG, PCB_GRID, PCB_GRID_AXES, PCB_PAGE_LIMITS, PCB_SHEET, SCH, SCH_DEFAULT, SCH_Z, parseColor, pcbColor, pcbZ, rgba } from "./colors";
 import { atOf, effectsOf, flipH, kid, kids, num, pointInPoly, ptsOf, splitLines, str } from "./sexpr";
 import { isBusLabel } from "./busname";
-import { ensureSchTheme } from "./geom";
+import { ensureFontGeom, ensureSchTheme } from "./geom";
+import { FAKE_ITALIC_SLANT, OUTLINE_EM, cssFamily, faceAvailable, fontChanged as olFontChanged, outlineLayout, type OutlineLayout } from "./outline-text";
 import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
 import { documentDrawingSheet } from "./sheet";
@@ -309,6 +310,7 @@ export function bucket(map: Map<number, Geom[]>, z: number): Geom[] { let arr = 
 
 export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | null): void {
   ensureSchTheme(doc);   // geometry built under another schematic colour theme is rebuilt first
+  ensureFontGeom(doc);   // and text set in a face that has arrived since is laid out with its metrics
   opts = opts || {}; const hidden = opts.hidden || new Set();
   const isPcb = doc.type === "pcb";
   setOverbarHeight(isPcb ? 1.23 : schFormat.overbarHeight);   // the board's KIFONT::METRICS are the defaults
@@ -1426,6 +1428,9 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
       if (strokesOnly && ((g as { noStroke?: boolean }).noStroke || g.noShadow)) continue;   // a sheet / body background fill, hatch lines: no stroke to shadow
       const halo = colorFn(g.color as string); ctx.strokeStyle = halo; ctx.fillStyle = halo;
       if (g.t === "text") {
+        // an outline face: the shadow follows the glyphs as they are drawn (same face, size, place and lines)
+        const OL = g.face && faceAvailable(g.face) && !(g as DrawTextG).knockout ? outlineLayout(g as unknown as DrawTextG) : null;
+        if (OL) { ctx.save(); drawOutlineText(ctx, g as unknown as DrawTextG, OL, halo, base, strokesOnly ? extra : extra + minW); ctx.restore(); continue; }
         if (strokesOnly && base && HAS_PATH2D) {
           // the glyphs themselves, each stroke widened (SCH_PAINTER draws shadow text with m_StrokeWidth + shadowWidth)
           const tg = g as unknown as DrawTextG; const pen = tg.w > 0 ? tg.w : tg.size / 8;
@@ -1455,31 +1460,8 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
   ctx.restore();
 }
 
-/** A face name as a CSS font-family entry. */
-export const cssFamily = (face: string): string => '"' + String(face).replace(/["'\\<>&;]/g, "") + '"';
-
-const FACES = new Map<string, boolean>();
-let faceCtx: CanvasRenderingContext2D | null = null;
-/**
- * Whether the browser can draw text in the named face.  KiCad falls back to its stroke font when fontconfig
- * has no such face; here a face is taken to exist when text set in it measures differently from both generic
- * fallbacks it would otherwise land on.  No canvas (Node) → false.  "KiCad Font" is the stroke font itself.
- */
-export function faceAvailable(face: string): boolean {
-  let ok = FACES.get(face);
-  if (ok !== undefined) return ok;
-  ok = false;
-  if (face && !/^kicad font$/i.test(face) && typeof document !== "undefined") {
-    try {
-      if (!faceCtx) faceCtx = document.createElement("canvas").getContext("2d");
-      const probe = "mmmmmmmmmmlliWW0123@#", fam = cssFamily(face);
-      const w = (f: string) => { faceCtx!.font = "40px " + f; return faceCtx!.measureText(probe).width; };   // a 2d context, or the throw below
-      ok = w(fam + ", monospace") !== w("monospace") || w(fam + ", serif") !== w("serif");
-    } catch (e) { ok = false; }
-  }
-  FACES.set(face, ok);
-  return ok;
-}
+export { cssFamily, faceAvailable, setFontData, fontData, allFontData } from "./outline-text";
+export type { FontBytes } from "./outline-text";
 
 const WANTED = new Set<string>();
 /**
@@ -1496,25 +1478,8 @@ export function wantFace(face: string, bold: boolean, italic: boolean): void {
 }
 /** A font arrived on (or left) the page: look again whether the face can be drawn.  No face: every face. */
 export function fontChanged(face?: string): void {
-  if (face === undefined) { FACES.clear(); WANTED.clear(); FONT_DATA.clear(); return; }
-  FACES.delete(face);
-}
-
-/** A font file held for plotting: the bytes, and the style the file really is (a family without a bold answers with its regular). */
-export interface FontBytes { data: ArrayBuffer; bold: boolean; italic: boolean }
-const FONT_DATA = new Map<string, FontBytes>();
-const fontKey = (face: string, bold: boolean, italic: boolean): string => face.toLowerCase() + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
-/**
- * The file of a face in the style asked for, kept so that a plot can draw the text's real outlines (web/fab
- * reads the glyphs out of it); the screen needs only the browser's own copy.  null forgets it.
- */
-export function setFontData(face: string, bold: boolean, italic: boolean, font: FontBytes | null): void {
-  if (font) FONT_DATA.set(fontKey(face, bold, italic), font); else FONT_DATA.delete(fontKey(face, bold, italic));
-}
-export function fontData(face: string, bold: boolean, italic: boolean): FontBytes | null { return FONT_DATA.get(fontKey(face, bold, italic)) || null; }
-/** Every file held, as [face, bold, italic, font] of the style it was asked in (to hand them to a worker). */
-export function allFontData(): [string, boolean, boolean, FontBytes][] {
-  return [...FONT_DATA].map(([k, f]) => { const [face, b, i] = k.split("|"); return [face, b === "b", i === "i", f] as [string, boolean, boolean, FontBytes]; });
+  olFontChanged(face);
+  if (face === undefined) WANTED.clear();
 }
 
 /** Text shorter than this on screen (device px of glyph height) is not drawn. */
@@ -1614,6 +1579,12 @@ export function drawText(ctx: Ctx2D, g: DrawTextG, s: number, docType: string, m
   const color = (colorOverride || g.color) as string;
   if (g.face) wantFace(g.face, !!g.bold, !!g.italic);
   const outline = !!g.face && faceAvailable(g.face);
+  if (outline && !g.knockout && !g.padText) {
+    // an outline face, laid out as KiCad's OUTLINE_FONT places it (outline-text.ts)
+    const flipIt = flip && !SIDE_SPECIFIC.test(g.layer || "");
+    const L = outlineLayout(flipIt ? Object.assign({}, g, { mirror: !g.mirror, h: flipH(g.h) }) : g);
+    if (L) { drawOutlineText(ctx, g, L, color, base, 0); return; }
+  }
   if (!outline && textMode() === "stroke") {
     let b = base;
     if (!b && typeof ctx.getTransform === "function") { const m = ctx.getTransform(); b = [m.a, m.b, m.c, m.d, m.e, m.f]; }
@@ -1668,6 +1639,39 @@ export function drawText(ctx: Ctx2D, g: DrawTextG, s: number, docType: string, m
   }
   if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore();
 }
+
+/**
+ * One line of an outline-font text where outlineLayout puts it: the face drawn at a 100 px em scaled to the text (so
+ * the browser's hinting at tiny sizes cannot move the glyphs off the advances the layout measured), an upright-only
+ * family slanted 12 degrees about the baseline as OUTLINE_FONT does, overbars 1.23 heights above the baseline.
+ * `halo` > 0 draws the selection shadow instead: the same glyphs filled and their outlines stroked that wide
+ * (SCH_PAINTER drawText / drawCache with a shadow width: every outline glyph polygon drawn with the shadow pen).
+ */
+export function drawOutlineText(ctx: Ctx2D, g: DrawTextG, L: OutlineLayout, color: string, base: Mat | null, halo: number): void {
+  const a = -L.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = L.mirror ? -1 : 1;
+  if (base) ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * L.ox + base[4], base[3] * L.oy + base[5]);
+  else { ctx.save(); ctx.translate(L.ox, L.oy); if (a) ctx.rotate(a); if (mx < 0) ctx.scale(-1, 1); }
+  ctx.fillStyle = color; ctx.strokeStyle = color; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  if (g.bars && g.bars.length) {
+    // FONT::drawMarkup's overbar: a pen-wide bar over the run, a tenth of the width short at each end
+    const y = L.baseline - L.size * OUTLINE_OVERBAR;
+    ctx.lineWidth = Math.max(g.w || L.size / 8, 0) + halo; ctx.beginPath();
+    for (const [i0, i1] of g.bars) {
+      const x0 = L.x + L.metrics.advance(L.text.slice(0, i0)) * L.emX, x1 = L.x + L.metrics.advance(L.text.slice(0, i1)) * L.emX;
+      if (x1 > x0) { ctx.moveTo(x0 + 0.1 * L.sizeX, y); ctx.lineTo(x1 - 0.1 * L.sizeX, y); }
+    }
+    ctx.stroke();
+  }
+  ctx.transform(L.emX / 100, 0, 0, L.em / 100, L.x, L.baseline);
+  if (L.metrics.slant) ctx.transform(1, 0, -FAKE_ITALIC_SLANT, 1, 0, 0);
+  ctx.font = L.metrics.css.replace("1px", "100px");
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  if (halo > 0) { ctx.lineWidth = halo * 100 / L.em; ctx.strokeText(L.text, 0, 0); }
+  ctx.fillText(L.text, 0, 0);
+  if (base) ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]); else ctx.restore();
+}
+/** METRICS::m_OverbarHeight: an outline font's overbar sits this many text heights above the baseline. */
+export const OUTLINE_OVERBAR = 1.23;
 
 /**
  * KiCad's drawing sheet under the document: the frame rectangles, the 50 mm tick band with its

@@ -110,6 +110,8 @@ export type TextGeom = GeomFlags & {
   dxfText?: { bold: boolean };
   /** a footprint text's own position (EDA_TEXT::GetTextPos, board coordinates): where its umbilical line starts */
   textPos?: Pt;
+  /** an outline-font text: its whole block and this line's place in it (outline-text.ts outlineLayout) */
+  olBlock?: import("./outline-text").OutlineBlock;
 };
 export type ImageGeom = GeomFlags & { t: "image"; x: number; y: number; h: number; rot?: number;
   entry: ImageEntry; pxMm: number; scale: number; opacity?: number };
@@ -129,6 +131,8 @@ export interface Item extends Omit<KItem, "geom" | "hiddenGeom" | "bbox"> {
   bbox: Box | null;
   /** the schematic theme its geometry was built under */
   schTheme?: string;
+  /** the font generation (outline-text.ts FONT_GEN) its outline-font text was laid out under; undefined without any */
+  fontGen?: number;
   /** a board outline item (Edge.Cuts) */
   edge?: boolean;
   unit?: number; page?: string; net?: number; scale?: number; viaType?: string;
@@ -158,6 +162,8 @@ export interface Doc extends Omit<KDoc, "items" | "bbox" | "page">, SheetContext
   bbox: Box | null;
   page: Pt;
   schTheme?: string;
+  /** the font generation its items were last brought up to (geom.ts ensureFontGeom) */
+  fontGen?: number;
   version: number;
   uuid?: string;
   auxOrigin?: [number, number]; gridOrigin?: [number, number];
@@ -195,6 +201,8 @@ export type TextExtra = Partial<Omit<TextGeom, "t">> & {
   pcb?: boolean;
   /** the footprint keep-upright rule */
   upright?: boolean;
+  /** how KiCad positions an outline-font text (OutlineBlock.kind): an SCH_TEXT and its schematic text offset, or a field */
+  olKind?: "text" | "field"; olLift?: number;
 };
 
 /** One wire-format change as applyChange reads it: the chrome's KChange, or a peer's with the item text under itemSexpr. */

@@ -27,9 +27,10 @@ import { PAPER_SIZES, addItem, applyDocProps, computeBBox, mm2mils, paperSize, p
 import type { Doc } from "./types";
 import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
 import { SvgPath, renderPng, renderSvg, serialize, serializeItem, setRenderCacheWriter, svgDrawingSheet, wrapFragment } from "./export";
-import { buildGeom, ensureSchTheme, inSchTheme } from "./geom";
+import { buildGeom, ensureFontGeom, ensureSchTheme, inSchTheme } from "./geom";
+import { faceMetrics, kicadAscDesc, outlineBoxCorners, outlineLayout, readSfnt } from "./outline-text";
 import { hatchLines } from "./geom-pcb";
-import { ORIENT, intersheetRefsText, resolveLib, schDisplay, schFormat, symbolTransform } from "./geom-sch";
+import { ORIENT, fieldColor, intersheetRefsText, resolveLib, schDisplay, schFormat, symbolTransform } from "./geom-sch";
 import { bboxOf, geomBox, geomHit, geomTouchesRect, itemTouchesRect, itemVisible, hitTest, hitTestDetail, layerList, movableItems, padAt, padGeomHit, snap } from "./hit";
 import { applyChange, setAt, setPts } from "./ops";
 import { darkened, mixColor, brightenedItemColor, lockedShadowMargin, footprintBodyBox, drawLockedShadow, DRC_HIGHLIGHTED, HL_FACTOR, HC_EDGE_MIN, viaSpans, umbilicalLines, viaStitchOutline, viaStitchTicks, gridItemGeom, gridItemArea, gridTakesPrecedence, autoSparsePitch } from "./render";
@@ -49,7 +50,7 @@ import { SCH_PEN, TEXT_INTERLINE, isUrlText, lineOffsets, parseMarkup, setSchPen
 import { drawStrokeText, linebreakText, parseStrokeMarkup, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin } from "./stroke-font";
 import { displayNetName, netCode } from "./geom-pcb";
 import { unitLetter } from "./geom-sch";
-import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, allFontData, drawTextStroke, faceAvailable, fontChanged, fontData, setFontData, textMode, wantFace } from "./render";
+import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, allFontData, drawOutlineText, drawTextStroke, faceAvailable, fontChanged, fontData, setFontData, textMode, wantFace } from "./render";
 import { pcbSizes } from "./pcb-sizes";
 import { boardItemBox, presenceSelection } from "./kicad-bbox";
 import { padModel } from "./pad-model";
@@ -88,6 +89,8 @@ export const api = {
   // font hook: set to a function (face, bold, italic) => void; called the first time text in an outline font is
   // drawn, so the app can fetch the font (web/editor/fonts.ts) and call fontChanged(face) once it is on the page
   onFontWanted: null, fontChanged, wantFace, faceAvailable, setFontData, fontData, allFontData, loadFontsFor: null, setRenderCacheWriter,
+  // outline-font text laid out as KiCad's OUTLINE_FONT places it (outline-text.ts): metrics, layout, box, painter
+  faceMetrics, readSfnt, kicadAscDesc, outlineLayout, outlineBoxCorners, drawOutlineText, ensureFontGeom, fieldColor,
   hopShapes, wireHopShape, hopOver, drawHalo, SCH_SELECTION_SHADOW, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable, tableCellShownText, cellAddr, parseCellAddress, autoPanDirection, autoPanStep, AUTOPAN_TICK_MS,
   darkened, mixColor, brightenedItemColor, lockedShadowMargin, footprintBodyBox, drawLockedShadow, DRC_HIGHLIGHTED, HL_FACTOR, HC_EDGE_MIN, viaSpans, umbilicalLines, viaStitchOutline, viaStitchTicks, gridItemGeom, gridItemArea, gridTakesPrecedence, autoSparsePitch,
   // the drawing sheet (web/canvas/sheet.ts): KiCad's built-in (kicad_wks …) description, its interpreter

@@ -2,7 +2,8 @@
 import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH, schTheme } from "./colors";
 import { buildGeom, inSchTheme } from "./geom";
 import { bboxOf } from "./hit";
-import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, cssFamily, dashPattern, faceAvailable, makeCanvas, render, textMode, tracePath } from "./render";
+import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, OUTLINE_OVERBAR, cssFamily, dashPattern, faceAvailable, makeCanvas, render, textMode, tracePath } from "./render";
+import { outlineLayout, type OutlineLayout } from "./outline-text";
 import { QUOTED, isList, kid, quotedMask, str, splitLines } from "./sexpr";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
@@ -70,6 +71,7 @@ export function svgGeom(g: Geom | DrawTextG, hairline: number, isPcb: boolean, b
   if (t === "text") {
     if (!g.text) return "";
     const outline = !!g.face && faceAvailable(g.face);
+    if (outline && !g.knockout && !g.padText) { const L = outlineLayout(g); if (L) return svgOutlineText(g, L, hairline, op); }
     if (!outline && textMode() === "stroke") return svgStrokeText(g, hairline, bg, op);
     const size = g.size, base0 = g.v === "top" ? size : g.v === "bottom" ? 0 : size / 2;
     const tr = `translate(${fmt(g.x)} ${fmt(g.y)})` + (g.rot ? ` rotate(${fmt(-g.rot)})` : "") + (g.mirror ? " scale(-1 1)" : "");
@@ -113,6 +115,26 @@ export function svgGeom(g: Geom | DrawTextG, hairline: number, isPcb: boolean, b
   const stroked = !g.noStroke && ((t as string) === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !g.fill)) || (t === "circle" && (g.w > 0 || !g.fill)) || (t === "pad" && !g.fill));
   if (t === "circle" && !g.pie) return `<circle cx="${fmt(g.x)}" cy="${fmt(g.y)}" r="${fmt(g.r)}"${fill}${stroked ? stroke(g.w) : ""}${op}/>`;
   return `<path d="${p.d}"${fill}${stroked ? stroke(g.w) : ""}${op}/>`;
+}
+
+/**
+ * A line of outline-font text where the canvas draws it (outline-text.ts outlineLayout, render.ts drawOutlineText):
+ * the face at the layout's em, from the line's left end on its baseline, slanted when KiCad would slant it.
+ */
+export function svgOutlineText(g: DrawTextG, L: OutlineLayout, hairline: number, op: string): string {
+  const tr = `translate(${fmt(L.ox)} ${fmt(L.oy)})` + (L.rot ? ` rotate(${fmt(-L.rot)})` : "") + (L.mirror ? " scale(-1 1)" : "");
+  const css = L.metrics.css, weight = /\bbold\b/.test(css) ? ' font-weight="bold"' : "", style = /\bitalic\b/.test(css) ? ' font-style="italic"' : "";
+  const inner = `translate(${fmt(L.x)} ${fmt(L.baseline)})` + (L.metrics.slant ? " skewX(-12)" : "") + (L.emX !== L.em ? ` scale(${fmt(L.emX / L.em)} 1)` : "");
+  let bars = "";
+  if (g.bars && g.bars.length) {
+    const y = L.baseline - L.size * OUTLINE_OVERBAR; let d = "";
+    for (const [i0, i1] of g.bars) {
+      const x0 = L.x + L.metrics.advance(L.text.slice(0, i0)) * L.emX, x1 = L.x + L.metrics.advance(L.text.slice(0, i1)) * L.emX;
+      if (x1 > x0) d += `M${fmt(x0 + 0.1 * L.sizeX)} ${fmt(y)}L${fmt(x1 - 0.1 * L.sizeX)} ${fmt(y)}`;
+    }
+    if (d) bars = `<path d="${d}" fill="none" stroke="${g.color}" stroke-width="${fmt(Math.max(g.w || L.size / 8, hairline))}" stroke-linecap="round"/>`;
+  }
+  return `<g transform="${tr}"${op}><text transform="${inner}" font-family='${cssFamily(g.face!)}' font-size="${fmt(L.em)}" fill="${g.color}"${weight}${style}>${esc(L.text)}</text>${bars}</g>`;
 }
 
 /**

@@ -7,6 +7,7 @@ import { setAt, setPts } from "./ops";
 import { atOf, kid, kids, num, ptsOf, str, uuidOf } from "./sexpr";
 import { shiftTable } from "./tables-images";
 import { textWidth } from "./text";
+import { fromLocal, outlineLayout } from "./outline-text";
 import type { Doc, Item, OutChange, Pt, TextGeom } from "./types";
 
 /** A field text's quad on the sheet (fieldBoxes). */
@@ -116,6 +117,12 @@ export function fieldBoxes(item: Pick<Item, "geom">, hidden?: Set<string> | null
   for (const g of item.geom || []) {
     if (g.t !== "text" || !g.field) continue;
     if (hidden && g.layer && hidden.has(g.layer)) continue;             // a field on a hidden layer is not on screen
+    const OL = outlineLayout(g);
+    if (OL) {   // an outline face: its own text box (outline-text.ts), grown by the same margin
+      const pad = 0.18 * g.size, [x0, y0, x1, y1] = OL.box;
+      out.push({ name: g.field, pts: [fromLocal(OL, x0 - pad, y0 - pad), fromLocal(OL, x1 + pad, y0 - pad), fromLocal(OL, x1 + pad, y1 + pad), fromLocal(OL, x0 - pad, y1 + pad)], geom: g });
+      continue;
+    }
     const w = textWidth(g.text || "", g.size, g.w), h = g.size, pad = 0.18 * g.size;
     const lx0 = (g.h === "left" ? 0 : g.h === "right" ? -w : -w / 2) - pad, lx1 = lx0 + w + 2 * pad;
     const ly0 = (g.v === "top" ? 0 : g.v === "bottom" ? -h : -h / 2) - pad, ly1 = ly0 + h + 2 * pad;
