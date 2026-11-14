@@ -11,7 +11,7 @@ jobs:
   build:
     # Homebrew bottles target the runner's macOS, so the oldest runner sets the
     # oldest macOS the DMG supports.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"

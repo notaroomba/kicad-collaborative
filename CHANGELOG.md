@@ -56,7 +56,7 @@ files as 2.0.0, so people in a project can update one at a time.
 
 | Platform | File | Notes |
 |---|---|---|
-| macOS (Apple Silicon, macOS 14+) | `Junction-2.1.0-macos.dmg` | Ad-hoc signed: first launch is right-click, Open. Replace the old app in Applications. |
+| macOS (Apple Silicon, macOS 15+) | `Junction-2.1.0-macos.dmg` | Ad-hoc signed: first launch is right-click, Open. Replace the old app in Applications. |
 | Windows x64 | `Junction-2.1.0-windows-x64.exe` | Installer; upgrades 2.0.0 or KiCad Collaborative in place. |
 | Linux x64 (Ubuntu 24.04+) | `Junction-2.1.0-linux-x64.tar.gz` | Extract anywhere, install the packages listed in `usr/share/junction/ubuntu-packages.txt` (`sudo apt install $(cat usr/share/junction/ubuntu-packages.txt)`), run `usr/bin/junction`. |
 
