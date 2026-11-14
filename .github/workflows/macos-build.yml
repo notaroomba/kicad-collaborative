@@ -36,6 +36,7 @@ jobs:
             brew list --versions "$f" > /dev/null || { echo "missing $f"; exit 1; }
           done
           wx-config --version
+          ls "$(brew --prefix libngspice)/lib" "$(brew --prefix libngspice)/include/ngspice"
           "$(brew --prefix curl)/bin/curl-config" --protocols | grep -qiE "^WSS?$" || { echo "Homebrew curl lacks WebSocket support"; exit 1; }
 
       - name: ccache (restore)
@@ -57,6 +58,9 @@ jobs:
             -DOCC_INCLUDE_DIR="$B/opt/opencascade/include/opencascade" \
             -DOCC_LIBRARY_DIR="$B/opt/opencascade/lib" \
             -DSQLite3_ROOT="$B/opt/sqlite" \
+            -DNGSPICE_ROOT_DIR="$B/opt/libngspice" \
+            -DNGSPICE_INCLUDE_DIR="$B/opt/libngspice/include" \
+            -DNGSPICE_LIBRARY="$B/opt/libngspice/lib/libngspice.dylib" \
             -DCURL_INCLUDE_DIR="$B/opt/curl/include" \
             -DCURL_LIBRARY="$B/opt/curl/lib/libcurl.dylib" \
             -DOPENSSL_ROOT_DIR="$B/opt/openssl@3" \
