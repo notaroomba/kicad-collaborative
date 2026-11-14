@@ -8,7 +8,7 @@ import { useApp } from "../store";
 import { cx } from "../util";
 import { keyName } from "../keys";
 import {
-  actionsFor, actionsOf, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, closeWindow, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
+  actionsFor, actionsOf, orderActions, buttonVisible, answerPrompt, cancelInstall, clearLog, closeManager, closePanels, closeWindow, confirmInstall, dismissRecommended, exportersFor, fetchFromUrl, importersFor, initPlugins,
   installFromRegistry, installOfficial, loadOfficial, installRecommended, loadRegistry, lookupPublished, missingRecommended, moderate, report, openManager, originOf, panelsFor, publish, readLocalFiles, recommend,
   recommendedPending, requestInstall, restart, localAllowed, localServersOf, forgetLocal, runPluginUi, setEnabled, setFrameHost, setManager, setPanelWidth, showPanel, uninstall, unpublish, usePlugins,
   type CatalogEntry, type Compat, type ModerationEntry, type OfficialEntry, type PluginWindowState, type ProjectPlugin, type PromptField, type PromptRequest, type RegistryEntry,
@@ -27,7 +27,7 @@ type MenuEntry = string | [string, MenuEntry[]];
 export function usePluginMenus(menus: [string, MenuEntry[]][], editor: string | null): [string, MenuEntry[]][] {
   const s = usePlugins((x) => x);
   if (!editor) return menus;
-  const acts = actionsFor(s, editor); const imps = importersFor(s, editor), exps = exportersFor(s, editor); const panels = panelsFor(s, editor);
+  const acts = orderActions(actionsFor(s, editor), s); const imps = importersFor(s, editor), exps = exportersFor(s, editor); const panels = panelsFor(s, editor);
   const byMenu = (name: string) => acts.filter((a) => (a.action.menu || "tools").toLowerCase() === name).map((a) => a.uiId);
   return menus.map(([title, entries]) => {
     const t = title.replace("&", "").toLowerCase(); let out = entries;   // titles carry KiCad's "&" mnemonic marker
@@ -59,7 +59,7 @@ export function usePluginMenus(menus: [string, MenuEntry[]][], editor: string | 
 /** The buttons of actions that ask for one (`show-button`), for the end of the top toolbar as in KiCad: one bar entry each, after a separator. */
 export function usePluginBarEntries(): { key: string; node: ReactNode; menu?: { id: string; label: string; glyph?: string } | null }[] {
   const s = usePlugins((x) => x); const editor = useApp((st) => st.document.editor);
-  const acts = actionsFor(s, editor).filter((a) => a.action["show-button"]);
+  const acts = orderActions(actionsFor(s, editor), s).filter((a) => buttonVisible(a, s));
   if (!acts.length) return [];
   return [{ key: "plugin-sep", node: <span className="plg-tb-sep" />, menu: null }, ...acts.map((a) => {
     const run = s.running[a.plugin]; const working = !!run && run.busy === a.name; const icon = a.action.icon ? safeSvg(a.action.icon) : "";

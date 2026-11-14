@@ -420,6 +420,7 @@ async fn main() -> anyhow::Result<()> {
         // web editor plugins (the per-account store and the built-in catalog)
         .route("/api/plugins", get(plugins::list))
         .route("/api/plugins/catalog", get(plugins::catalog))
+        .route("/api/plugins/action-order", get(plugins::action_order).put(plugins::save_action_order))
         .route("/api/plugins/pcm", get(pcm::list))
         .route("/api/plugins/pcm/{identifier}", get(pcm::get))
         .route("/api/plugins/pcm/{identifier}/fetch", post(pcm::net_fetch))

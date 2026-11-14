@@ -420,7 +420,7 @@ function OverflowBar({ id, cls, entries, a, tail, vertical, hidden, strip }: { i
   const hiddenEntries = cut >= 0 ? entries.slice(cut).filter((e) => e.menu) : [];
   return (
     <div id={id} className={cx(vertical ? KTB_V : KTB, cls)} ref={box} hidden={hidden}>
-      <div className={vertical ? KTB_V_INNER : KTB_INNER} ref={ref}>
+      <div className={vertical ? KTB_V_INNER : KTB_INNER} ref={ref} style={strip ? { flex: "0 1 auto" } : undefined}>
         {entries.map((e) => <Fragment key={e.key}>{e.node}</Fragment>)}
         {tail}
       </div>

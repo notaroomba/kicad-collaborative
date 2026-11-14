@@ -650,6 +650,61 @@ if (only('traces')) {
   standIn.close();
 }
 
+if (only('toolbar')) {
+  // KiCad's top toolbar ends with the action plugins' buttons (EDA_DRAW_FRAME::AddApiPluginTools), after a separator,
+  // in the order and with the visibility set in Preferences > PCB Editor > Action Plugins.
+  const RT = 'com.github.mitxela.kicad-round-tracks';
+  try {
+    await page.goto(`${BASE}${ecc83}`); await editorReady();
+    await install(RT);
+    await page.waitForTimeout(1500);
+    await shot('real-toolbar-after-install');
+    const btn = () => page.locator(`#tbPlugins [data-uiact^="plugin:${RT}:"]`).count();
+    check('toolbar: Round Tracks has its button on the top toolbar right after installing', (await btn()) === 1, `${await btn()} buttons; strip ${await page.locator('#tbPlugins').count()}`);
+    await page.reload(); await editorReady(); await page.waitForTimeout(1500);
+    check('toolbar: the button is still there after the page is opened again', (await btn()) === 1, `${await btn()} buttons`);
+    // as wxAuiToolBar packs its tools: the plugin button sits right after the last tool (the net class drop-down), not at the far end
+    const gap = await page.evaluate(() => { const b = document.querySelector('#tbPlugins .plg-tb-btn'); const tools = [...document.querySelectorAll('#tbTop .ktb-row > *')].filter((e) => e.getBoundingClientRect().width > 0); const last = tools[tools.length - 1]; return b && last ? Math.round(b.getBoundingClientRect().left - last.getBoundingClientRect().right) : null; });
+    check('toolbar: the plugin button follows the last tool, after a separator', gap !== null && gap >= 0 && gap < 20, `gap ${gap} px`);
+    await shot('real-toolbar-reloaded');
+    const JLC = 'com.github.bennymeg.JLC-Plugin-for-KiCad';
+    await install(JLC);
+    await page.waitForTimeout(1500);
+    const order = () => page.evaluate(() => [...document.querySelectorAll('#tbPlugins .plg-tb-btn')].map((b) => b.getAttribute('data-uiact').split(':')[1]));
+    const before = await order();
+    check('toolbar: two plugins, two buttons, in the order they were installed', before.length === 2 && before[0] === RT, before.join(', '));
+    // Preferences > PCB Editor > Action Plugins: move the second up, hide Round Tracks' button, OK
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Comma' : 'Control+Comma');
+    await page.waitForSelector('.kd-dialog [data-page="PCB Editor/Action Plugins"], .kd-dialog .kd-tb-node', { timeout: 10000 });
+    await page.locator('.kd-dialog .kd-tb-node', { hasText: 'Action Plugins' }).click();
+    await page.waitForSelector('#kd-pref-plugins tr', { timeout: 10000 });
+    const rowsShown = await page.locator('#kd-pref-plugins tr').count();
+    const checked = await page.locator('#kd-pref-plugins input[type=checkbox]:checked').count();
+    check('Action Plugins: both actions are listed with their Show Button boxes ticked', rowsShown === 2 && checked === 2, `${rowsShown} rows, ${checked} ticked`);
+    await shot('real-prefs-action-plugins');
+    await page.locator('#kd-pref-plugins tr').nth(1).click();
+    await page.click('#kd-pref-plugin-up');
+    await page.locator(`#kd-pref-plugins tr[data-action^="plugin:${RT}:"] input[type=checkbox]`).uncheck();
+    await shot('real-prefs-action-plugins-changed');
+    await page.locator('.kd-dialog .kd-foot .btn.primary').last().click();
+    await page.waitForTimeout(1200);
+    check('Action Plugins: after OK Round Tracks\' button is gone and the other stays', JSON.stringify(await order()) === JSON.stringify([JLC]), (await order()).join(', '));
+    const menu = await page.evaluate(() => { const s = window.KcPlugins.store.get(); return s.actionOrder; });
+    check('Action Plugins: the order is the moved one', menu.length === 2 && menu[0][0].includes(JLC) && menu[1][0].includes(RT) && menu[1][1] === false, JSON.stringify(menu));
+    await page.reload(); await editorReady(); await page.waitForTimeout(1500);
+    check('Action Plugins: the choice is kept for the account after the page is opened again', JSON.stringify(await order()) === JSON.stringify([JLC]), (await order()).join(', '));
+    // tick it again: it comes back, now after the JLC button
+    await page.keyboard.press('Control+Comma');
+    await page.waitForSelector('.kd-dialog .kd-tb-node', { timeout: 10000 });
+    await page.locator('.kd-dialog .kd-tb-node', { hasText: 'Action Plugins' }).click();
+    await page.locator(`#kd-pref-plugins tr[data-action^="plugin:${RT}:"] input[type=checkbox]`).check();
+    await page.locator('.kd-dialog .kd-foot .btn.primary').last().click();
+    await page.waitForTimeout(1200);
+    check('Action Plugins: ticked again, Round Tracks comes back in its new place', JSON.stringify(await order()) === JSON.stringify([JLC, RT]), (await order()).join(', '));
+    await shot('real-toolbar-reordered');
+  } catch (e) { check('toolbar block runs', false, String(e).slice(0, 400)); await shot('real-toolbar-fail'); }
+}
+
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
 

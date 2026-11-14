@@ -59,6 +59,8 @@ export interface PluginState {
   /** The actions each Python plugin registered when it last ran (a Python plugin names its actions at run time, not in a manifest). */
   pyActions: Record<string, PluginAction[]>;
   window: PluginWindowState | null;
+  /** Preferences > PCB Editor > Action Plugins (PCBNEW_SETTINGS m_Plugins.actions): the person's order of actions and whether each shows its button. */
+  actionOrder: [string, boolean][];
 }
 
 const ls = { get(k: string) { try { return localStorage.getItem(k); } catch { return null; } }, set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* no storage */ } }, del(k: string) { try { localStorage.removeItem(k); } catch { /* no storage */ } } };
@@ -69,7 +71,7 @@ let S: PluginState = {
   registry: null, registryQuery: "", published: {}, admin: false, moderation: null, project: { id: null, plugins: [], canEdit: false, dismissed: "" },
   manager: { open: false, tab: "installed", selected: null },
   panel: (() => { try { const j = JSON.parse(ls.get(LS_PANEL) || "{}"); return { open: !!j.open, active: typeof j.active === "string" ? j.active : null, width: Math.min(640, Math.max(240, Number(j.width) || 320)) }; } catch { return { open: false, active: null, width: 320 }; } })(),
-  prompt: null, consent: null, editor: null, official: null, officialError: null, pyActions: {}, window: null,
+  prompt: null, consent: null, editor: null, official: null, officialError: null, pyActions: {}, window: null, actionOrder: [],
 };
 const subs = new Set<() => void>();
 function set(patch: Partial<PluginState>) { S = Object.assign({}, S, patch); for (const fn of Array.from(subs)) fn(); }
@@ -102,10 +104,38 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 export async function refresh(): Promise<void> {
   const me = APP() ? APP().getState().me : null;
   if (!me) { set({ loaded: true, signedIn: false, installed: [], admin: false, moderation: null, error: null }); syncRunning(); return; }
-  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], admin: !!j.admin, error: null }); loadPyActions(); }
+  try { const j = await api("/api/plugins"); set({ loaded: true, signedIn: true, installed: j.plugins || [], admin: !!j.admin, error: null }); loadPyActions(); void loadActionOrder(); }
   catch (e) { set({ loaded: true, signedIn: true, error: e instanceof Error ? e.message : String(e) }); }
   syncRunning();
 }
+// ---- Preferences > PCB Editor > Action Plugins
+
+async function loadActionOrder(): Promise<void> {
+  try { const j = await api("/api/plugins/action-order"); set({ actionOrder: Array.isArray(j.actions) ? j.actions.filter((r: unknown) => Array.isArray(r) && r.length === 2).map((r: unknown[]) => [String(r[0]), !!r[1]] as [string, boolean]) : [] }); }
+  catch { /* keep the order already shown */ }
+}
+/** PANEL_PCBNEW_ACTION_PLUGINS::TransferDataFromWindow: the rows in the grid's order, each with its Show Button box. */
+export async function saveActionOrder(rows: [string, boolean][]): Promise<void> {
+  set({ actionOrder: rows.slice() });
+  try { await api("/api/plugins/action-order", { method: "PUT", body: JSON.stringify({ actions: rows }) }); }
+  catch (e) { toast(`The plugin order was not saved: ${e instanceof Error ? e.message : String(e)}`, 5000); }
+}
+/**
+ * EDA_DRAW_FRAME::GetOrderedPluginActions: the actions named in the settings first, in that order, then the others.
+ * PCB_EDIT_FRAME::GetPluginActionButtonVisible: the setting if there is one, otherwise the action's own show_button.
+ */
+export function orderActions<T extends { uiId: string }>(acts: T[], s: PluginState = S): T[] {
+  const at = new Map(s.actionOrder.map(([id], i) => [id, i] as [string, number]));
+  return acts.map((a, i) => ({ a, i })).sort((x, y) => (at.has(x.a.uiId) ? at.get(x.a.uiId)! : 1e6 + x.i) - (at.has(y.a.uiId) ? at.get(y.a.uiId)! : 1e6 + y.i)).map((x) => x.a);
+}
+export function buttonVisible(a: ActionContribution, s: PluginState = S): boolean {
+  const row = s.actionOrder.find(([id]) => id === a.uiId); return row ? row[1] : !!a.action["show-button"];
+}
+/** The rows of the Action Plugins grid for the board editor: Action (with its icon), Show Button, Plugin, Description. */
+export function actionPluginRows(editor = "pcb"): { id: string; name: string; plugin: string; description: string; visible: boolean; icon: string | null }[] {
+  return orderActions(actionsFor(S, editor)).map((a) => ({ id: a.uiId, name: a.name, plugin: a.pluginName, description: a.description, visible: buttonVisible(a), icon: a.action.iconUrl || null }));
+}
+
 export async function loadCatalog(): Promise<void> {
   try { const j = await api("/api/plugins/catalog"); set({ catalog: j.plugins || [] }); } catch (e) { set({ catalog: [], error: e instanceof Error ? e.message : String(e) }); }
 }
@@ -914,5 +944,5 @@ export function initPlugins(): void {
   }, true);
 
   // Other parts of the editor (and the tests) reach plugins and their declared tools through this object.
-  W.KcPlugins = { store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, runAction, refresh, loadProject };
+  W.KcPlugins = { actionPluginRows, saveActionOrder, store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, runAction, refresh, loadProject };
 }

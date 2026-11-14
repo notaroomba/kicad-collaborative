@@ -671,3 +671,42 @@ mod tests {
         }
     }
 }
+
+// ---------------------------------------------------------------- Preferences > PCB Editor > Action Plugins
+
+const MAX_ACTION_ROWS: usize = 500;
+
+/// `GET /api/plugins/action-order` — the person's order of plugin actions and their toolbar buttons
+/// (PCBNEW_SETTINGS m_Plugins.actions: `[[identifier, visible], ...]`).
+pub async fn action_order(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<Json<Value>> {
+    let row: Option<Value> = sqlx::query_scalar("SELECT actions FROM plugin_action_order WHERE user_id = $1")
+        .bind(user.id)
+        .fetch_optional(&state.pool)
+        .await?;
+    Ok(Json(json!({ "actions": row.unwrap_or_else(|| json!([])) })))
+}
+
+/// `PUT /api/plugins/action-order` — save it, as the panel's TransferDataFromWindow does.
+pub async fn save_action_order(State(state): State<AppState>, AuthUser(user): AuthUser, LenientJson(body): LenientJson<Value>) -> AppResult<Json<Value>> {
+    let rows = body.get("actions").and_then(Value::as_array).ok_or_else(|| bad("actions must be a list"))?;
+    if rows.len() > MAX_ACTION_ROWS {
+        return Err(bad("too many actions"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for r in rows {
+        let pair = r.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad("each action is [identifier, visible]"))?;
+        let id = pair[0].as_str().filter(|s| !s.is_empty() && s.len() <= 400).ok_or_else(|| bad("an action identifier is missing or too long"))?;
+        let visible = pair[1].as_bool().ok_or_else(|| bad("visible must be true or false"))?;
+        if seen.insert(id.to_string()) {
+            out.push(json!([id, visible]));
+        }
+    }
+    let actions = Value::Array(out);
+    sqlx::query("INSERT INTO plugin_action_order (user_id, actions, updated_at) VALUES ($1, $2, now()) ON CONFLICT (user_id) DO UPDATE SET actions = EXCLUDED.actions, updated_at = now()")
+        .bind(user.id)
+        .bind(&actions)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(json!({ "actions": actions })))
+}
