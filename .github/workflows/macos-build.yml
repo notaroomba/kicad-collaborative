@@ -28,7 +28,7 @@ jobs:
           brew install cmake ninja ccache pkgconf \
             boost cairo pixman glew glm libgit2 libngspice opencascade \
             protobuf abseil wxwidgets zstd nng curl openssl@3 \
-            freetype harfbuzz fontconfig gettext sqlite tbb \
+            freetype harfbuzz fontconfig gettext sqlite tbb unixodbc \
             glslang spirv-tools spirv-cross vulkan-headers python@3.12 || true
           # brew exits non-zero when a formula is already installed and only
           # needs linking; check what the build needs is really there.
