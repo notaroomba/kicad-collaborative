@@ -5,6 +5,9 @@ name: release
 # release with the three downloads.  The version is packaging/VERSION and the
 # notes are its section of CHANGELOG.md.  A run from the Actions tab makes a
 # draft unless "draft" is unticked; publish-release.yml publishes a draft.
+# A build that already passed in another run (a per-platform workflow run, or
+# an earlier release run) can be reused by its run id; it is still
+# launch-tested here before the release is made.
 on:
   workflow_dispatch:
     inputs:
@@ -12,25 +15,42 @@ on:
         description: "Create the release as a draft"
         type: boolean
         default: true
+      linux_run:
+        description: "Reuse the Linux tarball from this workflow run id instead of building (optional)"
+        default: ""
+      windows_run:
+        description: "Reuse the Windows installer from this workflow run id instead of building (optional)"
+        default: ""
+      macos_run:
+        description: "Reuse the macOS DMG from this workflow run id instead of building (optional)"
+        default: ""
   push:
     tags: ["v*"]
 
 jobs:
   linux:
+    if: ${{ !inputs.linux_run }}
     uses: ./.github/workflows/linux-build.yml
   windows:
+    if: ${{ !inputs.windows_run }}
     uses: ./.github/workflows/windows-installer.yml
   macos:
+    if: ${{ !inputs.macos_run }}
     uses: ./.github/workflows/macos-build.yml
 
   test-linux:
     needs: linux
+    if: ${{ always() && (needs.linux.result == 'success' || inputs.linux_run) }}
+    permissions:
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: junction-linux
+          run-id: ${{ inputs.linux_run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Install only the packages the tarball lists
         run: |
           mkdir -p "$HOME/Apps"
@@ -69,6 +89,9 @@ jobs:
 
   test-windows:
     needs: windows
+    if: ${{ always() && (needs.windows.result == 'success' || inputs.windows_run) }}
+    permissions:
+      actions: read
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -76,6 +99,8 @@ jobs:
         with:
           name: junction-windows-installer
           path: dl
+          run-id: ${{ inputs.windows_run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Install silently and launch the project manager and both editors
         shell: pwsh
         run: |
@@ -113,12 +138,17 @@ jobs:
 
   test-macos:
     needs: macos
+    if: ${{ always() && (needs.macos.result == 'success' || inputs.macos_run) }}
+    permissions:
+      actions: read
     runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: junction-macos
+          run-id: ${{ inputs.macos_run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Hide Homebrew, which the app must not need
         run: |
           # The DMG has to run on a Mac without Homebrew: move the prefix away.
@@ -148,18 +178,33 @@ jobs:
 
   release:
     needs: [test-linux, test-windows, test-macos]
+    if: ${{ always() && needs.test-linux.result == 'success' && needs.test-windows.result == 'success' && needs.test-macos.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
       - uses: actions/download-artifact@v4
         with:
+          name: junction-linux
           path: dl
-          pattern: junction-*
-          merge-multiple: true
+          run-id: ${{ inputs.linux_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: junction-windows-installer
+          path: dl
+          run-id: ${{ inputs.windows_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: junction-macos
+          path: dl
+          run-id: ${{ inputs.macos_run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Create the tag and the release
         env:
           GH_TOKEN: ${{ github.token }}

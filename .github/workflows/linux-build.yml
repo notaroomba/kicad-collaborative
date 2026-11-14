@@ -8,7 +8,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned: the tarball uses the build machine's library versions, and
+    # ubuntu-latest moved to 26.04.  24.04 LTS is what most users run.
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -49,8 +51,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-linux-${{ github.sha }}
-          restore-keys: ccache-linux-
+          key: ccache-linux2404-${{ github.sha }}
+          restore-keys: ccache-linux2404-
 
       - name: Configure
         run: >-
