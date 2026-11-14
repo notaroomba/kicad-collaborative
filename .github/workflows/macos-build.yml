@@ -27,17 +27,30 @@ jobs:
           brew update > /dev/null
           brew install cmake ninja ccache pkgconf \
             boost cairo pixman glew glm libgit2 libngspice opencascade \
-            protobuf abseil wxwidgets zstd nng curl openssl@3 \
+            protobuf abseil wxwidgets zstd curl openssl@3 \
             freetype harfbuzz fontconfig gettext sqlite tbb unixodbc \
             glslang spirv-tools spirv-cross vulkan-headers python@3.12 || true
           # brew exits non-zero when a formula is already installed and only
           # needs linking; check what the build needs is really there.
-          for f in cmake ninja ccache boost cairo glew glm libgit2 libngspice opencascade protobuf wxwidgets zstd nng curl sqlite glslang spirv-tools spirv-cross vulkan-headers; do
+          for f in cmake ninja ccache boost cairo glew glm libgit2 libngspice opencascade protobuf wxwidgets zstd curl sqlite glslang spirv-tools spirv-cross vulkan-headers; do
             brew list --versions "$f" > /dev/null || { echo "missing $f"; exit 1; }
           done
           wx-config --version
           ls "$(brew --prefix libngspice)/lib" "$(brew --prefix libngspice)/include/ngspice"
           "$(brew --prefix curl)/bin/curl-config" --protocols | grep -qiE "^WSS?$" || { echo "Homebrew curl lacks WebSocket support"; exit 1; }
+
+      - name: Build nng 1.x
+        # Homebrew ships nng 2, which dropped the nng/protocol/... headers
+        # KiCad's IPC API uses.  A static 1.x needs no bundling.
+        run: |
+          brew uninstall --ignore-dependencies nng 2>/dev/null || true
+          curl -sSL https://github.com/nanomsg/nng/archive/refs/tags/v1.11.tar.gz | tar xz
+          cmake -S nng-1.11 -B nng-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/nng1 -DBUILD_SHARED_LIBS=OFF \
+            -DNNG_TESTS=OFF -DNNG_TOOLS=OFF -DNNG_ENABLE_NNGCAT=OFF > /dev/null
+          cmake --build nng-build > /dev/null
+          cmake --install nng-build > /dev/null
+          ls $HOME/nng1/include/nng/protocol/reqrep0/rep.h $HOME/nng1/lib/libnng.a
 
       - name: ccache (restore)
         uses: actions/cache/restore@v4
@@ -58,6 +71,8 @@ jobs:
             -DOCC_INCLUDE_DIR="$B/opt/opencascade/include/opencascade" \
             -DOCC_LIBRARY_DIR="$B/opt/opencascade/lib" \
             -DSQLite3_ROOT="$B/opt/sqlite" \
+            -DNNG_INCLUDE_DIR="$HOME/nng1/include" \
+            -DNNG_LIBRARY="$HOME/nng1/lib/libnng.a" \
             -DNGSPICE_ROOT_DIR="$B/opt/libngspice" \
             -DNGSPICE_INCLUDE_DIR="$B/opt/libngspice/include" \
             -DNGSPICE_LIBRARY="$B/opt/libngspice/lib/libngspice.dylib" \
@@ -74,7 +89,8 @@ jobs:
             -DKICAD_APPLE_MAKE_RELOCATEABLE_BUNDLE=OFF
 
       - name: Build
-        run: cmake --build build
+        # -k 0: report every failing file in one run, not only the first.
+        run: cmake --build build -- -k 0
 
       # Save right after the compile so a later failure keeps the warm cache.
       - name: ccache (save)
