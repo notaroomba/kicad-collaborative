@@ -432,7 +432,10 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
         if (yesNo(g, "private")) continue;
         const before = item.bbox ? item.bbox.slice() : null; item.bbox = null;
         if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc" || gk === "ellipse" || gk === "ellipse_arc") {
-          shapeGeom(item, g, gk, tf, col(SCH.outline), bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g, 0) || SCH_PEN, undefined, true);
+          // a DNP symbol's shapes dimmed whole (getRenderColor aDimmed): their own stroke colours and the body fill too
+          const g0 = item.geom.length;
+          shapeGeom(item, g, gk, tf, SCH.outline, bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g, 0) || SCH_PEN, undefined, true);
+          if (dnp) for (let i = g0; i < item.geom.length; i++) { const x = item.geom[i] as { color?: string | null; fill?: string | null }; if (x.color) x.color = col(x.color); if (x.fill) x.fill = col(x.fill); }
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g); const ef = effectsOf(g);
